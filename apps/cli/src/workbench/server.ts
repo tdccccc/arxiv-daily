@@ -1,5 +1,7 @@
 import { WorkbenchLibrary } from "./library";
-import type { RunOutcome } from "@arxiv-daily/core";
+import type { LibraryDirectionPreview, RunOutcome } from "@arxiv-daily/core";
+import { authorizeCliLibrary } from "../library-connection-cmd";
+import type { CliLibraryOptions } from "../library-cmd";
 import type { CliRunEvent } from "../main-types";
 import { randomBytes } from "node:crypto";
 import { createReadStream } from "node:fs";
@@ -21,6 +23,7 @@ import { readPreferences, savePreferences } from "./preferences";
 export interface WorkbenchAsset { type: string; body: string; encoding?: "base64" }
 export interface WorkbenchOptions {
   config?: CliRuntimeConfig;
+  libraryOptions?: CliLibraryOptions;
   configPath?: string;
   onConfigSaved?: (config: CliRuntimeConfig) => void;
   port?: number;
@@ -58,6 +61,7 @@ export async function startWorkbench(options: WorkbenchOptions) {
   const secrets: string[] = [];
   const rememberSecrets = (value: CliRuntimeConfig) => { secrets.push(...[value.settings.llm.apiKey, value.settings.embedding.apiKey, value.settings.email.apiKey, value.settings.email.hostedToken].filter((key): key is string => Boolean(key))); };
   if (config) rememberSecrets(config);
+  let libraryPreview: { runId: string; preview: LibraryDirectionPreview | null } | null = null;
   let saving = false;
   const redact = (text: string) => redactText(text, { secrets });
   let origin = "";
@@ -73,6 +77,7 @@ export async function startWorkbench(options: WorkbenchOptions) {
     beginRun("Automatic daily report check", null, (io, signal) => options.run!(["run", "--scheduled"], io, signal));
   });
   function activate(next: CliRuntimeConfig) {
+    libraryPreview = null;
     config = next;
     documents = new WorkbenchDocuments(next);
     papers = new WorkbenchPapers(next, documents);
@@ -198,17 +203,70 @@ export async function startWorkbench(options: WorkbenchOptions) {
         throw new WorkbenchError(400, redact(error instanceof Error ? error.message : "设置操作失败。"));
       } finally { saving = false; }
     }
-    if (route === "api/library" && method === "GET") return json(res, 200, await new WorkbenchLibrary(config).catalog(url.searchParams));
+    if (route === "api/library/authorize" && method === "POST") {
+      const body = await readJson(req);
+      if (saving || run?.status === "running") throw new WorkbenchError(409, "请等待当前操作完成。");
+      if (Object.keys(body).some(key => !["configRevision", "fingerprint"].includes(key)) || typeof body.fingerprint !== "string" || body.fingerprint.length > 512) throw new WorkbenchError(400, "请重新查看授权范围。");
+      saving = true;
+      try {
+        const current = await loadCliConfig({ configPath: configPath! });
+        if (body.configRevision !== current.configRevision || config.configRevision !== current.configRevision) throw new WorkbenchError(409, "配置已改变，请重新打开设置并保存。");
+        const disclosure = inspectWorkbenchLibrary(current).disclosure;
+        if (!disclosure || body.fingerprint !== disclosure.authorizationFingerprint) throw new WorkbenchError(409, "请重新查看授权范围。");
+        const next = await authorizeCliLibrary(current, body.fingerprint);
+        activate(next);
+        return json(res, 200, await new WorkbenchLibrary(next, options.libraryOptions).review());
+      } finally { saving = false; }
+    }
+    if (route === "api/library/review" && method === "GET") return json(res, 200, await new WorkbenchLibrary(config, options.libraryOptions).review());
+    if (route === "api/library/preview" && method === "GET") {
+      if (!libraryPreview || url.searchParams.get("runId") !== libraryPreview.runId) throw new WorkbenchError(404, "找不到方向预览，请重新预览。");
+      return json(res, 200, { preview: libraryPreview.preview });
+    }
+    if (["api/library/review", "api/library/propose", "api/library/preview"].includes(route) && method === "POST") {
+      const body = await readJson(req);
+      if (saving || run?.status === "running") throw new WorkbenchError(409, "请等待当前操作完成。");
+      saving = true;
+      try {
+        const current = await loadCliConfig({ configPath: configPath! });
+        if (body.configRevision !== current.configRevision || config.configRevision !== current.configRevision) throw new WorkbenchError(409, "配置已改变，请重新打开设置并保存。");
+        const library = new WorkbenchLibrary(current, options.libraryOptions);
+        if (route === "api/library/review") {
+          controller = new AbortController();
+          const result = await library.action(body, controller.signal);
+          activate(await loadCliConfig({ configPath: configPath! }));
+          return json(res, 200, result);
+        }
+        if (body.expectedProposalRevision !== null && (!Number.isSafeInteger(body.expectedProposalRevision) || Number(body.expectedProposalRevision) < 0)) throw new WorkbenchError(400, "请重新读取候选方向后再操作。");
+        const snapshot = await library.review();
+        if (body.expectedProposalRevision !== (snapshot.proposal?.revision ?? null)) throw new WorkbenchError(409, "候选方向已改变，请刷新后重试。");
+        const preview = route === "api/library/preview";
+        if (preview && (typeof body.candidateId !== "string" || !body.candidateId.trim())) throw new WorkbenchError(400, "请选择要预览的方向。");
+        saving = false;
+        const started: WorkbenchRun = beginRun(preview ? "预览研究方向" : "生成候选方向", null, async (io, signal) => {
+          io.stdout.write(preview ? "正在检验代表论文与方向的匹配情况。\n" : "正在根据文献库生成候选方向。\n");
+          if (preview) {
+            const result = await library.preview(body, signal);
+            if (!signal.aborted && libraryPreview?.runId === started.id) libraryPreview.preview = result;
+          } else await library.propose(body, signal);
+          io.stdout.write("方向分析已完成。\n");
+          return 0;
+        });
+        libraryPreview = preview ? { runId: started.id, preview: null } : null;
+        return json(res, 202, { run: started });
+      } finally { saving = false; }
+    }
+    if (route === "api/library" && method === "GET") return json(res, 200, await new WorkbenchLibrary(config, options.libraryOptions).catalog(url.searchParams));
     if (route === "api/library/search" && method === "POST") {
       const body = await readJson(req);
-      if (run?.status === "running") throw new WorkbenchError(409, "请等待当前操作完成。");
+      if (saving || run?.status === "running") throw new WorkbenchError(409, "请等待当前操作完成。");
       saving = true;
       controller = new AbortController();
-      try { return json(res, 200, await new WorkbenchLibrary(config).search(body, controller.signal)); }
+      try { return json(res, 200, await new WorkbenchLibrary(config, options.libraryOptions).search(body, controller.signal)); }
       finally { saving = false; }
     }
     if (route === "api/library/pdf" && method === "GET") {
-      const bytes = await new WorkbenchLibrary(config).pdf(url.searchParams.get("key") || "");
+      const bytes = await new WorkbenchLibrary(config, options.libraryOptions).pdf(url.searchParams.get("key") || "");
       res.setHeader("Content-Security-Policy", "default-src 'none'; sandbox");
       res.writeHead(200, { "Content-Type": "application/pdf", "Content-Disposition": "inline; filename=paper.pdf" });
       return res.end(Buffer.from(bytes));

@@ -2,9 +2,11 @@ import { afterEach, expect, it, vi } from "vitest";
 import { mkdtemp, mkdir, readFile, readdir, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { get as httpGet } from "node:http";
+import { get as httpGet, request as httpRequest } from "node:http";
 import { DEFAULT_SETTINGS } from "@arxiv-daily/core";
 import { loadCliConfig, DEFAULT_CLI_SCHEDULE, type CliRuntimeConfig } from "../src/config";
+import { WorkbenchLibrary } from "../src/workbench/library";
+import { connectCliLibrary, inspectCliLibraryConnection } from "../src/library-connection-cmd";
 import { startWorkbench, type WorkbenchOptions } from "../src/workbench/server";
 
 const cleanup: Array<() => Promise<unknown>> = [];
@@ -213,4 +215,67 @@ it("exposes the disconnected personal-library view without running processing", 
   expect((await get("api/library/pdf?key=../../config.toml")).status).not.toBe(200);
   expect((await get("api/library/search", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ query: "x", mode: "shell" }) })).status).toBe(400);
   expect(run).not.toHaveBeenCalled();
+});
+
+it("provides review setup state and rejects outdated review jobs before starting them", async () => {
+  const fixture = await setup();
+  await writeFile(fixture.config.configPath, `schema_version = 1\nvault_root = ${JSON.stringify(fixture.vaultRoot)}\n`);
+  const config = await loadCliConfig({ configPath: fixture.config.configPath });
+  const app = await startWorkbench({ config }); cleanup.push(app.close);
+  const get = (path: string, init?: RequestInit) => fetch(new URL(path, app.url), init);
+  const response = await get('api/library/review');
+  expect(response.status).toBe(200);
+  expect(await response.json()).toMatchObject({ connected: false, proposal: null, configRevision: config.configRevision });
+  const post = (path: string, body: unknown) => get(path, { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(body) });
+  expect((await post('api/library/propose', {configRevision:'old',expectedProposalRevision:null})).status).toBe(409);
+  expect((await post('api/library/review', {operation:'accept-topics',configRevision:'old',expectedProposalRevision:1,topicIds:['one']})).status).toBe(409);
+  expect((await get('api/runs/current')).status).toBe(200);
+  expect((await (await get('api/runs/current')).json()).run).toBeNull();
+  expect((await get('api/library/preview?runId=unknown')).status).toBe(404);
+});
+
+
+it("authorizes an existing local index for direction analysis without rebuilding or invoking a model", async () => {
+  const fixture = await setup();
+  await writeFile(fixture.config.configPath, `schema_version = 1\nvault_root = ${JSON.stringify(fixture.vaultRoot)}\n`);
+  const config = await connectCliLibrary(await loadCliConfig({configPath:fixture.config.configPath}), fixture.vaultRoot);
+  const disclosure = inspectCliLibraryConnection(config).disclosure!;
+  const app = await startWorkbench({config}); cleanup.push(app.close);
+  const post = (body: unknown) => fetch(new URL('api/library/authorize',app.url), {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+  const before = await readFile(config.configPath,'utf8');
+  expect((await post({configRevision:config.configRevision,fingerprint:'old'})).status).toBe(409);
+  expect(await readFile(config.configPath,'utf8')).toBe(before);
+  const response = await post({configRevision:config.configRevision,fingerprint:disclosure.authorizationFingerprint});
+  expect(response.status).toBe(200);
+  const value = await response.json();
+  expect(value.configRevision).not.toBe(config.configRevision);
+  expect(value.proposal).toBeNull();
+  expect(inspectCliLibraryConnection(await loadCliConfig({configPath:config.configPath})).status.kind).toBe('authorized');
+  expect((await (await fetch(new URL('api/runs/current',app.url))).json()).run).toBeNull();
+});
+
+
+it("rechecks the operation gate after reading a delayed search request body", async () => {
+  const fixture = await setup();
+  await writeFile(fixture.config.configPath, `schema_version = 1\nvault_root = ${JSON.stringify(fixture.vaultRoot)}\n`);
+  const config = await loadCliConfig({configPath:fixture.config.configPath});
+  let release!: () => void;
+  const gate = new Promise<void>(resolve => { release=resolve; });
+  const action = vi.spyOn(WorkbenchLibrary.prototype,'action').mockImplementation(async () => { await gate; return new WorkbenchLibrary(config).review(); });
+  const search = vi.spyOn(WorkbenchLibrary.prototype,'search').mockResolvedValue({papers:[],total:0});
+  const app = await startWorkbench({config}); cleanup.push(app.close);
+  const body=JSON.stringify({query:'test'});
+  let response!: Promise<number | undefined>;
+  const pending = httpRequest(new URL('api/library/search',app.url),{method:'POST',headers:{'Content-Type':'application/json','Content-Length':Buffer.byteLength(body),Expect:'100-continue'}});
+  response = new Promise((resolve,reject)=>{pending.on('response',res=>{res.resume();resolve(res.statusCode);});pending.on('error',reject);});
+  const continued = new Promise<void>((resolve,reject)=>{pending.on('continue',resolve);pending.on('error',reject);});
+  pending.flushHeaders();
+  await continued;
+  const editing = fetch(new URL('api/library/review',app.url),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({configRevision:config.configRevision,operation:'accept-topics'})});
+  try {
+    await vi.waitFor(()=>expect(action).toHaveBeenCalledOnce());
+    pending.end(body);
+    expect(await response).toBe(409);
+    expect(search).not.toHaveBeenCalled();
+  } finally { release(); await editing; action.mockRestore(); search.mockRestore(); }
 });

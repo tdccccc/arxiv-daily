@@ -1,6 +1,6 @@
 import { watch } from "node:fs";
 import * as path from "node:path";
-import { searchFullTextKnowledgeBase, LibrarySourceError, type FullTextKnowledgeBaseManifest, type PersonalLibraryCatalog, type EmbeddingModel, type PersonalLibraryPaperRecord, type PersonalLibraryScanSummary } from "@arxiv-daily/core";
+import { searchFullTextKnowledgeBase, LibrarySourceError, createEmptyPersonalLibraryCatalog, redactText, PersonalLibraryInterestProfileReviewError, PersonalLibraryDirectionProposalStoreError, type LibraryReviewSnapshot, type LibraryDirectionPreview, type FullTextKnowledgeBaseManifest, type PersonalLibraryCatalog, type EmbeddingModel, type PersonalLibraryPaperRecord, type PersonalLibraryScanSummary } from "@arxiv-daily/core";
 import { openScopedLibrarySource } from "@arxiv-daily/node-runtime";
 import { CliConfigError, type CliRuntimeConfig } from "../config";
 import { createCliLibraryContext, type CliLibraryOptions } from "../library-cmd";
@@ -21,6 +21,7 @@ export interface WorkbenchLibrarySearch {
   mode?: "lexical" | "hybrid" | "dense";
   limit?: number;
 }
+export type WorkbenchLibraryReview = LibraryReviewSnapshot & { configRevision: string; connected: boolean };
 type Context = Awaited<ReturnType<typeof createCliLibraryContext>>;
 const PDF_LIMIT = 25 * 1024 * 1024;
 
@@ -46,7 +47,7 @@ export class WorkbenchLibrary {
         .sort((a, b) => b.published.localeCompare(a.published) || a.paperKey.localeCompare(b.paperKey));
       const selected = await Promise.all(papers.slice(offset, offset + limit).map(paper => this.present(context, paper, signal)));
       return { papers: selected, total: papers.length, offset, nextOffset: offset + limit < papers.length ? offset + limit : null, summary: catalog.lastScan, connected: true };
-    });
+    }, undefined, true);
   }
 
   async search(raw: unknown, signal?: AbortSignal): Promise<{ papers: WorkbenchLibraryPaper[]; total: number }> {
@@ -79,6 +80,87 @@ export class WorkbenchLibrary {
     }, signal);
   }
 
+  async review(): Promise<WorkbenchLibraryReview> {
+    if (!this.config.libraryConnection) {
+      await this.catalog(new URLSearchParams());
+      const empty = `sha256:${"0".repeat(64)}`;
+      return { catalog: createEmptyPersonalLibraryCatalog(empty, empty), proposal: null,
+        topics: structuredClone(this.config.settings.arxiv.topics), acceptances: [], indexedPapers: [],
+        configRevision: this.config.configRevision!, connected: false };
+    }
+    return this.withContext(async context => this.reviewResult(await context.workflow.review()), undefined, true);
+  }
+
+  async action(raw: unknown, signal?: AbortSignal): Promise<WorkbenchLibraryReview> {
+    const input = reviewInput(raw);
+    const operation = boundedText(input.operation, "operation", 40);
+    const fields: Record<string, string[]> = {
+      "update-candidate": ["candidateId", "patch", "representativePaperKeys"],
+      "rename-topic": ["topicId", "suggestedName"],
+      "move-direction": ["candidateId", "targetTopicId", "suggestedName"],
+      "remove-candidate": ["candidateId"],
+      "accept-topics": ["topicIds", "candidateIds"],
+    };
+    if (!Object.prototype.hasOwnProperty.call(fields, operation)) throw new WorkbenchError(400, "Unknown library review operation");
+    exactKeys(input, ["operation", "configRevision", "expectedProposalRevision", ...fields[operation]!]);
+    // Validate the complete untrusted payload before waiting for the workflow lease.
+    const candidateId = ["update-candidate", "move-direction", "remove-candidate"].includes(operation) ? boundedText(input.candidateId, "candidateId", 128) : "";
+    const topicId = operation === "rename-topic" ? boundedText(input.topicId, "topicId", 128) : "";
+    const suggestedName = ["rename-topic", "move-direction"].includes(operation) ? boundedText(input.suggestedName, "suggestedName", 120) : "";
+    let patch: { text?: string; discoveryCues?: string[] } = {};
+    if (operation === "update-candidate") {
+      const value = objectInput(input.patch); exactKeys(value, ["text", "discoveryCues"]);
+      patch = { ...(value.text === undefined ? {} : { text: boundedText(value.text, "text", 1000) }),
+        ...(value.discoveryCues === undefined ? {} : { discoveryCues: stringList(value.discoveryCues, "discoveryCues", 12, 200) }) };
+    }
+    const representativePaperKeys = operation === "update-candidate" && input.representativePaperKeys !== undefined ? stringList(input.representativePaperKeys, "representativePaperKeys", 5, 128) : undefined;
+    const topicIds = operation === "accept-topics" ? stringList(input.topicIds, "topicIds", 12, 128) : [];
+    const candidateIds = operation === "accept-topics" && input.candidateIds !== undefined ? stringList(input.candidateIds, "candidateIds", 12, 128) : undefined;
+    const targetTopicId = operation === "move-direction" && input.targetTopicId !== null ? boundedText(input.targetTopicId, "targetTopicId", 128) : null;
+    return this.withContext(async (context, currentSignal) => {
+      await this.assertReviewCurrent(context, input);
+      const versions = { expectedProposalRevision: input.expectedProposalRevision, signal: currentSignal };
+      let result: LibraryReviewSnapshot;
+      if (operation === "update-candidate") result = await context.workflow.updateCandidate({ ...versions, candidateId, patch, representativePaperKeys });
+      else if (operation === "rename-topic") result = await context.workflow.renameTopic({ ...versions, topicId, suggestedName });
+      else if (operation === "move-direction") result = await context.workflow.moveDirection({ ...versions, candidateId, targetTopicId, suggestedName });
+      else if (operation === "remove-candidate") result = await context.workflow.removeCandidate({ ...versions, candidateId });
+      else result = await context.workflow.acceptTopics({ ...versions, topicIds, candidateIds });
+      return this.reviewResult(result);
+    }, signal);
+  }
+
+  async propose(raw: unknown, signal?: AbortSignal): Promise<WorkbenchLibraryReview> {
+    const input = reviewInput(raw); exactKeys(input, ["configRevision", "expectedProposalRevision"]);
+    return this.withContext(async (context, currentSignal) => {
+      await this.assertReviewCurrent(context, input);
+      await context.workflow.propose({ signal: currentSignal });
+      return this.reviewResult(await context.workflow.review());
+    }, signal);
+  }
+
+  async preview(raw: unknown, signal?: AbortSignal): Promise<LibraryDirectionPreview> {
+    const input = reviewInput(raw); exactKeys(input, ["configRevision", "expectedProposalRevision", "candidateId", "paperKeys"]);
+    const candidateId = boundedText(input.candidateId, "candidateId", 128);
+    const paperKeys = input.paperKeys === undefined ? undefined : stringList(input.paperKeys, "paperKeys", 20, 128);
+    return this.withContext(async (context, currentSignal) => {
+      await this.assertReviewCurrent(context, input);
+      return context.workflow.previewDirection({ candidateId, paperKeys, categories: this.config.settings.arxiv.categories,
+        expectedProposalRevision: input.expectedProposalRevision, signal: currentSignal });
+    }, signal);
+  }
+
+  private reviewResult(snapshot: LibraryReviewSnapshot): WorkbenchLibraryReview {
+    return { ...snapshot, configRevision: this.config.configRevision!, connected: true };
+  }
+
+  private async assertReviewCurrent(context: Context, input: ReviewInput): Promise<void> {
+    await context.assertCurrent();
+    if (input.configRevision !== this.config.configRevision) throw new WorkbenchError(409, "CLI configuration changed; reload the review and retry");
+    const snapshot = await context.workflow.review();
+    if ((snapshot.proposal?.revision ?? null) !== input.expectedProposalRevision) throw new WorkbenchError(409, "Direction proposal changed; reload the review and retry");
+  }
+
   async pdf(key: string): Promise<ArrayBuffer> {
     return this.withContext(async (context, signal) => {
       const { catalog } = await context.workflow.review();
@@ -93,7 +175,7 @@ export class WorkbenchLibrary {
         } catch (error) { signal.throwIfAborted(); if (paper.filePaths.filter(isPdf).length === 1) throw error; }
       }
       throw new WorkbenchError(404, "Library PDF is unavailable");
-    });
+    }, undefined, true);
   }
 
   private async present(context: Context, paper: Omit<WorkbenchLibraryPaper, "pdfAvailable">, signal: AbortSignal): Promise<WorkbenchLibraryPaper> {
@@ -107,24 +189,30 @@ export class WorkbenchLibrary {
     return { ...paper, pdfAvailable };
   }
 
-  private async withContext<T>(run: (context: Context, signal: AbortSignal) => Promise<T>, signal?: AbortSignal): Promise<T> {
-    try { return await this.runContext(run, signal); }
+  private async withContext<T>(run: (context: Context, signal: AbortSignal) => Promise<T>, signal?: AbortSignal, readOnly = false): Promise<T> {
+    try { return await this.runContext(run, signal, readOnly); }
     catch (error) {
-      if (error instanceof WorkbenchError) throw error;
+      const message = redactText(error instanceof Error ? error.message : String(error), {secrets:[this.config.settings.llm.apiKey, this.config.settings.embedding.apiKey]});
+      if (error instanceof WorkbenchError) throw new WorkbenchError(error.status, message);
+      if (error instanceof PersonalLibraryInterestProfileReviewError) throw new WorkbenchError(error.code === "invalid-input" ? 400 : 409, message);
+      if (error instanceof PersonalLibraryDirectionProposalStoreError) throw new WorkbenchError(409, message);
       if (error instanceof LibrarySourceError) throw new WorkbenchError(error.kind === "limit-exceeded" ? 413 : error.kind === "not-found" ? 404 : 409, error.message);
       if (error instanceof CliConfigError) throw new WorkbenchError(409, error.message);
-      if (error instanceof Error && /identity changed|authorization|Personal library is busy/.test(error.message)) throw new WorkbenchError(409, error.message);
+      if (error instanceof Error && /identity changed|authorization|Personal library is busy|changed|revision|already accepted|was not found|must configure|Generate personal library/.test(error.message)) throw new WorkbenchError(409, message);
       throw error;
     }
   }
 
-  private async runContext<T>(run: (context: Context, signal: AbortSignal) => Promise<T>, signal?: AbortSignal): Promise<T> {
+  private async runContext<T>(run: (context: Context, signal: AbortSignal) => Promise<T>, signal?: AbortSignal, readOnly = false): Promise<T> {
     const controller = new AbortController();
     const combined = AbortSignal.any([controller.signal, ...[this.options.signal, signal].filter((value): value is AbortSignal => !!value)]);
     combined.throwIfAborted();
     const context = await createCliLibraryContext(this.config, { ...this.options, signal: combined });
-    const lease = await context.storage.acquireLock("personal-library-workflow", { wait: true, signal: combined, timeoutMs: 30_000 });
-    if (!lease) throw new Error("Personal library is busy");
+    // Atomic stores expose their last committed documents while a model job is running.
+    // These views do not need a cross-store index transaction; retrieval and mutations
+    // retain the exclusive lease for generation/index compatibility.
+    const lease = readOnly ? null : await context.storage.acquireLock("personal-library-workflow", { wait: true, signal: combined, timeoutMs: 30_000 });
+    if (!readOnly && !lease) throw new Error("Personal library is busy");
     let watcher: ReturnType<typeof watch> | undefined;
     try {
       const assertCurrent = async () => {
@@ -138,7 +226,7 @@ export class WorkbenchLibrary {
       const result = await run(context, combined);
       await assertCurrent();
       return result;
-    } finally { watcher?.close(); await lease.release(); }
+    } finally { watcher?.close(); await lease?.release(); }
   }
 }
 function isPdf(file: string): boolean { return /\.pdf$/i.test(file); }
@@ -159,4 +247,29 @@ function projectPapers(catalog: PersonalLibraryCatalog, manifest: FullTextKnowle
     };
   }
   return papers;
+}
+
+interface ReviewInput extends Record<string, unknown> { configRevision: string; expectedProposalRevision: number | null }
+function objectInput(value: unknown): Record<string, unknown> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new WorkbenchError(400, "Review input must be an object");
+  return value as Record<string, unknown>;
+}
+function reviewInput(raw: unknown): ReviewInput {
+  const value = objectInput(raw);
+  if (typeof value.configRevision !== "string" || !/^sha256:[a-f0-9]{64}$/.test(value.configRevision)) throw new WorkbenchError(400, "A current configRevision is required");
+  if (value.expectedProposalRevision !== null && (typeof value.expectedProposalRevision !== "number" || !Number.isSafeInteger(value.expectedProposalRevision) || value.expectedProposalRevision < 0)) throw new WorkbenchError(400, "A current expectedProposalRevision is required");
+  return value as ReviewInput;
+}
+function exactKeys(value: Record<string, unknown>, accepted: string[]): void {
+  if (Object.keys(value).some(key => !accepted.includes(key))) throw new WorkbenchError(400, "Unknown review input field");
+}
+function boundedText(value: unknown, name: string, maximum: number): string {
+  if (typeof value !== "string" || !value.trim() || value.length > maximum || /[\r\n]/.test(value)) throw new WorkbenchError(400, `${name} must be a non-empty single line up to ${maximum} characters`);
+  return value.trim();
+}
+function stringList(value: unknown, name: string, maximum: number, itemLength: number): string[] {
+  if (!Array.isArray(value) || value.length === 0 || value.length > maximum) throw new WorkbenchError(400, `${name} must contain 1..${maximum} items`);
+  const items = value.map(item => boundedText(item, name, itemLength));
+  if (new Set(items).size !== items.length) throw new WorkbenchError(400, `${name} contains duplicate items`);
+  return items;
 }
