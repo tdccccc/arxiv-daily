@@ -8,6 +8,7 @@ on:
       - apps/cli/**
       - packages/core/**
       - packages/node-runtime/**
+      - tools/node-library-runtime/**
       - package.json
       - package-lock.json
       - scripts/native-build.mjs
@@ -25,6 +26,7 @@ on:
       - apps/cli/**
       - packages/core/**
       - packages/node-runtime/**
+      - tools/node-library-runtime/**
       - package.json
       - package-lock.json
       - scripts/native-build.mjs

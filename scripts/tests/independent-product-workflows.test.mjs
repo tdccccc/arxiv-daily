@@ -279,3 +279,10 @@ test("production deploy, VSIX publish, and credential access are rejected", asyn
     ),
   );
 });
+
+test("DSH verification follows the optional library runtime embedded in its CLI", async () => {
+  const workflow = parse(await readFile(`${root}/.github/workflows/dsh-plugin.yml`, "utf8"));
+  for (const event of ["push", "pull_request"]) {
+    assert.ok(workflow.on[event].paths.includes("tools/node-library-runtime/**"), `${event} must verify runtime-manifest changes in the packed DSH CLI`);
+  }
+});
