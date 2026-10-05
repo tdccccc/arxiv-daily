@@ -12,7 +12,8 @@ export function settingsSetupGuide(snapshot: WorkbenchSettings, firstReportCompl
   const configured = { ...DEFAULT_SETTINGS, llm: { ...DEFAULT_SETTINGS.llm, apiKey: v.apiKeyConfigured ? 'configured' : '', baseUrl: v.baseUrl, model: v.model }, arxiv: { ...DEFAULT_SETTINGS.arxiv, categories: v.categories, topics: v.topics, timezone: v.timezone }, output: { ...DEFAULT_SETTINGS.output, dailyDir: v.dailyDir, papersDir: v.papersDir } };
   const validation = validateFilterConfig(configured);
   const enabled = v.schedule?.enabled ?? false;
-  if (validation.ok && firstReportComplete && enabled) return '';
+  // Scheduling is optional: a successful manual report also completes setup.
+  if (validation.ok && firstReportComplete) return '';
   const button = (action: string, text: string) => `<button type="button" data-setup-action="${action}">${escape(t(text))}</button>`;
   const steps = [
     { done: llmReady, name: 'Connect AI', text: 'Add an API key, API base URL, and model under LLM.', action: button('llm', 'Connect AI') },

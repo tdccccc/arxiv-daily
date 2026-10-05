@@ -23,3 +23,14 @@ it("renders the setup guide in Chinese without changing model content", async()=
  expect(root.querySelector('h2')?.textContent).toBe('开始使用');expect(root.querySelector('li strong')?.textContent).toBe('连接 AI');
  setUiLanguage('en');
 });
+
+it("does not reopen Enable onboarding for a configured manual-report user", async () => {
+ setUiLanguage('en');
+ const snapshot=await readWorkbenchSettings('/tmp/arxiv-missing-setup-fixture/config.toml');
+ snapshot.values.apiKeyConfigured=true;snapshot.values.baseUrl='https://example.test/v1';snapshot.values.model='model';
+ snapshot.values.topics=[{id:'focus',name:'Test',tag:'test',description:'Research',directions:[{id:'d1',text:'Research',origin:'manual'}],detail:true}];
+ snapshot.values.schedule.enabled=false;
+ expect(settingsSetupGuide(snapshot,true)).toBe('');
+ expect(snapshot.values.schedule.enabled).toBe(false);
+ expect(settingsSetupGuide(snapshot,false)).toContain('Getting started');
+});
