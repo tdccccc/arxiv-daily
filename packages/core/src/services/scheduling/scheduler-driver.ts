@@ -16,6 +16,7 @@ import { NoopProgressReporter, type ProgressReporter } from "../progress";
 import type { RunHistoryTrigger } from "../run-history";
 import type { RunLock } from "../run-lock";
 import type { StateStore } from "../state-store";
+import { clearRepeatingTimer, setRepeatingTimer } from "../../utils/timers";
 import { lookbackDateStrings, todayDateString } from "./date-selector";
 import { LOOKBACK_DAYS } from "./constants";
 import type { HistoryRecorder } from "./history-recorder";
@@ -90,7 +91,7 @@ const STORE_REPLACEMENT_ACTIVE_ERROR =
   "cannot replace scheduler store while work is active";
 
 export class SchedulerDriver {
-  private intervalHandle: number | null = null;
+  private intervalHandle: ReturnType<typeof setRepeatingTimer> | null = null;
   private readonly progress: ProgressReporter;
   private readonly pendingCompletions = new Map<string, PendingCompletion>();
   private readonly pendingNonCompletions = new Map<string, PendingNonCompletion>();
@@ -123,19 +124,19 @@ export class SchedulerDriver {
   start(): void {
     const min = this.deps.getSettings().schedule.tickIntervalMin;
     this.stop();
-    const handle = setInterval(() => {
+    const handle = setRepeatingTimer(() => {
       this.runScheduledTick().catch((error) =>
         this.safeEffect(() =>
           this.deps.logger.error("scheduler tick failed", error),
         ),
       );
     }, Math.max(1, min) * 60_000);
-    this.intervalHandle = handle as unknown as number;
+    this.intervalHandle = handle;
   }
 
   stop(): void {
     if (this.intervalHandle != null) {
-      clearInterval(this.intervalHandle as unknown as ReturnType<typeof setInterval>);
+      clearRepeatingTimer(this.intervalHandle);
       this.intervalHandle = null;
     }
   }

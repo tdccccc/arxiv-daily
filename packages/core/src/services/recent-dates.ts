@@ -5,6 +5,7 @@ import { arxivCategories } from "../settings/categories";
 import type { PluginSettings } from "../settings/types";
 import type { Logger } from "./logger";
 import { RunCancelledError, throwIfCancelled } from "./cancellation";
+import { clearTimer, setTimer } from "../utils/timers";
 
 type RecentFetcher = Pick<ArxivFetcher, "fetchRecent">;
 type RecentLogger = Pick<Logger, "debug" | "warn">;
@@ -66,9 +67,9 @@ export class RecentDatesCache {
   async refreshWithin(timeoutMs: number, signal?: AbortSignal): Promise<RecentDatesRefreshResult> {
     const underlyingRefresh = this.ensureRefresh();
     const caller = callerWait(underlyingRefresh, signal);
-    let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
+    let timeoutHandle: ReturnType<typeof setTimer> | undefined;
     const timeout = new Promise<"timeout">((resolve) => {
-      timeoutHandle = setTimeout(() => resolve("timeout"), Math.max(0, timeoutMs));
+      timeoutHandle = setTimer(() => resolve("timeout"), Math.max(0, timeoutMs));
     });
     try {
       const result = await Promise.race([caller.promise, timeout]);
@@ -90,7 +91,7 @@ export class RecentDatesCache {
       };
     } finally {
       caller.dispose();
-      if (timeoutHandle !== undefined) clearTimeout(timeoutHandle);
+      if (timeoutHandle !== undefined) clearTimer(timeoutHandle);
     }
   }
 
@@ -173,7 +174,7 @@ function callerWait<T>(
     if (settled) return;
     settled = true;
     cleanup();
-    const reason = (signal as AbortSignal & { reason?: unknown }).reason;
+    const reason: unknown = signal.reason;
     rejectWait(
       new RunCancelledError(
         typeof reason === "string" && reason ? reason : "cancelled by user",
@@ -194,11 +195,11 @@ function callerWait<T>(
         cleanup();
         resolve(value);
       },
-      (error) => {
+      (error: unknown) => {
         if (settled) return;
         settled = true;
         cleanup();
-        reject(error);
+        reject(error instanceof Error ? error : new Error(String(error), { cause: error }));
       },
     );
   });
