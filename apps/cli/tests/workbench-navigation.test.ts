@@ -124,3 +124,36 @@ it("opens the personal library in the main pane and restores reading with back/f
   click(root, '[data-action="history-forward"]');
   await vi.waitFor(() => expect(root.dataset.view).toBe('library'));
 });
+
+it("navigates between personal library and direction review without an agent turn", async () => {
+  const { root } = setup(url => {
+    if(url.pathname.endsWith('api/library')) return json({connected:false,papers:[],total:0,offset:0,nextOffset:null,summary:null});
+    if(url.pathname.endsWith('api/library/review')) return json({connected:false,configRevision:'current',catalog:{papers:{},lastScan:null},topics:[],acceptances:[],proposal:null,indexedPapers:[]});
+    return undefined;
+  });
+  await ready(root); click(root,'[data-action="personal-library"]');
+  await vi.waitFor(()=>expect(root.querySelector('[data-library="review"]')).toBeTruthy());
+  click(root,'[data-library="review"]');
+  await vi.waitFor(()=>expect(root.querySelector('.library-review-workspace')).toBeTruthy());
+  expect(new URL(location.href).searchParams.get('view')).toBe('review');
+  click(root,'[data-action="history-back"]');
+  await vi.waitFor(()=>expect(root.querySelector('.library-workspace')).toBeTruthy());
+  click(root,'[data-action="history-forward"]');
+  await vi.waitFor(()=>expect(root.querySelector('.library-review-workspace')).toBeTruthy());
+});
+
+it("restores a completed preview when returning to the review view", async () => {
+  const preview = { directionText:'Recovered preview',categories:['cs.AI'],missingCategories:[],papers:[] };
+  const seen = vi.fn();
+  const {root} = setup(url => {
+    if(url.pathname.endsWith('api/runs/current')) return json({run:{id:'preview-run',label:'预览研究方向',date:null,status:'completed',output:'',exitCode:0,startedAt:'2026-10-05T00:00:00Z',finishedAt:'2026-10-05T00:01:00Z'}});
+    if(url.pathname.endsWith('api/library/review')) return json({connected:true,configRevision:'current',catalog:{papers:{},lastScan:null},topics:[],acceptances:[],proposal:null,indexedPapers:[]});
+    if(url.pathname.endsWith('api/library/preview')) {seen(url.searchParams.get('runId'));return json({preview});}
+    return undefined;
+  });
+  await ready(root);
+  await vi.waitFor(()=>expect(root.querySelector('.run-tray')?.textContent).toContain('预览研究方向'));
+  click(root,'[data-action="direction-review"]');
+  await vi.waitFor(()=>expect(seen).toHaveBeenCalledWith('preview-run'));
+  await vi.waitFor(()=>expect(root.querySelector('.review-preview')?.textContent).toContain('Recovered preview'));
+});

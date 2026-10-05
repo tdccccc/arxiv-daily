@@ -4,6 +4,7 @@ import { settingsForm, bindSettings, type SettingsSnapshot } from "./settings";
 import type { DocumentEntry, WorkbenchDocuments } from "../documents";
 import type { WorkbenchRun } from "../server";
 import type { inspectProduct } from "../../inspect-cmd";
+import { mountLibraryReview } from "./library-review";
 import { mountLibrary } from "./library";
 import { generationFooter } from "./generation-footer";
 import { mountCalendar } from "./calendar";
@@ -83,6 +84,7 @@ function mountWorkbenchContent(root: HTMLElement, options: WorkbenchClientOption
   let paperList: WorkbenchPaperList | null = null;
   let activePaper: WorkbenchPaper | null = null;
   let selectedView = "";
+  let reviewView: ReturnType<typeof mountLibraryReview> | undefined;
   let disposeLibrary: (() => void) | undefined;
   let selectedKey = "";
   let selectedPath = "";
@@ -123,7 +125,7 @@ function mountWorkbenchContent(root: HTMLElement, options: WorkbenchClientOption
         <label class="search-box">${symbols.search}<input type="search" aria-label="${t("搜索标题、作者、arXiv ID 或日期")}" placeholder="${t("搜索标题、作者或关键词")}" autocomplete="off"></label>
         <nav class="paper-scopes" aria-label="${t("阅读筛选")}">${Object.entries(scopes).map(([key, label]) => `<button class="scope-button" data-scope="${key}"><span>${t(label)}</span><span data-count="${key}">—</span></button>`).join("")}</nav>
         <label class="topic-filter">${t("Topic")}<select data-filter="topic" aria-label="${t("筛选主题")}"><option value="">${t("全部主题")}</option></select></label>
-        <div class="navigation-footer"><button class="quiet-button" data-action="personal-library">${t("个人文献库")}</button><button class="quiet-button" data-action="clear-date">${t("浏览全部日期")}</button><button class="quiet-button" data-action="browse-documents">${t("浏览 Markdown 文件 ↗")}</button></div>
+        <div class="navigation-footer"><button class="quiet-button" data-action="personal-library">${t("个人文献库")}</button><button class="quiet-button" data-action="direction-review">${t("方向审核")}</button><button class="quiet-button" data-action="clear-date">${t("浏览全部日期")}</button><button class="quiet-button" data-action="browse-documents">${t("浏览 Markdown 文件 ↗")}</button></div>
       </aside>
       <main class="reading-pane" id="reading-content" tabindex="-1"></main>
       <aside class="toc-pane" aria-label="${t("文章目录")}"></aside>
@@ -221,7 +223,7 @@ function mountWorkbenchContent(root: HTMLElement, options: WorkbenchClientOption
   }
   function readRoute(): void {
     const params = new URL(location.href).searchParams;
-    selectedView = params.get("view") === "library" ? "library" : "";
+    selectedView = ["library", "review"].includes(params.get("view") || "") ? params.get("view")! : "";
     query = params.get("q") || ""; scope = Object.hasOwn(scopes, params.get("scope") || "") ? params.get("scope") as PaperScope : "all";
     topic = params.get("topic") || ""; sort = params.get("sort") || "published"; direction = params.get("direction") || "desc";
     offset = Math.max(0, Number(params.get("offset")) || 0); selectedDate = routeDate();
@@ -278,16 +280,28 @@ function mountWorkbenchContent(root: HTMLElement, options: WorkbenchClientOption
   async function showLibrary(push = true): Promise<void> {
     if (setupRequired) { await showSettings(); return; }
     if (push) rememberScroll();
-    disposeLibrary?.();
+    leaveLibrary();
     clearTimeout(searchTimer); listVersion += 1; documentVersion += 1;
     selectedView = "library"; selectedKey = ""; selectedPath = ""; activePaper = null;
     root.dataset.view = "library"; root.classList.remove("is-reading", "show-filters");
     find(".toc-pane").innerHTML = "";
     if (push) route();
     reading.scrollTop = 0; readingReady = true;
-    disposeLibrary = mountLibrary(reading, { request, onSettings: () => { void showSettings(); } });
+    disposeLibrary = mountLibrary(reading, { request, onSettings: () => { void showSettings(); }, onReview: () => { void showReview(); } });
   }
-  function leaveLibrary(): void { disposeLibrary?.(); disposeLibrary = undefined; selectedView = ""; }
+  async function showReview(push = true): Promise<void> {
+    if (setupRequired) { await showSettings(); return; }
+    if (push) rememberScroll();
+    leaveLibrary(); clearTimeout(searchTimer); listVersion += 1; documentVersion += 1;
+    selectedView = "review"; selectedKey = ""; selectedPath = ""; activePaper = null;
+    root.dataset.view = "review"; root.classList.remove("is-reading", "show-filters");
+    find(".toc-pane").innerHTML = "";
+    if (push) route();
+    reading.scrollTop = 0; readingReady = true;
+    reviewView = mountLibraryReview(reading, { request, onSettings: () => { void showSettings(); }, onLibrary: () => { void showLibrary(); }, onRun: acceptRun });
+    if (currentRun) void reviewView.handleRun(currentRun);
+  }
+  function leaveLibrary(): void { disposeLibrary?.(); disposeLibrary = undefined; reviewView?.dispose(); reviewView = undefined; selectedView = ""; }
   async function showList(push = false, restore = false, keepFilters = false): Promise<void> {
     if (push) rememberScroll();
     leaveLibrary();
@@ -473,6 +487,7 @@ function mountWorkbenchContent(root: HTMLElement, options: WorkbenchClientOption
     currentRun = run;
     root.querySelector(".settings-form")?.dispatchEvent(new CustomEvent("workbench-run", { detail: run }));
     renderRun();
+    if (run) void reviewView?.handleRun(run);
     if (run?.id !== previous?.id || run?.status !== previous?.status || run?.date !== previous?.date) void calendar.refresh();
     clearTimeout(pollTimer);
     if (run?.status === "running") pollTimer = setTimeout(() => { void pollRun(); }, options.pollIntervalMs ?? 1200);
@@ -543,7 +558,8 @@ function mountWorkbenchContent(root: HTMLElement, options: WorkbenchClientOption
     void pollRun();
     if (refresh) void calendar.refresh();
     else if (selectedDate) void calendar.selectDate(selectedDate); else void calendar.load();
-    if (selectedView === "library") void showLibrary(false);
+    if (selectedView === "review") void showReview(false);
+    else if (selectedView === "library") void showLibrary(false);
     else if (selectedPath) void openDocument(selectedPath, "none", location.hash);
     else if (selectedKey) void openPaper(selectedKey, false, true);
     else { listScroll = reading.scrollTop; void loadList(true); }
@@ -581,6 +597,7 @@ function mountWorkbenchContent(root: HTMLElement, options: WorkbenchClientOption
     else if (action === "generate-date") showGeneration(target.closest<HTMLElement>("[data-date]")!.dataset.date);
     else if (action === "settings") showSettings();
     else if (action === "personal-library") void showLibrary();
+    else if (action === "direction-review") void showReview();
     else if (action === "close-dialog") closeDialog();
     else if (action === "reconnect" || action === "refresh") reconnect();
     else if (action === "next-page" && nextOffset !== null) { offset = nextOffset; void showList(true); }
@@ -648,7 +665,7 @@ function mountWorkbenchContent(root: HTMLElement, options: WorkbenchClientOption
     navigation.pending = false; syncNavigation();
     const scroll = navigation.scrolls.get(navigation.index);
     readRoute(); syncFilters();
-    const loading = selectedView === "library" ? showLibrary(false) : selectedPath ? openDocument(selectedPath, "none", location.hash)
+    const loading = selectedView === "review" ? showReview(false) : selectedView === "library" ? showLibrary(false) : selectedPath ? openDocument(selectedPath, "none", location.hash)
       : selectedKey ? openPaper(selectedKey, false) : showList(false, true);
     const version = documentVersion;
     void loading.then(() => { if (!disposed && version === documentVersion && scroll !== undefined) reading.scrollTop = scroll; });
@@ -667,7 +684,7 @@ function mountWorkbenchContent(root: HTMLElement, options: WorkbenchClientOption
   void loadStatus().then(ok => { if (ok) void initializeWorkspace(); });
   return () => {
     disposed = true;
-    calendar.dispose(); disposeSidebar(); disposeLibrary?.();
+    calendar.dispose(); disposeSidebar(); leaveLibrary();
     systemTheme?.removeEventListener?.("change", applyTheme);
     lifetime.abort();
     clearTimeout(searchTimer); clearTimeout(pollTimer);
