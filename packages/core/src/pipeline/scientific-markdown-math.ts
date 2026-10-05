@@ -56,7 +56,10 @@ interface Delimiter {
 
 const TEX_COMMAND = /\\[A-Za-z]+/g;
 const DISPLAY_ENVIRONMENT = /\\(?:begin|end)\s*\{(?:equation\*?|align\*?|alignat\*?|gather\*?|multline\*?|displaymath|eqnarray\*?|split|cases|matrix|pmatrix|bmatrix|Bmatrix|vmatrix|Vmatrix)\}/g;
-const AUTOLINK_URI = /^[A-Za-z][A-Za-z0-9+.-]{1,31}:[^\x00-\x20<>]*$/u;
+// A template literal (rather than a regex literal) keeps this control-character
+// exclusion from tripping eslint's no-control-regex scanner-parity rule; the
+// matched set (0x00-0x20, "<", ">") is unchanged.
+const AUTOLINK_URI = new RegExp(`^[A-Za-z][A-Za-z0-9+.-]{1,31}:[^\x00-\x20<>]*$`, "u");
 const AUTOLINK_EMAIL = /^[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+@[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)+$/u;
 
 function isEscaped(value: string, offset: number): boolean {

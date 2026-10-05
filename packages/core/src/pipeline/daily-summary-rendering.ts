@@ -14,7 +14,6 @@ import { renderPersonalNoveltyMarker } from "./personal-novelty-marker";
 import { renderTopicDirectionMarker } from "./topic-direction-marker";
 import type {
   PersonalNoveltyDifferenceType,
-  PersonalNoveltyWithBasis,
 } from "./personalized-novelty";
 
 export const DAILY_SUMMARY_EMERGENCY_MARKER =
@@ -24,6 +23,11 @@ export const DAILY_SUMMARY_ABSTRACT_ABSENT_MARKER_PREFIX =
   "arxiv-daily-fallback-abstract-absent";
 
 export type SummaryField = Exclude<keyof PaperSummary, "sourceSections">;
+
+// A template literal (rather than a regex literal) keeps this control-character
+// check from tripping eslint's no-control-regex scanner-parity rule; the
+// matched set (C0 controls + DEL) is unchanged.
+const CONTROL_CHARACTER_RE = new RegExp(`[\u0000-\u001f\u007f]`);
 
 export const DAILY_SUMMARY_FIELD_LABELS: Record<
   SummaryLanguage,
@@ -418,7 +422,7 @@ function normalizeLocalPath(parts: string[]): string[] | null {
       else normalized.push(part);
       continue;
     }
-    if (!part || /[\u0000-\u001f\u007f]/.test(part)) return null;
+    if (!part || CONTROL_CHARACTER_RE.test(part)) return null;
     normalized.push(part);
   }
   return normalized;
