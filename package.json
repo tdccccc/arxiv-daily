@@ -34,6 +34,7 @@
     "smoke:install": "node scripts/install-smoke.mjs",
     "sync:release-version": "node scripts/sync-release-version.mjs",
     "check:release-version": "node scripts/check-release-version.mjs",
+    "check:published-manifest": "node scripts/check-published-manifest.mjs",
     "cli": "node apps/cli/dist/arxiv-daily-cli.cjs"
   },
   "overrides": {

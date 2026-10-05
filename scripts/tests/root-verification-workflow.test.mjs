@@ -50,6 +50,12 @@ const expectedWorkflow = {
           name: "Check Obsidian submission requirements",
           run: "npm run check:obsidian-submission",
         },
+        {
+          name: "Check published manifest release",
+          if: "${{ github.event_name == 'push' || github.base_ref == 'main' }}",
+          env: { GH_TOKEN: "${{ github.token }}" },
+          run: "npm run check:published-manifest",
+        },
         { name: "Smoke test build artifacts", run: "npm run smoke:build" },
         { name: "Smoke test CLI package installation", run: "npm run smoke:install" },
       ],
@@ -188,6 +194,34 @@ test("required steps cannot be disabled or redirected", async () => {
   assert.throws(() => assertRootVerificationWorkflow(disabledTests));
   assert.throws(() => assertRootVerificationWorkflow(redirectedBuild));
   assert.throws(() => assertRootVerificationWorkflow(toleratedFailure));
+});
+
+test("published manifest check only runs for release-relevant events and keeps its token", async () => {
+  const source = await currentWorkflow();
+  const workflow = parseWorkflow(source);
+  const step = workflow.jobs.verify.steps.find(
+    (value) => value.name === "Check published manifest release",
+  );
+  assert.equal(step.if, "${{ github.event_name == 'push' || github.base_ref == 'main' }}");
+  assert.deepEqual(step.env, { GH_TOKEN: "${{ github.token }}" });
+  assert.equal(step.run, "npm run check:published-manifest");
+
+  const unconditional = source.replace(
+    /^        if: \$\{\{ github\.event_name == 'push' \|\| github\.base_ref == 'main' \}\}\n/m,
+    "",
+  );
+  const widenedCondition = source.replace(
+    "github.event_name == 'push' || github.base_ref == 'main'",
+    "true",
+  );
+  const droppedToken = source.replace(
+    /^        env:\n          GH_TOKEN: \$\{\{ github\.token \}\}\n/m,
+    "",
+  );
+
+  assert.throws(() => assertRootVerificationWorkflow(unconditional));
+  assert.throws(() => assertRootVerificationWorkflow(widenedCondition));
+  assert.throws(() => assertRootVerificationWorkflow(droppedToken));
 });
 
 test("root verification remains limited to the root release group", async () => {
