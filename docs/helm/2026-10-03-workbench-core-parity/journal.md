@@ -157,3 +157,7 @@ Full repository3950 passed/2 real-corpus opt-in skips; types/boundaries/inventor
 User clarified Enable is the daily-discovery switch, not merely onboarding. The old UI only held the off state until manual Save; autosave now persists it before all close paths. Exact true→off→X/Escape→reopen regressions and actual HTTP/TOML check pass. Save button removed; queued text/change persistence, secrets, preference races, first-use path requirements and conflict/discard flows validated. Related optional-scheduling onboarding fix retained.
 
 CLI443 and DSH20 passed; types/boundaries/inventory/build plus34 doc links and packaged bytes verified.0.1.18 local package sha25646d7d07de8df1d72a115d260bb7cfc82bacf4a4db0da436fa41e23b1b55f53cb. No real model/email/corpus changes, production install, main merge or push. P20done, P4pending.
+
+## 2026-10-05T14:11:23+08:00 — Post-P20 local main synchronization
+
+用户请求合并主分支并确认README。两工作区干净，main678febe为featured359052祖先，0/14分叉计数；保留backup/main-before-library-autosave-20261005后fast-forward。最新CLI443/DSH20及types/build证据对应同一代码树，无冲突或执行逻辑变化，不重复测试。README中英文、getting-started、CLI及DSH说明已包含0.1.18与自动保存/文献库/审核流程。此记录随feature再次快进main。未push/publish/install；保留原worktree及其他warning工作树。

@@ -2,14 +2,14 @@
 
 ## User-approved next work
 
-P2/P3 and P20 are complete. The retained feature worktree now includes library browsing/review and automatic settings persistence; local DSH0.1.18 is packaged. The user's Enable issue was the daily-discovery switch itself: turning it off now persists before X/Escape/Done closes settings, and reopening stays off. Manual Save is removed. Local main remains the earlier P19 merge at678febe; these subsequent changes are not merged/pushed/installed. P4 richer run management stays pending; no active phase. Await user feedback rather than extending scope.
+P2/P3 and P20 are complete and merged into local main. On the user's request, main fast-forwarded from678febe to the verified feature head d359052; backup/main-before-library-autosave-20261005 retains678febe. The follow-up documentation commit records this synchronization and is also fast-forwarded into main. The feature worktree is retained. DSH0.1.18 is packaged locally; nothing has been pushed, published or installed into the production profile. P4 richer run management stays pending; no active phase. Await user feedback rather than extending scope.
 
 ## Workspace
 
 - /home/tiandc/Documents/code/arxiv-daily/.worktree/claude-code-research-plugin
 - branch feat/claude-code-research-plugin
 - Default Chinese. No Computer Use; screenshots supplied by user may be read. No real paid model calls/email or writes to user vault for testing.
-- Main remains at the previous merge; separate Obsidian warning worktrees are untouched. All implementation stays in this worktree.
+- Local main is synchronized with the accepted feature work. Keep future development isolated here; separate Obsidian warning worktrees are untouched.
 - Helm and code-change-discipline apply. Preserve staged/unrelated edits, observe Red/Green, inspect staged diff before scoped Conventional Commits.
 
 ## Product decisions
@@ -73,3 +73,7 @@ Full3950 pass/2 real-corpus opt-in skips (CLI422/Obsidian1007), all types/bounda
 bindSettings returns {flush,close,dispose}. Input debounce500ms, change saves immediately, root input waits for completion, and writes serialize using returned revisions. Explicit model/library/email operations flush first. X/Escape/Done wait for pending edits; failure preserves fields with retry and explicit discard confirmation. Displayed secrets are never written back as edits. Preferences save independently and redraw settings in place, retaining newer selections and business drafts; the shell updates after close. Opening settings never writes/enables scheduling. Completed manual discovery also retires the Enable guide requirement.
 
 Final CLI443/45 files and DSH20 passed; types/boundaries/product inventory/build passed. Local0.1.18 sha25646d7d07de8df1d72a115d260bb7cfc82bacf4a4db0da436fa41e23b1b55f53cb. No production install or main merge. Relevant logs /tmp/arxiv-p20-{cli,dsh,types,build,http-green,guide-green}.log.
+
+## Local main synchronization after P20
+
+The user explicitly requested merging and checking README. Main and feature were clean with0/14 divergence, so no rebase or conflict resolution was needed. The exact tested code was fast-forwarded; no repeated tests were needed for an unchanged tree. Latest acceptance remains CLI443, DSH20 and successful types/boundaries/inventory/build. English/Chinese README, getting-started docs, CLI README and DSH README include0.1.18 library/review/autosave behavior. No remote push or publication.
