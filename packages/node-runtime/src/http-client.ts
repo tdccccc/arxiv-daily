@@ -1,6 +1,8 @@
 import {
   HttpTransportError,
+  clearTimer,
   isHttpTransportError,
+  setTimer,
   throwIfCancelled,
   type HttpClient,
   type HttpRequest,
@@ -73,10 +75,10 @@ function settleRequest(
 ): Promise<HttpResponse> {
   return new Promise((resolve, reject) => {
     let settled = false;
-    let timeout: ReturnType<typeof setTimeout> | undefined;
+    let timeout: ReturnType<typeof setTimer> | undefined;
 
     const cleanup = () => {
-      if (timeout) clearTimeout(timeout);
+      if (timeout) clearTimer(timeout);
       req.signal?.removeEventListener("abort", onAbort);
     };
     const settle = (fn: () => void) => {
@@ -91,7 +93,7 @@ function settleRequest(
         try {
           throwIfCancelled(req.signal);
         } catch (error) {
-          reject(error);
+          reject(error instanceof Error ? error : new Error(String(error), { cause: error }));
         }
       });
     };
@@ -100,7 +102,7 @@ function settleRequest(
     if (req.signal?.aborted) {
       onAbort();
     } else if (req.timeoutMs && req.timeoutMs > 0) {
-      timeout = setTimeout(() => {
+      timeout = setTimer(() => {
         const error = new HttpTransportError(
           "timeout",
           `HTTP timeout after ${req.timeoutMs}ms: ${req.url}`,
@@ -113,14 +115,14 @@ function settleRequest(
 
     operation.then(
       (response) => settle(() => resolve(response)),
-      (error) => settle(() => reject(error)),
+      (error: unknown) => settle(() => reject(error instanceof Error ? error : new Error(String(error), { cause: error }))),
     );
   });
 }
 
 function requireFetch(): FetchLike {
-  if (typeof globalThis.fetch !== "function") {
+  if (typeof fetch !== "function") {
     throw new Error("NodeHttpClient requires global fetch");
   }
-  return globalThis.fetch.bind(globalThis);
+  return fetch;
 }

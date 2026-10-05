@@ -2,7 +2,7 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { createHash, randomUUID } from "node:crypto";
-import { throwIfCancelled, type StorageLock, type StorageLockOptions } from "@arxiv-daily/core";
+import { clearTimer, setTimer, throwIfCancelled, type StorageLock, type StorageLockOptions } from "@arxiv-daily/core";
 
 interface Owner {
   version: 1;
@@ -33,8 +33,8 @@ export class NodeFileLock {
     const rootIdentity = process.platform === "win32" ? canonicalRoot.toLowerCase() : canonicalRoot;
     const name = createHash("sha256").update(`${rootIdentity}\0${key}`).digest("hex");
     const dir = path.join(base, name);
-    await fs.mkdir(dir, { mode: 0o700 }).catch((error) => {
-      if (error.code !== "EEXIST") throw error;
+    await fs.mkdir(dir, { mode: 0o700 }).catch((error: unknown) => {
+      if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
     });
     const identity = await requireDirectory(dir);
     const assertCurrent = async () => {
@@ -193,11 +193,15 @@ async function publish(target: string, value: Owner | Decision): Promise<boolean
 
 function pause(signal?: AbortSignal): Promise<void> {
   return new Promise((resolve, reject) => {
-    const timer = setTimeout(() => { signal?.removeEventListener("abort", abort); resolve(); }, 15);
+    const timer = setTimer(() => { signal?.removeEventListener("abort", abort); resolve(); }, 15);
     const abort = () => {
-      clearTimeout(timer);
+      clearTimer(timer);
       signal?.removeEventListener("abort", abort);
-      try { throwIfCancelled(signal); } catch (error) { reject(error); }
+      try {
+        throwIfCancelled(signal);
+      } catch (error) {
+        reject(error instanceof Error ? error : new Error(String(error), { cause: error }));
+      }
     };
     signal?.addEventListener("abort", abort, { once: true });
     if (signal?.aborted) abort();
