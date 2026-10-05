@@ -5,6 +5,7 @@ import { lexicalTermBucket,
 } from "./generation-index-format";
 import { FullTextGenerationIndexStoreError, type OpenedFullTextGeneration } from "./generation-index-store";
 import type { KnowledgeBaseChunkHit, KnowledgeBasePaperMatch } from "./retrieval";
+import { setTimer } from "../../utils/timers";
 
 const DEFAULT_LIMIT = 10;
 const DEFAULT_MAX_HITS = 3;
@@ -204,7 +205,7 @@ function scorePostingsRange(block: LexicalPostingsBlock, routed: ReadonlySet<num
       && block.chunks[occurrence.chunkOrdinal - block.chunkStart]!.compactText.includes(compactAlias)) aliasChunks.add(occurrence.chunkOrdinal);
     if (occurrence.namespace !== namespace) continue;
     const queryIndex = queryTerms.indexOf(occurrence.term); if (queryIndex < 0 || !routed.has(queryIndex)) continue;
-    let terms = byChunk.get(occurrence.chunkOrdinal); if (!terms) byChunk.set(occurrence.chunkOrdinal, terms = new Map()); terms.set(queryIndex, occurrence.tf);
+    let terms = byChunk.get(occurrence.chunkOrdinal); if (!terms) byChunk.set(occurrence.chunkOrdinal, terms = new Map<number, number>()); terms.set(queryIndex, occurrence.tf);
   }
   const hits: HitCandidate[] = [];
   for (let ordinal = start; ordinal < end; ordinal += 1) {
@@ -247,4 +248,4 @@ function resetStats(stats?: GenerationBm25Stats): void { if (!stats) return; sta
 function observeLive(stats: GenerationBm25Stats | undefined, metadata: object | null, postings: object | null): void { if (stats) stats.maxLiveBlocks = Math.max(stats.maxLiveBlocks, Number(metadata !== null) + Number(postings !== null)); }
 function throwIfCancelled(signal?: AbortSignal): void { if (!signal?.aborted) return; if (typeof DOMException === "function") throw new DOMException("The operation was aborted", "AbortError"); const error = new Error("The operation was aborted"); error.name = "AbortError"; throw error; }
 function afterRead(signal?: AbortSignal): void { throwIfCancelled(signal); }
-async function yieldToTimer(signal?: AbortSignal): Promise<void> { throwIfCancelled(signal); await new Promise<void>((resolve) => setTimeout(resolve, 0)); throwIfCancelled(signal); }
+async function yieldToTimer(signal?: AbortSignal): Promise<void> { throwIfCancelled(signal); await new Promise<void>((resolve) => setTimer(resolve, 0)); throwIfCancelled(signal); }

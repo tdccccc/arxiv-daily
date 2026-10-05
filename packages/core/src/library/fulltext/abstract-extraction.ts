@@ -140,7 +140,7 @@ function leadingProse(page: string): string | undefined {
 function normalizePage(page: string): string {
   return page
     .split("\n")
-    .map((line) => line.trim().replace(/[ \t ]+/g, " "))
+    .map((line) => line.trim().replace(/[ \t\u00A0]+/g, " "))
     .join("\n")
     .replace(/\n{3,}/g, "\n\n")
     .trim();

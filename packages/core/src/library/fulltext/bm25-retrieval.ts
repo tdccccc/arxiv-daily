@@ -46,7 +46,7 @@ function tokenize(text: string, includeHanSingles: boolean): string[] {
   const normalized = text.normalize("NFKC").toLocaleLowerCase("und");
   const tokens: string[] = [];
   for (const match of normalized.matchAll(WORD_OR_HAN_RUN)) {
-    const run = match[0]!;
+    const run = match[0];
     if (!HAN_RUN.test(run)) {
       tokens.push(run);
       continue;
