@@ -3,8 +3,8 @@
 status: active
 owner: /root
 created: 2026-10-03T00:22:59+08:00
-updated: 2026-10-05T02:15:06+08:00
-revision: 25
+updated: 2026-10-05T11:07:30+08:00
+revision: 26
 
 ## Intent
 
@@ -59,3 +59,5 @@ revision: 25
 15. P15 — Core结构化运行状态与各端展示 — status: done
 
 16. P16 — Rebase到最新主线并保留两端功能 — status: done
+
+17. P17 — 修复工作台各阅读入口的Markdown与公式显示 — status: active
