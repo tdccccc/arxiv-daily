@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { get as httpGet } from "node:http";
 import { DEFAULT_SETTINGS } from "@arxiv-daily/core";
-import { DEFAULT_CLI_SCHEDULE, type CliRuntimeConfig } from "../src/config";
+import { loadCliConfig, DEFAULT_CLI_SCHEDULE, type CliRuntimeConfig } from "../src/config";
 import { startWorkbench, type WorkbenchOptions } from "../src/workbench/server";
 
 const cleanup: Array<() => Promise<unknown>> = [];
@@ -198,4 +198,19 @@ it("exposes durable generation metadata without changing the Markdown or inferri
  expect(doc.generationMetrics.generatedAt).toBeUndefined();
  expect(doc.html).not.toContain('Generation metrics');
  expect(await (await get(`api/raw?path=${encodeURIComponent(path)}`)).text()).toBe(source);
+});
+
+it("exposes the disconnected personal-library view without running processing", async () => {
+  const run = vi.fn<NonNullable<WorkbenchOptions["run"]>>();
+  const fixture = await setup(run);
+  await writeFile(fixture.config.configPath, `schema_version = 1\nvault_root = ${JSON.stringify(fixture.vaultRoot)}\n`);
+  const app = await startWorkbench({ config: await loadCliConfig({ configPath: fixture.config.configPath }), run });
+  cleanup.push(app.close);
+  const get = (path: string, init?: RequestInit) => fetch(new URL(path, app.url), init);
+  const response = await get("api/library");
+  expect(response.status).toBe(200);
+  expect(await response.json()).toMatchObject({ connected: false, papers: [], total: 0 });
+  expect((await get("api/library/pdf?key=../../config.toml")).status).not.toBe(200);
+  expect((await get("api/library/search", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ query: "x", mode: "shell" }) })).status).toBe(400);
+  expect(run).not.toHaveBeenCalled();
 });

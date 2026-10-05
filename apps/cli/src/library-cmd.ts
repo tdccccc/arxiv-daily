@@ -70,7 +70,7 @@ export async function runCliLibrary(config: CliRuntimeConfig, args: string[], io
       return 0;
     }
     if (!["scan", "index", "propose", "directions", "confirm", "search", "review"].includes(command)) throw new CliConfigError(`Unknown library command: ${command}`);
-    const context = await libraryContext(config, { ...options, signal });
+    const context = await createCliLibraryContext(config, { ...options, signal });
     lease = await context.storage.acquireLock("personal-library-workflow", { wait: true, signal, timeoutMs: 30_000 });
     if (!lease) throw new Error("Personal library is busy");
     await context.assertCurrent();
@@ -139,7 +139,7 @@ export async function runCliLibrary(config: CliRuntimeConfig, args: string[], io
   }
 }
 
-async function libraryContext(config: CliRuntimeConfig, options: CliLibraryOptions = {}) {
+export async function createCliLibraryContext(config: CliRuntimeConfig, options: CliLibraryOptions = {}) {
   const connection = config.libraryConnection;
   if (!connection) throw new CliConfigError(config.libraryConnectionError ?? "Connect a personal library first: arxiv-daily library connect PATH");
   const source = await openScopedLibrarySource(connection.selectedRoot);
@@ -179,7 +179,7 @@ async function libraryContext(config: CliRuntimeConfig, options: CliLibraryOptio
   const scope = createPersonalLibraryScopeFingerprint(connection);
   const identity = createPersonalLibraryIdentificationFingerprint(connection.eligibleExtensions);
   return {
-    storage, logger, assertCurrent, assertAuthorized, createEmbedding,
+    storage, source, logger, assertCurrent, assertAuthorized, createEmbedding,
     knowledgeBase: new FullTextKnowledgeBaseFileStore(storage, config.settings.output, scope, identity),
     generationStore: new FullTextGenerationIndexStore(storage, config.settings.output, scope, identity),
     workflow: new LibraryWorkflow({

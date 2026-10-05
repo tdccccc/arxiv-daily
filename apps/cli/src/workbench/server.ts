@@ -1,3 +1,4 @@
+import { WorkbenchLibrary } from "./library";
 import type { RunOutcome } from "@arxiv-daily/core";
 import type { CliRunEvent } from "../main-types";
 import { randomBytes } from "node:crypto";
@@ -196,6 +197,21 @@ export async function startWorkbench(options: WorkbenchOptions) {
         if (error instanceof WorkbenchError) throw error;
         throw new WorkbenchError(400, redact(error instanceof Error ? error.message : "设置操作失败。"));
       } finally { saving = false; }
+    }
+    if (route === "api/library" && method === "GET") return json(res, 200, await new WorkbenchLibrary(config).catalog(url.searchParams));
+    if (route === "api/library/search" && method === "POST") {
+      const body = await readJson(req);
+      if (run?.status === "running") throw new WorkbenchError(409, "请等待当前操作完成。");
+      saving = true;
+      controller = new AbortController();
+      try { return json(res, 200, await new WorkbenchLibrary(config).search(body, controller.signal)); }
+      finally { saving = false; }
+    }
+    if (route === "api/library/pdf" && method === "GET") {
+      const bytes = await new WorkbenchLibrary(config).pdf(url.searchParams.get("key") || "");
+      res.setHeader("Content-Security-Policy", "default-src 'none'; sandbox");
+      res.writeHead(200, { "Content-Type": "application/pdf", "Content-Disposition": "inline; filename=paper.pdf" });
+      return res.end(Buffer.from(bytes));
     }
     if (method === "GET" && route === "api/status") return json(res, 200, await inspectProduct(config));
     if (method === "GET" && route === "api/calendar") return json(res, 200, await inspectCalendar(config, documents, url.searchParams.get("month"), now(), run));

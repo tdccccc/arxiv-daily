@@ -110,3 +110,17 @@ describe("bounded reading navigation", () => {
   });
 
 });
+
+it("opens the personal library in the main pane and restores reading with back/forward", async () => {
+  const { root } = setup(url => url.pathname.endsWith('api/library') ? json({ connected: false, papers: [], total: 0, offset: 0, nextOffset: null, summary: null }) : undefined);
+  await ready(root);
+  expect(root.querySelector('[data-action="personal-library"]')).toBeTruthy();
+  click(root, '[data-action="personal-library"]');
+  await vi.waitFor(() => expect(root.dataset.view).toBe('library'));
+  expect(new URL(location.href).searchParams.get('view')).toBe('library');
+  await vi.waitFor(() => expect(root.querySelector('.reading-pane')?.textContent).toContain('连接'));
+  click(root, '[data-action="history-back"]'); await ready(root);
+  expect(new URL(location.href).searchParams.has('view')).toBe(false);
+  click(root, '[data-action="history-forward"]');
+  await vi.waitFor(() => expect(root.dataset.view).toBe('library'));
+});

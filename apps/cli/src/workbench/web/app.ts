@@ -4,6 +4,7 @@ import { settingsForm, bindSettings, type SettingsSnapshot } from "./settings";
 import type { DocumentEntry, WorkbenchDocuments } from "../documents";
 import type { WorkbenchRun } from "../server";
 import type { inspectProduct } from "../../inspect-cmd";
+import { mountLibrary } from "./library";
 import { generationFooter } from "./generation-footer";
 import { mountCalendar } from "./calendar";
 import { mountSidebar } from "./sidebar";
@@ -81,6 +82,8 @@ function mountWorkbenchContent(root: HTMLElement, options: WorkbenchClientOption
   let nextOffset: number | null = null;
   let paperList: WorkbenchPaperList | null = null;
   let activePaper: WorkbenchPaper | null = null;
+  let selectedView = "";
+  let disposeLibrary: (() => void) | undefined;
   let selectedKey = "";
   let selectedPath = "";
   let selectedDate = "";
@@ -120,7 +123,7 @@ function mountWorkbenchContent(root: HTMLElement, options: WorkbenchClientOption
         <label class="search-box">${symbols.search}<input type="search" aria-label="${t("搜索标题、作者、arXiv ID 或日期")}" placeholder="${t("搜索标题、作者或关键词")}" autocomplete="off"></label>
         <nav class="paper-scopes" aria-label="${t("阅读筛选")}">${Object.entries(scopes).map(([key, label]) => `<button class="scope-button" data-scope="${key}"><span>${t(label)}</span><span data-count="${key}">—</span></button>`).join("")}</nav>
         <label class="topic-filter">${t("Topic")}<select data-filter="topic" aria-label="${t("筛选主题")}"><option value="">${t("全部主题")}</option></select></label>
-        <div class="navigation-footer"><button class="quiet-button" data-action="clear-date">${t("浏览全部日期")}</button><button class="quiet-button" data-action="browse-documents">${t("浏览 Markdown 文件 ↗")}</button></div>
+        <div class="navigation-footer"><button class="quiet-button" data-action="personal-library">${t("个人文献库")}</button><button class="quiet-button" data-action="clear-date">${t("浏览全部日期")}</button><button class="quiet-button" data-action="browse-documents">${t("浏览 Markdown 文件 ↗")}</button></div>
       </aside>
       <main class="reading-pane" id="reading-content" tabindex="-1"></main>
       <aside class="toc-pane" aria-label="${t("文章目录")}"></aside>
@@ -211,13 +214,14 @@ function mountWorkbenchContent(root: HTMLElement, options: WorkbenchClientOption
   }
   function route(mode: "push" | "replace" = "push"): void {
     const url = new URL(location.href);
-    const values = { q: query, scope: scope === "all" ? "" : scope, topic, sort, direction, offset: offset ? String(offset) : "", date: selectedDate, files: documentsMode ? "1" : "", kind: documentsMode ? kind : "", document: selectedPath, paper: selectedKey };
+    const values = { view: selectedView, q: query, scope: scope === "all" ? "" : scope, topic, sort, direction, offset: offset ? String(offset) : "", date: selectedDate, files: documentsMode ? "1" : "", kind: documentsMode ? kind : "", document: selectedPath, paper: selectedKey };
     for (const [key, value] of Object.entries(values)) { if (value) url.searchParams.set(key, value); else url.searchParams.delete(key); }
     url.hash = "";
     writeRoute(url, mode);
   }
   function readRoute(): void {
     const params = new URL(location.href).searchParams;
+    selectedView = params.get("view") === "library" ? "library" : "";
     query = params.get("q") || ""; scope = Object.hasOwn(scopes, params.get("scope") || "") ? params.get("scope") as PaperScope : "all";
     topic = params.get("topic") || ""; sort = params.get("sort") || "published"; direction = params.get("direction") || "desc";
     offset = Math.max(0, Number(params.get("offset")) || 0); selectedDate = routeDate();
@@ -271,8 +275,22 @@ function mountWorkbenchContent(root: HTMLElement, options: WorkbenchClientOption
       readingReady = true; reportConnection(error);
     }
   }
+  async function showLibrary(push = true): Promise<void> {
+    if (setupRequired) { await showSettings(); return; }
+    if (push) rememberScroll();
+    disposeLibrary?.();
+    clearTimeout(searchTimer); listVersion += 1; documentVersion += 1;
+    selectedView = "library"; selectedKey = ""; selectedPath = ""; activePaper = null;
+    root.dataset.view = "library"; root.classList.remove("is-reading", "show-filters");
+    find(".toc-pane").innerHTML = "";
+    if (push) route();
+    reading.scrollTop = 0; readingReady = true;
+    disposeLibrary = mountLibrary(reading, { request, onSettings: () => { void showSettings(); } });
+  }
+  function leaveLibrary(): void { disposeLibrary?.(); disposeLibrary = undefined; selectedView = ""; }
   async function showList(push = false, restore = false, keepFilters = false): Promise<void> {
     if (push) rememberScroll();
+    leaveLibrary();
     documentVersion += 1; selectedPath = ""; selectedKey = ""; activePaper = null;
     root.dataset.view = "list"; root.classList.remove("is-reading");
     if (!keepFilters) root.classList.remove("show-filters");
@@ -282,7 +300,7 @@ function mountWorkbenchContent(root: HTMLElement, options: WorkbenchClientOption
     await loadList(restore);
   }
   function beginReading(captureScroll: boolean): void {
-    if (captureScroll) rememberScroll(); readingReady = false; listVersion += 1;
+    if (captureScroll) rememberScroll(); leaveLibrary(); readingReady = false; listVersion += 1;
     root.dataset.view = "reading"; root.classList.add("is-reading"); root.classList.remove("show-filters");
     find(".toc-pane").innerHTML = "";
   }
@@ -459,6 +477,7 @@ function mountWorkbenchContent(root: HTMLElement, options: WorkbenchClientOption
     clearTimeout(pollTimer);
     if (run?.status === "running") pollTimer = setTimeout(() => { void pollRun(); }, options.pollIntervalMs ?? 1200);
     if (run && run.status !== "running" && previous?.id === run.id && previous.status === "running") {
+      if (selectedView === "library") void showLibrary(false);
       if (root.dataset.view === "list") { listScroll = reading.scrollTop; void loadList(true); }
       if (selectedKey) void openPaper(selectedKey, false, true);
       else if (selectedPath) void openDocument(selectedPath, "none", location.hash, false);
@@ -524,7 +543,8 @@ function mountWorkbenchContent(root: HTMLElement, options: WorkbenchClientOption
     void pollRun();
     if (refresh) void calendar.refresh();
     else if (selectedDate) void calendar.selectDate(selectedDate); else void calendar.load();
-    if (selectedPath) void openDocument(selectedPath, "none", location.hash);
+    if (selectedView === "library") void showLibrary(false);
+    else if (selectedPath) void openDocument(selectedPath, "none", location.hash);
     else if (selectedKey) void openPaper(selectedKey, false, true);
     else { listScroll = reading.scrollTop; void loadList(true); }
   }
@@ -560,6 +580,7 @@ function mountWorkbenchContent(root: HTMLElement, options: WorkbenchClientOption
     else if (action === "generate") showGeneration();
     else if (action === "generate-date") showGeneration(target.closest<HTMLElement>("[data-date]")!.dataset.date);
     else if (action === "settings") showSettings();
+    else if (action === "personal-library") void showLibrary();
     else if (action === "close-dialog") closeDialog();
     else if (action === "reconnect" || action === "refresh") reconnect();
     else if (action === "next-page" && nextOffset !== null) { offset = nextOffset; void showList(true); }
@@ -627,7 +648,7 @@ function mountWorkbenchContent(root: HTMLElement, options: WorkbenchClientOption
     navigation.pending = false; syncNavigation();
     const scroll = navigation.scrolls.get(navigation.index);
     readRoute(); syncFilters();
-    const loading = selectedPath ? openDocument(selectedPath, "none", location.hash)
+    const loading = selectedView === "library" ? showLibrary(false) : selectedPath ? openDocument(selectedPath, "none", location.hash)
       : selectedKey ? openPaper(selectedKey, false) : showList(false, true);
     const version = documentVersion;
     void loading.then(() => { if (!disposed && version === documentVersion && scroll !== undefined) reading.scrollTop = scroll; });
@@ -646,7 +667,7 @@ function mountWorkbenchContent(root: HTMLElement, options: WorkbenchClientOption
   void loadStatus().then(ok => { if (ok) void initializeWorkspace(); });
   return () => {
     disposed = true;
-    calendar.dispose(); disposeSidebar();
+    calendar.dispose(); disposeSidebar(); disposeLibrary?.();
     systemTheme?.removeEventListener?.("change", applyTheme);
     lifetime.abort();
     clearTimeout(searchTimer); clearTimeout(pollTimer);
