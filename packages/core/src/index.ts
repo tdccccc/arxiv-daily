@@ -1,5 +1,3 @@
-/// <reference path="./prompts/md.d.ts" />
-
 export * from "./core/adapters";
 export * from "./delivery";
 export * from "./dashboard/detail-summary";
