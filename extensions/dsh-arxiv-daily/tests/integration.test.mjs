@@ -55,7 +55,22 @@ for (const firstRun of [false, true]) test(`${firstRun ? 'first-run' : 'configur
   assert.equal(first.result.ok, true, JSON.stringify(first)); assert.equal(first.result.value.url, second.result.value.url);
   const url = first.result.value.url;
   const get = async route => { const response = await fetch(new URL(route, url)); assert.equal(response.status, 200); return response; };
-  assert.ok((await get('')).headers.get('content-security-policy').includes(`frame-ancestors ${origin}`));
+  const page = await get('');
+  assert.ok(page.headers.get('content-security-policy').includes(`frame-ancestors ${origin}`));
+  assert.ok(page.headers.get('content-security-policy').includes("font-src 'self'"));
+  assert.match(await page.text(), /href="katex.css"/);
+  const cssResponse = await get('katex.css');
+  assert.match(cssResponse.headers.get('content-type'), /text\/css/);
+  const css = await cssResponse.text();
+  assert.match(css, /\.katex-mathml/);
+  const fontPaths = [...new Set([...css.matchAll(/url\(([^)]+\.woff2)\)/g)].map(match => match[1]))];
+  assert.ok(fontPaths.length > 10, 'formula fonts are bundled, not loaded from a CDN');
+  for (const fontPath of fontPaths) {
+    assert.equal(new URL(fontPath, url).origin, new URL(url).origin);
+    const font = await get(fontPath);
+    assert.equal(font.headers.get('content-type'), 'font/woff2');
+    assert.equal(Buffer.from(await font.arrayBuffer()).subarray(0, 4).toString(), 'wOF2');
+  }
   if (firstRun) {
     assert.equal((await (await get('api/status')).json()).setupRequired, true);
     const initial = await (await get('api/settings')).json();

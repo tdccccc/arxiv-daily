@@ -7,7 +7,7 @@ import type { inspectProduct } from "../../inspect-cmd";
 import { mountCalendar } from "./calendar";
 import { mountSidebar } from "./sidebar";
 import type { WorkbenchPaper, WorkbenchPaperList, PaperScope } from "../papers";
-import { scopes, marks, paperRows, dayHeading, overview } from "./papers";
+import { scopes, marks, paperRows, dayHeading, overview, scientificInline } from "./papers";
 
 export interface WorkbenchClientOptions {
   fetch?: typeof fetch;
@@ -233,7 +233,7 @@ function mountWorkbenchContent(root: HTMLElement, options: WorkbenchClientOption
         const result = await request<DocumentList>(`api/documents?${params}`);
         if (disposed || version !== listVersion || root.dataset.view !== "list") return;
         entries = result.documents; nextOffset = result.nextOffset;
-        reading.innerHTML = `<div class="paper-workspace">${listToolbar()}<div class="collection-tabs" role="tablist" aria-label="${t("文档类型")}">${Object.entries({ all: t("全部文件"), daily: t("日报"), papers: t("论文总结") }).map(([value, label]) => `<button role="tab" data-kind="${value}" aria-selected="${kind === value}">${t(label)}</button>`).join("")}</div><div class="document-list">${entries.map(entry => `<button class="document-row" data-document="${escapeHtml(entry.path)}"><span class="document-row-meta">${escapeHtml(entry.date || t("已保存文档"))}</span><span class="document-row-title">${escapeHtml(entry.title)}</span><span class="document-row-authors">${escapeHtml(entry.authors)}</span></button>`).join("") || `<div class="list-empty">${t("暂无匹配文件")}</div>`}</div>${pagination(result.total, result.nextOffset)}</div>`;
+        reading.innerHTML = `<div class="paper-workspace">${listToolbar()}<div class="collection-tabs" role="tablist" aria-label="${t("文档类型")}">${Object.entries({ all: t("全部文件"), daily: t("日报"), papers: t("论文总结") }).map(([value, label]) => `<button role="tab" data-kind="${value}" aria-selected="${kind === value}">${t(label)}</button>`).join("")}</div><div class="document-list">${entries.map(entry => `<button class="document-row" data-document="${escapeHtml(entry.path)}"><span class="document-row-meta">${escapeHtml(entry.date || t("已保存文档"))}</span><span class="document-row-title">${scientificInline(entry.title)}</span><span class="document-row-authors">${escapeHtml(entry.authors)}</span></button>`).join("") || `<div class="list-empty">${t("暂无匹配文件")}</div>`}</div>${pagination(result.total, result.nextOffset)}</div>`;
       } else {
         for (const [key, value] of Object.entries({ scope, topic, sort, direction, date: selectedDate })) if (value) params.set(key, value);
         const result = await request<WorkbenchPaperList>(`api/papers?${params}`);
@@ -326,7 +326,7 @@ function mountWorkbenchContent(root: HTMLElement, options: WorkbenchClientOption
 
   function renderDocument(entry: ReadingDocument): void {
     reading.innerHTML = `<div class="reading-toolbar"><button class="quiet-button" data-action="back">${t("← 返回列表")}</button><span class="reading-kind">${entry.kind === "daily" ? t("研究日报") : t("论文总结")}</span><div class="reading-controls"><button class="icon-button" data-action="font-down" aria-label="${t("缩小字号")}">A−</button><button class="icon-button" data-action="font-up" aria-label="${t("放大字号")}">A＋</button><a class="quiet-button" data-source="raw" href="api/raw?path=${encodeURIComponent(entry.path)}" target="_blank" rel="noopener noreferrer">Markdown ${symbols.arrow}</a></div></div>
-      <div class="article-wrap"><header class="document-header"><div class="document-eyebrow">${escapeHtml(entry.date || t("已保存文档"))}${entry.arxivId ? ` <span>· arXiv:${escapeHtml(entry.arxivId)}</span>` : ""}</div><h1 class="document-title">${escapeHtml(entry.title)}</h1>${entry.authors ? `<p class="document-authors">${escapeHtml(entry.authors)}</p>` : ""}<div class="document-links">${sourceLink(entry.originalUrl, t("arXiv 原文"), "original")}${sourceLink(entry.pdfUrl, t("阅读 PDF"), "pdf")}${entry.related.map(item => `<a href="?document=${encodeURIComponent(item.path)}">${t("来源日报 ·")} ${escapeHtml(item.title)}</a>`).join("")}</div></header><article class="markdown-body" aria-label="${t("文档正文")}"></article><footer class="article-footer"><span>${t("Markdown 保存在本地")}</span><span>${escapeHtml(entry.path)}</span></footer></div>`;
+      <div class="article-wrap"><header class="document-header"><div class="document-eyebrow">${escapeHtml(entry.date || t("已保存文档"))}${entry.arxivId ? ` <span>· arXiv:${escapeHtml(entry.arxivId)}</span>` : ""}</div><h1 class="document-title">${scientificInline(entry.title)}</h1>${entry.authors ? `<p class="document-authors">${escapeHtml(entry.authors)}</p>` : ""}<div class="document-links">${sourceLink(entry.originalUrl, t("arXiv 原文"), "original")}${sourceLink(entry.pdfUrl, t("阅读 PDF"), "pdf")}${entry.related.map(item => `<a href="?document=${encodeURIComponent(item.path)}">${t("来源日报 ·")} ${escapeHtml(item.title)}</a>`).join("")}</div></header><article class="markdown-body" aria-label="${t("文档正文")}"></article><footer class="article-footer"><span>${t("Markdown 保存在本地")}</span><span>${escapeHtml(entry.path)}</span></footer></div>`;
     // The local service owns Markdown sanitization. All other API text is escaped above.
     find("article").innerHTML = entry.html;
     const firstHeading = find("article").querySelector("h1");
@@ -334,7 +334,7 @@ function mountWorkbenchContent(root: HTMLElement, options: WorkbenchClientOption
       find(".document-title").id = firstHeading.id;
       firstHeading.remove();
     }
-    find(".toc-pane").innerHTML = entry.headings.length ? `<div class="toc-inner"><span class="toc-label">${t("本页目录")}</span><nav>${entry.headings.map(heading => `<a href="#${encodeURIComponent(heading.id)}" class="toc-level-${heading.level}">${escapeHtml(heading.title)}</a>`).join("")}</nav><span class="toc-note">${t("阅读原文，核对结论。")}</span></div>` : "";
+    find(".toc-pane").innerHTML = entry.headings.length ? `<div class="toc-inner"><span class="toc-label">${t("本页目录")}</span><nav>${entry.headings.map(heading => `<a href="#${encodeURIComponent(heading.id)}" class="toc-level-${heading.level}">${scientificInline(heading.title)}</a>`).join("")}</nav><span class="toc-note">${t("阅读原文，核对结论。")}</span></div>` : "";
   }
 
   function sourceLink(url: string | null, label: string, source: string): string {

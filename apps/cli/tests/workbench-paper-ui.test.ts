@@ -175,3 +175,46 @@ it("keeps mobile search filters open while typing, then allows returning to the 
   click(root, '.library-pane [data-action="show-filters"]');
   expect(root.classList.contains("show-filters")).toBe(false);
 });
+
+it("renders Markdown and formulas in paper lists and saved overviews without changing source text", async () => {
+  const scientific = { ...paper, title: String.raw`**Cosmology** $H_0$`,
+    abstract: String.raw`Measurements use \(\Omega_m\). <img src=x onerror=alert(1)>`,
+    summary: { ...paper.summary,
+      keyMethod: String.raw`**Model** with $x^2$.
+
+$$
+\frac{a}{b}
+$$
+
+- First constraint
+- Second constraint`,
+      whyRelevant: String.raw`Improves $\sigma_8$ without [unsafe](javascript:alert(1)).`,
+    },
+  };
+  const original = JSON.stringify(scientific);
+  const {root,fetcher}=setup(url=>url.pathname.endsWith("api/papers")?json(list([scientific])):url.pathname.endsWith("api/paper")?json({paper:scientific}):undefined);
+  await vi.waitFor(()=>expect(root.querySelector(".paper-title")).toBeTruthy());
+  expect(root.querySelector('.paper-title .katex')).toBeTruthy();
+  expect(root.querySelector('.paper-title strong')?.textContent).toBe('Cosmology');
+  expect(root.querySelector('.paper-reason .katex')).toBeTruthy();
+  click(root,'[data-paper]');
+  await vi.waitFor(()=>expect(root.querySelector('.paper-overview')).toBeTruthy());
+  expect(root.querySelector('.paper-overview .document-title .katex')).toBeTruthy();
+  expect(root.querySelectorAll('.overview-content .katex').length).toBe(4);
+  expect(root.querySelector('.overview-content .katex-display')).toBeTruthy();
+  expect(root.querySelector('.overview-content strong')?.textContent).toBe('Model');
+  expect(root.querySelectorAll('.overview-content li')).toHaveLength(2);
+  expect(root.querySelector('.overview-content img')).toBeNull();
+  expect(root.querySelector('[href^="javascript:"]')).toBeNull();
+  expect(root.querySelectorAll('.overview-content pre .katex')).toHaveLength(0);
+  expect(JSON.stringify(scientific)).toBe(original);
+  expect(fetcher.mock.calls.some(([,init])=>init?.method==='POST')).toBe(false);
+});
+
+it("renders math in document titles and table of contents", async () => {
+ const {root}=setup(url=>url.pathname.endsWith('api/document')?json({path:'daily/2026-10-01.md',kind:'daily',title:'Expansion $H_0$',date:day.date,arxivId:'',authors:'',html:'<h2 id="matter">Matter</h2>',headings:[{id:'matter',title:String.raw`Matter $\Omega_m$`,level:2}],related:[],originalUrl:null,pdfUrl:null}):undefined,'?date=2026-10-01');
+ await ready(root);click(root,'[data-action="read-day"]');
+ await vi.waitFor(()=>expect(root.querySelector('article')).toBeTruthy());
+ expect(root.querySelector('.document-title .katex')).toBeTruthy();
+ expect(root.querySelector('.toc-pane a .katex')).toBeTruthy();
+});

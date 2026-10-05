@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { describeMarkdown, renderMarkdown } from "../src/workbench/markdown";
+import { describeMarkdown, renderInlineMarkdown, renderMarkdown } from "../src/workbench/markdown";
 
 describe("workbench Markdown reading", () => {
   it("reads writer frontmatter without displaying it and preserves ordinary article formatting", () => {
@@ -32,6 +32,62 @@ describe("workbench Markdown reading", () => {
     expect(result.html).toContain("$$not_math$$");
     expect(result.html).toContain("Cost is $5 and $10.");
     expect(result.html).toContain("<math");
+  });
+
+  it("renders standalone display environments across blank lines without Markdown interference", () => {
+    for (const [open, close] of [["$$", "$$"], ["\\[", "\\]"]]) {
+      const result = renderMarkdown(`Before\n${open}\n\\begin{aligned}\na &= b \\\\\n\n c &= \\begin{pmatrix}1 & 2 \\\\ 3 & 4\\end{pmatrix}\n\\end{aligned}\n${close}\nAfter`);
+      expect(result.html.match(/class="katex-display"/g)).toHaveLength(1);
+      expect(result.html).not.toContain("katex-error");
+      expect(result.html).toContain("<annotation encoding=\"application/x-tex\">");
+      expect(result.html).toMatch(/<p>Before<\/p>\s*<span class="katex-display"/);
+      expect(result.html).toMatch(/<\/span>\s*<p>After<\/p>/);
+    }
+  });
+
+  it("renders safe inline previews through the same math and link contract", () => {
+    const html = renderInlineMarkdown(String.raw`**Mass** $M_\odot$ and \(x^2\) [web](https://example.com) <img src=x onerror=alert(1)>`, { resolveLink: () => null });
+    expect(html).toContain("<strong>Mass</strong>");
+    expect(html.match(/class="katex"/g)).toHaveLength(2);
+    expect(html).not.toContain("<p>");
+    expect(html).not.toContain("<a ");
+    expect(html).not.toContain("<img");
+  });
+
+  it("preserves escaped delimiters, code, currency and unmatched math", () => {
+    const source = String.raw`Escaped \$x\$ and \\(x\\), costs $5 and $10; unmatched $x.
+
+` + "`$x$` and `\\(x\\)`\n\n```latex\n$$x$$\n```\n\n    $$x$$\n";
+    const html = renderMarkdown(source).html;
+    expect(html).not.toContain('class="katex"');
+    expect(html).toContain("costs $5 and $10; unmatched $x.");
+    expect(html).toContain("<code>$x$</code>");
+    expect(html).toContain('class="language-latex"');
+    expect(html).toContain("$$x$$");
+  });
+
+  it("supports display math inside lists and quotes without consuming following blocks", () => {
+    const result = renderMarkdown("> $$\n> \\begin{aligned}x &= y \\\\\n>\n> y &= z\\end{aligned}\n> $$\n\n- Formula:\n\n  \\[\n  x^2\n\n  + y^2\n  \\]\n- Next item\n\nOutside");
+    expect(result.html.match(/class="katex-display"/g)).toHaveLength(2);
+    expect(result.html).not.toContain("katex-error");
+    expect(result.html).toMatch(/<li>\s*<p>Next item<\/p>\s*<\/li>/);
+    expect(result.html).toContain("<p>Outside</p>");
+  });
+
+  it("keeps unsupported and unclosed display syntax readable", () => {
+    const html = renderMarkdown("$$\n\\unknowncommand{x}\n$$\n\nUnclosed:\n\\[\nx^2\n\nEnd").html;
+    expect(html).toContain("unknowncommand");
+    expect(html).toContain("x^2");
+    expect(html).toContain("<p>End</p>");
+    expect(html).not.toContain("undefined");
+  });
+
+  it("shares safe link and math policies in inline previews", () => {
+    const html = renderInlineMarkdown(String.raw`[web](https://example.com) [bad](safe) $\href{https://example.com}{hidden}$ $\htmlClass{evil}{x}$`, { resolveLink: (target) => target === "safe" ? "javascript:alert(1)" : target });
+    expect(html).toContain('href="https://example.com" target="_blank" rel="noopener noreferrer"');
+    expect(html.match(/<a /g)).toHaveLength(1);
+    expect(html).not.toContain('href="javascript:');
+    expect(html).not.toContain('class="evil"');
   });
 
   it("keeps malformed math readable and does not enable KaTeX trusted links", () => {
@@ -85,4 +141,14 @@ describe("workbench Markdown reading", () => {
       expect(describeMarkdown(source)).toEqual({ title: rendered.title, metadata: rendered.metadata });
     }
   });
+});
+
+it("preserves heading math delimiters for rendered document titles and navigation", () => {
+  const source=String.raw`# Expansion $H_0$
+
+## Matter \(\Omega_m\)`;
+  const result=renderMarkdown(source);
+  expect(result.title).toBe(String.raw`Expansion $H_0$`);
+  expect(describeMarkdown(source).title).toBe(result.title);
+  expect(result.headings[1]?.title).toBe(String.raw`Matter $\Omega_m$`);
 });

@@ -52,6 +52,14 @@ export function renderMarkdown(source: string, options: RenderMarkdownOptions = 
   };
 }
 
+/** Safe inline projection for titles/previews; uses the same syntax and destination policy. */
+export function renderInlineMarkdown(source: string, options: RenderMarkdownOptions = {}): string {
+  const markdown = readingParser();
+  const tokens = markdown.parseInline(source, {});
+  for (const token of tokens) if (token.children) resolveDestinations(token.children, options);
+  return markdown.renderer.render(tokens, markdown.options, {});
+}
+
 function readingParser(): MarkdownParser {
   const markdown = new MarkdownIt({ html: false, linkify: false, typographer: false });
   addReadingSyntax(markdown);
@@ -82,7 +90,12 @@ function frontmatter(source: string): { body: string; metadata: Record<string, s
 }
 
 function inlineText(tokens: Token[]): string {
-  return tokens.map(token => token.children ? inlineText(token.children) : token.nesting === 0 ? token.content : "").join("").trim();
+  return tokens.map(token => {
+    // Heading metadata is rendered again in titles/TOC; retain math boundaries.
+    if (token.type === "reading_math") return `$${token.content}$`;
+    if (token.type === "reading_math_display") return `$$${token.content}$$`;
+    return token.children ? inlineText(token.children) : token.nesting === 0 ? token.content : "";
+  }).join("").trim();
 }
 
 function safeDestination(target: string, kind: "link" | "image", allowLocal: boolean): string | null {
@@ -175,6 +188,30 @@ function addReadingSyntax(markdown: MarkdownParser): void {
     state.pos = close + closeDelimiter.length;
     return true;
   });
+
+  // Block parsing must happen before paragraphs split display math at blank lines.
+  // Only standalone delimiters interrupt paragraphs; fences/indented code stay literal.
+  markdown.block.ruler.before("fence", "reading_math_block", (state, startLine, endLine, silent) => {
+    if (state.sCount[startLine]! - state.blkIndent >= 4) return false;
+    const opening = state.src.slice(state.bMarks[startLine]! + state.tShift[startLine]!, state.eMarks[startLine]).trim();
+    if (opening !== "$$" && opening !== "\\[") return false;
+    const closing = opening === "$$" ? "$$" : "\\]";
+    let closeLine = startLine + 1;
+    for (; closeLine < endLine; closeLine += 1) {
+      // Do not consume text belonging to a containing list/blockquote's next block.
+      if (state.tShift[closeLine]! < 0 || (!state.isEmpty(closeLine) && state.sCount[closeLine]! < state.blkIndent)) return false;
+      const line = state.src.slice(state.bMarks[closeLine]! + state.tShift[closeLine]!, state.eMarks[closeLine]).trim();
+      if (line === closing) break;
+    }
+    if (closeLine >= endLine) return false;
+    if (silent) return true;
+    const token = state.push("reading_math_display", "", 0);
+    token.block = true;
+    token.map = [startLine, closeLine + 1];
+    token.content = state.getLines(startLine + 1, closeLine, state.blkIndent, false);
+    state.line = closeLine + 1;
+    return true;
+  }, { alt: ["paragraph", "reference", "blockquote", "list"] });
 
   markdown.block.ruler.before("html_block", "reading_comment", (state, startLine, endLine, silent) => {
     const start = state.bMarks[startLine]! + state.tShift[startLine]!;
