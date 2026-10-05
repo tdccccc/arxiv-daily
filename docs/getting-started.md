@@ -10,7 +10,7 @@ For the product overview, see the [README](../README.md). The numbered guide bel
 |---|---|
 | Obsidian desktop plugin | Install and enable the plugin, then follow the steps below |
 | Standalone browser workbench | Build the CLI from source and run `npm run cli -- ui`; see [CLI instructions](../apps/cli/README.md#local-reading-workbench) |
-| DSH | Install the local `0.1.17` package and click `arxiv-daily` above Settings in the left sidebar; see [build, install and upgrade](../extensions/dsh-arxiv-daily/README.md) |
+| DSH | Install the local `0.1.18` package and click `arxiv-daily` above Settings in the left sidebar; see [build, install and upgrade](../extensions/dsh-arxiv-daily/README.md) |
 | Claude Code CLI | Load the plugin and use `/arxiv-daily:open` to open the browser workbench; see [instructions](../extensions/claude-code-arxiv-daily/README.md) |
 
 On first open, the standalone workbench lets you set the output folder, model, categories and research topics, save, and generate a report. A calendar and filters sit on the left; paper lists and a Markdown reader with math, back/forward, reading marks and favorites sit on the right. Settings can be edited and saved in the workbench, including appearance and Chinese/English interface language. Agent conversation is optional.

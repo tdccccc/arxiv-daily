@@ -10,7 +10,7 @@
 |---|---|
 | Obsidian 桌面插件 | 安装并启用插件，按下方步骤设置 |
 | 独立浏览器工作台 | 从源码构建 CLI，运行 `npm run cli -- ui`；见 [CLI 文档](../apps/cli/README.md#local-reading-workbench) |
-| DSH | 安装本地 `0.1.17` 包，在左栏“设置”上方点击 `arxiv-daily`；见 [构建、安装与升级](../extensions/dsh-arxiv-daily/README.md) |
+| DSH | 安装本地 `0.1.18` 包，在左栏“设置”上方点击 `arxiv-daily`；见 [构建、安装与升级](../extensions/dsh-arxiv-daily/README.md) |
 | Claude Code CLI | 加载插件，以 `/arxiv-daily:open` 打开浏览器工作台；见 [使用说明](../extensions/claude-code-arxiv-daily/README.md) |
 
 独立工作台首次打开即可设置保存目录、模型、分类和研究主题，保存后生成日报。左侧日历与筛选，右侧论文列表和 Markdown 阅读器，支持公式、前进/后退、待读与收藏；右上角“设置”可修改并保存配置，也可切换外观和中英文界面。Agent 对话不是使用这些功能的前提。

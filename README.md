@@ -45,7 +45,7 @@ Start with **Obsidian** if you already use it. Choose the **workbench** if you w
 
 The hosts share core discovery rules, settings definitions, and record formats. **Obsidian and CLI configuration values and API keys do not automatically synchronize.** DSH and the browser workbench both use the CLI configuration. Pointing hosts at the same output directory shares records, not settings.
 
-The standalone workbench and DSH **0.1.17** described here are available from source/local builds; these additions have not been published to npm. See the build instructions below rather than assuming the latest npm release includes them.
+The standalone workbench and DSH **0.1.18** described here are available from source/local builds; these additions have not been published to npm. See the build instructions below rather than assuming the latest npm release includes them.
 
 ---
 
@@ -110,7 +110,7 @@ The left calendar shows report status and paper counts; the right side starts wi
 - Read rendered Markdown, tables, and LaTeX formulas; original Markdown remains available and unchanged by reading.
 - Move backward and forward through the current reading session, retaining filters, anchors, and scroll position.
 - Review sources separately from the body and see recorded token usage, generation duration, and timestamp. Missing statistics in older records are shown as unrecorded; report-wide usage is labeled accordingly.
-- Edit and save settings in the workbench. **Appearance** controls theme and Chinese/English interface language separately from summary language.
+- Edit settings in the workbench; changes save automatically, with visible progress and errors. **Appearance** controls theme and Chinese/English interface language separately from summary language.
 - Distinguish awaiting announcements, no updates, no matching papers, and genuine failures. Waiting for an announcement does not consume ordinary failure retries.
 
 To embed this workbench in DSH, follow the [DSH build and installation guide](extensions/dsh-arxiv-daily/README.md). Open **arxiv-daily** above Settings in the left sidebar or from the right sidebar; no message is required. The local package includes native modules for its build platform. Linux/x64 and DSH Host integration have been tested; cross-platform packages and Electron visual behavior are not fully verified.

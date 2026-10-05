@@ -131,6 +131,8 @@ npm run cli -- ui
 
 Run these from the repository root. Source builds require CMake, a C++ compiler and Node-API headers for native storage. The same workbench is available inside [DSH](../../extensions/dsh-arxiv-daily/README.md); [Claude Code CLI](../../extensions/claude-code-arxiv-daily/README.md) can open it in your browser. Neither integration requires Obsidian.
 
+Settings changes save automatically. Closing settings waits for pending saves; failures keep the editor open so you can retry. Automatic daily reports remain optional after completing your first report.
+
 ## Optional personal library
 
 In the workbench, connect and index a folder from **Settings**, then open **Personal library** to browse/search titles and abstracts or open local PDFs (up to 25 MiB). **Review directions** provides proposal editing, representative evidence, previews, explicit partial acceptance, and a library overview. Accepted directions become ordinary research-topic settings; opening either page does not automatically call a model. The commands below remain available for terminal use.

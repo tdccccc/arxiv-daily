@@ -13,14 +13,14 @@ node extensions/dsh-arxiv-daily/build.mjs
 npm pack ./extensions/dsh-arxiv-daily/dist/package --pack-destination ./extensions/dsh-arxiv-daily/dist
 ```
 
-当前产物是 `extensions/dsh-arxiv-daily/dist/dsh-arxiv-daily-0.1.17.tgz`。本地构建包含当前操作系统和架构的原生存储模块；当前验收环境为 Linux x64。其他平台需在对应系统构建并验证，不能将本机包当作跨平台包分发。
+当前产物是 `extensions/dsh-arxiv-daily/dist/dsh-arxiv-daily-0.1.18.tgz`。本地构建包含当前操作系统和架构的原生存储模块；当前验收环境为 Linux x64。其他平台需在对应系统构建并验证，不能将本机包当作跨平台包分发。
 
-**DSH Desktop：** 打开“插件 / Plugins → 添加插件 / Add plugin”，输入生成的 `dsh-arxiv-daily-0.1.17.tgz` 的绝对路径，安装后选择“立即启用 / Enable now”。桌面 profile 由 Electron 管理，不要使用 `dsh plugin --profile desktop`。
+**DSH Desktop：** 打开“插件 / Plugins → 添加插件 / Add plugin”，输入生成的 `dsh-arxiv-daily-0.1.18.tgz` 的绝对路径，安装后选择“立即启用 / Enable now”。桌面 profile 由 Electron 管理，不要使用 `dsh plugin --profile desktop`。
 
 **DSH Web：** 使用下面的命令安装到 Web profile：
 
 ```sh
-dsh plugin --profile web add /absolute/path/dsh-arxiv-daily-0.1.17.tgz
+dsh plugin --profile web add /absolute/path/dsh-arxiv-daily-0.1.18.tgz
 ```
 
 重新启动 DSH，使新的插件包和客户端模块一起加载。包尚未发布到 npm；目前请安装本地产物。插件会注册自己的“arxiv-daily”侧栏标签。
@@ -30,7 +30,7 @@ dsh plugin --profile web add /absolute/path/dsh-arxiv-daily-0.1.17.tgz
 用新包替换旧版本，配置、Markdown 和论文索引保持在原位置。Web profile：
 
 ```sh
-dsh plugin --profile web add /absolute/path/dsh-arxiv-daily-0.1.17.tgz
+dsh plugin --profile web add /absolute/path/dsh-arxiv-daily-0.1.18.tgz
 ```
 
 然后退出并重新启动 DSH，使 Host 和客户端都加载新包。Desktop 使用插件管理器更新；若该版本的管理器不支持替换本地包，卸载旧插件后添加新包。插件卸载不会删除 arXiv Daily 的配置、Markdown 或论文索引。
@@ -38,8 +38,8 @@ dsh plugin --profile web add /absolute/path/dsh-arxiv-daily-0.1.17.tgz
 ## 使用
 
 1. 点击左侧栏“设置”上方的“arxiv-daily”，无需先发消息；也可在右侧栏入口页选择“arxiv-daily”。
-2. 首次使用会自动打开设置页。填写研究记录保存目录、模型 API 密钥与关注主题，点击“保存并开始使用”。已有 CLI 配置会直接沿用，不必再运行 `init`。
-3. 工作台右上角“设置”遵循 Obsidian 1.13+ 主设置路径：LLM、arXiv categories、Research topics、Automatic detail notes、Timezone、Output & schedule、Personal library、Email delivery、Advanced、Help & feedback。分类、推理强度、时区、时间窗口等保留原选择控件；模型保留自由输入、候选列表及“Get models”。点击“保存设置”后生效，密钥留空保留，默认不回显；点击 Show 时按需显示已保存密钥，Hide 隐藏。独立运行必需的保存根目录放在原设置之前。
+2. 首次使用会自动打开设置页。填写研究记录保存目录、模型 API 密钥与关注主题，修改会自动保存；等待“已保存”后即可关闭设置开始使用。已有 CLI 配置会直接沿用，不必再运行 `init`。
+3. 工作台右上角“设置”遵循 Obsidian 1.13+ 主设置路径：LLM、arXiv categories、Research topics、Automatic detail notes、Timezone、Output & schedule、Personal library、Email delivery、Advanced、Help & feedback。分类、推理强度、时区、时间窗口等保留原选择控件；模型保留自由输入、候选列表及“Get models”。修改后自动保存并生效；失败会保留输入并提示重试，关闭前会等待保存完成。密钥留空保留，默认不回显；点击 Show 时按需显示已保存密钥，Hide 隐藏。独立运行必需的保存根目录放在原设置之前。
 
    Personal library 的 Choose folder / Build index / Revoke 复用共享文献库流程；Web 宿主通过路径框指定目录，首次处理会显示授权范围。Email delivery 的 Send verification / Send test 只有点击后才发送。Enable 开启后，仅在工作台进程运行时，按 Check every (minutes) 检查工作日报；原 CLI 外部 cron 配置独立保留，不会自动安装或修改系统任务。
 4. 可使用 DSH 自带的侧栏放大或浮动功能。较窄时工作台通过“日历与筛选”切换导航。
@@ -91,7 +91,7 @@ node --test extensions/dsh-arxiv-daily/tests/*.test.mjs
 
 ## 外观与界面语言
 
-工作台右上角“设置 → 外观”集中管理主题和界面语言。修改后点击“保存设置”，界面立即重载所选语言和主题，保留当前阅读位置与筛选地址。界面语言不会改动论文总结语言、已有Markdown或用户研究主题。原始模型/网络诊断仍保留原文。
+工作台右上角“设置 → 外观”集中管理主题和界面语言。修改后自动保存，设置界面应用所选语言和主题；关闭设置后工作台其余区域同步更新，保留当前阅读位置与筛选地址。界面语言不会改动论文总结语言、已有Markdown或用户研究主题。原始模型/网络诊断仍保留原文。
 
 界面偏好保存在CLI配置旁的 `workbench-ui.json`，与业务TOML独立；侧栏布局和外观使用同一带锁的合并写入，不会互相覆盖。类型、默认值和纯校验，以及中英文词典统一由core提供，前端负责显示、宿主负责存储。Obsidian的原生设置控件和独立存储仍保留，未在此次变更中替换。
 
@@ -100,3 +100,5 @@ node --test extensions/dsh-arxiv-daily/tests/*.test.mjs
 模型、研究主题、输出、调度、文献库相关选项及邮件的字段描述由 core schema 统一提供，Obsidian 主设置页和工作台使用同一份顺序、名称、选项及条件。主题子字段和时区/运行窗口选项也共用定义。宿主仅保留原生控件、存储和运行时接线。
 
 Obsidian 设置事务和工作台保存共用编辑校验：允许保存不完整草稿，真正获取模型、生成报告或发送邮件时再使用对应业务就绪校验。测试邮件及验证请求组装也共用 core 服务；既有模型列表已共用 LlmClient。Obsidian 原生存储、CLI TOML、工作台密钥留空保留、修订冲突和文献库授权仍由各宿主适配，不会互相复制或同步配置值。
+
+完成首份日报后，首次使用引导不再要求开启自动日报。手动生成与定时运行都可使用，打开设置不会改变已有启用开关。
