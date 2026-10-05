@@ -2,7 +2,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { DEFAULT_SETTINGS, PaperIndexStore } from "@arxiv-daily/core";
+import { DEFAULT_SETTINGS, PaperIndexStore, appendGenerationMetrics } from "@arxiv-daily/core";
 import { NodeStorageAdapter } from "@arxiv-daily/node-runtime";
 import { DEFAULT_CLI_SCHEDULE, type CliRuntimeConfig } from "../src/config";
 import { startWorkbench } from "../src/workbench/server";
@@ -116,4 +116,22 @@ it("counts search and topic matches before scope while preserving absent-index r
   expect(missing).toMatchObject({ total: 0, day: { reportPath: report, papers: null } });
   expect((await get(`api/document?path=${encodeURIComponent(report)}`)).status).toBe(200);
   await expect(readFile(join(config.vaultRoot, index.paths.papersJsonPath))).rejects.toMatchObject({ code: "ENOENT" });
+});
+
+
+it("loads generation metrics only for one paper and identifies the whole daily report scope", async () => {
+  const { get, config, report, note, index } = await fixture();
+  const metrics = { logicalCalls: 2, attempts: 2, elapsedMs: 800, usageComplete: true, inputTokens: 120, outputTokens: 30, totalTokens: 150, pipelineElapsedMs: 1600, generatedAt: "2026-10-01T11:22:33.000Z" };
+  await writeFile(join(config.vaultRoot, report), appendGenerationMetrics("# Daily", metrics));
+  const newerMissing = "research/daily/2026-10-02.md";
+  await index.mutate(inbox => { inbox.papers["arxiv:2609.10002"]!.dailyReports.push(newerMissing); return { result: undefined, changed: true }; });
+  const all = await (await get("api/papers")).json();
+  expect(all.papers.every((paper: Record<string, unknown>) => !("generation" in paper))).toBe(true);
+  const { paper } = await (await get("api/paper?key=arxiv:2609.10002")).json();
+  expect(paper.generation).toEqual({ scope: "daily", sourcePath: report, metrics });
+  await writeFile(join(config.vaultRoot, note), appendGenerationMetrics("# Detail", { ...metrics, inputTokens: 10 }));
+  const detail = await (await get("api/paper?key=arxiv:2609.10001")).json();
+  expect(detail.paper.generation).toMatchObject({ scope: "paper", sourcePath: note, metrics: { inputTokens: 10 } });
+  const legacy = await (await get("api/paper?key=arxiv:2609.10003")).json();
+  expect(legacy.paper.generation).toBeNull();
 });

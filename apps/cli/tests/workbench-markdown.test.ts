@@ -152,3 +152,13 @@ it("preserves heading math delimiters for rendered document titles and navigatio
   expect(describeMarkdown(source).title).toBe(result.title);
   expect(result.headings[1]?.title).toBe(String.raw`Matter $\Omega_m$`);
 });
+
+it("separates trailing summary sources and projects saved generation statistics", () => {
+ const source = '# Paper\n\nMain result.\n\n## Summary sources\n\nAbstract and Conclusion.\n\n## Original abstract\n\nOriginal text.\n\n<!-- arxiv-daily:generation-metrics -->\n> [!info]- Generation metrics\n> - LLM calls: 1 logical, 1 HTTP attempt\n> - LLM duration: 2.5 s\n> - Pipeline wall time: 4.0 s\n> - Provider token usage: 100 input / 50 output / 150 total\n';
+ const result = renderMarkdown(source);
+ expect(result.html).toMatch(/<hr[^>]*class="reading-appendix-divider"[^>]*>\s*<h2[^>]*>Summary sources/);
+ expect(result.html).not.toContain('Generation metrics');
+ expect(result.generationMetrics).toMatchObject({ inputTokens:100,outputTokens:50,totalTokens:150,elapsedMs:2500,pipelineElapsedMs:4000 });
+ expect(result.generationMetrics?.generatedAt).toBeUndefined();
+ expect(result.html).toContain('Original text.');
+});

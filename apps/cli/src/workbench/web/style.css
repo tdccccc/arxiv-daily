@@ -255,3 +255,18 @@ code { font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace; }
   .generation-kind { gap: 16px; }
 }
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation: none !important; transition: none !important; scroll-behavior: auto !important; } }
+
+/* Bounded reading history remains visible while documents load or fail. */
+.reading-history { display: flex; align-items: center; gap: 2px; padding-right: 10px; margin-right: 2px; border-right: 1px solid var(--line); }
+.reading-history button:disabled { cursor: default; background: transparent; color: var(--muted); }
+@media (max-width: 760px) {
+  .reading-history { gap: 0; padding-right: 4px; margin-right: 0; }
+  .reading-history span { display: none; }
+  .header-actions .reading-history button { min-width: 30px; padding: 6px; }
+}
+@media (max-width: 420px) {
+  .app-header { padding-inline: 10px; gap: 4px; }
+  .brand { font-size: 23px; }
+  .header-actions .quiet-button { padding-inline: 6px; }
+  .header-actions .primary-button { padding-inline: 8px; }
+}

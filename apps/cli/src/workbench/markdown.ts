@@ -1,3 +1,4 @@
+import { splitGenerationMetrics, type GenerationMetrics } from "@arxiv-daily/core";
 import MarkdownIt, { type MarkdownIt as MarkdownParser, type Token } from "markdown-it";
 import katex from "katex";
 
@@ -7,6 +8,7 @@ export interface RenderMarkdownOptions {
 
 export interface RenderedMarkdown {
   html: string;
+  generationMetrics: GenerationMetrics | null;
   title: string;
   headings: Array<{ id: string; title: string; level: number }>;
   metadata: Record<string, string>;
@@ -25,7 +27,8 @@ export function describeMarkdown(source: string): Pick<RenderedMarkdown, "title"
 
 /** Render a projection only: the source Markdown and its frontmatter remain unchanged. */
 export function renderMarkdown(source: string, options: RenderMarkdownOptions = {}): RenderedMarkdown {
-  const { body, metadata } = frontmatter(source);
+  const generation = splitGenerationMetrics(source);
+  const { body, metadata } = frontmatter(generation.body);
   const markdown = readingParser();
   const tokens = markdown.parse(body, {});
   const headings: RenderedMarkdown["headings"] = [];
@@ -34,6 +37,7 @@ export function renderMarkdown(source: string, options: RenderMarkdownOptions = 
     const token = tokens[index]!;
     if (token.type === "heading_open") {
       const title = inlineText(tokens[index + 1]?.children ?? []);
+      if (["summary sources", "总结依据"].includes(title.trim().replace(/[:：]$/, "").toLowerCase())) token.meta = { readingAppendix: true };
       const stem = title.normalize("NFKC").toLowerCase().replace(/[^\p{L}\p{N}\p{M}_-]+/gu, "-").replace(/^-+|-+$/g, "") || "section";
       let id = stem;
       let suffix = 2;
@@ -46,6 +50,7 @@ export function renderMarkdown(source: string, options: RenderMarkdownOptions = 
   }
   return {
     html: markdown.renderer.render(tokens, markdown.options, {}),
+    generationMetrics: generation.metrics,
     title: metadata.title || headings.find(heading => heading.level === 1)?.title || headings[0]?.title || "",
     headings,
     metadata,
@@ -63,6 +68,9 @@ export function renderInlineMarkdown(source: string, options: RenderMarkdownOpti
 function readingParser(): MarkdownParser {
   const markdown = new MarkdownIt({ html: false, linkify: false, typographer: false });
   addReadingSyntax(markdown);
+  markdown.renderer.rules.heading_open = (tokens, index) =>
+    (tokens[index]!.meta?.readingAppendix ? '<hr class="reading-appendix-divider">\n' : '')
+    + markdown.renderer.renderToken(tokens, index, markdown.options);
   return markdown;
 }
 

@@ -1,5 +1,5 @@
 import path from "node:path";
-import { modernArxivResources, PaperIndexStore, PaperSearchIndex, queryDashboard, projectDashboardOccurrenceProvenance, projectDashboardOccurrenceNovelty, type PaperIndexEntry, type PaperPriority, type PaperStatus, type PaperSummary, type DashboardOccurrenceProvenance, type DashboardPersonalNovelty, type DashboardSortKey } from "@arxiv-daily/core";
+import { splitGenerationMetrics, type GenerationMetrics, modernArxivResources, PaperIndexStore, PaperSearchIndex, queryDashboard, projectDashboardOccurrenceProvenance, projectDashboardOccurrenceNovelty, type PaperIndexEntry, type PaperPriority, type PaperStatus, type PaperSummary, type DashboardOccurrenceProvenance, type DashboardPersonalNovelty, type DashboardSortKey } from "@arxiv-daily/core";
 import { NodeStorageAdapter } from "@arxiv-daily/node-runtime";
 import type { CliRuntimeConfig } from "../config";
 import { WorkbenchError, type DocumentEntry, type WorkbenchDocuments } from "./documents";
@@ -12,6 +12,7 @@ export interface WorkbenchPaper {
   abstract: string; summary: PaperSummary | null; detailPath: string | null;
   reports: Array<{ path: string; date: string; title: string; available: boolean }>;
   originalUrl: string | null; pdfUrl: string | null;
+  generation?: { scope: "daily" | "paper"; metrics: GenerationMetrics | null; sourcePath: string } | null;
   provenance: DashboardOccurrenceProvenance | null; novelty: DashboardPersonalNovelty | null;
 }
 export type PaperScope = "all" | "inbox" | "to_read" | "read" | "starred";
@@ -52,7 +53,20 @@ export class WorkbenchPapers {
     const [{ inbox }, catalog] = await Promise.all([this.store.inspect(), this.documents.list()]);
     const entry = Object.hasOwn(inbox.papers, key) ? inbox.papers[key] : undefined;
     if (!entry) throw new WorkbenchError(404, "找不到这篇论文，索引可能已改变。");
-    return this.project(entry, catalog);
+    const paper = this.project(entry, catalog);
+    const report = paper.reports.find(item => item.available);
+    const sourcePath = paper.summary && report ? report.path : paper.detailPath || report?.path;
+    paper.generation = null;
+    if (sourcePath) {
+      try {
+        const { metrics } = splitGenerationMetrics(await this.documents.raw(sourcePath));
+        paper.generation = { scope: sourcePath === paper.detailPath ? "paper" : "daily", sourcePath, metrics };
+      } catch (error) {
+        // A document may disappear between catalog discovery and the read.
+        if (!(error instanceof WorkbenchError && error.status === 404)) throw error;
+      }
+    }
+    return paper;
   }
 
   async mark(body: Record<string, unknown>, beforeWrite?: () => Promise<void>): Promise<WorkbenchPaper> {

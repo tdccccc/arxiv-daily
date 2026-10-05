@@ -187,3 +187,15 @@ it.each([
   await get("api/runs", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ kind: "daily", date: "2026-10-02" }) });
   await vi.waitFor(async () => expect((await (await get("api/runs/current")).json()).run).toMatchObject({ status: kind, outcome, exitCode: 0 }));
 });
+
+it("exposes durable generation metadata without changing the Markdown or inferring missing time",async()=>{
+ const {get,vaultRoot}=await setup();
+ const source='# Report\n\nContent\n\n<!-- arxiv-daily:generation-metrics -->\n> [!info]- Generation metrics\n> - LLM calls: 1 logical, 1 HTTP attempt\n> - LLM duration: 500 ms\n> - Provider token usage: 20 input / 10 output / 30 total\n';
+ const path='research/daily/2026-10-01.md';
+ await writeFile(join(vaultRoot,path),source);
+ const doc=await(await get(`api/document?path=${encodeURIComponent(path)}`)).json();
+ expect(doc.generationMetrics).toMatchObject({totalTokens:30,elapsedMs:500});
+ expect(doc.generationMetrics.generatedAt).toBeUndefined();
+ expect(doc.html).not.toContain('Generation metrics');
+ expect(await (await get(`api/raw?path=${encodeURIComponent(path)}`)).text()).toBe(source);
+});

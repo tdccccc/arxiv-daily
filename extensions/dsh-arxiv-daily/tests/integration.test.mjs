@@ -120,6 +120,15 @@ for (const firstRun of [false, true]) test(`${firstRun ? 'first-run' : 'configur
   for (let i = 0; i < 250; i++) { run = (await (await get('api/runs/current')).json()).run; if (run.status !== 'running') break; await new Promise(resolve => setTimeout(resolve, 50)); }
   assert.equal(run.status, 'completed', run.output);
   assert.equal(run.outcome, 'papers_written');
+  const generatedDocument = await (await get('api/document?path=arxiv-daily%2Fdaily%2F2026-05-11.md')).json();
+  assert.ok(generatedDocument.generationMetrics.logicalCalls > 0);
+  assert.ok(generatedDocument.generationMetrics.pipelineElapsedMs >= 0);
+  assert.ok(Number.isFinite(Date.parse(generatedDocument.generationMetrics.generatedAt)));
+  assert.equal(generatedDocument.generationMetrics.usageComplete, false, 'fixture providers omit usage rather than inventing zero tokens');
+  assert.doesNotMatch(generatedDocument.html, /Generation metrics/);
+  assert.match(await (await get('api/raw?path=arxiv-daily%2Fdaily%2F2026-05-11.md')).text(), /arxiv-daily:generation-metrics:v1/);
+  assert.deepEqual((await (await get('api/document?path=arxiv-daily%2Fdaily%2F2026-05-11.md')).json()).generationMetrics, generatedDocument.generationMetrics);
+
   for (const [date, status, outcome, calendarState] of [
     ['2026-05-12', 'pending', 'awaiting_announcement', 'awaiting-announcement'],
     ['2026-10-03', 'completed', 'no_updates', 'no-updates'],
@@ -137,6 +146,8 @@ for (const firstRun of [false, true]) test(`${firstRun ? 'first-run' : 'configur
   assert.equal((await post('api/paper/mark', { key: paper.key, action: 'star', value: true, expected: 'normal' })).status, 200);
   const actual = (await (await get(`api/paper?key=${encodeURIComponent(paper.key)}`)).json()).paper;
   assert.equal(actual.status, 'to_read'); assert.equal(actual.starred, true);
+  assert.equal(actual.generation.scope, 'daily');
+  assert.deepEqual(actual.generation.metrics, generatedDocument.generationMetrics);
   assert.equal((await post('api/preferences', { appearance: { theme: 'dark', language: 'en' } })).status, 200);
   assert.equal((await post('api/preferences', { sidebarWidth: 530, sidebarCollapsed: false })).status, 200);
   assert.deepEqual((await (await get('api/preferences')).json()).appearance, { theme: 'dark', language: 'en' });

@@ -4,6 +4,7 @@ import { settingsForm, bindSettings, type SettingsSnapshot } from "./settings";
 import type { DocumentEntry, WorkbenchDocuments } from "../documents";
 import type { WorkbenchRun } from "../server";
 import type { inspectProduct } from "../../inspect-cmd";
+import { generationFooter } from "./generation-footer";
 import { mountCalendar } from "./calendar";
 import { mountSidebar } from "./sidebar";
 import type { WorkbenchPaper, WorkbenchPaperList, PaperScope } from "../papers";
@@ -32,6 +33,7 @@ export function mountWorkbench(root: HTMLElement, options: WorkbenchClientOption
   let disposeContent: (() => void) | undefined;
   let restoreScroll: MutationObserver | undefined;
   let appearance: UiAppearancePreferences = options.appearance ?? { ...DEFAULT_UI_APPEARANCE, language: getUiLanguage() };
+  const navigation = { session: `${Date.now()}-${Math.random()}`, index: 0, end: 0, scrolls: new Map<number, number>(), pending: false };
   function render(next: UiAppearancePreferences) {
     if (disposed) return;
     const scroll = root.querySelector<HTMLElement>('.reading-pane')?.scrollTop ?? 0;
@@ -40,7 +42,7 @@ export function mountWorkbench(root: HTMLElement, options: WorkbenchClientOption
     appearance = next; setUiLanguage(next.language);
     document.documentElement.lang = next.language === 'zh' ? 'zh-CN' : 'en';
     document.title = t('arxiv-daily · 阅读工作台');
-    disposeContent = mountWorkbenchContent(root, { ...options, appearance: next }, async value => {
+    disposeContent = mountWorkbenchContent(root, { ...options, appearance: next }, navigation, async value => {
       if (value.language !== appearance.language || value.theme !== appearance.theme) render(value);
     });
     if (scroll > 0) {
@@ -64,7 +66,9 @@ export function mountWorkbench(root: HTMLElement, options: WorkbenchClientOption
   return () => { disposed = true; lifetime.abort(); restoreScroll?.disconnect(); disposeContent?.(); };
 }
 
-function mountWorkbenchContent(root: HTMLElement, options: WorkbenchClientOptions, onAppearanceSaved: (value: UiAppearancePreferences) => Promise<void>): () => void {
+interface ReadingNavigation { session: string; index: number; end: number; scrolls: Map<number, number>; pending: boolean }
+
+function mountWorkbenchContent(root: HTMLElement, options: WorkbenchClientOptions, navigation: ReadingNavigation, onAppearanceSaved: (value: UiAppearancePreferences) => Promise<void>): () => void {
   const fetcher = options.fetch ?? globalThis.fetch.bind(globalThis);
   const lifetime = new AbortController();
   let disposed = false;
@@ -81,6 +85,7 @@ function mountWorkbenchContent(root: HTMLElement, options: WorkbenchClientOption
   let selectedPath = "";
   let selectedDate = "";
   let listScroll = 0;
+  let readingReady = false;
   const scrollPositions = new Map<string, number>();
   const pendingMarks = new Set<string>();
   let listVersion = 0;
@@ -105,7 +110,7 @@ function mountWorkbenchContent(root: HTMLElement, options: WorkbenchClientOption
     <a class="skip-link" href="#reading-content">${t("跳到正文")}</a>
     <header class="app-header">
       <a class="brand" href="./" aria-label="${t("arxiv-daily 首页")}">arxiv<span class="brand-hyphen">-</span>daily</a>
-      <div class="header-actions"><button class="quiet-button" data-action="settings">${t("设置")}</button><button class="primary-button" data-action="generate"><span aria-hidden="true">＋</span> ${t("生成")}</button></div>
+      <div class="header-actions"><nav class="reading-history" aria-label="${t("阅读历史")}"><button class="quiet-button" data-action="history-back" aria-label="${t("后退")}" title="${t("后退")}" disabled>← <span>${t("后退")}</span></button><button class="quiet-button" data-action="history-forward" aria-label="${t("前进")}" title="${t("前进")}" disabled><span>${t("前进")}</span> →</button></nav><button class="quiet-button" data-action="settings">${t("设置")}</button><button class="primary-button" data-action="generate"><span aria-hidden="true">＋</span> ${t("生成")}</button></div>
     </header>
     <div class="connection-banner" role="alert" hidden></div>
     <div class="workspace">
@@ -180,7 +185,25 @@ function mountWorkbenchContent(root: HTMLElement, options: WorkbenchClientOption
     }
   }
   function listIdentity(): string { return JSON.stringify([documentsMode, kind, selectedDate, query, scope, topic, sort, direction, offset]); }
+  function syncNavigation(): void {
+    find<HTMLButtonElement>('[data-action="history-back"]').disabled = navigation.pending || navigation.index === 0;
+    find<HTMLButtonElement>('[data-action="history-forward"]').disabled = navigation.pending || navigation.index === navigation.end;
+  }
+  function rememberReadingScroll(): void { if (readingReady) navigation.scrolls.set(navigation.index, reading.scrollTop); }
+  function navigateHistory(delta: number): void {
+    if (navigation.pending || navigation.index + delta < 0 || navigation.index + delta > navigation.end) return;
+    rememberReadingScroll(); navigation.pending = true; syncNavigation(); history.go(delta);
+  }
+  function writeRoute(url: URL, mode: "push" | "replace"): void {
+    if (mode === "push") {
+      navigation.index += 1; navigation.end = navigation.index;
+      for (const key of navigation.scrolls.keys()) if (key >= navigation.index) navigation.scrolls.delete(key);
+    }
+    history[mode === "push" ? "pushState" : "replaceState"]({ ...history.state, listScroll, readingNavigation: { session: navigation.session, index: navigation.index } }, "", url);
+    syncNavigation();
+  }
   function rememberScroll(): void {
+    rememberReadingScroll();
     if (root.dataset.view !== "list") return;
     listScroll = reading.scrollTop;
     scrollPositions.set(listIdentity(), listScroll);
@@ -191,7 +214,7 @@ function mountWorkbenchContent(root: HTMLElement, options: WorkbenchClientOption
     const values = { q: query, scope: scope === "all" ? "" : scope, topic, sort, direction, offset: offset ? String(offset) : "", date: selectedDate, files: documentsMode ? "1" : "", kind: documentsMode ? kind : "", document: selectedPath, paper: selectedKey };
     for (const [key, value] of Object.entries(values)) { if (value) url.searchParams.set(key, value); else url.searchParams.delete(key); }
     url.hash = "";
-    history[mode === "push" ? "pushState" : "replaceState"]({ listScroll }, "", url);
+    writeRoute(url, mode);
   }
   function readRoute(): void {
     const params = new URL(location.href).searchParams;
@@ -223,6 +246,7 @@ function mountWorkbenchContent(root: HTMLElement, options: WorkbenchClientOption
     return `<div class="paper-pagination"><button class="quiet-button" data-action="previous-page" ${offset === 0 ? "disabled" : ""}>${t("← 上一页")}</button><span>${t("第 {0} 页", Math.floor(offset / 20) + 1)}${total ? ` / ${Math.max(1, Math.ceil(total / 20))}` : ""}</span><button class="quiet-button" data-action="next-page" ${next === null ? "disabled" : ""}>${t("下一页 →")}</button></div>`;
   }
   async function loadList(restore = false): Promise<void> {
+    readingReady = false;
     const version = ++listVersion;
     const scroll = restore ? listScroll : 0;
     reading.innerHTML = `<div class="reading-loading" role="status">${t("正在读取列表…")}</div>`;
@@ -240,14 +264,15 @@ function mountWorkbenchContent(root: HTMLElement, options: WorkbenchClientOption
         if (disposed || version !== listVersion || root.dataset.view !== "list") return;
         paperList = result; nextOffset = result.nextOffset; renderList();
       }
-      reading.scrollTop = scroll;
+      reading.scrollTop = scroll; readingReady = true;
     } catch (error) {
       if (disposed || version !== listVersion || root.dataset.view !== "list") return;
       reading.innerHTML = `<div class="empty-reading"><h1>${t("列表暂时不可用")}</h1><p>${escapeHtml(message(error))}</p><button class="quiet-button" data-action="refresh">${t("重试")}</button><button class="quiet-button" data-action="browse-documents">${t("浏览 Markdown 文件")}</button></div>`;
-      reportConnection(error);
+      readingReady = true; reportConnection(error);
     }
   }
   async function showList(push = false, restore = false, keepFilters = false): Promise<void> {
+    if (push) rememberScroll();
     documentVersion += 1; selectedPath = ""; selectedKey = ""; activePaper = null;
     root.dataset.view = "list"; root.classList.remove("is-reading");
     if (!keepFilters) root.classList.remove("show-filters");
@@ -257,7 +282,7 @@ function mountWorkbenchContent(root: HTMLElement, options: WorkbenchClientOption
     await loadList(restore);
   }
   function beginReading(captureScroll: boolean): void {
-    if (captureScroll) rememberScroll(); listVersion += 1;
+    if (captureScroll) rememberScroll(); readingReady = false; listVersion += 1;
     root.dataset.view = "reading"; root.classList.add("is-reading"); root.classList.remove("show-filters");
     find(".toc-pane").innerHTML = "";
   }
@@ -273,9 +298,11 @@ function mountWorkbenchContent(root: HTMLElement, options: WorkbenchClientOption
       renderDocument(result);
       if (syncCalendar && result.kind === "daily" && /^\d{4}-\d{2}-\d{2}$/.test(result.date)) void calendar.selectDate(result.date);
       if (hash) scrollToHash(hash); else reading.scrollTop = 0;
+      readingReady = true;
     } catch (error) {
       if (disposed || version !== documentVersion) return;
       reading.innerHTML = `<div class="empty-reading"><button class="quiet-button" data-action="back">${t("← 返回列表")}</button><h1>${t("暂时无法打开文档")}</h1><p>${escapeHtml(message(error))}</p><button class="primary-button" data-action="retry-document">${t("重试读取")}</button></div>`;
+      readingReady = true;
       if (message(error).includes("无法连接") || message(error).includes("Cannot connect")) reportConnection(error);
     }
   }
@@ -288,9 +315,10 @@ function mountWorkbenchContent(root: HTMLElement, options: WorkbenchClientOption
     try {
       const result = await request<{ paper: WorkbenchPaper }>(`api/paper?key=${encodeURIComponent(key)}`);
       if (disposed || version !== documentVersion) return;
-      activePaper = result.paper; reading.innerHTML = overview(result.paper, pendingMarks.has(key)); syncMarkValues(); reading.scrollTop = preserveScroll ? scroll : 0;
+      activePaper = result.paper; reading.innerHTML = overview(result.paper, pendingMarks.has(key)); syncMarkValues(); reading.scrollTop = preserveScroll ? scroll : 0; readingReady = true;
     } catch (error) {
       if (disposed || version !== documentVersion) return;
+      readingReady = true;
       reading.innerHTML = `<div class="empty-reading"><button class="quiet-button" data-action="back">${t("← 返回列表")}</button><h1>${t("论文暂时不可用")}</h1><p>${escapeHtml(message(error))}</p><button class="quiet-button" data-action="retry-paper">${t("重试")}</button></div>`;
     }
   }
@@ -326,7 +354,7 @@ function mountWorkbenchContent(root: HTMLElement, options: WorkbenchClientOption
 
   function renderDocument(entry: ReadingDocument): void {
     reading.innerHTML = `<div class="reading-toolbar"><button class="quiet-button" data-action="back">${t("← 返回列表")}</button><span class="reading-kind">${entry.kind === "daily" ? t("研究日报") : t("论文总结")}</span><div class="reading-controls"><button class="icon-button" data-action="font-down" aria-label="${t("缩小字号")}">A−</button><button class="icon-button" data-action="font-up" aria-label="${t("放大字号")}">A＋</button><a class="quiet-button" data-source="raw" href="api/raw?path=${encodeURIComponent(entry.path)}" target="_blank" rel="noopener noreferrer">Markdown ${symbols.arrow}</a></div></div>
-      <div class="article-wrap"><header class="document-header"><div class="document-eyebrow">${escapeHtml(entry.date || t("已保存文档"))}${entry.arxivId ? ` <span>· arXiv:${escapeHtml(entry.arxivId)}</span>` : ""}</div><h1 class="document-title">${scientificInline(entry.title)}</h1>${entry.authors ? `<p class="document-authors">${escapeHtml(entry.authors)}</p>` : ""}<div class="document-links">${sourceLink(entry.originalUrl, t("arXiv 原文"), "original")}${sourceLink(entry.pdfUrl, t("阅读 PDF"), "pdf")}${entry.related.map(item => `<a href="?document=${encodeURIComponent(item.path)}">${t("来源日报 ·")} ${escapeHtml(item.title)}</a>`).join("")}</div></header><article class="markdown-body" aria-label="${t("文档正文")}"></article><footer class="article-footer"><span>${t("Markdown 保存在本地")}</span><span>${escapeHtml(entry.path)}</span></footer></div>`;
+      <div class="article-wrap"><header class="document-header"><div class="document-eyebrow">${escapeHtml(entry.date || t("已保存文档"))}${entry.arxivId ? ` <span>· arXiv:${escapeHtml(entry.arxivId)}</span>` : ""}</div><h1 class="document-title">${scientificInline(entry.title)}</h1>${entry.authors ? `<p class="document-authors">${escapeHtml(entry.authors)}</p>` : ""}<div class="document-links">${sourceLink(entry.originalUrl, t("arXiv 原文"), "original")}${sourceLink(entry.pdfUrl, t("阅读 PDF"), "pdf")}${entry.related.map(item => `<a href="?document=${encodeURIComponent(item.path)}">${t("来源日报 ·")} ${escapeHtml(item.title)}</a>`).join("")}</div></header><article class="markdown-body" aria-label="${t("文档正文")}"></article><footer class="article-footer"><span>${t("Markdown 保存在本地")}</span><span>${escapeHtml(entry.path)}</span></footer>${generationFooter(entry.generationMetrics, entry.kind === "daily" ? "daily" : "paper")}</div>`;
     // Body HTML comes from the safe reader; titles use its safe inline projection.
     find("article").innerHTML = entry.html;
     const firstHeading = find("article").querySelector("h1");
@@ -343,6 +371,12 @@ function mountWorkbenchContent(root: HTMLElement, options: WorkbenchClientOption
   function sourceLink(url: string | null, label: string, source: string): string {
     if (!url || !(/^(?:https?:\/\/|api\/asset\?)/i.test(url))) return "";
     return `<a data-source="${source}" href="${escapeHtml(url)}" target="_blank" rel="noopener noreferrer">${label} ${symbols.arrow}</a>`;
+  }
+
+  function openHash(hash: string): void {
+    rememberScroll();
+    const url = new URL(location.href); url.hash = hash;
+    writeRoute(url, "push"); scrollToHash(hash);
   }
 
   function scrollToHash(hash: string): void {
@@ -504,11 +538,11 @@ function mountWorkbenchContent(root: HTMLElement, options: WorkbenchClientOption
       const path = url.searchParams.get("document");
       if (url.origin === location.origin && url.pathname === location.pathname && path) {
         event.preventDefault();
-        if (path === selectedPath && url.hash) { history.pushState({}, "", url); scrollToHash(url.hash); }
+        if (path === selectedPath && url.hash) { openHash(url.hash); }
         else void openDocument(path, "push", url.hash);
         return;
       }
-      if (link.getAttribute("href")?.startsWith("#")) { event.preventDefault(); history.pushState({}, "", url); scrollToHash(url.hash); return; }
+      if (link.getAttribute("href")?.startsWith("#")) { event.preventDefault(); openHash(url.hash); return; }
     }
     const markButton = target.closest<HTMLElement>('[data-mark="star"]');
     if (markButton) { const key = markButton.closest<HTMLElement>("[data-key]")!.dataset.key!; void saveMark(key, "star", markButton.getAttribute("aria-pressed") !== "true"); return; }
@@ -521,7 +555,9 @@ function mountWorkbenchContent(root: HTMLElement, options: WorkbenchClientOption
     const tab = target.closest<HTMLElement>("[data-kind]");
     if (tab) { switchCollection(tab.dataset.kind as typeof kind); return; }
     const action = target.closest<HTMLElement>("[data-action]")?.dataset.action;
-    if (action === "generate") showGeneration();
+    if (action === "history-back") navigateHistory(-1);
+    else if (action === "history-forward") navigateHistory(1);
+    else if (action === "generate") showGeneration();
     else if (action === "generate-date") showGeneration(target.closest<HTMLElement>("[data-date]")!.dataset.date);
     else if (action === "settings") showSettings();
     else if (action === "close-dialog") closeDialog();
@@ -581,10 +617,20 @@ function mountWorkbenchContent(root: HTMLElement, options: WorkbenchClientOption
   }
   function popstate(): void {
     listVersion += 1; documentVersion += 1; clearTimeout(searchTimer);
+    const entry = history.state?.readingNavigation;
+    if (entry?.session === navigation.session && Number.isInteger(entry.index) && entry.index >= 0 && entry.index <= navigation.end) navigation.index = entry.index;
+    else {
+      // Unknown browser entries are a new local boundary, never a license to leave the frame.
+      navigation.index = 0; navigation.end = 0; navigation.scrolls.clear();
+      history.replaceState({ ...history.state, readingNavigation: { session: navigation.session, index: 0 } }, "");
+    }
+    navigation.pending = false; syncNavigation();
+    const scroll = navigation.scrolls.get(navigation.index);
     readRoute(); syncFilters();
-    if (selectedPath) void openDocument(selectedPath, "none", location.hash);
-    else if (selectedKey) void openPaper(selectedKey, false);
-    else void showList(false, true);
+    const loading = selectedPath ? openDocument(selectedPath, "none", location.hash)
+      : selectedKey ? openPaper(selectedKey, false) : showList(false, true);
+    const version = documentVersion;
+    void loading.then(() => { if (!disposed && version === documentVersion && scroll !== undefined) reading.scrollTop = scroll; });
     if (selectedDate) void calendar.selectDate(selectedDate); else calendar.clearSelection();
   }
   root.addEventListener("click", click);
@@ -593,6 +639,9 @@ function mountWorkbenchContent(root: HTMLElement, options: WorkbenchClientOption
   root.addEventListener("submit", submit);
   root.addEventListener("keydown", keydown);
   window.addEventListener("popstate", popstate);
+  reading.addEventListener("scroll", rememberReadingScroll);
+  history.replaceState({ ...history.state, readingNavigation: { session: navigation.session, index: navigation.index } }, "");
+  syncNavigation();
   readRoute(); syncFilters();
   void loadStatus().then(ok => { if (ok) void initializeWorkspace(); });
   return () => {
@@ -604,6 +653,7 @@ function mountWorkbenchContent(root: HTMLElement, options: WorkbenchClientOption
     closeDialog();
     root.removeEventListener("click", click); root.removeEventListener("input", input); root.removeEventListener("change", input); root.removeEventListener("submit", submit);
     root.removeEventListener("keydown", keydown);
+    reading.removeEventListener("scroll", rememberReadingScroll);
     window.removeEventListener("popstate", popstate);
   };
 }
