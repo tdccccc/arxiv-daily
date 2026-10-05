@@ -1,7 +1,7 @@
 import type { OutputSettings } from "../../settings/types";
 import { sha256Hex } from "../../utils/digest";
 import { derivePaperInboxPaths } from "../../services/paper-index";
-import { createEvidenceChunkId, type EvidenceChunk, type EvidenceDerivation } from "./evidence-chunk";
+import { createEvidenceChunkId, type EvidenceChunk, type EvidenceDerivation, type NormalizedBoundingBox } from "./evidence-chunk";
 
 export const MAX_BINARY_OBJECT_BYTES = 4 * 1024 * 1024;
 export const BINARY_BLOCK_HEADER_BYTES = 52;
@@ -277,11 +277,12 @@ export function decodePaperMetadataBlock(bytes: Uint8Array): PaperMetadataBlock 
   const value = decodeStrictJson(block.payload, "paper metadata block");
   requireExactObject(value, ["paperStart", "records"], "paper metadata block");
   requireIntegerInRange(value.paperStart, "metadata paperStart", 0, MAX_GENERATION_PAPERS - 1);
+  const paperStart = value.paperStart;
   if (!Array.isArray(value.records) || value.records.length !== block.recordCount || value.records.length === 0) {
     throw new Error("metadata record count does not match payload");
   }
-  const records = value.records.map((record, offset) => validatePaperMetadataRecord(record, value.paperStart + offset));
-  return { paperStart: value.paperStart, records };
+  const records = value.records.map((record, offset) => validatePaperMetadataRecord(record, paperStart + offset));
+  return { paperStart, records };
 }
 
 export function encodeLexicalPostingsBlock(input: LexicalPostingsBlock): Uint8Array {
@@ -381,7 +382,12 @@ export function validateEvidenceStreamClosure(
   previous: EvidenceStreamClosureState | null,
   records: readonly EvidenceBlockRecord[],
 ): EvidenceStreamClosureState {
-  if (!Array.isArray(records) || records.length === 0) throw new Error("evidence closure requires a non-empty block");
+  // `Array.isArray` narrows a readonly array parameter's element type to
+  // `any`, so the runtime guard runs against an untyped alias instead of
+  // `records` itself, keeping `records: readonly EvidenceBlockRecord[]`
+  // intact for the rest of this function.
+  const maybeRecords: unknown = records;
+  if (!Array.isArray(maybeRecords) || maybeRecords.length === 0) throw new Error("evidence closure requires a non-empty block");
   let state = previous;
   for (const record of records) {
     if (state === null) {
@@ -593,7 +599,7 @@ function decodeStrictUtf8(bytes: Uint8Array, name: string): string {
   catch { throw new Error(`${name} is not valid UTF-8`); }
 }
 
-function decodeStrictJson(bytes: Uint8Array, name: string): Record<string, any> {
+function decodeStrictJson(bytes: Uint8Array, name: string): Record<string, unknown> {
   let value: unknown;
   try { value = JSON.parse(decodeStrictUtf8(bytes, name)); }
   catch (caught) { if (caught instanceof Error && /UTF-8/.test(caught.message)) throw caught; throw new Error(`${name} is not valid JSON`); }
@@ -610,6 +616,10 @@ function decodeStrictJson(bytes: Uint8Array, name: string): Record<string, any> 
  */
 const TERM_BYTES_CACHE_LIMIT = 200_000;
 const termBytesCache = new Map<string, Uint8Array>();
+
+function requireValidTerm(term: unknown): asserts term is string {
+  strictTermBytes(term);
+}
 
 function strictTermBytes(term: unknown): Uint8Array {
   if (typeof term === "string") {
@@ -635,12 +645,6 @@ function computeStrictTermBytes(term: unknown): Uint8Array {
 
 function compactNormalizedText(text: string): string {
   return text.normalize("NFKC").toLocaleLowerCase("und").replace(/[^\p{L}\p{N}]+/gu, "");
-}
-
-function compareBytes(left: Uint8Array, right: Uint8Array): number {
-  const length = Math.min(left.length, right.length);
-  for (let index = 0; index < length; index += 1) if (left[index] !== right[index]) return left[index]! - right[index]!;
-  return left.length - right.length;
 }
 
 const NAMESPACE_ORDER: Record<LexicalNamespace, number> = { alias: 0, base: 1, expanded: 2 };
@@ -678,11 +682,6 @@ function compareOccurrenceCatalog(a: LexicalOccurrence, b: LexicalOccurrence): n
   return compareNamespaceTerm(a, b) || a.chunkOrdinal - b.chunkOrdinal;
 }
 
-function validateObjectLogicalPath(value: unknown, name: string): string {
-  if (typeof value !== "string" || !/^objects\/[a-z0-9][a-z0-9._-]{0,127}$/.test(value)) throw new Error(`${name} is invalid`);
-  return value;
-}
-
 function validateLexicalPostings(value: unknown): LexicalPostingsBlock {
   requireExactObject(value, ["postingOrdinal", "chunkStart", "chunks", "occurrences", "termCatalog"], "lexical postings block");
   requireIntegerInRange(value.postingOrdinal, "postingOrdinal", 0, MAX_GENERATION_OBJECTS - 1);
@@ -705,7 +704,7 @@ function validateLexicalPostings(value: unknown): LexicalPostingsBlock {
   for (const raw of value.occurrences) {
     requireExactObject(raw, ["chunkOrdinal", "namespace", "term", "tf"], "lexical occurrence");
     requireIntegerInRange(raw.chunkOrdinal, "occurrence chunkOrdinal", value.chunkStart, value.chunkStart + chunks.length - 1);
-    const namespace = validateNamespace(raw.namespace); strictTermBytes(raw.term); requireIntegerInRange(raw.tf, "occurrence tf", 1, 0xffff_ffff);
+    const namespace = validateNamespace(raw.namespace); requireValidTerm(raw.term); requireIntegerInRange(raw.tf, "occurrence tf", 1, 0xffff_ffff);
     if (namespace === "alias" && raw.tf !== 1) throw new Error("alias occurrence tf must equal one");
     const occurrence = { chunkOrdinal: raw.chunkOrdinal, namespace, term: raw.term, tf: raw.tf };
     if (previous && compareOccurrenceAuthority(previous, occurrence) >= 0) throw new Error("occurrence authority must strictly increase without duplicates");
@@ -732,7 +731,7 @@ function validateLexicalDictionary(value: unknown): LexicalDictionaryBlock {
   for (const raw of value.entries) {
     requireExactObject(raw, ["postingOrdinal", "namespace", "term", "chunkDf", "totalTf"], "dictionary entry");
     requireIntegerInRange(raw.postingOrdinal, "dictionary postingOrdinal", value.postingStart, value.postingStart + value.postingCount - 1);
-    const namespace = validateNamespace(raw.namespace); strictTermBytes(raw.term);
+    const namespace = validateNamespace(raw.namespace); requireValidTerm(raw.term);
     requireIntegerInRange(raw.chunkDf, "dictionary chunkDf", 1, MAX_GENERATION_CHUNKS); requireIntegerInRange(raw.totalTf, "dictionary totalTf", 1, Number.MAX_SAFE_INTEGER);
     if (raw.totalTf < raw.chunkDf) throw new Error("dictionary totalTf must be at least chunkDf");
     const entry = { postingOrdinal: raw.postingOrdinal, namespace, term: raw.term, chunkDf: raw.chunkDf, totalTf: raw.totalTf };
@@ -780,7 +779,7 @@ function validateEvidenceRecord(value: unknown): EvidenceBlockRecord {
   return { paperIndex: value.paperIndex, paperKey: value.paperKey, vectorRow: value.vectorRow, chunk };
 }
 
-function requireEvidenceShapeBounds(value: unknown): void {
+function requireEvidenceShapeBounds(value: unknown): asserts value is Record<string, unknown> {
   requireExactObject(value, ["id", "index", "page", "text", "headings", "locator", "derivation"], "evidence chunk");
   if (typeof value.text !== "string" || value.text.length > MAX_CHUNK_TEXT_LENGTH) {
     throw new Error("evidence chunk text exceeds its string limit");
@@ -807,7 +806,7 @@ function requireEvidenceShapeBounds(value: unknown): void {
   }
 }
 
-function validateDescriptorV2(value: Record<string, any>): GenerationDescriptor {
+function validateDescriptorV2(value: Record<string, unknown>): GenerationDescriptor {
   requireExactObject(value, [
     "formatVersion", "schemaVersion", "generationId", "sourceRevision", "scopeFingerprint",
     "identificationFingerprint", "modelId", "dimension", "corpusMean", "corpusStats", "indexDerivation", "objects",
@@ -847,10 +846,11 @@ function validateDescriptor(value: unknown): GenerationDescriptor {
   requireFingerprint(value.identificationFingerprint, "generation identificationFingerprint");
   if (!boundedString(value.modelId, MAX_MODEL_ID_LENGTH)) throw new Error("generation modelId exceeds its string limit");
   requireIntegerInRange(value.dimension, "generation dimension", 1, MAX_GENERATION_DIMENSION);
-  if (!Array.isArray(value.corpusMean) || value.corpusMean.length !== value.dimension
-    || value.corpusMean.some((entry) => typeof entry !== "number" || !Number.isFinite(entry))) {
-    throw new Error("generation corpusMean must contain the finite per-dimension mean of all vector rows");
-  }
+  requireFiniteNumberArray(
+    value.corpusMean,
+    value.dimension,
+    "generation corpusMean must contain the finite per-dimension mean of all vector rows",
+  );
   requireExactObject(value.corpusStats, ["indexedPaperCount", "chunkCount", "totalLexicalTokenCount", "avgdl", "totalLexicalTokenCountWithHanSingles", "avgdlWithHanSingles"], "generation corpusStats");
   requireIntegerInRange(value.corpusStats.indexedPaperCount, "generation indexed paper count", 0, MAX_GENERATION_PAPERS);
   requireIntegerInRange(value.corpusStats.chunkCount, "generation chunk count", 0, MAX_GENERATION_CHUNKS);
@@ -858,7 +858,8 @@ function validateDescriptor(value: unknown): GenerationDescriptor {
   requireIntegerInRange(value.corpusStats.totalLexicalTokenCountWithHanSingles, "generation expanded lexical token count", 0, Number.MAX_SAFE_INTEGER);
   const expectedAvgdl = value.corpusStats.chunkCount === 0 ? 0 : value.corpusStats.totalLexicalTokenCount / value.corpusStats.chunkCount;
   const expectedExpandedAvgdl = value.corpusStats.chunkCount === 0 ? 0 : value.corpusStats.totalLexicalTokenCountWithHanSingles / value.corpusStats.chunkCount;
-  if (!Object.is(value.corpusStats.avgdl, expectedAvgdl) || !Object.is(value.corpusStats.avgdlWithHanSingles, expectedExpandedAvgdl)) {
+  if (typeof value.corpusStats.avgdl !== "number" || typeof value.corpusStats.avgdlWithHanSingles !== "number"
+    || !Object.is(value.corpusStats.avgdl, expectedAvgdl) || !Object.is(value.corpusStats.avgdlWithHanSingles, expectedExpandedAvgdl)) {
     throw new Error("generation avgdl values must exactly match their token totals/chunkCount");
   }
   if (value.lexicalCapability !== "none" && value.lexicalCapability !== "bm25-v1") throw new Error("generation lexicalCapability is unknown");
@@ -905,8 +906,7 @@ function validateDescriptor(value: unknown): GenerationDescriptor {
       ["kind", "path", "byteLength", "recordStart", "recordCount", "checksum"],
       "generation object reference",
     );
-    if (object.kind !== "vector" && object.kind !== "evidence" && object.kind !== "paper-metadata"
-      && object.kind !== "lexical-dictionary" && object.kind !== "lexical-postings") throw new Error("generation object kind is unknown");
+    requireGenerationObjectKind(object.kind);
     if (typeof object.path !== "string" || !/^objects\/[a-z0-9][a-z0-9._-]{0,127}$/.test(object.path)) {
       throw new Error("generation object path must be a bounded logical child of objects/");
     }
@@ -1032,7 +1032,7 @@ function requireBoundedVersion(value: unknown, name: string): number {
   return value;
 }
 
-function validateGenerationEvidenceChunk(value: Record<string, any>): EvidenceChunk | null {
+function validateGenerationEvidenceChunk(value: Record<string, unknown>): EvidenceChunk | null {
   if (!isFingerprint(value.id) || !isNonNegativeInteger(value.index) || !isPositiveInteger(value.page)) return null;
   if (typeof value.text !== "string" || !Array.isArray(value.headings) || !value.headings.every(isNonEmptyString)) return null;
   if (!isPlainObject(value.locator) || !isPositiveInteger(value.locator.pageStart) || value.page !== value.locator.pageStart) return null;
@@ -1066,11 +1066,12 @@ function validateGenerationEvidenceDerivation(value: unknown): EvidenceDerivatio
   };
 }
 
-function isNormalizedBoundingBox(value: unknown): boolean {
+function isNormalizedBoundingBox(value: unknown): value is NormalizedBoundingBox {
   if (!isPlainObject(value)) return false;
-  const numbers = [value.left, value.top, value.right, value.bottom];
-  return numbers.every((number) => typeof number === "number" && Number.isFinite(number) && number >= 0 && number <= 1)
-    && value.left <= value.right && value.top <= value.bottom;
+  const { left, top, right, bottom } = value;
+  if (typeof left !== "number" || typeof top !== "number" || typeof right !== "number" || typeof bottom !== "number") return false;
+  if (![left, top, right, bottom].every((number) => Number.isFinite(number) && number >= 0 && number <= 1)) return false;
+  return left <= right && top <= bottom;
 }
 
 function isFingerprint(value: unknown): value is string {
@@ -1087,6 +1088,11 @@ function isPositiveInteger(value: unknown): value is number {
 
 function isNonNegativeInteger(value: unknown): value is number {
   return Number.isSafeInteger(value) && (value as number) >= 0;
+}
+
+function requireGenerationObjectKind(value: unknown): asserts value is GenerationObjectKind {
+  if (value !== "vector" && value !== "evidence" && value !== "paper-metadata"
+    && value !== "lexical-dictionary" && value !== "lexical-postings") throw new Error("generation object kind is unknown");
 }
 
 function requireGenerationId(value: unknown): asserts value is string {
@@ -1107,7 +1113,13 @@ function requireIntegerInRange(value: unknown, name: string, minimum: number, ma
   }
 }
 
-function requireExactObject(value: unknown, keys: readonly string[], name: string): asserts value is Record<string, any> {
+function requireFiniteNumberArray(value: unknown, length: number, message: string): asserts value is number[] {
+  if (!Array.isArray(value) || value.length !== length || value.some((entry) => typeof entry !== "number" || !Number.isFinite(entry))) {
+    throw new Error(message);
+  }
+}
+
+function requireExactObject(value: unknown, keys: readonly string[], name: string): asserts value is Record<string, unknown> {
   if (!isPlainObject(value)) throw new Error(`${name} must be an object`);
   const actual = Object.keys(value);
   if (actual.length !== keys.length || actual.some((key) => !keys.includes(key))) {
@@ -1120,7 +1132,7 @@ function requireAllowedObject(
   allowed: readonly string[],
   required: readonly string[],
   name: string,
-): asserts value is Record<string, any> {
+): asserts value is Record<string, unknown> {
   if (!isPlainObject(value)) throw new Error(`${name} must be an object`);
   const actual = Object.keys(value);
   if (actual.some((key) => !allowed.includes(key)) || required.some((key) => !actual.includes(key))) {
@@ -1141,9 +1153,9 @@ function boundedString(value: unknown, maximum: number): value is string {
   return typeof value === "string" && value.trim().length > 0 && value.length <= maximum;
 }
 
-function isPlainObject(value: unknown): value is Record<string, any> {
+function isPlainObject(value: unknown): value is Record<string, unknown> {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
-  const prototype = Object.getPrototypeOf(value);
+  const prototype: unknown = Object.getPrototypeOf(value);
   return prototype === Object.prototype || prototype === null;
 }
 
