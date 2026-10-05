@@ -853,7 +853,7 @@ async function streamZipEntry(
       if (settled) return;
       settled = true;
       stream.destroy?.(error as Error);
-      reject(error);
+      reject(error instanceof Error ? error : new Error(String(error), { cause: error }));
     };
     const finish = () => {
       if (settled) return;
