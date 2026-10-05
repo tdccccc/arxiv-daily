@@ -153,11 +153,13 @@ export function decodeIncrementalSuggestionsDocument(
     || !isFingerprint(value.identificationFingerprint)
     || !isCanonicalTimestamp(value.updatedAt)
     || !Array.isArray(value.suggestions)) return null;
+  let pendingAuthorization: { bufferedPaperCount: number; updatedAt: string } | undefined;
   if (value.pendingAuthorization !== undefined) {
     const pending = value.pendingAuthorization;
     if (!isExactObject(pending, ["bufferedPaperCount", "updatedAt"])
       || !isNonNegativeSafeInteger(pending.bufferedPaperCount)
       || !isCanonicalTimestamp(pending.updatedAt)) return null;
+    pendingAuthorization = { bufferedPaperCount: pending.bufferedPaperCount, updatedAt: pending.updatedAt };
   }
 
   const suggestions: DirectionDiffSuggestion[] = [];
@@ -198,14 +200,7 @@ export function decodeIncrementalSuggestionsDocument(
     identificationFingerprint: value.identificationFingerprint,
     updatedAt: value.updatedAt,
     suggestions,
-    ...(value.pendingAuthorization !== undefined
-      ? {
-          pendingAuthorization: {
-            bufferedPaperCount: value.pendingAuthorization.bufferedPaperCount,
-            updatedAt: value.pendingAuthorization.updatedAt,
-          },
-        }
-      : {}),
+    ...(pendingAuthorization === undefined ? {} : { pendingAuthorization }),
   };
 }
 
@@ -569,7 +564,21 @@ function isValidReason(value: unknown): value is string {
     && value.length > 0
     && value.length <= PERSONAL_LIBRARY_DIRECTION_DIFF_MAX_REASON_LENGTH
     && value.trim() === value
-    && !/[\u0000-\u001F\u007F]/.test(value);
+    && !hasControlCharacter(value);
+}
+
+/**
+ * Same matched set as `/[\u0000-\u001F\u007F]/` (C0 controls plus DEL), as a
+ * char-code loop: `no-control-regex` flags that pattern even written with
+ * `\u00xx` escapes, and a broader class like `\p{Cc}` would not match the
+ * exact same set.
+ */
+function hasControlCharacter(value: string): boolean {
+  for (let index = 0; index < value.length; index += 1) {
+    const code = value.charCodeAt(index);
+    if (code <= 0x1f || code === 0x7f) return true;
+  }
+  return false;
 }
 
 const SUGGESTION_KIND_ORDER: Readonly<Record<DirectionDiffSuggestion["kind"], number>> = {
@@ -631,13 +640,13 @@ function codeUnitCompare(left: string, right: string): number {
   return left < right ? -1 : left > right ? 1 : 0;
 }
 
-function isPlainObject(value: unknown): value is Record<string, any> {
+function isPlainObject(value: unknown): value is Record<string, unknown> {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
-  const prototype = Object.getPrototypeOf(value);
+  const prototype: unknown = Object.getPrototypeOf(value);
   return prototype === Object.prototype || prototype === null;
 }
 
-function isExactObject(value: unknown, keys: readonly string[]): value is Record<string, any> {
+function isExactObject(value: unknown, keys: readonly string[]): value is Record<string, unknown> {
   if (!isPlainObject(value)) return false;
   const actual = Object.keys(value).sort(codeUnitCompare);
   const expected = [...keys].sort(codeUnitCompare);

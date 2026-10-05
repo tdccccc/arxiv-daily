@@ -250,7 +250,9 @@ function decodeSuggestion(
       if (!isExactObject(raw, ["kind", "directionId", "paperKeys", "reason"])) {
         return { ok: false, reason: "wrong-shape" };
       }
-      if (!byId.has(raw.directionId)) return { ok: false, reason: "direction-unknown" };
+      if (typeof raw.directionId !== "string" || !byId.has(raw.directionId)) {
+        return { ok: false, reason: "direction-unknown" };
+      }
       const paperKeys = decodePaperKeys(raw.paperKeys, clusterKeySets);
       if (!paperKeys) return { ok: false, reason: "paper-keys-invalid" };
       if (!isValidReason(raw.reason)) return { ok: false, reason: "reason-invalid" };
@@ -272,7 +274,9 @@ function decodeSuggestion(
       if (!isExactObject(raw, ["kind", "directionId", "paperKeys", "reason"])) {
         return { ok: false, reason: "wrong-shape" };
       }
-      if (!byId.has(raw.directionId)) return { ok: false, reason: "direction-unknown" };
+      if (typeof raw.directionId !== "string" || !byId.has(raw.directionId)) {
+        return { ok: false, reason: "direction-unknown" };
+      }
       if (lockedIds.has(raw.directionId)) return { ok: false, reason: "direction-locked" };
       const paperKeys = decodePaperKeys(raw.paperKeys, clusterKeySets);
       if (!paperKeys) return { ok: false, reason: "paper-keys-invalid" };
@@ -287,12 +291,14 @@ function decodeSuggestion(
         return { ok: false, reason: "wrong-shape" };
       }
       const ids = raw.directionIds;
-      if (!Array.isArray(ids) || ids.length !== 2
-        || typeof ids[0] !== "string" || typeof ids[1] !== "string"
-        || ids[0] === ids[1]) {
+      if (!isUnknownArray(ids) || ids.length !== 2) return { ok: false, reason: "wrong-shape" };
+      const [firstId, secondId] = ids;
+      if (typeof firstId !== "string" || typeof secondId !== "string" || firstId === secondId) {
         return { ok: false, reason: "wrong-shape" };
       }
-      const directionIds: [string, string] = [...ids].sort(codeUnitCompare) as [string, string];
+      // Same ascending code-unit order as `[...ids].sort(codeUnitCompare)`,
+      // valid for exactly two distinct elements.
+      const directionIds: [string, string] = firstId < secondId ? [firstId, secondId] : [secondId, firstId];
       for (const directionId of directionIds) {
         if (!byId.has(directionId)) return { ok: false, reason: "direction-unknown" };
         if (lockedIds.has(directionId)) return { ok: false, reason: "direction-locked" };
@@ -328,7 +334,21 @@ function isValidReason(value: unknown): value is string {
     && value.length > 0
     && value.length <= PERSONAL_LIBRARY_DIRECTION_DIFF_MAX_REASON_LENGTH
     && value.trim() === value
-    && !/[\u0000-\u001F\u007F]/.test(value);
+    && !hasControlCharacter(value);
+}
+
+/**
+ * Same matched set as `/[\u0000-\u001F\u007F]/` (C0 controls plus DEL), as a
+ * char-code loop: `no-control-regex` flags that pattern even written with
+ * `\u00xx` escapes, and a broader class like `\p{Cc}` would not match the
+ * exact same set.
+ */
+function hasControlCharacter(value: string): boolean {
+  for (let index = 0; index < value.length; index += 1) {
+    const code = value.charCodeAt(index);
+    if (code <= 0x1f || code === 0x7f) return true;
+  }
+  return false;
 }
 
 function escapeDiffDataFence(value: string): string {
@@ -345,13 +365,17 @@ function codeUnitCompare(left: string, right: string): number {
   return left < right ? -1 : left > right ? 1 : 0;
 }
 
-function isPlainObject(value: unknown): value is Record<string, any> {
+function isUnknownArray(value: unknown): value is unknown[] {
+  return Array.isArray(value);
+}
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
-  const prototype = Object.getPrototypeOf(value);
+  const prototype: unknown = Object.getPrototypeOf(value);
   return prototype === Object.prototype || prototype === null;
 }
 
-function isExactObject(value: unknown, keys: readonly string[]): value is Record<string, any> {
+function isExactObject(value: unknown, keys: readonly string[]): value is Record<string, unknown> {
   if (!isPlainObject(value)) return false;
   const actual = Object.keys(value).sort(codeUnitCompare);
   const expected = [...keys].sort(codeUnitCompare);
