@@ -2,8 +2,8 @@
 
 goal_ref: ../goal.md
 created: 2026-10-03T12:38:19+08:00
-updated: 2026-10-05T12:49:49+08:00
-revision: 2
+updated: 2026-10-05T12:59:01+08:00
+revision: 3
 
 ## Outcome
 
@@ -27,7 +27,7 @@ revision: 2
 - Red signal: new workbench-library tests require missing browse/search/PDF service; then observable catalog/filter and unsafe-path failures
 - Green check: temporary-library fixtures verify catalog pagination, title/abstract retrieval, root identity, PDF paper-key-only access and current config checks
 - regression checks: cli-library, cli-library-config, CLI typecheck
-- [ ] implementation and tests accepted
+- [x] implementation and tests accepted
 
 ### Chunk 2 — HTTP and workbench library view
 
@@ -36,7 +36,7 @@ revision: 2
 - Red signal: HTTP catalog/search/PDF endpoints absent; DOM cannot navigate to personal library
 - Green check: actual temporary HTTP server and DOM contracts for browse/search, empty/error/loading states, stale responses, PDF links, settings and task navigation
 - regression checks: workbench navigation/UI/settings/run tests, all CLI tests and typecheck, build and isolated DSH Host
-- [ ] implementation and tests accepted
+- [x] implementation and tests accepted
 
 ## Phase verification
 
@@ -45,3 +45,7 @@ No real user corpus/model/email; temporary fixtures and stub parser/embedding on
 ## Abort / reshape triggers
 
 If existing app service cannot return structured values safely, factor a shared host adapter under Green CLI baseline; do not parse terminal logs. If model access scope changes, use existing authorization disclosure. P3 remains pending until P2 accepted.
+
+## Acceptance evidence
+
+CLI387 passed; later adapter/HTTP46 passed including fallback PDF, invalid bounds and current-config checks. UI27 and consent29+40 passed. Missing routes/navigation and CSS bundle failures were observed before implementation. Typecheck/build and20 actual isolated DSH Host tests passed. No Electron visual walkthrough. Commits d8ee9c4 and1b0989f.

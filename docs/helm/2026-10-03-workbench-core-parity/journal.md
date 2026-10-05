@@ -141,3 +141,7 @@ Root3881 passed/2 real-corpus opt-in skips; release tools368; DSH20; Claude pack
 ## 2026-10-05T12:49:49+08:00 — P2 resumed
 
 用户确认将0.5.0已有文献库检索和方向审核接入DSH网页。原生界面与core均未丢失；此次补宿主界面，不重建业务。先P2库浏览/检索/PDF，再P3审核，保留现有设置与运行管理。继续原隔离worktree，无生产安装或真实文献处理。
+
+## 2026-10-05T12:59:01+08:00 — P2 accepted, P3 started
+
+Personal-library HTTP/DOM flow now handles catalog and indexed fallback PDFs without requiring an agent conversation. Core retrieval, source guards and existing settings are reused. CLI387, final adapter46, UI27, DSH20, typecheck/build passed; no real corpus/model. Proceed to P3 parity against native review operations with typed service boundaries and receipt-safe acceptance.
