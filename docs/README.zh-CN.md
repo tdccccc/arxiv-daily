@@ -45,7 +45,7 @@ arxiv-daily/
 
 各入口共用 core 的发现规则、设置定义和研究记录格式。**Obsidian 与 CLI 的配置值、API 密钥不会自动同步**；DSH 与浏览器工作台都使用 CLI 配置。指向同一输出目录可以共享记录，但不等于同步设置。
 
-本文介绍的独立工作台与 DSH **0.1.16** 目前通过源码和本地构建使用，新增功能尚未发布到 npm。请使用下文构建方式，不要假定 npm 最新版已包含这些功能。
+本文介绍的独立工作台与 DSH **0.1.17** 目前通过源码和本地构建使用，新增功能尚未发布到 npm。请使用下文构建方式，不要假定 npm 最新版已包含这些功能。
 
 ---
 
@@ -116,7 +116,7 @@ node apps/cli/dist/arxiv-daily-cli.cjs ui
 
 需要对话辅助时，可选用 [Claude Code CLI 集成](../extensions/claude-code-arxiv-daily/README.md)。它调用相同的筛选和总结流程；arXiv Daily 使用自己配置的模型端点，与 Claude 的对话模型独立。
 
-当前工作台支持阅读 Markdown，尚不提供 Markdown 编辑。设置中已有文献库连接与索引；专用文献库浏览、方向审核页面及更完整的运行管理仍待补充。CLI 已支持 `library search`、`library propose`、`library directions` 及显式审核 / 确认命令，见 [CLI 指南](../apps/cli/README.md)。候选方向只有接受后才参与发现。
+当前工作台支持阅读 Markdown，尚不提供 Markdown 编辑。左侧 **个人文献库** 可浏览目录、检索已索引的标题与摘要、打开本地 PDF；**方向审核** 提供候选与文献库概览，可检查代表论文、修改或移动候选、预览匹配，并明确选择接受到研究主题。连接和索引仍在设置中。候选只有接受后才参与每日发现；更完整的运行管理仍待补充。[CLI 指南](../apps/cli/README.md) 保留对应终端命令。
 
 ---
 

@@ -133,6 +133,8 @@ Run these from the repository root. Source builds require CMake, a C++ compiler 
 
 ## Optional personal library
 
+In the workbench, connect and index a folder from **Settings**, then open **Personal library** to browse/search titles and abstracts or open local PDFs (up to 25 MiB). **Review directions** provides proposal editing, representative evidence, previews, explicit partial acceptance, and a library overview. Accepted directions become ordinary research-topic settings; opening either page does not automatically call a model. The commands below remain available for terminal use.
+
 After basic setup, `library connect` selects a read-only PDF source. `library status` displays the processing scope and endpoint-bound authorization fingerprint. Authorize only the displayed scope using `library authorize --fingerprint …`; `library revoke` revokes it.
 
 Run `library prepare` to install pinned optional PDF/runtime components in the configured cache, then `library scan` and `library index`. Local embedding uses the same e5 q8 model and downloads weights on first use. Remote embedding skips the local CPU component and requires the displayed title-and-abstract processing authorization. Local indexing can run before model-processing authorization; direction generation requires authorization.

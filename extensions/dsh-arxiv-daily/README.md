@@ -13,14 +13,14 @@ node extensions/dsh-arxiv-daily/build.mjs
 npm pack ./extensions/dsh-arxiv-daily/dist/package --pack-destination ./extensions/dsh-arxiv-daily/dist
 ```
 
-当前产物是 `extensions/dsh-arxiv-daily/dist/dsh-arxiv-daily-0.1.16.tgz`。本地构建包含当前操作系统和架构的原生存储模块；当前验收环境为 Linux x64。其他平台需在对应系统构建并验证，不能将本机包当作跨平台包分发。
+当前产物是 `extensions/dsh-arxiv-daily/dist/dsh-arxiv-daily-0.1.17.tgz`。本地构建包含当前操作系统和架构的原生存储模块；当前验收环境为 Linux x64。其他平台需在对应系统构建并验证，不能将本机包当作跨平台包分发。
 
-**DSH Desktop：** 打开“插件 / Plugins → 添加插件 / Add plugin”，输入生成的 `dsh-arxiv-daily-0.1.16.tgz` 的绝对路径，安装后选择“立即启用 / Enable now”。桌面 profile 由 Electron 管理，不要使用 `dsh plugin --profile desktop`。
+**DSH Desktop：** 打开“插件 / Plugins → 添加插件 / Add plugin”，输入生成的 `dsh-arxiv-daily-0.1.17.tgz` 的绝对路径，安装后选择“立即启用 / Enable now”。桌面 profile 由 Electron 管理，不要使用 `dsh plugin --profile desktop`。
 
 **DSH Web：** 使用下面的命令安装到 Web profile：
 
 ```sh
-dsh plugin --profile web add /absolute/path/dsh-arxiv-daily-0.1.16.tgz
+dsh plugin --profile web add /absolute/path/dsh-arxiv-daily-0.1.17.tgz
 ```
 
 重新启动 DSH，使新的插件包和客户端模块一起加载。包尚未发布到 npm；目前请安装本地产物。插件会注册自己的“arxiv-daily”侧栏标签。
@@ -30,7 +30,7 @@ dsh plugin --profile web add /absolute/path/dsh-arxiv-daily-0.1.16.tgz
 用新包替换旧版本，配置、Markdown 和论文索引保持在原位置。Web profile：
 
 ```sh
-dsh plugin --profile web add /absolute/path/dsh-arxiv-daily-0.1.16.tgz
+dsh plugin --profile web add /absolute/path/dsh-arxiv-daily-0.1.17.tgz
 ```
 
 然后退出并重新启动 DSH，使 Host 和客户端都加载新包。Desktop 使用插件管理器更新；若该版本的管理器不支持替换本地包，卸载旧插件后添加新包。插件卸载不会删除 arXiv Daily 的配置、Markdown 或论文索引。
@@ -58,7 +58,15 @@ dsh plugin --profile web add /absolute/path/dsh-arxiv-daily-0.1.16.tgz
 - 前进/后退在当前工作台阅读历史内跳转，恢复筛选、锚点和滚动位置；边界处按钮禁用。“返回列表”仍保留。这些按钮不控制 DSH 外部页面，也不跨工作台重启恢复历史。
 - 生成日报或按 arXiv ID 生成论文总结时显示进度并可取消。等待公告、当日无更新、筛选无匹配与真正失败分别显示；等待公告不消耗失败重试额度。
 
-个人文献库已能从设置连接、授权和建立索引。专用文献库检索、方向审核页面及更完整的运行管理仍待完善；目前通过 [CLI 文献库命令](../../apps/cli/README.md#optional-personal-library) 检索、生成候选并审核接受。接受后的方向保存为普通研究主题，候选不会自行参与日报筛选。
+1. 在“设置 → 个人文献库”连接目录并建立索引，按提示确认模型处理范围。
+2. 点击左侧 **个人文献库** 浏览已识别的论文。目录筛选不调用模型；索引检索可选关键词、混合或语义模式，后两者使用配置的嵌入服务。已索引的非 arXiv PDF 也可显示。
+3. 点击论文的 PDF 链接，在新页面打开本地文件（最多 25 MiB），使用浏览器或宿主的 PDF 阅读能力。
+4. 点击 **方向审核 → 生成候选方向**，等待运行面板显示完成。打开审核页本身不调用模型。
+5. 在“候选方向”中查看代表论文、编辑文本和依据、改名新主题、移动或删除候选；可预览代表论文的匹配情况。弱证据候选默认不选。
+6. 选择方向并点击 **接受所选方向**，确认后保存到普通研究主题，之后参与日报筛选。已处理项不会重复添加；后续调整在研究主题设置完成。
+7. “文献库概览”显示分析时间、已有方向覆盖、未归类与分析后新增论文。已修改方向的历史覆盖会提示重新验证。
+
+生成与预览可在现有运行面板取消；预览不修改订阅。更完整的运行管理仍待补充。对应 [CLI 文献库命令](../../apps/cli/README.md#optional-personal-library) 继续可用。
 
 ## 实现边界
 

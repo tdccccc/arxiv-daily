@@ -10,12 +10,12 @@
 |---|---|
 | Obsidian 桌面插件 | 安装并启用插件，按下方步骤设置 |
 | 独立浏览器工作台 | 从源码构建 CLI，运行 `npm run cli -- ui`；见 [CLI 文档](../apps/cli/README.md#local-reading-workbench) |
-| DSH | 安装本地 `0.1.16` 包，在左栏“设置”上方点击 `arxiv-daily`；见 [构建、安装与升级](../extensions/dsh-arxiv-daily/README.md) |
+| DSH | 安装本地 `0.1.17` 包，在左栏“设置”上方点击 `arxiv-daily`；见 [构建、安装与升级](../extensions/dsh-arxiv-daily/README.md) |
 | Claude Code CLI | 加载插件，以 `/arxiv-daily:open` 打开浏览器工作台；见 [使用说明](../extensions/claude-code-arxiv-daily/README.md) |
 
 独立工作台首次打开即可设置保存目录、模型、分类和研究主题，保存后生成日报。左侧日历与筛选，右侧论文列表和 Markdown 阅读器，支持公式、前进/后退、待读与收藏；右上角“设置”可修改并保存配置，也可切换外观和中英文界面。Agent 对话不是使用这些功能的前提。
 
-DSH 包目前通过本地源码构建分发，未发布到 npm。工作台与 Obsidian 共用核心流程和设置规则，各宿主配置值、密钥独立保存。个人文献库的专用检索、方向审核页面和完整运行管理仍在后续计划中；现有设置与 CLI 命令可完成库连接、索引及方向接受。
+DSH 包目前通过本地源码构建分发，未发布到 npm。工作台与 Obsidian 共用核心流程和设置规则，各宿主配置值、密钥独立保存。先在设置中连接文献目录并建立索引，再从左侧“个人文献库”浏览、检索及打开 PDF；“方向审核”可查看依据、编辑候选、预览并接受到研究主题。更完整的运行管理仍在后续计划中。
 
 ## 你需要准备
 

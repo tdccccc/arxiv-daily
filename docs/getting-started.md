@@ -10,12 +10,12 @@ For the product overview, see the [README](../README.md). The numbered guide bel
 |---|---|
 | Obsidian desktop plugin | Install and enable the plugin, then follow the steps below |
 | Standalone browser workbench | Build the CLI from source and run `npm run cli -- ui`; see [CLI instructions](../apps/cli/README.md#local-reading-workbench) |
-| DSH | Install the local `0.1.16` package and click `arxiv-daily` above Settings in the left sidebar; see [build, install and upgrade](../extensions/dsh-arxiv-daily/README.md) |
+| DSH | Install the local `0.1.17` package and click `arxiv-daily` above Settings in the left sidebar; see [build, install and upgrade](../extensions/dsh-arxiv-daily/README.md) |
 | Claude Code CLI | Load the plugin and use `/arxiv-daily:open` to open the browser workbench; see [instructions](../extensions/claude-code-arxiv-daily/README.md) |
 
 On first open, the standalone workbench lets you set the output folder, model, categories and research topics, save, and generate a report. A calendar and filters sit on the left; paper lists and a Markdown reader with math, back/forward, reading marks and favorites sit on the right. Settings can be edited and saved in the workbench, including appearance and Chinese/English interface language. Agent conversation is optional.
 
-The DSH package is currently distributed as a local source build, not an npm release. The workbench and Obsidian share core workflows and settings rules, while configuration values and secrets remain separate. Dedicated library-search and direction-review pages and fuller run management remain planned; current settings and CLI commands support connecting, indexing and accepting library-derived directions.
+The DSH package is currently distributed as a local source build, not an npm release. The workbench and Obsidian share core workflows and settings rules, while configuration values and secrets remain separate. Open **Personal library** to browse/search your indexed papers and open PDFs, then **Review directions** to inspect, edit, preview and accept proposals. Connect and index the library from settings first. Richer run management remains planned.
 
 ## What you need
 

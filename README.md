@@ -45,7 +45,7 @@ Start with **Obsidian** if you already use it. Choose the **workbench** if you w
 
 The hosts share core discovery rules, settings definitions, and record formats. **Obsidian and CLI configuration values and API keys do not automatically synchronize.** DSH and the browser workbench both use the CLI configuration. Pointing hosts at the same output directory shares records, not settings.
 
-The standalone workbench and DSH **0.1.16** described here are available from source/local builds; these additions have not been published to npm. See the build instructions below rather than assuming the latest npm release includes them.
+The standalone workbench and DSH **0.1.17** described here are available from source/local builds; these additions have not been published to npm. See the build instructions below rather than assuming the latest npm release includes them.
 
 ---
 
@@ -117,7 +117,7 @@ To embed this workbench in DSH, follow the [DSH build and installation guide](ex
 
 For conversational assistance, use the optional [Claude Code CLI integration](extensions/claude-code-arxiv-daily/README.md). It invokes the same discovery and note-generation workflows, using arXiv Daily's configured model endpoint independently of Claude's conversation model.
 
-The workbench currently reads Markdown rather than editing it. Library connection and indexing are available in settings; dedicated library browsing, direction-review pages, and richer run management remain planned. The CLI already provides `library search`, `library propose`, `library directions`, and explicit review/confirmation commands; see the [CLI guide](apps/cli/README.md). Proposed directions only affect discovery after acceptance.
+The workbench reads Markdown; it does not edit it. **Personal library** opens catalog browsing, indexed title/abstract search, and local PDFs. **Review directions** shows proposals and a library overview: inspect representative papers, edit or move candidates, preview matches, and explicitly accept selected directions into research topics. Connection and indexing remain in settings. Proposed directions only affect discovery after acceptance. Richer run management remains planned; the [CLI guide](apps/cli/README.md) also documents terminal library commands.
 
 ---
 
