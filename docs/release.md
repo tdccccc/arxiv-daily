@@ -29,11 +29,13 @@ Production plugin and CLI bundles contain the complete locked pako notice from
 
 ## Prepare metadata
 
-Use Node.js 20.19.0 or newer from a clean checkout. Create the curated notes
-before tagging, then synchronize metadata with the repository tool:
+Use Node.js 20.19.0 or newer from a clean checkout. Branch from main; never
+prepare a release on main itself. Create the curated notes before tagging,
+then synchronize metadata with the repository tool:
 
 ```bash
 export VERSION=0.3.1
+git switch -c "release/$VERSION" main
 npm ci
 npm run sync:release-version -- "$VERSION"
 npm run check:release-version -- "$VERSION"
@@ -78,14 +80,33 @@ delegating shim.
 
 ## Tag and publish
 
-Commit the reviewed preparation, then create an annotated stable tag at that
-exact commit:
+Commit the reviewed preparation on the release branch, push the branch, then
+create an annotated stable tag at that branch's head and push the tag:
 
 ```bash
+git add -A
+git commit -m "docs(release): prepare $VERSION"
+git push origin "release/$VERSION"
 git tag -a "$VERSION" -m "arXiv Daily $VERSION"
-git push origin main
 git push origin "$VERSION"
 ```
+
+Do not push the release branch into main before the tag exists. Pushing the
+tag triggers `.github/workflows/release.yml` straight from the release
+branch commit — the workflow matches on the tag ref and never needs the
+commit to be on main — so the GitHub release is created without main's
+`manifest.json` ever naming a version that has no matching release. Only
+after that release is confirmed published (not just started) should you open
+the PR merging `release/$VERSION` into main, and merge it. This order exists
+because Obsidian's Community directory reads the root `manifest.json` from
+main to learn the latest version and expects a published GitHub release with
+the same tag; a gap between the two gets the plugin delisted from in-app
+search, which is exactly what happened to 0.5.0 (manifest bumped on main
+2026-10-02, release not published until 2026-10-04, plugin delisted
+2026-10-03). `scripts/check-published-manifest.mjs` now enforces this in CI's
+`Root verification` workflow on every push to main and every pull request
+targeting it, so a merge PR that would reintroduce the gap fails before it
+can land.
 
 Never move or reuse a published tag. If the workflow fails before creating a
 release, fix the underlying commit and publish a new version; do not replace
