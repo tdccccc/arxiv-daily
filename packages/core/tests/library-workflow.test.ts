@@ -261,3 +261,83 @@ describe("shared LibraryWorkflow", () => {
     expect((await f.workflow.review()).proposal).toEqual(f.proposal);
   });
 });
+
+
+describe("library proposal review application operations", () => {
+ it("renames, moves and removes candidates with revisions while leaving research topics untouched", async () => {
+  const f=await prepareDirections();
+  const rename={topicId:f.proposal.topics[0]!.id,suggestedName:'Reviewed topic',expectedProposalRevision:f.proposal.revision};
+  await expect(f.workflow.renameTopic({...rename,expectedProposalRevision:999})).rejects.toThrow('revision');
+  const renamed=await f.workflow.renameTopic(rename);
+  expect(renamed.proposal!.topics.find(t=>t.id===rename.topicId)!.suggestedName).toBe('Reviewed topic');
+  const moved=await f.workflow.moveDirection({candidateId:f.candidate.id,targetTopicId:null,suggestedName:'New destination',expectedProposalRevision:renamed.proposal!.revision});
+  const destination=moved.proposal!.topics.find(t=>t.suggestedName==='New destination')!;
+  expect(destination.id).not.toBe(rename.topicId);
+  expect(destination.directions[0]).toEqual(f.candidate);
+  await expect(f.workflow.removeCandidate({candidateId:f.candidate.id,expectedProposalRevision:renamed.proposal!.revision})).rejects.toThrow('revision');
+  const removed=await f.workflow.removeCandidate({candidateId:f.candidate.id,expectedProposalRevision:moved.proposal!.revision});
+  expect(removed.proposal!.topics.flatMap(t=>t.directions).some(d=>d.id===f.candidate.id)).toBe(false);
+  expect(removed.topics).toEqual([]);
+  expect(removed.acceptances).toEqual([]);
+ });
+
+ it("previews only indexed selected evidence without writing and checks revision and consent", async () => {
+  const f=await prepareDirections();
+  const input={candidateId:f.candidate.id,categories:['astro-ph'],expectedProposalRevision:f.proposal.revision};
+  const call=vi.fn(async()=>JSON.stringify({papers:f.candidate.representatives.map((_,i)=>({id:`sample-${i+1}`,category:'preview',directions:['preview#1'],relevanceScore:90}))}));
+  f.options.llm={call};
+  const before=new Map(f.text);
+  await expect(f.workflow.previewDirection({...input,expectedProposalRevision:999})).rejects.toThrow('revision');
+  expect(call).not.toHaveBeenCalled();
+  vi.mocked(f.options.assertAuthorized).mockImplementationOnce(()=>{throw new Error('consent required');});
+  await expect(f.workflow.previewDirection(input)).rejects.toThrow('consent required');
+  expect(call).not.toHaveBeenCalled();
+  const result=await f.workflow.previewDirection(input);
+  expect(result.papers.map(p=>p.paperKey)).toEqual(f.candidate.representatives.map(p=>p.paperKey));
+  expect(result.missingCategories).toEqual(['cs.AI']);
+  expect(f.text).toEqual(before);
+  expect((await f.workflow.review()).indexedPapers).toHaveLength(6);
+  await expect(f.workflow.previewDirection({...input,paperKeys:['arxiv:9999.99999']})).rejects.toThrow(/indexed|evidence/i);
+ });
+
+ it("does not let edits turn processed candidates back into suggestions", async () => {
+  const f=await prepareDirections();
+  await f.workflow.acceptTopics({topicIds:[f.proposal.topics[0]!.id],candidateIds:[f.candidate.id]});
+  const input={candidateId:f.candidate.id,expectedProposalRevision:f.proposal.revision};
+  await expect(f.workflow.updateCandidate({...input,patch:{text:'Changed'}})).rejects.toThrow(/accepted|processed/i);
+  await expect(f.workflow.confirm(f.confirmInput)).rejects.toThrow(/accepted|processed/i);
+  await expect(f.workflow.moveDirection({...input,targetTopicId:null,suggestedName:'Again'})).rejects.toThrow(/accepted|processed/i);
+  await expect(f.workflow.removeCandidate(input)).rejects.toThrow(/accepted|processed/i);
+  await expect(f.workflow.renameTopic({topicId:f.proposal.topics[0]!.id,suggestedName:'Again',expectedProposalRevision:f.proposal.revision})).rejects.toThrow(/accepted|processed/i);
+ });
+
+ it("rejects stale host state after a preview and cancelled mutations before writes", async () => {
+  const f=await prepareDirections();
+  const before=new Map(f.text);
+  f.options.llm={call:async()=>{vi.mocked(f.options.assertCurrent).mockImplementation(()=>{throw new Error('connection changed');});return JSON.stringify({papers:[]});}};
+  await expect(f.workflow.previewDirection({candidateId:f.candidate.id,categories:['cs.AI'],expectedProposalRevision:f.proposal.revision})).rejects.toThrow('connection changed');
+  expect(f.text).toEqual(before);
+  const aborted=new AbortController();aborted.abort();
+  await expect(f.workflow.removeCandidate({candidateId:f.candidate.id,signal:aborted.signal})).rejects.toThrow();
+  expect(f.text).toEqual(before);
+ });
+});
+
+
+it("projects and previews fallback-indexed papers without inventing arXiv metadata", async () => {
+ const f=await prepareDirections();
+ const catalog=(await f.workflow.review()).catalog;
+ const store=new FullTextKnowledgeBaseFileStore(f.storage,f.options.output,catalog.scopeFingerprint,catalog.identificationFingerprint);
+ const manifest=await store.loadManifest();
+ const key=`file:sha256:${'a'.repeat(64)}`;
+ manifest.papers[key]={...Object.values(manifest.papers)[0]!,paperKey:key,contentHash:`sha256:${'a'.repeat(64)}`,title:'Independent local paper',abstract:'A local abstract',filePaths:['local.pdf']};
+ await store.replaceManifest(manifest,manifest.revision);
+ const snapshot=await f.workflow.review();
+ expect(snapshot.catalog.papers[key]).toBeUndefined();
+ expect(snapshot.indexedPapers.find(p=>p.paperKey===key)).toEqual({paperKey:key,title:'Independent local paper',abstract:'A local abstract',categories:[]});
+ f.options.llm={call:async()=>JSON.stringify({papers:[{id:'sample-1',category:'preview',directions:['preview#1'],relevanceScore:90}]})};
+ const before=new Map(f.text);
+ const result=await f.workflow.previewDirection({candidateId:f.candidate.id,paperKeys:[key],categories:['cs.AI'],expectedProposalRevision:f.proposal.revision});
+ expect(result.papers[0]).toMatchObject({paperKey:key,categoryCoverage:'unknown',matched:true});
+ expect(f.text).toEqual(before);
+});

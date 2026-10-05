@@ -26,7 +26,8 @@ import { FullTextGenerationIndexStore, type FullTextLegacyMigrationLease } from 
 import { indexPersonalLibraryFullText } from "./fulltext/index-orchestration";
 import { preflightFullTextGenerationSynchronization, synchronizeFullTextGenerationIndex } from "./fulltext/generation-index-orchestration";
 import { proposeClusteredPersonalLibraryDirections } from "./personal-library-direction-proposer";
-import { updatePersonalLibraryDirectionCandidate } from "./personal-library-proposal-review";
+import { updatePersonalLibraryDirectionCandidate, renamePersonalLibraryProposedTopic, movePersonalLibraryDirectionCandidate, removePersonalLibraryDirectionCandidate } from "./personal-library-proposal-review";
+import { previewPersonalLibraryDirection, type LibraryDirectionPreview, type LibraryPreviewPaper } from "./personal-library-direction-preview";
 import { acceptProposedTopics, type ProposalAcceptanceReceipt } from "../settings/accept-proposed-topics";
 
 export interface LibraryTopicSettingsSnapshot {
@@ -59,6 +60,7 @@ export interface LibraryWorkflowOptions {
 export interface LibraryReviewSnapshot extends LibraryTopicSettingsSnapshot {
   catalog: PersonalLibraryCatalog;
   proposal: PersonalLibraryDirectionProposal | null;
+  indexedPapers: LibraryPreviewPaper[];
 }
 export interface LibraryWorkflowRunOptions { signal?: AbortSignal }
 export interface LibraryReviewVersions { expectedProposalRevision?: number | null }
@@ -75,6 +77,22 @@ export interface LibraryCandidateUpdateInput extends LibraryWorkflowRunOptions, 
   candidateId: string;
   patch: PersonalLibraryDirectionTextPatch;
   representativePaperKeys?: string[];
+}
+
+export interface LibraryRenameTopicInput extends LibraryWorkflowRunOptions, LibraryReviewVersions {
+  topicId: string;
+  suggestedName: string;
+}
+export interface LibraryRemoveCandidateInput extends LibraryWorkflowRunOptions, LibraryReviewVersions {
+  candidateId: string;
+}
+export interface LibraryMoveDirectionInput extends LibraryRemoveCandidateInput {
+  targetTopicId: string | null;
+  suggestedName: string;
+}
+export interface LibraryPreviewDirectionInput extends LibraryRemoveCandidateInput {
+  paperKeys?: string[];
+  categories: string[];
 }
 
 /** Shared library application service; accepted directions live in normal topic settings. */
@@ -216,7 +234,16 @@ export class LibraryWorkflow {
     await this.check();
     const [catalog, proposal, settings] = await Promise.all([this.loadCatalog(), this.proposalStore.load(), this.readTopicSettings()]);
     await this.check();
-    return { catalog, proposal, ...settings };
+    const manifest = await this.knowledgeBase.loadManifest();
+    const indexedPapers = Object.values(manifest.papers).flatMap(record => {
+      if (record.status !== "ready") return [];
+      const paper = catalog.papers[record.paperKey];
+      const title = paper?.title ?? record.title;
+      if (!title) return [];
+      return [{ paperKey: record.paperKey, title, abstract: paper?.abstract ?? record.abstract ?? "", categories: [...(paper?.categories ?? [])] }];
+    }).sort((left, right) => left.paperKey.localeCompare(right.paperKey));
+    await this.check();
+    return { catalog, proposal, indexedPapers, ...settings };
   }
 
   async updateCandidate(input: LibraryCandidateUpdateInput): Promise<LibraryReviewSnapshot> {
@@ -225,6 +252,7 @@ export class LibraryWorkflow {
       const current = await this.review();
       this.assertProposalRevision(current.proposal, input);
       if (!current.proposal) throw new Error("Generate personal library direction proposals first");
+      this.assertUnprocessed(current, input.candidateId);
       const proposal = updatePersonalLibraryDirectionCandidate({
         proposal: current.proposal, candidateId: input.candidateId, patch: input.patch,
         ...(input.representativePaperKeys === undefined ? {} : { representativePaperKeys: input.representativePaperKeys, catalog: current.catalog }),
@@ -233,6 +261,92 @@ export class LibraryWorkflow {
       await this.proposalStore.replace(proposal, current.proposal.revision);
       return this.review();
     });
+  }
+
+  async renameTopic(input: LibraryRenameTopicInput): Promise<LibraryReviewSnapshot> {
+    return this.editProposal(input, current => {
+      const topic = current.proposal.topics.find(item => item.id === input.topicId);
+      if (!topic) throw new Error("Proposed topic was not found; refresh the review");
+      for (const candidate of topic.directions) this.assertUnprocessed(current, candidate.id);
+      if (topic.targetTopicId) throw new Error("Edit an existing research topic in settings");
+      return renamePersonalLibraryProposedTopic({ proposal: current.proposal, topicId: input.topicId, suggestedName: input.suggestedName });
+    });
+  }
+
+  async moveDirection(input: LibraryMoveDirectionInput): Promise<LibraryReviewSnapshot> {
+    return this.editProposal(input, current => {
+      this.assertUnprocessed(current, input.candidateId);
+      if (input.targetTopicId !== null && !current.topics.some(topic => topic.id === input.targetTopicId)) {
+        throw new Error("Destination research topic no longer exists; refresh the review");
+      }
+      return movePersonalLibraryDirectionCandidate({ proposal: current.proposal, candidateId: input.candidateId,
+        targetTopicId: input.targetTopicId, suggestedName: input.suggestedName, topicId: this.createId() });
+    });
+  }
+
+  async removeCandidate(input: LibraryRemoveCandidateInput): Promise<LibraryReviewSnapshot> {
+    return this.editProposal(input, current => {
+      this.assertUnprocessed(current, input.candidateId);
+      return removePersonalLibraryDirectionCandidate({ proposal: current.proposal, candidateId: input.candidateId });
+    });
+  }
+
+  async previewDirection(input: LibraryPreviewDirectionInput): Promise<LibraryDirectionPreview> {
+    return this.mutate(async () => {
+      await this.check(input.signal);
+      const current = await this.review();
+      this.assertProposalRevision(current.proposal, input);
+      const candidate = current.proposal?.topics.flatMap(topic => topic.directions).find(item => item.id === input.candidateId);
+      if (!candidate) throw new Error("Direction candidate was not found; refresh the review");
+      await this.options.assertAuthorized("directions");
+      const keys = input.paperKeys ?? candidate.representatives.map(paper => paper.paperKey);
+      if (keys.length === 0 || keys.length > 20 || new Set(keys).size !== keys.length) throw new Error("Select 1 to 20 distinct indexed evidence papers");
+      const papers = keys.map(key => {
+        const paper = current.indexedPapers.find(item => item.paperKey === key);
+        if (!paper) throw new Error("Selected indexed evidence is no longer available; refresh the review");
+        return paper;
+      });
+      const result = await previewPersonalLibraryDirection({ text: candidate.text, papers, categories: input.categories,
+        llm: { call: async (messages, options) => {
+          const raw = await this.guardedLlm(input.signal).call(messages, options);
+          await this.check(input.signal);
+          await this.options.assertAuthorized("directions");
+          return raw;
+        } }, signal: input.signal });
+      await this.check(input.signal);
+      const latest = await this.review();
+      this.assertProposalRevision(latest.proposal, { expectedProposalRevision: current.proposal!.revision });
+      if (latest.catalog.revision !== current.catalog.revision || JSON.stringify(latest.indexedPapers) !== JSON.stringify(current.indexedPapers)) {
+        throw new Error("Library evidence changed during preview; refresh the review");
+      }
+      return result;
+    });
+  }
+
+  private async editProposal(input: LibraryWorkflowRunOptions & LibraryReviewVersions,
+    edit: (snapshot: LibraryReviewSnapshot & { proposal: PersonalLibraryDirectionProposal }) => PersonalLibraryDirectionProposal,
+  ): Promise<LibraryReviewSnapshot> {
+    return this.mutate(async () => {
+      await this.check(input.signal);
+      const current = await this.review();
+      this.assertProposalRevision(current.proposal, input);
+      if (!current.proposal) throw new Error("Generate personal library direction proposals first");
+      const proposal = edit({ ...current, proposal: current.proposal });
+      await this.check(input.signal);
+      await this.proposalStore.replace(proposal, current.proposal.revision);
+      return this.review();
+    });
+  }
+
+  private assertUnprocessed(snapshot: LibraryReviewSnapshot, candidateId: string): void {
+    const proposal = snapshot.proposal;
+    if (!proposal) throw new Error("Generate personal library direction proposals first");
+    const receipt = snapshot.acceptances.find(item => item.proposalId === proposal.proposalId && item.scopeFingerprint === proposal.scopeFingerprint);
+    const candidate = proposal.topics.flatMap(topic => topic.directions).find(item => item.id === candidateId);
+    if (!candidate) throw new Error("Direction candidate was not found; refresh the review");
+    if (receipt?.processedCandidateIds.some(id => id === candidateId || candidate.lineage.candidateIds.includes(id))) {
+      throw new Error("This direction was already accepted; edit research topics in settings");
+    }
   }
 
   async acceptTopics(input: LibraryAcceptTopicsInput): Promise<LibraryReviewSnapshot> {
@@ -248,6 +362,7 @@ export class LibraryWorkflow {
       const current = await this.review();
       this.assertProposalRevision(current.proposal, input);
       if (!current.proposal) throw new Error("Generate personal library direction proposals first");
+      this.assertUnprocessed(current, input.candidateId);
       const topic = current.proposal.topics.find(item => item.directions.some(candidate => candidate.id === input.candidateId));
       if (!topic) throw new Error("Direction candidate was not found; refresh the review");
       const proposal = updatePersonalLibraryDirectionCandidate({
