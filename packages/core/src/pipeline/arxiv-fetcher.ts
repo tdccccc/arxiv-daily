@@ -12,6 +12,7 @@ import {
 } from "../core/adapters";
 import type { PaperMeta } from "./arxiv-parser";
 import { modernArxivResources } from "../utils/arxiv";
+import { setTimer, clearTimer } from "../utils/timers";
 import { isAtomPaperMeta, type AtomMetadataCache } from "./atom-metadata-cache";
 
 export interface ArxivFetcherOptions {
@@ -410,8 +411,8 @@ export class ArxivFetcher {
     try {
       const body = await this.fetchHtml(url, { allow404: true }, signal);
       return { ok: true, body };
-    } catch (err: any) {
-      if (err?.status === 404) return { ok: false, status: 404 };
+    } catch (err: unknown) {
+      if (isArxivHttpError(err) && err.status === 404) return { ok: false, status: 404 };
       throw err;
     }
   }
@@ -434,8 +435,8 @@ export class ArxivFetcher {
     try {
       const body = await this.fetchBinary(url, { allow404: true }, signal);
       return { ok: true, body };
-    } catch (err: any) {
-      if (err?.status === 404) return { ok: false, status: 404 };
+    } catch (err: unknown) {
+      if (isArxivHttpError(err) && err.status === 404) return { ok: false, status: 404 };
       throw err;
     }
   }
@@ -600,7 +601,7 @@ function abortablePromise<T>(promise: Promise<T>, signal?: AbortSignal): Promise
       try {
         throwIfCancelled(signal);
       } catch (error) {
-        reject(error);
+        reject(error instanceof Error ? error : new Error(String(error), { cause: error }));
       }
     };
     const cleanup = () => signal.removeEventListener("abort", onAbort);
@@ -614,9 +615,9 @@ function abortablePromise<T>(promise: Promise<T>, signal?: AbortSignal): Promise
         cleanup();
         resolve(value);
       },
-      (error) => {
+      (error: unknown) => {
         cleanup();
-        reject(error);
+        reject(error instanceof Error ? error : new Error(String(error), { cause: error }));
       },
     );
   });
@@ -625,14 +626,14 @@ function abortablePromise<T>(promise: Promise<T>, signal?: AbortSignal): Promise
 function abortableDelay(ms: number, signal?: AbortSignal): Promise<void> {
   throwIfCancelled(signal);
   return new Promise((resolve, reject) => {
-    const timeout = setTimeout(done, ms);
+    const timeout = setTimer(done, ms);
     const onAbort = () => {
-      clearTimeout(timeout);
+      clearTimer(timeout);
       cleanup();
       try {
         throwIfCancelled(signal);
       } catch (e) {
-        reject(e);
+        reject(e instanceof Error ? e : new Error(String(e), { cause: e }));
       }
     };
     function done() {
@@ -673,12 +674,12 @@ function requestWithWatchdog(
   try {
     operation = Promise.resolve(http.request(req));
   } catch (error) {
-    operation = Promise.reject(error);
+    operation = Promise.reject(error instanceof Error ? error : new Error(String(error), { cause: error }));
   }
   return new Promise((resolve, reject) => {
     let settled = false;
     const cleanup = () => {
-      clearTimeout(timeout);
+      clearTimer(timeout);
       req.signal?.removeEventListener("abort", onAbort);
     };
     const settle = (fn: () => void) => {
@@ -691,10 +692,10 @@ function requestWithWatchdog(
       try {
         throwIfCancelled(req.signal);
       } catch (error) {
-        reject(error);
+        reject(error instanceof Error ? error : new Error(String(error), { cause: error }));
       }
     });
-    const timeout = setTimeout(
+    const timeout = setTimer(
       () => settle(() => reject(new HttpTransportError(
         "timeout",
         `HTTP timeout after ${timeoutMs}ms: ${req.url}`,
@@ -709,7 +710,7 @@ function requestWithWatchdog(
     if (req.signal?.aborted) onAbort();
     operation.then(
       (response) => settle(() => resolve(response)),
-      (error) => settle(() => reject(error)),
+      (error: unknown) => settle(() => reject(error instanceof Error ? error : new Error(String(error), { cause: error }))),
     );
   });
 }

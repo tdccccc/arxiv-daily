@@ -2,6 +2,7 @@ import type { StorageAdapter } from "../core/adapters";
 import type { AtomPaperMeta } from "./atom-parser";
 import { modernArxivResources } from "../utils/arxiv";
 import { isCancellationError, throwIfCancelled } from "../services/cancellation";
+import { setTimer, clearTimer } from "../utils/timers";
 
 export interface AtomMetadataCacheOptions {
   rootDir: string;
@@ -228,7 +229,7 @@ function serializeCacheOperation<T>(
     try {
       physical = Promise.resolve(operation());
     } catch (error) {
-      physical = Promise.reject(error);
+      physical = Promise.reject(error instanceof Error ? error : new Error(String(error), { cause: error }));
     }
     // The lease recovers the logical queue. An adapter that ignores cancellation
     // can still settle later and physically overlap a newer operation; consuming
@@ -253,7 +254,7 @@ function operationLease<T>(
   return new Promise<T>((resolve, reject) => {
     let settled = false;
     const cleanup = () => {
-      clearTimeout(timeout);
+      clearTimer(timeout);
       signal?.removeEventListener("abort", onAbort);
     };
     const settle = (fn: () => void) => {
@@ -263,7 +264,7 @@ function operationLease<T>(
       fn();
     };
     const onAbort = () => settle(() => reject(cancellationError(signal)));
-    const timeout = setTimeout(
+    const timeout = setTimer(
       () => settle(() => reject(new Error(
         `Atom metadata cache operation lease expired after ${leaseMs}ms`,
       ))),
@@ -273,7 +274,7 @@ function operationLease<T>(
     if (signal?.aborted) onAbort();
     physical.then(
       (value) => settle(() => resolve(value)),
-      (error) => settle(() => reject(error)),
+      (error: unknown) => settle(() => reject(error instanceof Error ? error : new Error(String(error), { cause: error }))),
     );
   });
 }
@@ -291,16 +292,16 @@ function abortablePromise<T>(promise: Promise<T>, signal?: AbortSignal): Promise
     if (signal.aborted) return onAbort();
     promise.then(
       (value) => { cleanup(); resolve(value); },
-      (error) => { cleanup(); reject(error); },
+      (error: unknown) => { cleanup(); reject(error instanceof Error ? error : new Error(String(error), { cause: error })); },
     );
   });
 }
 
-function cancellationError(signal?: AbortSignal): unknown {
+function cancellationError(signal?: AbortSignal): Error {
   try {
     throwIfCancelled(signal);
   } catch (error) {
-    return error;
+    return error instanceof Error ? error : new Error(String(error), { cause: error });
   }
   return new Error("cancelled by user");
 }
