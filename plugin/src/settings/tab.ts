@@ -566,6 +566,11 @@ export class ArxivDailySettingTab extends PluginSettingTab {
     });
     setting.setDesc(row.description);
     setting.controlEl.addClass("arxiv-daily-settings__library-controls");
+    // Mirrors styles.css's `.setting-item:has(> .arxiv-daily-settings__library-controls)`
+    // as a static class on the row itself, added at the same moment the
+    // control class above is, since the control is always a direct child of
+    // this setting item for the lifetime of this row.
+    setting.settingEl.addClass("arxiv-daily-settings__library-row");
     const live: LibraryRowElements = { descEl: setting.descEl };
 
     setting.addButton((button) =>
@@ -2936,8 +2941,12 @@ export class ArxivDailySettingTab extends PluginSettingTab {
     };
 
     // Directions
+    // The row always holds the directions list created just below (it is
+    // only ever emptied/repopulated, never removed), so the CSS that makes
+    // this row span the grid can key off a static class here instead of a
+    // `:has()` selector.
     const dirRow = form.createDiv({
-      cls: "arxiv-daily-settings__topic-row",
+      cls: ["arxiv-daily-settings__topic-row", "arxiv-daily-settings__topic-row--has-directions"],
     });
     const dirId = `${idPrefix}-directions`;
     const dirHintId = `${dirId}-hint`;

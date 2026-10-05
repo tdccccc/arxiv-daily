@@ -617,6 +617,7 @@ describe("personal library settings row", () => {
     document.body.appendChild(descEl);
     const setting = {
       controlEl: { addClass: vi.fn() },
+      settingEl: { addClass: vi.fn() },
       descEl,
       setDesc: vi.fn().mockReturnThis(),
       addButton(callback: (button: any) => void) {
