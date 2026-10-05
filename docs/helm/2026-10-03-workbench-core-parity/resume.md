@@ -2,7 +2,7 @@
 
 ## User-approved next work
 
-P2 and P3 are now complete after P19. Personal library browsing/search/PDF and direction review/overview are implemented in the retained feature worktree, with local DSH0.1.17 packaged. Local main remains the earlier P19 merge at678febe; these new commits are not merged or pushed. No production install occurred. User requested these two GUI workflows; do not restart them or activate P4 automatically. P4 richer run management remains pending.
+P2/P3 and P20 are complete. The retained feature worktree now includes library browsing/review and automatic settings persistence; local DSH0.1.18 is packaged. The user's Enable issue was the daily-discovery switch itself: turning it off now persists before X/Escape/Done closes settings, and reopening stays off. Manual Save is removed. Local main remains the earlier P19 merge at678febe; these subsequent changes are not merged/pushed/installed. P4 richer run management stays pending; no active phase. Await user feedback rather than extending scope.
 
 ## Workspace
 
@@ -67,3 +67,9 @@ LibraryWorkflow now exposes guarded renameTopic/moveDirection/removeCandidate/pr
 Review supports proposed/overview tabs, representative evidence, drafts, renaming/moving/deleting candidates, weak-evidence selection, explicit partial acceptance and history-aware preview restoration. Proposal receipts keep processed candidates from being edited/re-added. Config/proposal revision checks, explicit endpoint authorization, scoped PDF reads and cancellation stay enforced. Atomic read views do not wait behind long model jobs; search and mutations keep their lease. PDF cap25MiB.
 
 Full3950 pass/2 real-corpus opt-in skips (CLI422/Obsidian1007), all types/boundaries/inventory/root build; lint0 errors/22 pre-existing warnings; DSH20 actual isolated Host and Claude7 passed. Final0.1.17 package sha2567daeeecadb2802534f746bf187b17f531b9d884cea5fc3231657c7ce4838f294. No real-model/corpus/email or browser automation, no Electron visual check, no publication/install/main merge. See phase03 for evidence. P4 is the only pending product phase.
+
+## P20 current settings behavior
+
+bindSettings returns {flush,close,dispose}. Input debounce500ms, change saves immediately, root input waits for completion, and writes serialize using returned revisions. Explicit model/library/email operations flush first. X/Escape/Done wait for pending edits; failure preserves fields with retry and explicit discard confirmation. Displayed secrets are never written back as edits. Preferences save independently and redraw settings in place, retaining newer selections and business drafts; the shell updates after close. Opening settings never writes/enables scheduling. Completed manual discovery also retires the Enable guide requirement.
+
+Final CLI443/45 files and DSH20 passed; types/boundaries/product inventory/build passed. Local0.1.18 sha25646d7d07de8df1d72a115d260bb7cfc82bacf4a4db0da436fa41e23b1b55f53cb. No production install or main merge. Relevant logs /tmp/arxiv-p20-{cli,dsh,types,build,http-green,guide-green}.log.

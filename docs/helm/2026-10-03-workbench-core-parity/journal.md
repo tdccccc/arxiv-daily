@@ -151,3 +151,9 @@ Personal-library HTTP/DOM flow now handles catalog and indexed fallback PDFs wit
 Connected the existing native proposal workflow to web/DSH: explicit authorization, evidence/drafts, rename/move/remove, preview, partial acceptance and overview. Preserved ordinary topics/receipts; did not restore retired profiles. Readonly review/catalog/PDF no longer queue behind model jobs. Fixed delayed-body operation gating and preview restoration with observed regressions.
 
 Full repository3950 passed/2 real-corpus opt-in skips; types/boundaries/inventory/build passed; lint0 errors/22 warnings. Final DSH20 actual isolated Host, Claude7, documentation34 links and package bytes verified. Package0.1.17 sha2567daeeecadb2802534f746bf187b17f531b9d884cea5fc3231657c7ce4838f294. Core df00de4, service20d90e6, UI7b5e32c, docs/version41a4857. No production install, user corpus/model/email, Computer Use, push or main merge. P2/P3done; P4 remains pending, no active phase.
+
+## 2026-10-05T13:35:43+08:00 — P20 accepted
+
+User clarified Enable is the daily-discovery switch, not merely onboarding. The old UI only held the off state until manual Save; autosave now persists it before all close paths. Exact true→off→X/Escape→reopen regressions and actual HTTP/TOML check pass. Save button removed; queued text/change persistence, secrets, preference races, first-use path requirements and conflict/discard flows validated. Related optional-scheduling onboarding fix retained.
+
+CLI443 and DSH20 passed; types/boundaries/inventory/build plus34 doc links and packaged bytes verified.0.1.18 local package sha25646d7d07de8df1d72a115d260bb7cfc82bacf4a4db0da436fa41e23b1b55f53cb. No real model/email/corpus changes, production install, main merge or push. P20done, P4pending.
