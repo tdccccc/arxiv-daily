@@ -412,7 +412,7 @@ async function readDocument<T>(storage: StorageAdapter, path: string, decoder: D
     return { kind: "unreadable", error: caught };
   }
   try {
-    const parsed = JSON.parse(raw);
+    const parsed: unknown = JSON.parse(raw);
     if (isPlainObject(parsed)
       && typeof parsed.schemaVersion === "number"
       && parsed.schemaVersion > FULLTEXT_KNOWLEDGE_BASE_SCHEMA_VERSION) {

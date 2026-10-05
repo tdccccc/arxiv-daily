@@ -16,6 +16,7 @@ import {
   createEvidenceChunkId,
   type EvidenceChunk,
   type EvidenceDerivation,
+  type NormalizedBoundingBox,
 } from "./evidence-chunk";
 
 export const FULLTEXT_KNOWLEDGE_BASE_SCHEMA_VERSION = 2 as const;
@@ -275,7 +276,7 @@ export function decodeFullTextKnowledgeBaseManifest(value: unknown): FullTextKno
   if (!isPositiveInteger(value.dimension)) return null;
   if (!isIsoDate(value.updatedAt)) return null;
   if (!isPlainObject(value.papers)) return null;
-  const papers: Record<string, FullTextPaperKnowledgeRecord> = Object.create(null);
+  const papers = Object.create(null) as Record<string, FullTextPaperKnowledgeRecord>;
   for (const [paperKey, record] of Object.entries(value.papers)) {
     if (typeof paperKey !== "string" || paperKey.length === 0) return null;
     if (!isPlainObject(record)) return null;
@@ -294,10 +295,9 @@ export function decodeFullTextKnowledgeBaseManifest(value: unknown): FullTextKno
       // A failed record may carry no indexed files (first failure).
       return null;
     }
-    if (record.status === "ready" && !isFingerprintArray(record.observationFingerprints, record.filePaths.length)) {
-      return null;
-    }
-    if (record.status === "failed" && !isOptionalFingerprintArray(record.observationFingerprints, record.filePaths.length)) {
+    if (record.status === "ready") {
+      if (!isFingerprintArray(record.observationFingerprints, record.filePaths.length)) return null;
+    } else if (!isOptionalFingerprintArray(record.observationFingerprints, record.filePaths.length)) {
       return null;
     }
     if (record.title !== undefined && (typeof record.title !== "string" || record.title.length === 0)) {
@@ -395,8 +395,10 @@ function completeEvidenceChunk(chunk: FullTextChunk, documentDerivation?: Eviden
   return { id: expectedId, index: chunk.index, page: chunk.page, ...identity };
 }
 
-function decodeEvidenceChunk(value: Record<string, any>): EvidenceChunk | null {
-  if (!isFingerprint(value.id) || !Array.isArray(value.headings) || !value.headings.every(isNonEmptyString)) return null;
+function decodeEvidenceChunk(value: Record<string, unknown>): EvidenceChunk | null {
+  if (!isFingerprint(value.id) || !isNonNegativeInteger(value.index) || !isPositiveInteger(value.page)) return null;
+  if (typeof value.text !== "string") return null;
+  if (!Array.isArray(value.headings) || !value.headings.every(isNonEmptyString)) return null;
   if (!isPlainObject(value.locator) || !isPositiveInteger(value.locator.pageStart)) return null;
   if (value.page !== value.locator.pageStart) return null;
   if (value.locator.pageEnd !== undefined
@@ -437,11 +439,12 @@ function decodeDerivation(value: unknown): EvidenceDerivation | null {
   };
 }
 
-function isNormalizedBoundingBox(value: unknown): boolean {
+function isNormalizedBoundingBox(value: unknown): value is NormalizedBoundingBox {
   if (!isPlainObject(value)) return false;
-  const numbers = [value.left, value.top, value.right, value.bottom];
-  return numbers.every((number) => typeof number === "number" && Number.isFinite(number) && number >= 0 && number <= 1)
-    && value.left <= value.right && value.top <= value.bottom;
+  const { left, top, right, bottom } = value;
+  if (typeof left !== "number" || typeof top !== "number" || typeof right !== "number" || typeof bottom !== "number") return false;
+  if (![left, top, right, bottom].every((number) => Number.isFinite(number) && number >= 0 && number <= 1)) return false;
+  return left <= right && top <= bottom;
 }
 
 function decodeVectors(value: unknown, expectedLength: number): Float32Array | null {
@@ -514,8 +517,11 @@ function isLogicalPathArray(value: unknown): value is string[] {
 }
 
 function isOptionalLogicalPathArray(value: unknown): value is string[] {
+  // `Array.prototype.every` is vacuously true on an empty array, so this is
+  // equivalent to the length === 0 short-circuit it replaces, while keeping
+  // `value` narrowed to `string[]` for the rest of this expression.
   return Array.isArray(value)
-    && (value.length === 0 || value.every(isLogicalRelativePath))
+    && value.every(isLogicalRelativePath)
     && new Set(value).size === value.length
     && [...value].sort().every((path, index) => path === value[index]);
 }
@@ -542,8 +548,8 @@ function isNonNegativeSafeInteger(value: unknown): value is number {
   return isNonNegativeInteger(value);
 }
 
-function isPlainObject(value: unknown): value is Record<string, any> {
+function isPlainObject(value: unknown): value is Record<string, unknown> {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
-  const prototype = Object.getPrototypeOf(value);
+  const prototype: unknown = Object.getPrototypeOf(value);
   return prototype === Object.prototype || prototype === null;
 }
