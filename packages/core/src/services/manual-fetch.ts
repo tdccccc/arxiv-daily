@@ -55,6 +55,7 @@ export class ManualFetchService {
   }
 
   async fetchAndSummarize(rawId: string, dateStr: string, signal?: AbortSignal): Promise<ManualFetchResult> {
+    const startedAt = Date.now();
     const { storage, output, logger } = this.deps;
     throwIfCancelled(signal);
 
@@ -256,6 +257,7 @@ export class ManualFetchService {
     logger.info(
       `manual-fetch: ${replaceableExistingContent !== null ? "replacing" : "writing"} detail note for ${id}`,
     );
+    detailMetrics.setPipelineElapsedMs(Date.now() - startedAt);
     const path = await this.deps.writer.writePaperDetail(
       paper,
       dateStr,

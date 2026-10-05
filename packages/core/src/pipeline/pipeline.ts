@@ -410,6 +410,7 @@ export class ArxivPipeline {
       logger.info(`pipeline: detail report for ${paper.id}`);
       let confirmedPath: string | null = null;
       try {
+        const detailStartedAt = Date.now();
         const detailMetrics = new GenerationMetricsCollector();
         const detail = await summarizePaperDetail(paper, {
           llm: this.deps.llm,
@@ -425,6 +426,7 @@ export class ArxivPipeline {
           },
         });
         throwIfCancelled(signal);
+        detailMetrics.setPipelineElapsedMs(Date.now() - detailStartedAt);
         confirmedPath = await this.deps.writer.writePaperDetail(
           paper,
           dateStr,

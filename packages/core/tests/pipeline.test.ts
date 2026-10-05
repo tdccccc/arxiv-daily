@@ -2144,6 +2144,10 @@ describe("ArxivPipeline", () => {
     expect(selectorCalls).toBe(1);
     expect(d.writer.writePaperDetail).toHaveBeenCalledTimes(1);
     expect(d.writer.writePaperDetail.mock.calls[0]?.[0].id).toBe(selectedId);
+    expect(d.writer.writePaperDetail).toHaveBeenCalledWith(
+      expect.anything(), expect.any(String), expect.any(String), undefined,
+      { metrics: expect.objectContaining({ pipelineElapsedMs: expect.any(Number) }) },
+    );
   });
 
   it("continues daily generation with no deep dives when selector transport fails", async () => {
