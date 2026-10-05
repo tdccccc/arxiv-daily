@@ -146,6 +146,25 @@ function isLogLevel(value: string): value is LogLevel {
 }
 
 /**
+ * Style a button as destructive. `setDestructive` replaced `setWarning` in
+ * Obsidian 1.13.0 (above this plugin's 1.4.0 `minAppVersion`), so this calls
+ * it only when the running app supports it and otherwise falls back to the
+ * older styling via a structural type (not the deprecated declaration) so
+ * the fallback itself does not re-trigger the deprecation warning.
+ */
+interface LegacyWarningButton {
+  setWarning(): unknown;
+}
+
+function applyDestructiveButtonStyle(button: ButtonComponent): void {
+  if (requireApiVersion("1.13.0")) {
+    button.setDestructive();
+  } else {
+    (button as unknown as LegacyWarningButton).setWarning();
+  }
+}
+
+/**
  * How often the Library row may be rewritten while a run reports.
  *
  * Indexing reports once per paper, which on a large library is several times a
@@ -573,9 +592,9 @@ export class ArxivDailySettingTab extends PluginSettingTab {
     const cancel = row.cancel;
     if (cancel) {
       setting.addButton((button) => {
+        button.setButtonText(cancel.label);
+        applyDestructiveButtonStyle(button);
         button
-          .setButtonText(cancel.label)
-          .setWarning()
           .setDisabled(cancel.disabled)
           .onClick(() => this.cancelLibraryIndexing());
         live.cancel = button;

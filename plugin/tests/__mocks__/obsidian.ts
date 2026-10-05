@@ -206,6 +206,8 @@ export class ButtonComponent {
 
   setWarning(): this { return this; }
 
+  setDestructive(): this { return this; }
+
   onClick(callback: () => unknown): this {
     this.callback = callback;
     this.buttonEl.addEventListener("click", () => { void this.callback?.(); });

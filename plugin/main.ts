@@ -12,7 +12,6 @@ import type {
   FullTextLegacyMigrationLease,
   FullTextGenerationMaintenanceReport,
   KnowledgeBaseChunkHit,
-  DirectionDiffSuggestion,
   IncrementalSuggestionsDocument,
   ClusteringInputPaper,
   ProposalAcceptanceReceipt,
