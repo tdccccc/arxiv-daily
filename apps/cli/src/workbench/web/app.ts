@@ -327,10 +327,13 @@ function mountWorkbenchContent(root: HTMLElement, options: WorkbenchClientOption
   function renderDocument(entry: ReadingDocument): void {
     reading.innerHTML = `<div class="reading-toolbar"><button class="quiet-button" data-action="back">${t("← 返回列表")}</button><span class="reading-kind">${entry.kind === "daily" ? t("研究日报") : t("论文总结")}</span><div class="reading-controls"><button class="icon-button" data-action="font-down" aria-label="${t("缩小字号")}">A−</button><button class="icon-button" data-action="font-up" aria-label="${t("放大字号")}">A＋</button><a class="quiet-button" data-source="raw" href="api/raw?path=${encodeURIComponent(entry.path)}" target="_blank" rel="noopener noreferrer">Markdown ${symbols.arrow}</a></div></div>
       <div class="article-wrap"><header class="document-header"><div class="document-eyebrow">${escapeHtml(entry.date || t("已保存文档"))}${entry.arxivId ? ` <span>· arXiv:${escapeHtml(entry.arxivId)}</span>` : ""}</div><h1 class="document-title">${scientificInline(entry.title)}</h1>${entry.authors ? `<p class="document-authors">${escapeHtml(entry.authors)}</p>` : ""}<div class="document-links">${sourceLink(entry.originalUrl, t("arXiv 原文"), "original")}${sourceLink(entry.pdfUrl, t("阅读 PDF"), "pdf")}${entry.related.map(item => `<a href="?document=${encodeURIComponent(item.path)}">${t("来源日报 ·")} ${escapeHtml(item.title)}</a>`).join("")}</div></header><article class="markdown-body" aria-label="${t("文档正文")}"></article><footer class="article-footer"><span>${t("Markdown 保存在本地")}</span><span>${escapeHtml(entry.path)}</span></footer></div>`;
-    // The local service owns Markdown sanitization. All other API text is escaped above.
+    // Body HTML comes from the safe reader; titles use its safe inline projection.
     find("article").innerHTML = entry.html;
     const firstHeading = find("article").querySelector("h1");
-    if (firstHeading?.textContent === entry.title) {
+    const firstHeadingMetadata = entry.headings.find(heading => heading.level === 1);
+    const sameHeading = firstHeading && firstHeadingMetadata?.id === firstHeading.id
+      && firstHeadingMetadata.title.trim() === entry.title.trim();
+    if (firstHeading && (sameHeading || firstHeading.textContent === entry.title)) {
       find(".document-title").id = firstHeading.id;
       firstHeading.remove();
     }

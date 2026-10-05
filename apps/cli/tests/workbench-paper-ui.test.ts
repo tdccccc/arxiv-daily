@@ -1,6 +1,7 @@
 // @vitest-environment happy-dom
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { mountWorkbench } from "../src/workbench/web/app";
+import { renderMarkdown } from "../src/workbench/markdown";
 
 const paper = { key: "arxiv:2609.12345", arxivId: "2609.12345", title: "Efficient inference", authors: ["Ada"], published: "2026-09-29", topics: ["Inference"], category: "cs.AI", status: "inbox", priority: "normal", starred: false, abstract: "Original abstract", summary: { coreProblem: "The existing problem", keyMethod: "The saved method", whyRelevant: "Relevant to efficient models" }, detailPath: null, reports: [{ path: "daily/2026-10-01.md", date: "2026-10-01", title: "研究日报", available: true }], originalUrl: "https://arxiv.org/abs/2609.12345", pdfUrl: "https://arxiv.org/pdf/2609.12345", provenance: null, novelty: null };
 const day = { date: "2026-10-01", state: "has-report", reportPath: "daily/2026-10-01.md", reportTitle: "研究日报", papers: 1, message: "日报已保存。", canGenerate: false, actionLabel: null };
@@ -212,9 +213,13 @@ $$
 });
 
 it("renders math in document titles and table of contents", async () => {
- const {root}=setup(url=>url.pathname.endsWith('api/document')?json({path:'daily/2026-10-01.md',kind:'daily',title:'Expansion $H_0$',date:day.date,arxivId:'',authors:'',html:'<h2 id="matter">Matter</h2>',headings:[{id:'matter',title:String.raw`Matter $\Omega_m$`,level:2}],related:[],originalUrl:null,pdfUrl:null}):undefined,'?date=2026-10-01');
+ const rendered=renderMarkdown(String.raw`# Expansion $H_0$
+
+## Matter $\Omega_m$`);
+ const {root}=setup(url=>url.pathname.endsWith('api/document')?json({path:'daily/2026-10-01.md',kind:'daily',title:'Expansion $H_0$',date:day.date,arxivId:'',authors:'',html:rendered.html,headings:rendered.headings,related:[],originalUrl:null,pdfUrl:null}):undefined,'?date=2026-10-01');
  await ready(root);click(root,'[data-action="read-day"]');
  await vi.waitFor(()=>expect(root.querySelector('article')).toBeTruthy());
  expect(root.querySelector('.document-title .katex')).toBeTruthy();
  expect(root.querySelector('.toc-pane a .katex')).toBeTruthy();
+ expect(root.querySelectorAll('.reading-pane h1')).toHaveLength(1);
 });
