@@ -169,9 +169,9 @@ function decodeBase64Url(value: string): string {
   return new TextDecoder("utf-8", { fatal: true }).decode(bytes);
 }
 
-function isExactDataObject(value: unknown, keys: string[]): value is Record<string, any> {
+function isExactDataObject(value: unknown, keys: string[]): value is Record<string, unknown> {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
-  const prototype = Object.getPrototypeOf(value);
+  const prototype: unknown = Object.getPrototypeOf(value);
   if (prototype !== Object.prototype && prototype !== null) return false;
   const ownKeys = Reflect.ownKeys(value);
   if (ownKeys.length !== keys.length || !keys.every((key) => ownKeys.includes(key))) return false;

@@ -59,7 +59,7 @@ function parseHeaderDate(headerText: string): string | null {
  * to a live page, so these elements never run or apply either way.
  */
 function removeUnsafeElements(doc: Document): void {
-  const unsafe = Array.from(doc.querySelectorAll("script, style, link")) as unknown as Element[];
+  const unsafe = Array.from(doc.querySelectorAll("script, style, link"));
   for (const el of unsafe) el.remove();
 }
 
@@ -75,7 +75,7 @@ export function parseRecent(html: string, markupParser: MarkupParser): DateBucke
   const doc = markupParser.parseFromString(html, "text/html");
   removeUnsafeElements(doc);
   const buckets: DateBucket[] = [];
-  const dls = Array.from(doc.querySelectorAll("dl#articles")) as unknown as Element[];
+  const dls = Array.from(doc.querySelectorAll("dl#articles"));
   for (const dl of dls) {
     const h3 = dl.querySelector("h3");
     const date = h3 ? parseHeaderDate(h3.textContent ?? "") : null;

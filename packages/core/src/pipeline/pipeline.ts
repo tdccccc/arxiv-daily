@@ -33,7 +33,6 @@ import type { NoveltyCheckpointPort } from "./personalized-novelty";
 import {
   summarizeDaily,
   summarizePaperDetail,
-  type DailyPaperWithContent,
   type DailySummaryCheckpointPort,
 } from "./summarizer";
 import {
@@ -69,11 +68,6 @@ export type PipelineResult =
   | { kind: "cancelled"; reason: string }
   | { kind: "failed_transient"; reason: string }
   | { kind: "failed_permanent"; reason: string };
-
-type PipelineFailureResult = Extract<
-  PipelineResult,
-  { kind: "failed_transient" | "failed_permanent" }
->;
 
 const CONTENT_FETCH_CONCURRENCY = 6;
 
@@ -161,7 +155,7 @@ export class ArxivPipeline {
     dateStr: string,
     signal?: AbortSignal,
   ): Promise<PipelineResult> {
-    const { fetcher, logger } = this.deps;
+    const { logger } = this.deps;
     const t0 = Date.now();
     const runMetrics = new GenerationMetricsCollector();
     const stageStart = (label: string) => {
@@ -790,15 +784,6 @@ export class ArxivPipeline {
       dateWindow: "recent",
     };
   }
-}
-
-function combineAbortSignals(
-  primary?: AbortSignal,
-  lifecycle?: AbortSignal,
-): AbortSignal | undefined {
-  if (!primary) return lifecycle;
-  if (!lifecycle) return primary;
-  return AbortSignal.any([primary, lifecycle]);
 }
 
 function extractDailyArxivIds(markdown: string): string[] {

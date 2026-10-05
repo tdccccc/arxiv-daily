@@ -79,7 +79,7 @@ export function normalizePaperDiscoveryProvenance(value: unknown): PaperDiscover
     const representatives: PaperDiscoveryProvenance["directions"][number]["representatives"] = [];
     for (const representative of raw.representatives) {
       if (!isExactDataObject(representative, ["paperKey", "title", "evidenceDepth"])
-        || !/^arxiv:\d{4}\.\d{4,5}$/.test(representative.paperKey)
+        || !isPaperKey(representative.paperKey)
         || !isBoundedText(representative.title, DISCOVERY_PROVENANCE_MAX_TITLE_CODE_UNITS)
         || representative.evidenceDepth !== "metadata-and-abstract") return null;
       representatives.push({
@@ -181,7 +181,7 @@ export function parseDailyReportDiscoveryProvenance(
       return { kind: "invalid", reason: "provenance marker placement or count is invalid" };
     }
     if (arxivIds.length !== 1) return { kind: "invalid", reason: "marked paper identity is ambiguous" };
-    const markerIndex = markerIndexes[0]!;
+    const markerIndex = markerIndexes[0];
     const payload = parseDiscoveryProvenanceMarker(lines[markerIndex] ?? "");
     if (!payload) return { kind: "invalid", reason: "provenance marker is malformed" };
     const arxivId = arxivIds[0]!;
@@ -201,7 +201,7 @@ export function parseDailyReportDiscoveryProvenance(
 
 /** Escape untrusted provenance metadata to literal, single-line Markdown text. */
 export function escapeDiscoveryProvenancePlainText(value: string): string {
-  return value.replace(/\s+/gu, " ").trim().replace(/[\\`*_{}\[\]()<>#+\-.!|>]/g, "\\$&");
+  return value.replace(/\s+/gu, " ").trim().replace(/[\\`*_{}[\]()<>#+\-.!|>]/g, "\\$&");
 }
 
 function encodeBase64Url(value: string): string {
@@ -219,9 +219,9 @@ function decodeBase64Url(value: string): string {
   return new TextDecoder("utf-8", { fatal: true }).decode(bytes);
 }
 
-function isExactDataObject(value: unknown, keys: string[]): value is Record<string, any> {
+function isExactDataObject(value: unknown, keys: string[]): value is Record<string, unknown> {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
-  const prototype = Object.getPrototypeOf(value);
+  const prototype: unknown = Object.getPrototypeOf(value);
   if (prototype !== Object.prototype && prototype !== null) return false;
   const ownKeys = Reflect.ownKeys(value);
   if (ownKeys.length !== keys.length || !keys.every((key) => ownKeys.includes(key))) return false;
@@ -233,7 +233,7 @@ function isExactDataObject(value: unknown, keys: string[]): value is Record<stri
   return true;
 }
 
-function isOrdinaryDataArray(value: unknown, maxItems: number): value is any[] {
+function isOrdinaryDataArray(value: unknown, maxItems: number): value is unknown[] {
   if (!Array.isArray(value) || Object.getPrototypeOf(value) !== Array.prototype
     || value.length > maxItems) return false;
   const ownKeys = Reflect.ownKeys(value);
@@ -254,6 +254,10 @@ function isBoundedText(value: unknown, max: number): value is string {
 function isCanonicalTextArray(value: unknown, maxItems: number, maxLength: number): value is string[] {
   return isOrdinaryDataArray(value, maxItems)
     && value.every((entry) => isBoundedText(entry, maxLength)) && strictlySortedUnique(value);
+}
+
+function isPaperKey(value: unknown): value is string {
+  return typeof value === "string" && /^arxiv:\d{4}\.\d{4,5}$/.test(value);
 }
 
 function isCanonicalArxivId(value: unknown): value is string {
