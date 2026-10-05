@@ -115,3 +115,9 @@ P15 is complete within the requested scope. P2/P3/P4 stay pending for subsequent
 Rebased all77 original commits onto main c2de350; retained backup eafe972. No dropped patches (67 unchanged,10 adapted), plus scoped integration/docs/release checkpoints. Main's removal of standalone profiles required CLI topic acceptance and atomic receipts, not restoration of obsolete stores. Shared settings now preserve direction lists and the daily cap; P15 stays intact. Stable legacy direction IDs and page-text-only library parsing fixed with observed regressions.
 
 CLI339, Obsidian1007, core focused suites, DSH20 actual Host, Claude package7 and native workflow5 passed; typechecks/boundaries/inventory/builds passed. DSH0.1.14 packaged locally; no production install, main edit or push. Detailed coverage/limitations in phase16. P16 complete; remaining product phases stay pending.
+
+## 2026-10-05T11:17:00+08:00 — P17 scientific reading accepted
+
+用户确认公式原文直接显示。概览/摘要/推荐理由曾仅转义文本；现在复用工作台Markdown/KaTeX渲染，标题/目录保留公式边界，跨空行display不再被段落拆分。数学标题重复也已按解析元数据修复。原始Markdown保持不变，无需重新生成内容。
+
+Observed Red/Green and63 focused+38 final regression checks、CLI typecheck/boundaries/build passed. DSH20及最终包实际Host2/2通过，逐项验证本地CSS/WOFF2与CSP。0.1.15已打包但未改用户安装；无Computer Use/真实付费调用。P17完成，其余产品阶段继续pending。
