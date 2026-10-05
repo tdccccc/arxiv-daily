@@ -2,7 +2,20 @@
 
 Get your first **daily report** in Obsidian, then optionally turn on scheduling and email.
 
-For a short product overview (plugin + CLI), see the [README](../README.md). This guide is for the **Obsidian plugin**.
+For the product overview, see the [README](../README.md). The numbered guide below covers the **Obsidian plugin**; the same daily discovery and reading workflow also works without Obsidian.
+
+## Choose an entry point
+
+| Entry point | Start here |
+|---|---|
+| Obsidian desktop plugin | Install and enable the plugin, then follow the steps below |
+| Standalone browser workbench | Build the CLI from source and run `npm run cli -- ui`; see [CLI instructions](../apps/cli/README.md#local-reading-workbench) |
+| DSH | Install the local `0.1.16` package and click `arxiv-daily` above Settings in the left sidebar; see [build, install and upgrade](../extensions/dsh-arxiv-daily/README.md) |
+| Claude Code CLI | Load the plugin and use `/arxiv-daily:open` to open the browser workbench; see [instructions](../extensions/claude-code-arxiv-daily/README.md) |
+
+On first open, the standalone workbench lets you set the output folder, model, categories and research topics, save, and generate a report. A calendar and filters sit on the left; paper lists and a Markdown reader with math, back/forward, reading marks and favorites sit on the right. Settings can be edited and saved in the workbench, including appearance and Chinese/English interface language. Agent conversation is optional.
+
+The DSH package is currently distributed as a local source build, not an npm release. The workbench and Obsidian share core workflows and settings rules, while configuration values and secrets remain separate. Dedicated library-search and direction-review pages and fuller run management remain planned; current settings and CLI commands support connecting, indexing and accepting library-derived directions.
 
 ## What you need
 
@@ -21,14 +34,15 @@ Install and enable **arXiv Daily**, then open:
 Settings → arXiv Daily
 ```
 
-At the top, a four-step guide walks you through setup:
+At the top, a five-step guide walks you through setup:
 
 1. **Connect AI**
 2. **Choose paper sources**
 3. **Describe your research interests**
 4. **Generate your first report**
+5. **Turn on daily reports**
 
-Buttons jump to the matching form. The full guide stays until a report completes; then you get a short “setup complete” summary (it returns if settings become invalid).
+Buttons jump to the matching form. Once all five steps are complete, Obsidian remembers that the guide was finished and keeps it hidden, even if you later turn scheduling off. You can still use the manual report commands without enabling scheduling.
 
 ## 2. Connect AI
 
@@ -47,19 +61,18 @@ Each topic becomes a **section in the daily report**.
 For each topic set:
 
 - **Name** — section title  
-- **Tag** — short slug  
-- **Description** — in plain language, which papers belong here  
+- **Directions** — one specific research thread per line; papers are matched against these
 
 Example:
 
 ```text
 Name: Photometric Redshift
-Tag: photo-z
-Description: Methods, benchmarks, uncertainty calibration, catalog construction,
-and systematics for photometric redshift estimation.
+Directions:
+Uncertainty calibration for photometric redshift estimation
+Benchmarks and systematics of photometric redshift catalogs
 ```
 
-You can start from a template, then edit.
+You can start from a template, then edit. Library-proposed directions must be reviewed and accepted before joining ordinary topics; unaccepted candidates never affect filtering.
 
 **Paper notes (optional depth):**  
 Each topic has a **Detail report** option: papers in that topic may get a longer **paper note** under `papers/` (not just the short entry in the daily report). Below the topic list, **Automatic detail notes** (Fewer / Recommended / More) controls how often those notes are created automatically. You can always create a paper note manually later (for example **Summarize by arXiv ID**).
@@ -87,7 +100,7 @@ arxiv-daily/daily/YYYY-MM-DD.md
 | **Daily report** | `daily/YYYY-MM-DD.md` | That day’s reading list (main result) |
 | **Paper note** | `papers/<arxiv_id>.md` | Longer note for one paper |
 
-If automatic paper notes fail or are skipped, the daily report can still succeed.
+If automatic paper notes fail or are skipped, the daily report can still succeed. Waiting for an arXiv announcement, confirmed no updates, no filtering matches and real failures are shown separately. Waiting does not consume the ordinary failure retry budget.
 
 ## 6. Use the Dashboard
 
@@ -153,7 +166,7 @@ With auto-send on, a **completed** daily run may email one digest for that date.
 
 ## CLI (optional)
 
-If you want reports without keeping Obsidian open (Node.js 20.11+):
+If you want reports without keeping Obsidian open (Node.js 20.19+):
 
 ```bash
 npm install -g arxiv-daily

@@ -2,7 +2,7 @@
 
 Command-line tool for [arXiv Daily](https://github.com/tdccccc/arxiv-daily): fetch arXiv by category, filter with an LLM by your research topics, and write Markdown **daily reports** (and optional **paper notes**).
 
-Works standalone on a server or always-on machine. The Obsidian plugin is separate; both can share the same vault folder layout.
+Works standalone in a terminal, local browser, or on a server or always-on machine. The Obsidian plugin is separate; both can share the same vault folder layout.
 
 ## Requirements
 
@@ -81,7 +81,7 @@ arxiv-daily status
 arxiv-daily ui [--port PORT] [--no-open]
 arxiv-daily papers [--query TEXT] [--offset N] [--limit N]
 arxiv-daily library connect PATH
-arxiv-daily library status|prepare|scan|index|propose|directions|update|revoke
+arxiv-daily library status|prepare|scan|index|propose|directions|revoke
 arxiv-daily library authorize --fingerprint HASH
 arxiv-daily library confirm --candidate ID --proposal-revision N
 arxiv-daily library search --query TEXT [--mode hybrid|lexical|dense] [--limit N]
@@ -109,15 +109,27 @@ Run `arxiv-daily ui` (with or without an existing configuration) to open the loc
 
 Browse daily reports and paper notes, search their titles/authors/IDs/dates, and read existing Markdown with tables, code, images and scientific math. Relative links and unambiguous Obsidian wikilinks navigate between existing reports. Source and PDF buttons open original papers. No reading action changes the original Markdown or calls a model; browser assets and math fonts are embedded in the CLI.
 
-The left sidebar contains the calendar and search/topic/reading filters. The right side starts with all indexed discoveries, including papers without detailed notes, with sorting and pagination. Selecting a date filters its papers; an explicit action opens the complete saved report. Opening a paper shows its saved overview and detail actions. Returning restores list filters, page and scroll position. “Browse Markdown files” also exposes standalone notes. Other days show their persisted state and offer a date-prefilled generation/retry form when available. Completed zero-match runs remain distinct from ungenerated days, and completed runs whose files are missing do not offer a misleading rerun. Dates use the configured product timezone; browsing does not infer arXiv publication availability or trigger generation.
+The left sidebar contains the calendar and search/topic/reading filters. The right side starts with all indexed discoveries, including papers without detailed notes, with sorting and pagination. Selecting a date filters its papers; an explicit action opens the complete saved report. Opening a paper shows its saved overview and detail actions. Back/forward stays within the current workbench reading history, restoring filters, anchors and scroll positions; unavailable directions are disabled. History does not persist across workbench restarts. Return to list restores list filters, page and scroll position. “Browse Markdown files” also exposes standalone notes. Other days show their persisted state and offer a date-prefilled generation/retry form when available. Completed zero-match runs remain distinct from ungenerated days, and completed runs whose files are missing do not offer a misleading rerun. Dates use the configured product timezone; browsing does not infer arXiv publication availability or trigger generation.
+
+Waiting for an announcement, confirmed no updates, no filtering matches and genuine failures have distinct statuses. Waiting does not consume the ordinary failure retry budget.
+
+Summary sources and following appendix material are separated from the body. The reading footer shows input/output/total tokens, generation duration and the generation timestamp in UTC. Older missing values are shown as not recorded; file modification time is never substituted. A paper overview that uses its source daily report’s metrics labels that report-wide scope.
 
 Larger colored day cells show paper counts directly. Known run totals take precedence; otherwise existing Paper Index references can provide a count for older reports. Missing counts remain unknown (—), not zero. Drag the sidebar separator or use its arrow keys to resize; the sidebar can also collapse. Width and collapse preferences persist beside CLI configuration across service ports. Mobile navigation opens through the calendar/filter button, with matching light/dark status colors.
 
 Reading status (unmarked/to-read/read) and independent favorites persist through the shared Paper Index. Existing legacy states remain until explicitly changed, stale conflicting edits are rejected, and marking never rewrites Markdown.
 
-Explicit generation actions invoke the same daily/manual CLI workflow, including configured email delivery, and show progress, cancellation and final results. Settings follows the Obsidian 1.13+ section order and controls, including model suggestions, categories, topics, detail policy, output and schedule, personal library, email, advanced and help. With no configuration it opens first-run setup automatically. Save activates the settings immediately; secret inputs stay blank and preserve existing keys when left empty. Show explicitly reveals a saved key through a revision-checked local POST; Hide clears a revealed saved key. Get models populates the dropdown attached to the same editable Model field; it supports typing, filtering and keyboard selection. Changes from another editor are rejected instead of overwritten, and settings cannot be saved during an active generation task. Embedding, email and automatic detail policy are editable; legacy PDF sidecar values remain stored while their retired settings controls stay hidden. Library indexing and explicit email/model-list actions reuse the shared workflows. Enable and Check every (minutes) run shared scheduler checks while the workbench process is open, using a separate workbench_schedule TOML table; existing external cron intent is preserved. The initial workbench is a reader, not a Markdown editor or full Obsidian host. Library indexing/review remains available through the commands below.
+Explicit generation actions invoke the same daily/manual CLI workflow, including configured email delivery, and show progress, cancellation and final results. Settings follows the Obsidian 1.13+ section order and controls, including model suggestions, categories, topics, detail policy, output and schedule, personal library, email, advanced and help. With no configuration it opens first-run setup automatically. Save activates the settings immediately; secret inputs stay blank and preserve existing keys when left empty. Show explicitly reveals a saved key through a revision-checked local POST; Hide clears a revealed saved key. Get models populates the dropdown attached to the same editable Model field; it supports typing, filtering and keyboard selection. Changes from another editor are rejected instead of overwritten, and settings cannot be saved during an active generation task. Embedding, email and automatic detail policy are editable; legacy PDF sidecar values remain stored while their retired settings controls stay hidden. Library indexing and explicit email/model-list actions reuse the shared workflows. Enable and Check every (minutes) run shared scheduler checks while the workbench process is open, using a separate workbench_schedule TOML table; existing external cron intent is preserved. The initial workbench is a reader, not a Markdown editor or full Obsidian host. Settings already supports connecting, authorizing and indexing a library. Dedicated library-search and direction-review pages, and fuller run management, remain planned; use the commands below for library search and proposal acceptance.
 
-This workbench is currently available in the experimental Claude integration worktree; use its locally built bundle until published.
+For the workbench described here, use the current source build until a CLI release containing these changes is published:
+
+```bash
+npm ci
+npm run build --workspace apps/cli
+npm run cli -- ui
+```
+
+Run these from the repository root. Source builds require CMake, a C++ compiler and Node-API headers for native storage. The same workbench is available inside [DSH](../../extensions/dsh-arxiv-daily/README.md); [Claude Code CLI](../../extensions/claude-code-arxiv-daily/README.md) can open it in your browser. Neither integration requires Obsidian.
 
 ## Optional personal library
 

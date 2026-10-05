@@ -2,7 +2,20 @@
 
 在 Obsidian 里跑通第一份 **日报（Daily report）**，再按需打开定时与邮件。
 
-产品总览（插件 + CLI）见 [中文说明](README.zh-CN.md)。本页只讲 **Obsidian 插件**。
+产品总览见 [中文说明](README.zh-CN.md)。下面的分步教程以 **Obsidian 插件**为主；不使用 Obsidian 时也能从同一套日报与阅读流程开始。
+
+## 选择使用入口
+
+| 入口 | 开始方式 |
+|---|---|
+| Obsidian 桌面插件 | 安装并启用插件，按下方步骤设置 |
+| 独立浏览器工作台 | 从源码构建 CLI，运行 `npm run cli -- ui`；见 [CLI 文档](../apps/cli/README.md#local-reading-workbench) |
+| DSH | 安装本地 `0.1.16` 包，在左栏“设置”上方点击 `arxiv-daily`；见 [构建、安装与升级](../extensions/dsh-arxiv-daily/README.md) |
+| Claude Code CLI | 加载插件，以 `/arxiv-daily:open` 打开浏览器工作台；见 [使用说明](../extensions/claude-code-arxiv-daily/README.md) |
+
+独立工作台首次打开即可设置保存目录、模型、分类和研究主题，保存后生成日报。左侧日历与筛选，右侧论文列表和 Markdown 阅读器，支持公式、前进/后退、待读与收藏；右上角“设置”可修改并保存配置，也可切换外观和中英文界面。Agent 对话不是使用这些功能的前提。
+
+DSH 包目前通过本地源码构建分发，未发布到 npm。工作台与 Obsidian 共用核心流程和设置规则，各宿主配置值、密钥独立保存。个人文献库的专用检索、方向审核页面和完整运行管理仍在后续计划中；现有设置与 CLI 命令可完成库连接、索引及方向接受。
 
 ## 你需要准备
 
@@ -21,14 +34,15 @@
 Settings → arXiv Daily
 ```
 
-顶部有四步引导：
+顶部有五步引导：
 
 1. **Connect AI（连接 AI）**  
 2. **Choose paper sources（选择论文来源）**  
 3. **Describe your research interests（描述研究兴趣）**  
 4. **Generate your first report（生成第一份报告）**  
+5. **Turn on daily reports（开启定时日报）**
 
-按钮会跳到对应表单。第一份报告完成前会显示完整引导；完成后变成简短的「设置完成」（配置失效时完整引导会回来）。
+按钮会跳到对应表单；五步全部完成后，Obsidian 会记住引导已完成，即使后来关闭定时也不会重新弹出。不开启定时也可以手动生成日报。
 
 ## 2. 连接 AI
 
@@ -47,19 +61,18 @@ Settings → arXiv Daily
 每个 topic 需要：
 
 - **Name** — 章节标题  
-- **Tag** — 短标签  
-- **Description** — 用自然语言说明哪些论文算这个主题  
+- **Directions** — 每行一个具体研究方向，筛选时逐项匹配
 
 例子：
 
 ```text
 Name: Photometric Redshift
-Tag: photo-z
-Description: Methods, benchmarks, uncertainty calibration, catalog construction,
-and systematics for photometric redshift estimation.
+Directions:
+Uncertainty calibration for photometric redshift estimation
+Benchmarks and systematics of photometric redshift catalogs
 ```
 
-可先用模板，再改成你的方向。
+可先用模板，再改成你的方向。文献库提出的方向需要审核接受才会加入普通主题；未接受候选不参与筛选。
 
 **论文总结（可选加深）：**  
 每个 topic 的 **Detail report** 表示：该主题下的论文是否有机会生成 `papers/` 里更长的 **论文总结**（不只是日报里的短条目）。列表下方的 **Automatic detail notes**（Fewer / Recommended / More）控制自动写总结的频率。之后仍可手动生成（例如 **Summarize by arXiv ID**）。
@@ -87,7 +100,7 @@ arxiv-daily/daily/YYYY-MM-DD.md
 | **日报** | `daily/YYYY-MM-DD.md` | 当天的阅读列表（主要结果） |
 | **论文总结** | `papers/<arxiv_id>.md` | 单篇更长的总结 |
 
-自动论文总结失败或跳过时，日报仍可成功。
+自动论文总结失败或跳过时，日报仍可成功。等待 arXiv 公告、当日无更新、筛选无匹配和真正失败会分别展示；等待公告不消耗普通失败重试额度。
 
 ## 6. 使用 Dashboard
 
@@ -153,7 +166,7 @@ Beta 额度偏小（每个已验证邮箱每个 UTC 日仅少量消息，测试�
 
 ## CLI（可选）
 
-若希望不打开 Obsidian 也能出日报（Node.js 20.11+）：
+若希望不打开 Obsidian 也能出日报（Node.js 20.19+）：
 
 ```bash
 npm install -g arxiv-daily
