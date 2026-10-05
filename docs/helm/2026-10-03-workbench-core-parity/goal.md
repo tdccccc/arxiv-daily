@@ -3,8 +3,8 @@
 status: active
 owner: /root
 created: 2026-10-03T00:22:59+08:00
-updated: 2026-10-05T12:29:28+08:00
-revision: 31
+updated: 2026-10-05T12:49:49+08:00
+revision: 32
 
 ## Intent
 
@@ -32,7 +32,7 @@ revision: 31
 ## Phases
 
 1. P1 — 图形设置与首次使用闭环 — status: done
-2. P2 — 个人文献库管理与检索 — status: pending
+2. P2 — 个人文献库管理与检索 — status: active
 3. P3 — 方向与建议审核 — status: pending
 4. P4 — 定时与运行管理 — status: pending
 

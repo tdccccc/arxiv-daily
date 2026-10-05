@@ -137,3 +137,7 @@ Observed Red/Green：core332、CLI358、Obsidian1007、DSH20通过，typechecks/
 First workbench merge accepted after full gate. main a1cd713 was clean; backup/main-before-workbench-20261005 preserved it, then main fast-forwarded to feature d1ad169. Seven user docs updated and35 links checked. Shared functionality is ready as a first iteration; dedicated library/review GUI remains pending.
 
 Root3881 passed/2 real-corpus opt-in skips; release tools368; DSH20; Claude package7; typechecks/boundaries/inventory/build/submission/smokes/published-manifest all passed; audit0. Lint0 errors/22 allowed warnings. Fixed nested-dependency release checker and DSH runtime-file CI coverage with observed regressions. No push/publish/install, user corpus access or Computer Use. Closing records will be fast-forwarded to main as well.
+
+## 2026-10-05T12:49:49+08:00 — P2 resumed
+
+用户确认将0.5.0已有文献库检索和方向审核接入DSH网页。原生界面与core均未丢失；此次补宿主界面，不重建业务。先P2库浏览/检索/PDF，再P3审核，保留现有设置与运行管理。继续原隔离worktree，无生产安装或真实文献处理。

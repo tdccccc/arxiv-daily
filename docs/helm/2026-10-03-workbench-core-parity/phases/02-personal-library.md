@@ -2,8 +2,8 @@
 
 goal_ref: ../goal.md
 created: 2026-10-03T12:38:19+08:00
-updated: 2026-10-03T12:38:19+08:00
-revision: 1
+updated: 2026-10-05T12:49:49+08:00
+revision: 2
 
 ## Outcome
 
@@ -16,43 +16,32 @@ revision: 1
 
 ## Approach
 
-为既有CLI业务增加工作台适配层。短配置操作有revision与任务互斥，长任务接入可取消的运行展示，结果提供结构化论文列表。设置页增加文献库与嵌入配置分组，连接本身不隐式授权或开始处理。
+连接/授权/索引设置已在P5/P14完成，保留现有入口。以0.5.0原生流程为准补网页主区域浏览、检索和PDF打开；通过共享CLI应用上下文调用core，不复制索引或检索业务。P3随后接入同一工作区的方向审核。
 
 ## Chunks
 
-### Chunk 1 — 文献库 HTTP 适配
+### Chunk 1 — Library application adapter
 
-- change kind: behavior change
-- strategy: strict Red-Green-Refactor
-- Red signal: 临时目录测试中 library status/connect/authorize/revoke API 缺失。
-- Green check: 连接、当前披露授权、过期fingerprint拒绝、撤销及config revision刷新。
-- regression checks: cli-library-config、settings、workbench HTTP。
+- change kind: behavior change; existing context extraction is behavior-preserving
+- strategy: Green CLI library baseline for context export; strict Red-Green for structured workbench service
+- Red signal: new workbench-library tests require missing browse/search/PDF service; then observable catalog/filter and unsafe-path failures
+- Green check: temporary-library fixtures verify catalog pagination, title/abstract retrieval, root identity, PDF paper-key-only access and current config checks
+- regression checks: cli-library, cli-library-config, CLI typecheck
 - [ ] implementation and tests accepted
 
-### Chunk 2 — 长任务与检索
+### Chunk 2 — HTTP and workbench library view
 
 - change kind: behavior change
 - strategy: strict Red-Green-Refactor
-- Red signal: scan/index/prepare/search不可从工作台执行；忙状态无法互斥。
-- Green check: 模拟模型与解析器、临时文献目录，验证扫描/索引进度与结构化检索结果、取消及未授权拒绝。
-- regression checks: cli-library-workflow 与 runs/settings 互斥。
-- [ ] implementation and tests accepted
-
-### Chunk 3 — 文献库界面
-
-- change kind: behavior change
-- strategy: strict Red-Green-Refactor
-- Red signal: DOM无连接/披露/授权与结果入口。
-- Green check: DOM→真实适配层契约，包括取消授权无副作用与错误输入保留。
-- regression checks: 全量workbench UI、CLI typecheck、实际DSH隔离Host。
+- Red signal: HTTP catalog/search/PDF endpoints absent; DOM cannot navigate to personal library
+- Green check: actual temporary HTTP server and DOM contracts for browse/search, empty/error/loading states, stale responses, PDF links, settings and task navigation
+- regression checks: workbench navigation/UI/settings/run tests, all CLI tests and typecheck, build and isolated DSH Host
 - [ ] implementation and tests accepted
 
 ## Phase verification
 
-- 无网络读取用户实际文献，使用临时资料与模拟模型/解析器验证完整流程。
-- 连接、授权、scan/index及search在同一工作台持续可用，设置修订不会使后续请求永久失败。
+No real user corpus/model/email; temporary fixtures and stub parser/embedding only. Reuse current scoped source, config revisions and authorization. In-app library navigation participates in existing back/forward history. English and Chinese UI supported. Independent chunks may be delegated; owner alone edits Helm and commits.
 
 ## Abort / reshape triggers
 
-- 如CLI入口无法传递结构化结果/取消，提取共享应用服务后接入，不能另写业务副本。
-- 如嵌入配置更改扩大披露范围，必须由既有授权协议重新审核，不自动授权。
+If existing app service cannot return structured values safely, factor a shared host adapter under Green CLI baseline; do not parse terminal logs. If model access scope changes, use existing authorization disclosure. P3 remains pending until P2 accepted.
