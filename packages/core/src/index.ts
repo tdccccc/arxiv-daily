@@ -143,3 +143,4 @@ export * from "./utils/redaction";
 export * from "./utils/retry";
 export * from "./utils/slugify";
 export * from "./utils/time";
+export * from "./utils/timers";
