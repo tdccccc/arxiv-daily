@@ -61,7 +61,7 @@ export function mountWorkbench(root: HTMLElement, options: WorkbenchClientOption
   if (!options.appearance) void fetcher('api/preferences', { signal: lifetime.signal }).then(async response => {
     if (!response.ok) return;
     const value = await response.json() as { appearance?: UiAppearancePreferences };
-    if (disposed || generation !== initialGeneration || !value.appearance) return;
+    if (disposed || generation !== initialGeneration || !value.appearance || root.querySelector<HTMLFormElement>('.settings-form')?.dataset.edited === 'true') return;
     const saved = normalizeUiAppearancePreferences(value.appearance);
     if (saved.language !== appearance.language || saved.theme !== appearance.theme) render(saved);
   }).catch(() => { /* Sidebar and settings provide retry UI for unavailable preferences. */ });
@@ -106,7 +106,9 @@ function mountWorkbenchContent(root: HTMLElement, options: WorkbenchClientOption
 
   root.className = "workbench";
   root.dataset.view = "list";
-  const appearance = options.appearance ?? DEFAULT_UI_APPEARANCE;
+  let appearance = { ...(options.appearance ?? DEFAULT_UI_APPEARANCE) };
+  let settingsBinding: ReturnType<typeof bindSettings> | undefined;
+  let settingsAppearanceChanged = false;
   const systemTheme = window.matchMedia?.('(prefers-color-scheme: dark)');
   const applyTheme = () => { root.dataset.theme = appearance.theme === 'system' ? (systemTheme?.matches ? 'dark' : 'light') : appearance.theme; };
   applyTheme(); systemTheme?.addEventListener?.('change', applyTheme);
@@ -420,11 +422,14 @@ function mountWorkbenchContent(root: HTMLElement, options: WorkbenchClientOption
   }
 
   function closeDialog(): void {
+    settingsBinding?.dispose(); settingsBinding = undefined;
     dialog?.close?.();
     dialog?.remove();
     dialog = null;
     returnFocus?.focus();
   }
+
+  function requestCloseDialog(): void { if (settingsBinding) void settingsBinding.close(); else closeDialog(); }
 
   function showDialog(title: string, content: string): void {
     closeDialog();
@@ -437,7 +442,7 @@ function mountWorkbenchContent(root: HTMLElement, options: WorkbenchClientOption
     dialog.innerHTML = `<div class="dialog-heading"><h2 id="dialog-title">${title}</h2><button class="icon-button" data-action="close-dialog" aria-label="${t("关闭弹窗")}">×</button></div>${content}`;
     find(".dialog-host").append(dialog);
     if (dialog.showModal) dialog.showModal(); else dialog.setAttribute("open", "");
-    dialog.addEventListener("cancel", event => { event.preventDefault(); closeDialog(); });
+    dialog.addEventListener("cancel", event => { event.preventDefault(); requestCloseDialog(); });
   }
 
   async function showSettings(): Promise<void> {
@@ -447,13 +452,20 @@ function mountWorkbenchContent(root: HTMLElement, options: WorkbenchClientOption
       const snapshot = await request<SettingsSnapshot>("api/settings");
       if (disposed || dialog !== activeDialog) return;
       activeDialog.querySelector(".dialog-description")!.outerHTML = settingsForm(snapshot, status?.recentRuns?.some(isCompletedDiscovery), appearance);
-      bindSettings(activeDialog.querySelector("form")!, snapshot, request, async () => {
+      settingsAppearanceChanged = false;
+      settingsBinding = bindSettings(activeDialog.querySelector("form")!, snapshot, request, async () => {
         if (disposed) return;
         closeDialog();
+        if (settingsAppearanceChanged) { await onAppearanceSaved(appearance); if (disposed) return; }
         find(".connection-banner").hidden = true;
         if (!await loadStatus()) return;
         await initializeWorkspace(true);
-      }, acceptRun, status?.recentRuns?.some(isCompletedDiscovery), { appearance, onAppearanceSaved });
+      }, acceptRun, status?.recentRuns?.some(isCompletedDiscovery), { appearance, onAppearanceSaved: async next => {
+        settingsAppearanceChanged = true; appearance = { ...next }; applyTheme();
+        document.documentElement.lang = next.language === 'zh' ? 'zh-CN' : 'en'; document.title = t('arxiv-daily · 阅读工作台');
+        activeDialog.querySelector('#dialog-title')!.textContent = t('设置');
+        activeDialog.querySelector('[data-action="close-dialog"]')!.setAttribute('aria-label', t('关闭弹窗'));
+      } });
     } catch (error) {
       if (disposed || dialog !== activeDialog) return;
       activeDialog.querySelector(".dialog-description")!.textContent = message(error);
@@ -598,7 +610,7 @@ function mountWorkbenchContent(root: HTMLElement, options: WorkbenchClientOption
     else if (action === "settings") showSettings();
     else if (action === "personal-library") void showLibrary();
     else if (action === "direction-review") void showReview();
-    else if (action === "close-dialog") closeDialog();
+    else if (action === "close-dialog") requestCloseDialog();
     else if (action === "reconnect" || action === "refresh") reconnect();
     else if (action === "next-page" && nextOffset !== null) { offset = nextOffset; void showList(true); }
     else if (action === "previous-page") { offset = Math.max(0, offset - 20); void showList(true); }
@@ -684,6 +696,7 @@ function mountWorkbenchContent(root: HTMLElement, options: WorkbenchClientOption
   void loadStatus().then(ok => { if (ok) void initializeWorkspace(); });
   return () => {
     disposed = true;
+    settingsBinding?.dispose();
     calendar.dispose(); disposeSidebar(); leaveLibrary();
     systemTheme?.removeEventListener?.("change", applyTheme);
     lifetime.abort();

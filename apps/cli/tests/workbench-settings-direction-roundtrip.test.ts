@@ -20,6 +20,7 @@ it('writes daily limit to the existing TOML output table',()=>{
 });
 it('keeps direction identities and origin when editing settings, and renders the daily limit', async()=>{
  const snapshot=await readWorkbenchSettings('/tmp/arxiv-daily-missing-roundtrip/config.toml');
+ snapshot.values.vaultRoot='/notes';
  snapshot.values.topics=[{id:'t',name:'Topic',tag:'topic',description:'First',detail:true,directions:[{id:'a',text:'First',origin:'library'},{id:'b',text:'Second',origin:'manual'}]}];
  document.body.innerHTML=settingsForm(snapshot);
  const form=document.querySelector('form')!;

@@ -270,3 +270,6 @@ code { font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace; }
   .header-actions .quiet-button { padding-inline: 6px; }
   .header-actions .primary-button { padding-inline: 8px; }
 }
+
+.settings-form .settings-save-status { margin-right: auto; color: var(--muted); font-size: 12px; line-height: 1.5; }
+.settings-form [data-settings="retry-save"] { color: var(--accent); }

@@ -87,7 +87,7 @@ it("keeps edits and a blank unchanged key on save conflicts", async () => {
   input(root, "model", "edited-model"); submit(root);
   await vi.waitFor(() => expect(root.querySelector(".settings-form [role=alert]")?.textContent).toContain("其他窗口"));
   expect(root.querySelector<HTMLInputElement>('[name="model"]')!.value).toBe("edited-model");
-  expect(root.querySelector<HTMLButtonElement>('.settings-form [type="submit"]')!.disabled).toBe(false);
+  expect(root.querySelector<HTMLButtonElement>('.settings-form [data-settings="retry-save"]')!.hidden).toBe(false);
   const body = JSON.parse(String(fetcher.mock.calls.find(([, i]) => i?.method === "POST")![1]!.body));
   expect(body.revision).toBe("revision-1"); expect(body.values.apiKey).toBeUndefined();
 });
@@ -216,6 +216,7 @@ it("reloads the revision after library authorization completes and unlocks editi
  await vi.waitFor(()=>expect(configReads).toBeGreaterThan(1),{timeout:3000});
  expect(root.querySelector<HTMLInputElement>('[name="model"]')!.value).toBe('draft-kept');
  expect(root.querySelector<HTMLInputElement>('[name="model"]')!.disabled).toBe(false);
+ input(root,'model','edited-after-authorization');
  submit(root);
  await vi.waitFor(()=>expect(root.querySelector('.settings-form')).toBeNull());
  const saves=fetcher.mock.calls.filter(([url,init])=>String(url)==='api/settings'&&init?.method==='POST');
@@ -226,6 +227,7 @@ it("runs the first-report guide action explicitly after saving the draft", async
  await vi.waitFor(()=>expect(root.querySelector('.paper-workspace')).toBeTruthy());root.querySelector<HTMLButtonElement>('[data-action="settings"]')!.click();
  await vi.waitFor(()=>expect(root.querySelector('[data-setup-action="generate"]')).toBeTruthy());
  expect(fetcher.mock.calls.some(([url])=>String(url)==='api/runs')).toBe(false);
+ input(root,'model','first-report-draft');
  root.querySelector<HTMLButtonElement>('[data-setup-action="generate"]')!.click();
  await vi.waitFor(()=>expect(root.querySelector('.run-tray')?.textContent).toContain('First report'));
  const postPaths=fetcher.mock.calls.filter(([,init])=>init?.method==='POST').map(([url])=>String(url));
@@ -307,7 +309,7 @@ it('offers interface appearance separately from the report language and preserve
  await vi.waitFor(()=>expect(root.querySelector('.settings-form')).toBeNull());
  const product=fetcher.mock.calls.find(([url,init])=>String(url)==='api/settings'&&init?.method==='POST')!;
  const preferences=fetcher.mock.calls.find(([url,init])=>String(url)==='api/preferences'&&init?.method==='POST')!;
- expect(JSON.parse(String(product[1]!.body)).values.summaryLanguage).toBe('zh');
+ expect(product).toBeUndefined(); // Interface-only changes never rewrite research settings.
  expect(JSON.parse(String(preferences[1]!.body))).toEqual({appearance:{theme:'dark',language:'en'}});
 });
 it('keeps translated labels separate from user topics, model identifiers and submitted fields', async()=>{
@@ -383,4 +385,50 @@ it.each(["en", "zh"] as const)("keeps local embedding disclosure on device (%s)"
  const text=root.querySelector('[data-library-row] .setting-item-description')!.textContent;
  expect(text).toMatch(language==='zh'?/本地嵌入在此设备上完成/:/Local embedding stays on this device/);
  expect(text).not.toMatch(/sends|remote|发送|远程/i);
+});
+
+
+it.each(['button','escape'])('waits for automatic persistence before closing settings via %s',async(kind)=>{
+ let release!:(response:Response)=>void;
+ const {root,fetcher}=setup(false,false,undefined,(path,init)=>path==='api/settings'&&init?.method==='POST'?new Promise(resolve=>{release=resolve;}):undefined);
+ await vi.waitFor(()=>expect(root.querySelector('.paper-workspace')).toBeTruthy());root.querySelector<HTMLButtonElement>('[data-action="settings"]')!.click();
+ await vi.waitFor(()=>expect(root.querySelector('.settings-form')).toBeTruthy());
+ const model=root.querySelector<HTMLInputElement>('[name="model"]')!;model.value='await-persistence';model.dispatchEvent(new Event('input',{bubbles:true}));
+ if(kind==='button')root.querySelector<HTMLButtonElement>('[data-action="close-dialog"]')!.click();else root.querySelector('dialog')!.dispatchEvent(new Event('cancel',{cancelable:true}));
+ await vi.waitFor(()=>expect(release).toBeTypeOf('function'));expect(root.querySelector('.settings-form')).toBeTruthy();
+ const call=fetcher.mock.calls.find(([url,init])=>String(url)==='api/settings'&&init?.method==='POST')!;
+ expect(JSON.parse(String(call[1]!.body)).values.model).toBe('await-persistence');
+ release(json({setupRequired:false,revision:'after-close',configPath:'/config.toml',values:{...values,model:'await-persistence'}}));
+ await vi.waitFor(()=>expect(root.querySelector('dialog')).toBeNull());
+});
+
+it('finishes first setup after appearance is changed and then returned to its original value',async()=>{
+ const {root}=setup(true);
+ await vi.waitFor(()=>expect(root.querySelector('.settings-form')).toBeTruthy());
+ const vault=root.querySelector<HTMLInputElement>('[name="vaultRoot"]')!;vault.value='/configured-root';vault.dispatchEvent(new Event('change',{bubbles:true}));
+ await vi.waitFor(()=>expect(root.querySelector('.settings-save-status')?.textContent).toBe('Saved automatically'));
+ const theme=root.querySelector<HTMLSelectElement>('[name="appearance.theme"]')!;theme.value='dark';theme.dispatchEvent(new Event('change',{bubbles:true}));
+ await vi.waitFor(()=>expect(root.dataset.theme).toBe('dark'));
+ theme.value='light';theme.dispatchEvent(new Event('change',{bubbles:true}));await vi.waitFor(()=>expect(root.dataset.theme).toBe('light'));
+ root.querySelector<HTMLButtonElement>('[data-settings="close"]')!.click();
+ await vi.waitFor(()=>expect(root.querySelector('.paper-workspace')).toBeTruthy());expect(root.querySelector('dialog')).toBeNull();
+});
+
+it.each(['button','escape'])('keeps daily discovery off after switching it off and reopening through %s close',async(kind)=>{
+ let stored={...values,schedule:{...DEFAULT_SETTINGS.schedule,enabled:true}};let revision=1;
+ const {root,fetcher}=setup(false,false,undefined,(path,init)=>{
+  if(path!=='api/settings')return;
+  if(init?.method==='POST'){stored={...stored,...JSON.parse(String(init.body)).values};revision++;}
+  return json({setupRequired:false,revision:`stored-${revision}`,configPath:'/config.toml',values:stored});
+ });
+ await vi.waitFor(()=>expect(root.querySelector('.paper-workspace')).toBeTruthy());root.querySelector<HTMLButtonElement>('[data-action="settings"]')!.click();
+ await vi.waitFor(()=>expect(root.querySelector('.settings-form')).toBeTruthy());
+ const toggle=root.querySelector<HTMLInputElement>('[name="schedule.enabled"]')!;expect(toggle.checked).toBe(true);
+ const before=fetcher.mock.calls.filter(([url,init])=>String(url)==='api/settings'&&init?.method==='POST').length;
+ expect(before).toBe(0);toggle.checked=false;toggle.dispatchEvent(new Event('change',{bubbles:true}));
+ if(kind==='button')root.querySelector<HTMLButtonElement>('[data-action="close-dialog"]')!.click();else root.querySelector('dialog')!.dispatchEvent(new Event('cancel',{cancelable:true}));
+ await vi.waitFor(()=>expect(root.querySelector('dialog')).toBeNull());expect(stored.schedule.enabled).toBe(false);
+ root.querySelector<HTMLButtonElement>('[data-action="settings"]')!.click();await vi.waitFor(()=>expect(root.querySelector('.settings-form')).toBeTruthy());
+ expect(root.querySelector<HTMLInputElement>('[name="schedule.enabled"]')!.checked).toBe(false);
+ const saves=fetcher.mock.calls.filter(([url,init])=>String(url)==='api/settings'&&init?.method==='POST');expect(saves).toHaveLength(1);expect(JSON.parse(String(saves[0]![1]!.body)).values.schedule.enabled).toBe(false);
 });

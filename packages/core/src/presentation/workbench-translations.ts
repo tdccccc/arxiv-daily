@@ -1,5 +1,18 @@
 /** Shared workbench chrome messages; research content is never passed through this catalog. */
 export const workbenchMessages: ReadonlyArray<readonly [string, string]> = [
+  ["放弃未保存修改并关闭", "Discard unsaved changes and close"],
+  ["尚未保存的修改将被放弃，已保存的设置保持不变。", "Unsaved changes will be discarded. Previously saved settings will remain unchanged."],
+  ["放弃修改并关闭", "Discard changes and close"],
+  ["修改会自动保存并立即生效。", "Changes are saved automatically and take effect immediately."],
+  ["重试保存", "Retry saving"],
+  ["完成", "Done"],
+  ["已自动保存", "Saved automatically"],
+  ["正在自动保存…", "Saving automatically…"],
+  ["修改尚未保存…", "Changes pending…"],
+  ["请先填写完整的保存根目录。", "Enter a complete save root first."],
+  ["自动保存失败，修改仍保留。", "Automatic save failed. Your edits are preserved."],
+  ["请先解决自动保存问题，再继续操作。", "Resolve the automatic-save issue before continuing."],
+  ["索引任务结束后将自动保存。", "Changes will be saved after indexing finishes."],
   ["请先在连接与索引中修正文献库或模型配置，再进行分析。", "Fix the library or model configuration in Connection and indexing before analyzing."],
   ["确认授权并分析文献库", "Authorize and analyze library"],
   ["允许将所列范围内的标题和摘要发送给这些模型端点，然后运行本次分析。候选方向仍需另行审核接受。", "Allow titles and abstracts within this scope to be sent to these model endpoints, then run this analysis. Proposed directions still require separate review and acceptance."],
