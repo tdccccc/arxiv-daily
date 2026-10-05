@@ -23,6 +23,7 @@
     "check:product-units": "node scripts/check-product-units.mjs",
     "lint:obsidian": "eslint \"plugin/{main.ts,src/**/*.ts}\" manifest.json LICENSE --max-warnings=64",
     "lint": "npm run lint:obsidian",
+    "lint:review": "eslint --config eslint.config.review.mjs . ; node scripts/check-css-review.mjs",
     "typecheck": "npm run typecheck --workspaces --if-present",
     "test": "node scripts/run-root-tests.mjs",
     "test:workspaces": "npm run test --workspaces --if-present --",
