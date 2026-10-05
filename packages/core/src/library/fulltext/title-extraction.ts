@@ -195,15 +195,6 @@ function tokens(text: string): Set<string> {
   return new Set(text.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim().split(/\s+/).filter(Boolean));
 }
 
-/** Whether every token of `needle` also appears in `haystack`. */
-function coversAll(haystack: string, needle: string): boolean {
-  const haystackTokens = tokens(haystack);
-  for (const token of tokens(needle)) {
-    if (!haystackTokens.has(token)) return false;
-  }
-  return true;
-}
-
 /** Whether the haystack's token set strictly contains the needle's (the
  * needle is missing at least one token the haystack has). */
 function strictlyCovers(haystack: string, needle: string): boolean {

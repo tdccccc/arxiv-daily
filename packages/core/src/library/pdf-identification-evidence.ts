@@ -19,7 +19,6 @@ import { inflate } from "pako";
 import {
   extractArxivIdsFromText,
   modernArxivIdFromText,
-  type ArxivIdCandidate,
 } from "./pdf-text-utils";
 
 export interface PdfIdentificationEvidence {
