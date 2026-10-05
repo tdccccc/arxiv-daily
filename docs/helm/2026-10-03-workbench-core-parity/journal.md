@@ -127,3 +127,7 @@ Observed Red/Green and63 focused+38 final regression checks、CLI typecheck/boun
 Summary sources及其后的资料现在分隔显示，生成统计位于页尾。Core以兼容callout+结构化JSON保存token/耗时/生成时间，旧缺失值不补造；概览日报统计注明整份日报范围。前进后退保留本会话历史、筛选/锚点/滚动位置，同时保留返回列表。
 
 Observed Red/Green：core332、CLI358、Obsidian1007、DSH20通过，typechecks/boundaries/inventory/build通过。0.1.16本地包已生成，未修改生产安装；无Computer Use/真实模型/邮件/用户文献修改。P18完成，后续产品阶段继续pending。
+
+## 2026-10-05T12:16:11+08:00 — P19 merge acceptance start
+
+用户认为首版接近可用并请求合入主线及更新README。进入完整验收和用户文档整理；仅授权本地main合并，不推送或发布。main初始a1cd713、feature4d2b583均干净，后续GUI阶段保持pending。

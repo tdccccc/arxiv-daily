@@ -3,8 +3,8 @@
 status: active
 owner: /root
 created: 2026-10-03T00:22:59+08:00
-updated: 2026-10-05T11:35:27+08:00
-revision: 29
+updated: 2026-10-05T12:16:11+08:00
+revision: 30
 
 ## Intent
 
@@ -25,7 +25,7 @@ revision: 29
 
 ## Constraints
 
-- 仅当前隔离 worktree；保留已有 0.1.3 名称修改。
+- 开发留在当前隔离 worktree；用户已授权 P19 验收后合并本地 main，保留 arxiv-daily 名称。
 - 不使用 Computer Use，不修改真实文献、定时任务，不调用付费模型或发送邮件进行测试。
 - Markdown 为研究记录；共享 CLI/core 与既有 consent、revision、原子写入机制。
 
@@ -63,3 +63,5 @@ revision: 29
 17. P17 — 修复工作台各阅读入口的Markdown与公式显示 — status: done
 
 18. P18 — 阅读附录/生成统计与前进后退导航 — status: done
+
+19. P19 — 合并前验收、用户文档与本地主线合并 — status: active
