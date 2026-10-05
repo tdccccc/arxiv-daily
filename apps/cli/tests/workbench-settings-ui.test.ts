@@ -341,3 +341,46 @@ it('keeps first-report setup incomplete after a no-update day',async()=>{
  await vi.waitFor(()=>expect(root.querySelector('.settings-setup')).toBeTruthy());
  expect(root.querySelector('.settings-setup li:nth-child(4)')?.getAttribute('data-complete')).toBe('false');
 });
+
+
+it.each((["en", "zh"] as const).flatMap(language => ["authorization-required", "authorization-invalidated", "authorized"].map(kind => ({language, kind}))))("describes remote library indexing as titles and abstracts ($language/$kind)", async ({language, kind}) => {
+ setUiLanguage(language);
+ const {root}=setup(false,false,undefined,path=>path==='api/settings'?json({setupRequired:false,revision:'r1',configPath:'/config.toml',values:{...values,embedding:{...DEFAULT_SETTINGS.embedding,mode:'remote'}}}):path==='api/settings/library'?json({status:{kind,rootLabel:'/pdfs'},disclosure:null}):undefined);
+ await vi.waitFor(()=>expect(root.querySelector('.paper-workspace')).toBeTruthy());
+ root.querySelector<HTMLButtonElement>('[data-action="settings"]')!.click();
+ await vi.waitFor(()=>expect(root.querySelector('[data-library-row] .setting-item-description')?.textContent).toContain('/pdfs'));
+ const text=root.querySelector('[data-library-row] .setting-item-description')!.textContent;
+ expect(text).toMatch(language==='zh'?/标题与摘要/:/titles and abstracts/);
+ expect(text).not.toMatch(/full.text|全文/i);
+ if(language==='zh') {
+  expect(root.querySelector('[name="embedding.mode"] option[value="remote"]')?.textContent).toMatch(/标题[和与]摘要/);
+  expect(root.querySelector('[name="embedding.mode"]')?.closest('.setting-item')?.textContent).toContain('嵌入 API');
+ }
+});
+
+it.each(["en", "zh"] as const)("shows the actual depth for a legacy full-text authorization token (%s)", async language => {
+ setUiLanguage(language);
+ const disclosure={selectedRoot:'/pdfs',eligibleExtensions:['.pdf'],processingDepth:'full-text',endpoint:'https://api.example/v1',embeddingEndpoint:'https://embed.example/v1',authorizationFingerprint:'unchanged-consent'};
+ const {root}=setup(false,false,undefined,path=>path==='api/settings/library'?json({status:{kind:'authorization-required',rootLabel:'/pdfs'},disclosure}):undefined);
+ await vi.waitFor(()=>expect(root.querySelector('.paper-workspace')).toBeTruthy());
+ root.querySelector<HTMLButtonElement>('[data-action="settings"]')!.click();
+ await vi.waitFor(()=>expect(root.querySelector('[data-settings="library-build"]')).toBeTruthy());
+ root.querySelector<HTMLButtonElement>('[data-settings="library-build"]')!.click();
+ await vi.waitFor(()=>expect(root.querySelector('.settings-confirm pre')).toBeTruthy());
+ const text=root.querySelector('.settings-confirm pre')!.textContent;
+ expect(text).toMatch(language==='zh'?/处理深度：标题与摘要/:/Processing depth: Titles and abstracts/);
+ expect(text).not.toMatch(/full.text|全文/i);
+ expect(text).toContain(disclosure.embeddingEndpoint);
+});
+
+
+it.each(["en", "zh"] as const)("keeps local embedding disclosure on device (%s)", async language => {
+ setUiLanguage(language);
+ const {root}=setup(false,false,undefined,path=>path==='api/settings/library'?json({status:{kind:'authorization-required',rootLabel:'/pdfs'},disclosure:null}):undefined);
+ await vi.waitFor(()=>expect(root.querySelector('.paper-workspace')).toBeTruthy());
+ root.querySelector<HTMLButtonElement>('[data-action="settings"]')!.click();
+ await vi.waitFor(()=>expect(root.querySelector('[data-library-row] .setting-item-description')?.textContent).toContain('/pdfs'));
+ const text=root.querySelector('[data-library-row] .setting-item-description')!.textContent;
+ expect(text).toMatch(language==='zh'?/本地嵌入在此设备上完成/:/Local embedding stays on this device/);
+ expect(text).not.toMatch(/sends|remote|发送|远程/i);
+});

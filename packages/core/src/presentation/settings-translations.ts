@@ -457,8 +457,8 @@ export const settingsMessages: Array<readonly [zh: string, en: string]> = [
     "metadata-and-abstracts"
   ],
   [
-    "全文",
-    "full-text"
+    "标题与摘要",
+    "Titles and abstracts"
   ],
   [
     "已保存。留空保留现有值。",
@@ -793,16 +793,16 @@ export const settingsMessages: Array<readonly [zh: string, en: string]> = [
     "Indexing {0} — {1}. Nothing is saved until the run finishes, so cancelling discards it."
   ],
   [
-    "已选择：{0}。嵌入服务地址已变化，建立索引前需重新确认向外部发送的全文范围。",
-    "Selected: {0}. The embedding endpoint changed, so building the index asks you to confirm what full text leaves this device."
+    "已选择：{0}。嵌入服务地址已变化，建立索引前需重新确认向外部发送的标题与摘要范围。",
+    "Selected: {0}. The embedding endpoint changed, so building the index asks you to confirm which titles and abstracts leave this device."
   ],
   [
-    "已选择：{0}。远程嵌入会发送全文到外部，建立索引前需先确认。",
-    "Selected: {0}. Remote embedding sends full text off this device — building the index asks you to confirm first."
+    "已选择：{0}。远程嵌入会发送标题与摘要到外部，建立索引前需先确认。",
+    "Selected: {0}. Remote embedding sends titles and abstracts off this device — building the index asks you to confirm first."
   ],
   [
-    "已连接：{0}。已授权远程全文嵌入，可以建立搜索索引。",
-    "Connected: {0}. Authorized for remote full-text embedding. Build the search index next."
+    "已连接：{0}。已授权远程嵌入标题与摘要，可以建立搜索索引。",
+    "Connected: {0}. Authorized to embed titles and abstracts remotely. Build the search index next."
   ],
   [
     "已选择：{0}。本地嵌入在此设备上完成，建立索引后即可搜索这些 PDF。",
