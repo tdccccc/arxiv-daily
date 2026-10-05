@@ -121,3 +121,9 @@ CLI339, Obsidian1007, core focused suites, DSH20 actual Host, Claude package7 an
 用户确认公式原文直接显示。概览/摘要/推荐理由曾仅转义文本；现在复用工作台Markdown/KaTeX渲染，标题/目录保留公式边界，跨空行display不再被段落拆分。数学标题重复也已按解析元数据修复。原始Markdown保持不变，无需重新生成内容。
 
 Observed Red/Green and63 focused+38 final regression checks、CLI typecheck/boundaries/build passed. DSH20及最终包实际Host2/2通过，逐项验证本地CSS/WOFF2与CSP。0.1.15已打包但未改用户安装；无Computer Use/真实付费调用。P17完成，其余产品阶段继续pending。
+
+## 2026-10-05T11:35:27+08:00 — P18 reading context accepted
+
+Summary sources及其后的资料现在分隔显示，生成统计位于页尾。Core以兼容callout+结构化JSON保存token/耗时/生成时间，旧缺失值不补造；概览日报统计注明整份日报范围。前进后退保留本会话历史、筛选/锚点/滚动位置，同时保留返回列表。
+
+Observed Red/Green：core332、CLI358、Obsidian1007、DSH20通过，typechecks/boundaries/inventory/build通过。0.1.16本地包已生成，未修改生产安装；无Computer Use/真实模型/邮件/用户文献修改。P18完成，后续产品阶段继续pending。

@@ -2,7 +2,7 @@
 
 ## User-approved next work
 
-P15, P16 and P17 are complete. Current branch is rebased onto main c2de350 (0.5.0), with backup/claude-code-research-plugin-pre-rebase at eafe972. DSH0.1.15 is packaged locally, not installed into the user profile. Future work remains paper-list decision support, personal-library UX and direction review. Do not restart completed settings/status work.
+P15–P18 are complete. Current branch is rebased onto main c2de350 (0.5.0), with backup/claude-code-research-plugin-pre-rebase at eafe972. DSH0.1.16 is packaged locally, not installed into the user profile. Future work remains paper-list decision support, personal-library UX and direction review. Do not restart completed settings/status work.
 
 ## Workspace
 
@@ -51,3 +51,7 @@ Workbench supports direction rows + daily paper limit, preserves direction id/or
 ## P17 current display fix
 
 Workbench markdown.ts now exports safe inline rendering plus blank-line-aware display blocks. Browser overview, abstract, reason, title and TOC use the same reader as server Markdown. Heading math delimiters are preserved and duplicate first headings matched by metadata. Source files unchanged; code samples stay literal. DSH0.1.15 built, local fonts/CSS verified through actual Host; install/restart needed.63 focused+38 final regressions, typecheck/boundaries/build and20 DSH tests pass. No Electron visual walkthrough. See phase17.
+
+## P18 current reading context
+
+Core metrics now include durable generatedAt and versioned JSON inside the existing callout. splitGenerationMetrics returns {body,metrics}, preserving later notes and code examples. Workbench API/rendering exposes generationMetrics and scoped paper.generation; overview appendix starts at Summary sources and generation-footer is last. Old missing data stays unrecorded. Header adds session-bounded history back/forward with scroll/filter/hash restoration, no history.length inference. Tested core332 focused, CLI358 full, plugin1007 full, DSH20 actual Host; all typechecks/boundaries/builds pass. Latest local package0.1.16; no production install. See phase18.
