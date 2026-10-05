@@ -16,7 +16,6 @@ import {
   isCutoverOperationId,
   issueReadyBoundDevice,
   postCutoverAction,
-  type CutoverAction,
 } from "./cutover-control";
 
 export type { Env };
@@ -325,7 +324,7 @@ async function forwardCutoverAction(
   }
   return postCutoverAction(
     env,
-    body.action as CutoverAction,
+    body.action,
     body.operationId,
     typeof body.attestation === "string" ? body.attestation : undefined,
   );
