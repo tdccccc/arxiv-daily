@@ -474,8 +474,8 @@ function canonicalRaw(raw: string): string {
 function isLegacyProposalRead<T>(result: ReadResult<T>): boolean {
   if (result.kind !== "corrupt" || typeof result.raw !== "string") return false;
   try {
-    const value = JSON.parse(result.raw);
-    return typeof value === "object" && value !== null && value.schemaVersion === 1;
+    const value: unknown = JSON.parse(result.raw);
+    return typeof value === "object" && value !== null && "schemaVersion" in value && value.schemaVersion === 1;
   } catch {
     return false;
   }

@@ -13,7 +13,6 @@ import {
   PERSONAL_LIBRARY_MAX_CANDIDATE_LINEAGE_IDS,
   PERSONAL_LIBRARY_MAX_NAME_LENGTH,
   PERSONAL_LIBRARY_PROPOSAL_SCHEMA_VERSION,
-  PERSONAL_LIBRARY_MAX_PROPOSAL_LINEAGE_IDS,
   createPersonalLibraryCatalogInputManifestFingerprint,
   createPersonalLibraryPaperEvidenceFingerprint,
   createPersonalLibraryRepresentativeSetFingerprint,
@@ -351,7 +350,10 @@ function decodeCandidateViaProposal(candidate: unknown): PersonalLibraryDirectio
 }
 
 function representativeKeys(value: unknown): string[] {
-  if (!Array.isArray(value)) fail("invalid-input", "representativePaperKeys must be an array");
+  if (!isUnknownArray(value)) fail("invalid-input", "representativePaperKeys must be an array");
+  if (!value.every((item): item is string => typeof item === "string")) {
+    fail("invalid-input", "representativePaperKeys must be canonical, sorted, unique, and bounded");
+  }
   const evidence = `sha256:${"0".repeat(64)}`;
   try {
     const representatives = value.map((paperKey) => ({ paperKey, evidenceFingerprint: evidence }));
@@ -392,23 +394,11 @@ function opaqueIdSet(value: unknown, field: string, minimum: number, maximum: nu
   return ids;
 }
 
-function canonicalDate(value: unknown): string {
-  try {
-    if (!(value instanceof Date)) fail("invalid-input", "now must be a valid Date");
-    const time = Date.prototype.getTime.call(value);
-    if (!Number.isFinite(time)) fail("invalid-input", "now must be a valid Date");
-    return new Date(time).toISOString();
-  } catch (caught) {
-    if (caught instanceof PersonalLibraryInterestProfileReviewError) throw caught;
-    fail("invalid-input", "now must be a valid Date");
-  }
-}
-
 function exactInput(
   value: unknown,
   required: readonly string[],
   optional: readonly string[] = [],
-): Record<string, any> {
+): Record<string, unknown> {
   if (!isPlainObject(value)) fail("invalid-input", "input must be an exact object");
   const keys = Object.keys(value);
   if (required.some((key) => !optional.includes(key) && !keys.includes(key))
@@ -420,25 +410,6 @@ function exactInput(
 
 function canonicalUnion(...sets: readonly (readonly string[])[]): string[] {
   return [...new Set(sets.flat())].sort(codeUnitCompare);
-}
-
-function monotonicTimestamp(candidate: string, ...existing: string[]): string {
-  return [candidate, ...existing].reduce((latest, value) => Date.parse(value) > Date.parse(latest) ? value : latest);
-}
-
-function verifyProposalCatalogManifest(
-  proposal: PersonalLibraryDirectionProposal,
-  catalog: PersonalLibraryCatalog,
-): void {
-  for (const selected of proposal.catalogInputPapers) {
-    const paper = catalog.papers[selected.paperKey];
-    if (!paper || createPersonalLibraryPaperEvidenceFingerprint(paper) !== selected.evidenceFingerprint) {
-      fail("conflict", "proposal selected catalog evidence is stale", {
-        proposalId: proposal.proposalId,
-        paperKey: selected.paperKey,
-      });
-    }
-  }
 }
 
 function lineageLimit(field: string, actual: number): never {
@@ -461,8 +432,12 @@ function isStrictlyOrderedUnique(value: readonly string[]): boolean {
   return value.every((item, index) => index === 0 || codeUnitCompare(value[index - 1]!, item) < 0);
 }
 
-function isPlainObject(value: unknown): value is Record<string, any> {
+function isUnknownArray(value: unknown): value is unknown[] {
+  return Array.isArray(value);
+}
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
-  const prototype = Object.getPrototypeOf(value);
+  const prototype: unknown = Object.getPrototypeOf(value);
   return prototype === Object.prototype || prototype === null;
 }
