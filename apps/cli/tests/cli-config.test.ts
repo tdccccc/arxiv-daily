@@ -204,3 +204,32 @@ describe("CLI topics reach the direction-driven filter", () => {
     ]);
   });
 });
+
+it("loads custom details, local parser and workbench schedule without changing cron", async () => {
+  const config = await loadCliConfig({ readText: async () => `${minimalToml}
+[detail_selection]
+profile = "custom"
+normal_threshold = 80
+exceptional_threshold = 94
+soft_limit = 2
+[pdf_parser_sidecar]
+enabled = true
+capabilities_url = "http://127.0.0.1:5010/cap"
+parse_url = "http://127.0.0.1:5010/parse"
+[workbench_schedule]
+enabled = true
+run_at_local = "08:30"
+run_until_local = "17:30"
+tick_interval_min = 13
+` });
+  expect(config.settings.detailSelection).toEqual({ profile: "custom", normalThreshold: 80, exceptionalThreshold: 94, softLimit: 2 });
+  expect(config.settings.pdfParserSidecar).toMatchObject({ enabled: true, parseUrl: "http://127.0.0.1:5010/parse" });
+  expect(config).toMatchObject({ workbenchSchedule: { enabled: true, tickIntervalMin: 13 } });
+  expect(config.settings.schedule.enabled).toBe(false);
+});
+
+it('keeps normalized direction identities stable across read-only legacy config loads', async () => {
+ const options={configPath:'/cfg.toml',readText:async()=>minimalToml};
+ const first=await loadCliConfig(options), second=await loadCliConfig(options);
+ expect(first.settings.arxiv.topics).toEqual(second.settings.arxiv.topics);
+});

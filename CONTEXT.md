@@ -7,7 +7,10 @@ Language for arXiv Daily. Implementation details live in code and ADRs, not here
 | Term | Meaning |
 |---|---|
 | **Plugin product** | The Obsidian-facing product: settings UI, Dashboard, in-app scheduler while Obsidian is open. |
-| **CLI product** | The headless one-shot product for servers, cron, and long-running machines. Same pipeline engine; separate configuration and UX. |
+| **CLI product** | The independently runnable product for terminal workflows and external scheduling, with an optional local reading workbench. Same pipeline engine as the plugin product; separate configuration and UX. |
+| **Reading workbench** | The local browser surface for browsing daily reports, reading paper notes, following source links, and starting product tasks. It displays the existing Markdown research record; reading does not replace or rewrite that record. |
+| **Claude Code integration** | An auxiliary conversational entry to arXiv Daily's established paper filtering, daily reports, paper notes, and library-guided discovery. The product works independently of an active agent conversation and does not require Obsidian. |
+| **DSH integration** | The research workbench available inside DeepSeek Harness. Researchers use the same papers, reports, and reading marks across conversations; agent conversation remains an auxiliary entry. |
 | **Host** | A composition root that wires ports (HTTP, storage, etc.) and invokes core. Plugin and CLI are two hosts, not two business cores. |
 | **Core** | Shared pipeline, digest, delivery, index, and validation logic used by both products. |
 
@@ -44,12 +47,15 @@ Language for arXiv Daily. Implementation details live in code and ADRs, not here
 
 | Term | Meaning |
 |---|---|
+| **Interface appearance** | Theme and interface display language, independent of generated summary language and research content. Hosts share the preference definition and UI messages; each host owns persistence and rendering. |
+| **Shared settings schema** | The common description of business setting fields, groups, ordering, controls, options and conditional visibility used by host settings interfaces. |
+| **Settings draft** | An editable configuration that may be incomplete; saving its structurally valid fields does not imply that a model, schedule or delivery operation is ready to run. |
 | **Product settings** | User choices that shape discovery and output: categories, topics, summary language, detail policy, email preferences, paths under the vault, LLM endpoint fields, embedding mode fields. |
 | **Embedding mode** | Whether a paper's title and abstract are embedded locally (offline, the default) or via a named remote embedding endpoint (fast; the text leaves the machine). Chosen when a library is first prepared for indexing; switching modes rebuilds the index. |
 | **Plugin settings store** | Where the plugin product persists product settings and secrets (Obsidian plugin data). Independent of the CLI product. |
 | **CLI config** | The CLI product’s single configuration file (TOML). Holds product settings, deployment paths, and secrets for that machine. |
-| **Init** | First-run interactive setup for the CLI product that writes CLI config. Required before other CLI commands succeed. |
-| **Manual configuration** | Changing product settings by editing the product’s own store (plugin UI / data, or CLI TOML). No automatic cross-product settings sync. |
+| **Init** | Terminal first-run setup for the CLI product that writes CLI config. The reading workbench also supports graphical first-run setup against the same configuration. |
+| **Manual configuration** | Changing product settings by editing the product’s own store (plugin UI / data, or workbench settings / CLI TOML). No automatic cross-product settings sync. |
 
 ## Vault data
 

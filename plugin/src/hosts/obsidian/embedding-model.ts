@@ -42,23 +42,17 @@
  * completes and the next embed reuses it); only the caller sees the abort.
  */
 
-import type {
-  EmbeddingModel,
-  EmbeddingOptions,
+import {
+  createTransformersEmbeddingModelFromLoader,
+  LOCAL_EMBEDDING_MODEL_ID,
+  LOCAL_EMBEDDING_MODEL_REPO,
+  type EmbeddingModel,
 } from "@arxiv-daily/core";
-import type { FeatureExtractionPipeline, ProgressInfo } from "@huggingface/transformers";
 
-/** Stable model identifier shared with core's knowledge-base manifest. */
-export const EMBEDDING_MODEL_ID = "multilingual-e5-small-q8";
-/**
- * Transformers.js model repository. Xenova's ONNX export ships
- * `onnx/model_quantized.onnx` (q8), which is what `dtype: "q8"` resolves to.
- */
-const TRANSFORMERS_MODEL_REPO = "Xenova/multilingual-e5-small";
-/** Embedding width of multilingual-e5-small; asserted against the loaded model. */
-const EXPECTED_DIMENSION = 384;
-/** Texts per inference call: bounds q8-session memory and gives abort granularity. */
-const EMBED_BATCH_SIZE = 8;
+import type { ProgressInfo } from "@huggingface/transformers";
+
+/** Stable identity retained for existing host callers. */
+export const EMBEDDING_MODEL_ID = LOCAL_EMBEDDING_MODEL_ID;
 
 export interface ModelPreparationProgress {
   phase: "loading" | "downloading" | "ready";
@@ -70,6 +64,7 @@ export interface ModelPreparationProgress {
 export interface TransformersEmbeddingModelOptions {
   /** Preparation updates for active embed calls; silenced after cancellation. */
   onProgress?: (progress: ModelPreparationProgress) => void;
+
   /**
    * Hugging Face mirror base URL, e.g. `"https://hf-mirror.com"`. Applied to
    * transformers.js `env.remoteHost` before the first model load; the default
@@ -96,153 +91,38 @@ export interface TransformersEmbeddingModelOptions {
 type TransformersModule = typeof import("@huggingface/transformers");
 /** Environment object type (the `env` export's type is not re-exported at root). */
 type TransformersEnv = TransformersModule["env"];
-/** Output tensor of the feature-extraction pipeline. */
-type PipelineOutputTensor = Awaited<ReturnType<FeatureExtractionPipeline["_call"]>>;
-
-/**
- * Create the local embedding model. The factory is cheap: all heavy work is
- * deferred to the first `embed()` call (module import, model download,
- * session creation, dimension probe).
- */
+/** The host retains runtime selection and lazy module/model asset loading. */
 export function createTransformersEmbeddingModel(
   options?: TransformersEmbeddingModelOptions,
 ): EmbeddingModel {
   alignElectronReleaseProbe();
-  const loader = new LazyModelLoader(options);
-  return {
-    modelId: EMBEDDING_MODEL_ID,
-    dimension: EXPECTED_DIMENSION,
-    prefixPolicy: "e5",
-    async embed(
-      texts: readonly string[],
-      embedOptions?: EmbeddingOptions,
-    ): Promise<readonly Float32Array[]> {
-      const signal = embedOptions?.signal ?? options?.signal;
-      if (signal?.aborted) throw abortError(signal);
-      if (texts.length === 0) return [];
-
-      const extractor = await loader.ensure(signal);
-      const vectors: Float32Array[] = [];
-      for (let start = 0; start < texts.length; start += EMBED_BATCH_SIZE) {
-        if (signal?.aborted) throw abortError(signal);
-        const batch = texts.slice(start, start + EMBED_BATCH_SIZE);
-        const output = await raceWithAbort(
-          extractor(batch, { pooling: "mean", normalize: true }),
-          signal,
-        );
-        vectors.push(...tensorToVectors(output, EXPECTED_DIMENSION));
-        // Yield between inference batches so a long index run does not
-        // freeze the host UI (the Obsidian renderer processes queued events
-        // between batches); harmless on Node hosts.
-        await yieldToEventLoop();
+  return createTransformersEmbeddingModelFromLoader({
+    signal: options?.signal,
+    onProgress: options?.onProgress,
+    yieldBetweenBatches: yieldToEventLoop,
+    loadPipeline: async (report) => {
+      const transformers = await import("@huggingface/transformers");
+      configureTransformersEnv(transformers.env, options);
+      try {
+        return await transformers.pipeline("feature-extraction", LOCAL_EMBEDDING_MODEL_REPO, {
+          dtype: "q8",
+          device: isNodeRuntime() ? "cpu" : "wasm",
+          progress_callback: options?.onProgress
+            ? (event: ProgressInfo) => {
+              // Cache reads emit download/progress too; do not imply a network transfer.
+              const progress = "progress" in event && Number.isFinite(event.progress)
+                ? Math.min(100, Math.max(0, event.progress)) : undefined;
+              const message = event.status === "ready"
+                ? "Initializing the local model."
+                : "file" in event ? `Loading local model file: ${event.file}.` : "Loading local model files.";
+              report({ phase: "loading", message, progress });
+            } : undefined,
+        });
+      } catch (error) {
+        throw isLikelyNetworkError(error) ? embeddingModelDownloadNetworkError(error) : error;
       }
-      return vectors;
     },
-  };
-}
-
-/**
- * One-time, memoized load of the transformers.js module and the ONNX
- * feature-extraction session, with dimension assertion.
- */
-class LazyModelLoader {
-  private modulePromise: Promise<TransformersModule> | null = null;
-  private pipelinePromise: Promise<FeatureExtractionPipeline> | null = null;
-  private ready = false;
-  private readonly progressListeners = new Set<(progress: ModelPreparationProgress) => void>();
-
-  constructor(private readonly options?: TransformersEmbeddingModelOptions) {}
-
-  /**
-   * Resolve the pipeline, racing the (possibly in-flight) load against the
-   * signal. The underlying load is never cancelled — aborting only rejects
-   * this caller — so a later embed reuses the completed load.
-   */
-  async ensure(signal?: AbortSignal): Promise<FeatureExtractionPipeline> {
-    const report = (progress: ModelPreparationProgress) => {
-      if (!signal?.aborted && !this.options?.signal?.aborted) this.options?.onProgress?.(progress);
-    };
-    this.progressListeners.add(report);
-    try {
-      if (!this.ready) report({
-        phase: "loading",
-        message: "Loading local model files; first use may download about 130 MB.",
-      });
-      const loading = this.pipelinePromise ?? this.startLoad();
-      const extractor = await (signal ? raceWithAbort(loading, signal) : loading);
-      report({ phase: "ready", message: "Local model ready; extracting and embedding titles and abstracts." });
-      return extractor;
-    } finally {
-      this.progressListeners.delete(report);
-    }
-  }
-
-  private reportPreparation(event: ProgressInfo): void {
-    // Transformers emits `download` and `progress` even for browser-cache
-    // reads. These events prove file loading, not a network download; reserve
-    // the downloading phase for a future source that can tell the difference.
-    const progress = "progress" in event && Number.isFinite(event.progress)
-      ? Math.min(100, Math.max(0, event.progress))
-      : undefined;
-    const message = event.status === "ready"
-      ? "Initializing the local model."
-      : "file" in event
-        ? `Loading local model file: ${event.file}.`
-        : "Loading local model files.";
-    for (const report of this.progressListeners) report({ phase: "loading", message, progress });
-  }
-
-  private startLoad(): Promise<FeatureExtractionPipeline> {
-    this.pipelinePromise = this.load();
-    return this.pipelinePromise;
-  }
-
-  private async load(): Promise<FeatureExtractionPipeline> {
-    const transformers = await this.loadModule();
-    configureTransformersEnv(transformers.env, this.options);
-
-    const device = isNodeRuntime() ? "cpu" : "wasm";
-    let extractor: FeatureExtractionPipeline;
-    try {
-      // This is the call that downloads the model files (config, tokenizer,
-      // q8 ONNX weights — about 130 MB total) from Hugging Face on first use;
-      // a network failure here is by far the most common way this factory
-      // fails, so it gets a message a reader can act on instead of whatever
-      // fetch/DNS error transformers.js happened to surface.
-      extractor = await transformers.pipeline("feature-extraction", TRANSFORMERS_MODEL_REPO, {
-        dtype: "q8",
-        device,
-        progress_callback: this.options?.onProgress ? (event) => this.reportPreparation(event) : undefined,
-      });
-    } catch (error) {
-      throw isLikelyNetworkError(error) ? embeddingModelDownloadNetworkError(error) : error;
-    }
-
-    // Probe the loaded model and assert the documented dimension so the port
-    // contract (`dimension === 384`) is verified against the real model
-    // output once, up front, with a descriptive error on mismatch.
-    const probe = await extractor("dimension probe", { pooling: "mean", normalize: true });
-    const dims = probe.dims;
-    if (dims.length !== 2 || dims[1] !== EXPECTED_DIMENSION) {
-      throw new Error(
-        `Embedding model ${EMBEDDING_MODEL_ID} produced dimension ` +
-          `[${dims.join(", ")}], expected [*, ${EXPECTED_DIMENSION}]. ` +
-          "The knowledge base embedding model and the host model must agree; " +
-          "refusing to serve inconsistent vectors.",
-      );
-    }
-    this.ready = true;
-    return extractor;
-  }
-
-  private loadModule(): Promise<TransformersModule> {
-    if (!this.modulePromise) {
-      // Lazy, deferred import: nothing from transformers.js runs at plugin
-      // startup. esbuild rewrites this to a bundled require at build time.
-      this.modulePromise = import("@huggingface/transformers");
-    }
-    return this.modulePromise;
-  }
+  });
 }
 
 /**
@@ -375,76 +255,6 @@ function yieldToEventLoop(): Promise<void> {
     if (typeof schedule === "function") schedule(resolve, 0);
     else resolve();
   });
-}
-
-/**
- * Copy the pipeline output rows into fresh Float32Array instances. The copy
- * is required: transformers.js may reuse the underlying tensor buffer across
- * calls, so callers must not retain views into it.
- */function tensorToVectors(
-  tensor: PipelineOutputTensor,
-  expectedDimension: number,
-): Float32Array[] {
-  const dims = tensor.dims;
-  if (dims.length !== 2 || dims[1] !== expectedDimension) {
-    throw new Error(
-      `Embedding model output dimension mismatch: expected [*, ${expectedDimension}], ` +
-        `got [${dims.join(", ")}]. The knowledge base must be rebuilt with the ` +
-        "model whose vectors are stored.",
-    );
-  }
-  const rows = dims[0];
-  if (rows === undefined || !Number.isInteger(rows)) {
-    throw new Error("Embedding model returned an invalid batch output");
-  }
-  // transformers.js types the tensor data loosely; treat it as a flat numeric
-  // sequence (Float32Array on onnxruntime-node, number[] elsewhere) and copy
-  // rows into fresh Float32Array instances. The copy is required: the runtime
-  // may reuse the underlying buffer across calls.
-  const data = tensor.data as unknown as ArrayLike<number>;
-  const vectors = new Array<Float32Array>(rows);
-  for (let i = 0; i < rows; i++) {
-    const offset = i * expectedDimension;
-    const row = new Float32Array(expectedDimension);
-    for (let j = 0; j < expectedDimension; j++) {
-      row[j] = data[offset + j] as number;
-    }
-    vectors[i] = row;
-  }
-  return vectors;
-}
-
-/** Race a promise against the abort signal (mirrors pdf-text-extractor). */
-function raceWithAbort<T>(promise: Promise<T>, signal?: AbortSignal): Promise<T> {
-  if (!signal) return promise;
-  return new Promise<T>((resolve, reject) => {
-    const onAbort = () => reject(abortError(signal));
-    signal.addEventListener("abort", onAbort, { once: true });
-    promise.then(
-      (value) => {
-        signal.removeEventListener("abort", onAbort);
-        resolve(value);
-      },
-      (error) => {
-        signal.removeEventListener("abort", onAbort);
-        reject(error instanceof Error ? error : new Error(String(error)));
-      },
-    );
-  });
-}
-
-/**
- * Mirror core's cancellation convention (`isCancellationError` matches on
- * `name === "AbortError"`): an Error named "AbortError" carrying the signal
- * reason as message.
- */
-function abortError(signal: AbortSignal): Error {
-  const reason = (signal as { reason?: unknown }).reason;
-  const message =
-    typeof reason === "string" && reason ? reason : "cancelled by user";
-  const error = new Error(message);
-  error.name = "AbortError";
-  return error;
 }
 
 /**

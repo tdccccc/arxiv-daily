@@ -35,6 +35,7 @@
     "smoke:install": "node scripts/install-smoke.mjs",
     "sync:release-version": "node scripts/sync-release-version.mjs",
     "check:release-version": "node scripts/check-release-version.mjs",
+    "check:published-manifest": "node scripts/check-published-manifest.mjs",
     "cli": "node apps/cli/dist/arxiv-daily-cli.cjs"
   },
   "overrides": {
@@ -43,7 +44,8 @@
     "vite": "$vite",
     "obsidian": {
       "moment": "2.31.0"
-    }
+    },
+    "source-map-js": "^1.2.2"
   },
   "devDependencies": {
     "@eslint/js": "^9.39.5",

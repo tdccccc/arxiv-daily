@@ -10,7 +10,8 @@ import { normalizeTopic } from "../src/settings/topics";
 import type { SourceAdapter } from "../src/sources";
 import { markupParser } from "./markup-parser";
 
-const date = "2026-09-05";
+// Exercise ranking on an announcement weekday; weekends now stop before discovery.
+const date = "2026-09-07";
 const id = (index: number): string => `2609.${String(index).padStart(5, "0")}`;
 const decision = (index: number, relevanceScore: number, category = "topic-a"): FilterRecord => ({
   id: id(index), category, relevanceScore, directions: [`${category}#1`],

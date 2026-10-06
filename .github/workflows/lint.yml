@@ -45,6 +45,11 @@ jobs:
         run: npm run build
       - name: Check Obsidian submission requirements
         run: npm run check:obsidian-submission
+      - name: Check published manifest release
+        if: ${{ github.event_name == 'push' || github.base_ref == 'main' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: npm run check:published-manifest
       - name: Smoke test build artifacts
         run: npm run smoke:build
       - name: Smoke test CLI package installation

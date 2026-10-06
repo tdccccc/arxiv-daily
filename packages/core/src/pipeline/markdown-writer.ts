@@ -99,7 +99,7 @@ export class MarkdownWriter {
       path,
       appendGenerationMetrics(
         frontmatter + dateWindowNote(options.dateWindowNote) + summary,
-        options.metrics,
+        stampGenerationMetrics(options.metrics),
       ),
     );
     this.opts.logger.info(`wrote daily: ${path}`);
@@ -132,7 +132,7 @@ export class MarkdownWriter {
       publishedReport,
       tags,
     });
-    await this.writeMarkdown(path, appendGenerationMetrics(fm + summary, options.metrics));
+    await this.writeMarkdown(path, appendGenerationMetrics(fm + summary, stampGenerationMetrics(options.metrics)));
     this.opts.logger.info(`wrote paper: ${path}`);
     return path;
   }
@@ -493,4 +493,9 @@ function weekdayName(dateStr: string): string {
     "Saturday",
   ];
   return weekdays[date.getUTCDay()] ?? "Sunday";
+}
+
+/** Stamp only at the persistence boundary; reads never invent a generation time. */
+function stampGenerationMetrics(metrics: GenerationMetrics | undefined): GenerationMetrics | undefined {
+  return metrics ? { ...metrics, generatedAt: new Date().toISOString() } : undefined;
 }

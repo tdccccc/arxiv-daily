@@ -1,11 +1,6 @@
 import {
   isValidMaxDailyPapers,
-  sanitizeDetailSelection,
-  validateLocalPdfParserSidecarConfig,
-  validateScheduleConfig,
-  validateSchedulerConfig,
-  validateVaultRelativeDirectory,
-  vaultRelativeDirectoriesCollide,
+  normalizeSettingsEdits,
   type LogLevel,
   type PluginSettings,
   type RunHistoryStore,
@@ -91,11 +86,12 @@ export class SettingsChangeService {
     return this.enqueue(async () => {
       const previous = cloneSettings(this.deps.settings);
       const candidate = cloneSettings(this.deps.settings);
-      candidate.detailSelection = sanitizeDetailSelection(
-        candidate.detailSelection,
-      );
-      const commitPaths = changedLeafPaths(previous, candidate);
+      let commitPaths: string[] = [];
       try {
+        // Complex editors already mutate live topics before entering this queue.
+        // Validate their known fields without claiming to recover a pre-edit snapshot.
+        Object.assign(candidate, normalizeSettingsEdits(candidate, ["arxiv.topics", "detailSelection"]));
+        commitPaths = changedLeafPaths(previous, candidate);
         this.validateCandidate(candidate, []);
         assertLiveCommitEligible(this.deps.settings, candidate, commitPaths);
         await this.deps.persistSettings(candidate);
@@ -148,9 +144,6 @@ export class SettingsChangeService {
         if (!request.forcePersist && requestedKeys.every(
           (key) => valuesEqual(readPath(previous, key), readPath(candidate, key)),
         )) return;
-        candidate.detailSelection = sanitizeDetailSelection(
-          candidate.detailSelection,
-        );
 
         this.validateCandidate(candidate, requestedKeys);
         request.validateCandidate?.(candidate);
@@ -231,59 +224,7 @@ export class SettingsChangeService {
     ) {
       throw new Error("Invalid output.maxDailyPapers: expected a positive safe integer");
     }
-    if (changedKeys.some(isOutputDirectoryKey)) {
-      for (const field of ["dailyDir", "papersDir"] as const) {
-        const validation = validateVaultRelativeDirectory(candidate.output[field]);
-        if (!validation.ok || !validation.value) {
-          throw new Error(`Invalid output.${field}: ${validation.reason ?? "Invalid path"}`);
-        }
-        candidate.output[field] = validation.value;
-      }
-      if (
-        vaultRelativeDirectoriesCollide(
-          candidate.output.dailyDir,
-          candidate.output.papersDir,
-        )
-      ) {
-        throw new Error("Daily and papers directories must be different");
-      }
-    }
-
-    if (changedKeys.includes("arxiv.timezone")) {
-      const timezone = candidate.arxiv.timezone.trim();
-      if (!isValidTimezone(timezone)) {
-        throw new Error(`Invalid timezone: ${candidate.arxiv.timezone}`);
-      }
-      candidate.arxiv.timezone = timezone;
-    }
-
-    if (
-      changedKeys.includes("advanced.logLevel") &&
-      !isLogLevel(candidate.advanced.logLevel)
-    ) {
-      throw new Error(`Invalid log level: ${String(candidate.advanced.logLevel)}`);
-    }
-
-    if (changedKeys.includes("schedule.tickIntervalMin")) {
-      const interval = candidate.schedule.tickIntervalMin;
-      if (!Number.isFinite(interval) || interval < 1) {
-        throw new Error(`Invalid scheduler tick interval: ${String(interval)}`);
-      }
-    }
-
-    if (changedKeys.some((key) => key.startsWith("pdfParserSidecar."))) {
-      const validation = validateLocalPdfParserSidecarConfig(candidate);
-      if (!validation.ok) throw new Error(validation.reasons.join("; "));
-    }
-
-    if (changedKeys.some((key) => key.startsWith("schedule."))) {
-      const validation = candidate.schedule.enabled
-        ? validateSchedulerConfig(candidate)
-        : validateScheduleConfig(candidate);
-      if (!validation.ok) {
-        throw new Error(validation.reasons.join("; "));
-      }
-    }
+    Object.assign(candidate, normalizeSettingsEdits(candidate, changedKeys));
   }
 
   private commitLiveSettings(
@@ -385,9 +326,6 @@ function isOutputDirectoryKey(key: string): boolean {
   return key === "output.dailyDir" || key === "output.papersDir";
 }
 
-function isLogLevel(value: unknown): value is LogLevel {
-  return value === "debug" || value === "info" || value === "warn" || value === "error";
-}
 
 function readPath(settings: PluginSettings, key: string): unknown {
   let value: unknown = settings;

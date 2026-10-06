@@ -1,5 +1,5 @@
 import type { PluginSettings, RunState } from "@arxiv-daily/core";
-import { arxivCategories } from "@arxiv-daily/core";
+import { arxivCategories, isCompletedDiscovery } from "@arxiv-daily/core";
 import { validateFilterConfig, validateSchedulerConfig } from "@arxiv-daily/core";
 import type { Logger } from "@arxiv-daily/core";
 
@@ -73,7 +73,7 @@ export function getSetupStatus(
   const validation = validateFilterConfig(settings);
   const schedulerValidation = validateSchedulerConfig(settings);
   const latestCompletedReportDate = Object.entries(runState)
-    .filter(([, entry]) => entry?.status === "completed")
+    .filter(([, entry]) => isCompletedDiscovery(entry))
     .map(([date]) => date)
     .sort()
     .at(-1);

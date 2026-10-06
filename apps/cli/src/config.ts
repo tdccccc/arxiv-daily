@@ -6,14 +6,20 @@ import {
   DEFAULT_SETTINGS,
   arxivCategories,
   isValidMaxDailyPapers,
+  decodeLibraryConnection,
   normalizeCategoryList,
   normalizeTopic,
   sanitizeDetailSelection,
+  isDetailSelectionProfile,
+  validateScheduleConfig,
+  validateLocalPdfParserSidecarConfig,
+  sha256Hex,
   validateVaultRelativeDirectory,
   vaultRelativeDirectoriesCollide,
 } from "@arxiv-daily/core";
 import type {
   LinkStyle,
+  PersistedLibraryConnection,
   PluginSettings,
   SummaryLanguage,
   Topic,
@@ -48,6 +54,12 @@ export interface CliRuntimeConfig {
   linkStyle: LinkStyle;
   configPath: string;
   scheduleIntent: CliScheduleIntent;
+  /** Optional for injected configurations; independent of external cron intent. */
+  workbenchSchedule?: PluginSettings["schedule"];
+  libraryConnection?: PersistedLibraryConnection;
+  libraryConnectionError?: string;
+  /** Fingerprint of the exact loaded bytes, used to reject stale config writes. */
+  configRevision?: string;
 }
 
 export interface LoadCliConfigOptions {
@@ -80,7 +92,7 @@ export async function loadCliConfig(
   } catch (e) {
     if ((e as NodeJS.ErrnoException).code === "ENOENT") {
       throw new CliConfigError(
-        `CLI config not found: ${configPath}\nRun: arxiv-daily init`,
+        `CLI config not found: ${configPath}\nRun: arxiv-daily init`, e,
       );
     }
     throw new CliConfigError(`failed to read CLI config: ${configPath}`, e);
@@ -98,9 +110,6 @@ export async function loadCliConfig(
   }
 
   const settings = mapTomlToSettings(parsed);
-  settings.detailSelection = sanitizeDetailSelection(
-    detailSelectionPresetBalanced(),
-  );
 
   const home = opts.homedir?.() ?? os.homedir();
   const vaultRoot = resolveUserPath(
@@ -136,6 +145,15 @@ export async function loadCliConfig(
     settings.output.summaryLanguage ?? "zh",
   );
 
+  const libraryConnection = decodeLibraryConnection(parsed.library);
+  const libraryConnectionError = parsed.library === undefined
+    ? undefined
+    : !libraryConnection
+      ? "Optional library connection is invalid; reconnect the library to enable library-guided discovery."
+      : isRecord(parsed.library) && parsed.library.authorization !== undefined && !libraryConnection.authorization
+        ? "Library authorization is invalid; review its disclosure and authorize processing again."
+        : undefined;
+
   return {
     settings,
     vaultRoot,
@@ -143,6 +161,10 @@ export async function loadCliConfig(
     linkStyle,
     configPath,
     scheduleIntent: mapScheduleIntent(parsed.schedule),
+    workbenchSchedule: mapWorkbenchSchedule(parsed.workbench_schedule),
+    configRevision: `sha256:${sha256Hex(raw)}`,
+    ...(libraryConnection ? { libraryConnection } : {}),
+    ...(libraryConnectionError ? { libraryConnectionError } : {}),
   };
 }
 
@@ -189,7 +211,7 @@ function mapTomlToSettings(root: Record<string, unknown>): PluginSettings {
     if (Array.isArray(arxiv.categories)) {
       base.arxiv.categories = normalizeCategoryList(
         arxiv.categories,
-        base.arxiv.categories,
+        [],
       );
     }
     base.arxiv.timezone = stringField(arxiv, "timezone", base.arxiv.timezone);
@@ -288,6 +310,20 @@ function mapTomlToSettings(root: Record<string, unknown>): PluginSettings {
     }
   }
 
+  const detail = asTable(root.detail_selection);
+  if (detail) {
+    if (!isDetailSelectionProfile(detail.profile)) throw new CliConfigError("Invalid detail_selection.profile");
+    base.detailSelection = sanitizeDetailSelection({ profile: detail.profile, normalThreshold: detail.normal_threshold, exceptionalThreshold: detail.exceptional_threshold, softLimit: detail.soft_limit });
+  }
+  const sidecar = asTable(root.pdf_parser_sidecar);
+  if (sidecar) {
+    if (typeof sidecar.enabled === "boolean") base.pdfParserSidecar.enabled = sidecar.enabled;
+    base.pdfParserSidecar.capabilitiesUrl = stringField(sidecar, "capabilities_url", base.pdfParserSidecar.capabilitiesUrl);
+    base.pdfParserSidecar.parseUrl = stringField(sidecar, "parse_url", base.pdfParserSidecar.parseUrl);
+    const validation = validateLocalPdfParserSidecarConfig(base);
+    if (!validation.ok) throw new CliConfigError(validation.reasons.join("; "));
+  }
+
   // Plugin schedule table ignored for CLI runtime; scheduleIntent is separate.
   base.schedule = { ...DEFAULT_SETTINGS.schedule, enabled: false };
 
@@ -310,7 +346,33 @@ function mapTopic(raw: unknown, index: number): Topic {
   // `detail` keeps the CLI's own default (true) rather than the shared one;
   // everything else goes through normalizeTopic so the plugin and the CLI
   // derive the description shadow the same way (ADR 0012).
-  return normalizeTopic({ id, name, tag, description, directions: raw.directions, detail });
+  // Read-only loads must not invent fresh direction identities on every read.
+  const directions = Array.isArray(raw.directions)
+    ? raw.directions.map((direction, directionIndex) => isRecord(direction)
+      ? { ...direction, id: typeof direction.id === "string" && direction.id.trim()
+        ? direction.id : `cli-direction-${sha256Hex(`${id}:${directionIndex}:${String(direction.text ?? "")}`).slice(0, 16)}` }
+      : direction)
+    : description.trim() ? [{ id: `cli-direction-${sha256Hex(`${id}:0:${description.trim()}`).slice(0, 16)}`, text: description, origin: "migrated" }] : [];
+  return normalizeTopic({ id, name, tag, description, directions, detail });
+}
+
+function mapWorkbenchSchedule(raw: unknown): PluginSettings["schedule"] {
+  const schedule = { ...DEFAULT_SETTINGS.schedule, enabled: false };
+  if (raw === undefined) return schedule;
+  if (!isRecord(raw)) throw new CliConfigError("Invalid workbench_schedule table");
+  if (raw.enabled !== undefined) {
+    if (typeof raw.enabled !== "boolean") throw new CliConfigError("Invalid workbench_schedule.enabled");
+    schedule.enabled = raw.enabled;
+  }
+  schedule.runAtLocal = stringField(raw, "run_at_local", schedule.runAtLocal);
+  schedule.runUntilLocal = stringField(raw, "run_until_local", schedule.runUntilLocal);
+  if (raw.tick_interval_min !== undefined) {
+    if (typeof raw.tick_interval_min !== "number" || !Number.isInteger(raw.tick_interval_min) || raw.tick_interval_min < 1 || raw.tick_interval_min > 1440) throw new CliConfigError("Invalid workbench_schedule.tick_interval_min (1..1440)");
+    schedule.tickIntervalMin = raw.tick_interval_min;
+  }
+  const validation = validateScheduleConfig({ ...DEFAULT_SETTINGS, schedule });
+  if (!validation.ok) throw new CliConfigError(validation.reasons.join("; "));
+  return schedule;
 }
 
 function mapScheduleIntent(raw: unknown): CliScheduleIntent {

@@ -888,11 +888,8 @@ describe("settings tab regressions", () => {
     expect(settingsTabSource).toContain(
       'Manual “summarize paper” is unchanged',
     );
-    expect(settingsTabSource).toContain('.addOption("conservative", "Fewer")');
-    expect(settingsTabSource).toContain('.addOption("balanced", "Recommended")');
-    expect(settingsTabSource).toContain('.addOption("broad", "More")');
-    expect(settingsTabSource).toContain('d.addOption("custom", "Custom (current values)")');
-    expect(settingsTabSource).toContain('s.detailSelection.profile === "custom"');
+    expect(settingsTabSource).toContain('addBusinessOptions(d, "detailProfile", { detailProfile: s.detailSelection.profile })');
+    expect(settingsTabSource).toContain('getBusinessSetting(id,context).options');
     expect(settingsTabSource).toContain("detailSelectionPreset(profile)");
     expect(settingsTabSource).toContain("await this.plugin.saveSettings()");
   });

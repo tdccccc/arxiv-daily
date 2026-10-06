@@ -332,9 +332,9 @@ describe("ArxivPipeline", () => {
       detailSelection: testDetailSelection,
     });
 
-    const result = await pipeline.runForDate("2026-06-13");
+    const result = await pipeline.runForDate("2026-06-15");
 
-    expect(result.kind).toBe("failed_transient");
+    expect(result).toMatchObject({ kind: "pending", outcome: "awaiting_announcement" });
     expect((result as any).reason).toContain("newer than newest");
     expect(d.fetcher.fetchBySubmittedDate).not.toHaveBeenCalled();
     expect(d.writer.writeDaily).not.toHaveBeenCalled();
@@ -2144,6 +2144,10 @@ describe("ArxivPipeline", () => {
     expect(selectorCalls).toBe(1);
     expect(d.writer.writePaperDetail).toHaveBeenCalledTimes(1);
     expect(d.writer.writePaperDetail.mock.calls[0]?.[0].id).toBe(selectedId);
+    expect(d.writer.writePaperDetail).toHaveBeenCalledWith(
+      expect.anything(), expect.any(String), expect.any(String), undefined,
+      { metrics: expect.objectContaining({ pipelineElapsedMs: expect.any(Number) }) },
+    );
   });
 
   it("continues daily generation with no deep dives when selector transport fails", async () => {

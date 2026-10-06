@@ -46,6 +46,7 @@ export interface CliRuntime {
   manualFetch: ManualFetchService;
   operations: OperationRegistry;
   settings: CliRuntimeConfig["settings"];
+  dispose?: () => void;
 }
 
 export interface BuildCliRuntimeOptions {
@@ -205,6 +206,7 @@ export async function buildCliRuntime(
     dailyPathForDate: (date) => writer.dailyPath(date),
     onDailyCompleted,
   });
+
 
   return {
     host,

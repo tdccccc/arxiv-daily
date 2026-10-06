@@ -17,7 +17,10 @@ export default defineConfig({
     },
   }],
   resolve: {
-    alias: { "@arxiv-daily/core": resolve(here, "../../packages/core/src/index.ts") },
+    alias: {
+      "@arxiv-daily/core": resolve(here, "../../packages/core/src/index.ts"),
+      "@arxiv-daily/node-runtime": resolve(here, "../../packages/node-runtime/src/index.ts"),
+    },
   },
   test: {
     environment: "node",

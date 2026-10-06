@@ -12,7 +12,8 @@
     "preflight": "node scripts/cutover-preflight.mjs"
   },
   "overrides": {
-    "vite": "$vite"
+    "vite": "$vite",
+    "source-map-js": "^1.2.2"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^5.20260822.1",

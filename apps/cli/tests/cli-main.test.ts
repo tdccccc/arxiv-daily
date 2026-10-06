@@ -194,6 +194,26 @@ describe("CLI main", () => {
     expect(runtime.pipeline.runForDate).toHaveBeenCalledWith("2026-06-13");
   });
 
+  it.each([
+    [{ kind: "pending", reason: "not published", outcome: "awaiting_announcement" }, "awaiting_announcement"],
+    [{ kind: "completed", papersWritten: 0, outcome: "no_updates" }, "no_updates"],
+    [{ kind: "completed", papersWritten: 0, outcome: "no_matches" }, "no_matches"],
+  ] as const)("publishes structured run outcomes without treating waiting as failure: %s", async (result, outcome) => {
+    const capture = captureIo();
+    const onRunResult = vi.fn();
+    const runtime = fakeRuntime();
+    runtime.scheduler = { runForDateNow: vi.fn(async () => result) };
+    const code = await runCli({
+      argv: ["run", "--date", "2026-10-02"],
+      io: { ...capture.io, onRunResult },
+      loadConfig: async () => testConfig(), buildRuntime: () => runtime,
+    });
+    expect(code).toBe(0);
+    expect(capture.stderr).toEqual([]);
+    expect(capture.stdout.join("")).toContain(outcome);
+    expect(onRunResult).toHaveBeenCalledWith(expect.objectContaining({ date: "2026-10-02", kind: result.kind, outcome }));
+  });
+
   it("uses scheduler-backed run when available", async () => {
     const io = captureIo();
     const runtime = fakeRuntime();

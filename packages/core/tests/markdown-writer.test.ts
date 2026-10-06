@@ -1,4 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
+import { splitGenerationMetrics } from "../src/metrics/generation";
 import { parse as parseYaml } from "yaml";
 import type { StorageAdapter } from "../src/core/adapters";
 import { MarkdownWriter } from "../src/pipeline/markdown-writer";
@@ -299,6 +300,7 @@ describe("MarkdownWriter strictness on existing files", () => {
     const written = files["arxiv-daily/daily/2026-05-11.md"]!;
     expect(written).toContain("date: 2026-05-11\nweekday: Monday\ntags: [arxiv, daily]");
     expect(written).toMatch(/<!-- arxiv-daily:generation-metrics -->\n> \[!info\]- Generation metrics/);
+    expect(splitGenerationMetrics(written).metrics?.generatedAt).toMatch(/^\d{4}-\d{2}-\d{2}T/);
     expect(written).toMatch(/Provider token usage: 100 input \/ 25 output \/ 125 total\n$/);
   });
 
@@ -314,6 +316,7 @@ describe("MarkdownWriter strictness on existing files", () => {
       },
     });
     const written = files["arxiv-daily/papers/2605.06587.md"]!;
+    expect(splitGenerationMetrics(written).metrics?.generatedAt).toMatch(/^\d{4}-\d{2}-\d{2}T/);
     expect(written).toContain("LLM calls: 1 logical, 2 HTTP attempts");
     expect(written).not.toContain("Pipeline wall time");
     expect(written).toMatch(/Provider token usage: unavailable or incomplete\n$/);

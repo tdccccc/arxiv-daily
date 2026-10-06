@@ -923,3 +923,34 @@ describe("SettingsChangeService computed and coordinated changes", () => {
     expect(settings.llm.model).toBe("Research topic");
   });
 });
+
+it("normalizes shared model edits before preparing and preserves the candidate reference", async () => {
+  const settings = makeSettings();
+  let prepared: unknown;
+  const persistSettings = vi.fn(async candidate => { expect(candidate).toBe(prepared); expect(candidate.llm.model).toBe("new-model"); });
+  const service = new SettingsChangeService({ settings, persistSettings });
+  await service.change({ changes: [{ key: "llm.model", value: "  new-model  " }], prepare: candidate => { prepared = candidate; return undefined; } });
+  expect(settings.llm.model).toBe("new-model");
+});
+it("rejects unsafe model endpoints transactionally while allowing incomplete mail drafts", async () => {
+  const settings = makeSettings(); const persistSettings = vi.fn(async () => undefined);
+  const service = new SettingsChangeService({ settings, persistSettings });
+  await expect(service.changeValue("llm.baseUrl", "https://user:secret@example.com/v1")).rejects.toBeInstanceOf(SettingsChangeError);
+  expect(settings.llm.baseUrl).toBe(DEFAULT_SETTINGS.llm.baseUrl); expect(persistSettings).not.toHaveBeenCalled();
+  await service.changeValue("email.to", "  user@ ");
+  expect(settings.email.to).toBe("user@");
+});
+it("validates complex topic editor drafts without auditing unrelated legacy domains", async () => {
+  const settings = makeSettings(); settings.email.mode = "legacy" as "self";
+  settings.arxiv.topics = [{ id: "", name: "", tag: "", description: "", directions: [], detail: false }];
+  const persistSettings = vi.fn(async () => undefined);
+  const service = new SettingsChangeService({ settings, persistSettings });
+  await expect(service.persistCurrent()).rejects.toBeInstanceOf(SettingsChangeError);
+  expect(persistSettings).not.toHaveBeenCalled();
+  settings.arxiv.topics[0]!.id = "topic-draft";
+  settings.arxiv.topics[0]!.description = "unfinished\nnotes";
+  await service.persistCurrent();
+  expect(persistSettings).toHaveBeenCalledTimes(1);
+  expect(settings.email.mode).toBe("legacy");
+  expect(settings.arxiv.topics[0]!.name).toBe("");
+});

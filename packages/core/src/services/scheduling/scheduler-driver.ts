@@ -693,7 +693,9 @@ export class SchedulerDriver {
               result.papersWritten,
             );
             const pending: PendingCompletion = {
-              result,
+              result: papersWritten !== result.papersWritten
+                ? { ...result, outcome: previousEntry.outcome ?? "papers_written" }
+                : result,
               papersWritten,
               requestedPapersWritten: result.papersWritten,
               preservedPapersWritten: papersWritten !== result.papersWritten,
@@ -812,7 +814,7 @@ export class SchedulerDriver {
   ): Promise<PipelineResult> {
     if (!pending.committed) {
       try {
-        await store.setCompleted(date, pending.papersWritten);
+        await store.setCompleted(date, pending.papersWritten, pending.result.outcome);
         pending.committed = true;
       } catch (commitFailure) {
         this.safeEffect(() =>
@@ -858,6 +860,7 @@ export class SchedulerDriver {
           papersWritten: pending.papersWritten,
           requestedPapersWritten: pending.requestedPapersWritten,
           preservedPapersWritten: pending.preservedPapersWritten,
+          outcome: pending.result.outcome,
         },
         pending.completedAt,
       ),
@@ -878,7 +881,11 @@ export class SchedulerDriver {
     store: StateStore,
   ): Promise<PendingNonCompletionResult> {
     try {
-      await store.setPending(date, pending.result.reason);
+      if (pending.result.kind === "pending" && pending.result.outcome) {
+        await store.setPending(date, pending.result.reason, pending.result.outcome);
+      } else {
+        await store.setPending(date, pending.result.reason);
+      }
     } catch (error) {
       this.safeEffect(() =>
         this.deps.logger.error(
@@ -902,6 +909,7 @@ export class SchedulerDriver {
           pending.trigger,
           pending.result.reason,
           pending.at,
+          pending.result.kind === "pending" ? pending.result.outcome : undefined,
         ),
       );
     } else {

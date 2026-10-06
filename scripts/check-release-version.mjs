@@ -131,7 +131,9 @@ for (const workspacePath of workspacePaths) {
   }
 }
 for (const path of Object.keys(lock.packages ?? {})) {
-  if (/^(apps|packages)\//.test(path) && !path.startsWith("node_modules/") && !workspacePaths.has(path)) {
+  // npm may install conflicting versions beneath a workspace, including scoped
+  // and deeper nested packages. Those node_modules entries are dependencies.
+  if (/^(apps|packages)\//.test(path) && !/(?:^|\/)node_modules\//.test(path) && !workspacePaths.has(path)) {
     errors.push(`package-lock.json contains unexpected workspace package ${path}`);
   }
 }

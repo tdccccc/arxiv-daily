@@ -24,6 +24,14 @@ describe("run-format", () => {
     );
   });
 
+  it("distinguishes structured availability and filtering outcomes from failures", () => {
+    expect(describeResult({ kind: "pending", outcome: "awaiting_announcement", reason: "latest bucket is yesterday" }))
+      .toBe("awaiting announcement: latest bucket is yesterday");
+    expect(describeResult({ kind: "completed", outcome: "no_updates", papersWritten: 0 })).toBe("no arXiv updates");
+    expect(describeResult({ kind: "completed", outcome: "no_matches", papersWritten: 0 })).toBe("no matching papers");
+    expect(describeResult({ kind: "completed", outcome: "papers_written", papersWritten: 2 })).toBe("done (2 papers)");
+  });
+
   it("formats manual fetch results with the shared arrow convention", () => {
     expect(describeManualResult({ kind: "done", path: "papers/2606.12345.md" })).toBe(
       "done → papers/2606.12345.md",
