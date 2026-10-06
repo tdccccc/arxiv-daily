@@ -36,7 +36,7 @@ function validatePatch(body: unknown): Partial<WorkbenchPreferences> {
   if (Object.hasOwn(fields, "sidebarWidth")) {
     const width = fields.sidebarWidth;
     if (width !== null && (typeof width !== "number" || !Number.isFinite(width) || width < 280 || width > 900)) throw new WorkbenchError(400, "侧栏宽度无效。");
-    patch.sidebarWidth = width as number | null;
+    patch.sidebarWidth = width;
   }
   if (Object.hasOwn(fields, "sidebarCollapsed")) {
     if (typeof fields.sidebarCollapsed !== "boolean") throw new WorkbenchError(400, "侧栏折叠偏好无效。");

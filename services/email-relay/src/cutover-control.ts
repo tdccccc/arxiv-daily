@@ -365,7 +365,7 @@ export async function fetchPublicReadiness(
     automatic?: unknown;
   };
   try {
-    body = await response.json() as typeof body;
+    body = await response.json();
   } catch {
     return null;
   }
@@ -413,7 +413,7 @@ export async function issueReadyBoundDevice(
   }
   let body: { status?: unknown; token?: unknown };
   try {
-    body = await response.json() as typeof body;
+    body = await response.json();
   } catch {
     return { status: "unavailable" };
   }
@@ -455,10 +455,10 @@ export async function authorizeAutomaticDelivery(
     }),
   );
   if (!response.ok) return { authorized: false };
-  const body = await response.json() as {
+  const body: {
     authorized?: unknown;
     legacyEvidence?: unknown;
-  };
+  } = await response.json();
   if (
     body.authorized !== true ||
     (body.legacyEvidence !== "none" &&
@@ -567,7 +567,7 @@ async function readStatus(
 async function parseIssuanceIdentity(request: Request): Promise<string | null> {
   let body: Record<string, unknown>;
   try {
-    body = await request.json() as Record<string, unknown>;
+    body = await request.json();
   } catch {
     return null;
   }
@@ -734,7 +734,7 @@ function normalizeIssuanceClaim(raw: unknown): IssuanceClaim {
     claim.readyGeneration! < 1 ||
     !validTimestamp(claim.createdAt) ||
     !validTimestamp(claim.pendingExpiresAt) ||
-    Date.parse(claim.pendingExpiresAt!) <= Date.parse(claim.createdAt!) ||
+    Date.parse(claim.pendingExpiresAt) <= Date.parse(claim.createdAt) ||
     !isHash(claim.recipientIdentity) ||
     !isHash(claim.pendingProof)
   ) {
@@ -784,7 +784,7 @@ async function authorizeAutomatic(
     readyGeneration?: unknown;
   };
   try {
-    body = await request.json() as typeof body;
+    body = await request.json();
   } catch {
     return deniedAutomatic();
   }
@@ -821,10 +821,7 @@ async function authorizeAutomatic(
     return deniedAutomatic();
   }
   const legacyEvidence: LegacyDeliveryEvidence =
-    (control.legacyAutoEvidence[body.evidenceIdentity] as
-      | "done"
-      | "attempted"
-      | undefined) ?? "none";
+    control.legacyAutoEvidence[body.evidenceIdentity] ?? "none";
   return Response.json({ authorized: true, legacyEvidence });
 }
 
@@ -864,7 +861,7 @@ async function runAction(
 async function parseAction(request: Request): Promise<ActionInput | Response> {
   let body: Record<string, unknown>;
   try {
-    body = await request.json() as Record<string, unknown>;
+    body = await request.json();
   } catch {
     return safeError("invalid cutover action", 400);
   }
@@ -1407,7 +1404,6 @@ async function performLegacyScan(
       },
     });
   } catch (error) {
-    const completed = now();
     if (
       error instanceof Error &&
       error.message === "legacy automatic delivery scan encountered an unsupported key"
@@ -1551,9 +1547,9 @@ async function buildAuditMarker(
     followupAutomaticKeyCount: control.followupScan.automaticKeyCount,
     legacyAutoEvidenceSnapshot: "exact-canonical-map" as const,
     legacyAutoEvidence: canonicalEvidence(control.legacyAutoEvidence),
-    identitySecretFingerprint: control.identitySecretFingerprint!,
-    buildIdentity: control.buildIdentity!,
-    protocolGeneration: control.protocolGeneration!,
+    identitySecretFingerprint: control.identitySecretFingerprint,
+    buildIdentity: control.buildIdentity,
+    protocolGeneration: control.protocolGeneration,
     constructedAt: constructedAt.toISOString(),
   };
   return {
@@ -1708,10 +1704,10 @@ async function normalizeAuditMarker(
     inventoryAutomaticKeyCount: value.inventoryAutomaticKeyCount!,
     postFenceScanStartedAt: value.postFenceScanStartedAt,
     postFenceScanCompletedAt: value.postFenceScanCompletedAt,
-    postFenceAutomaticKeyCount: value.postFenceAutomaticKeyCount!,
+    postFenceAutomaticKeyCount: value.postFenceAutomaticKeyCount,
     followupScanStartedAt: value.followupScanStartedAt,
     followupScanCompletedAt: value.followupScanCompletedAt,
-    followupAutomaticKeyCount: value.followupAutomaticKeyCount!,
+    followupAutomaticKeyCount: value.followupAutomaticKeyCount,
     legacyAutoEvidenceSnapshot: "exact-canonical-map" as const,
     legacyAutoEvidence: evidence,
     identitySecretFingerprint: value.identitySecretFingerprint,
@@ -1964,7 +1960,7 @@ function normalizeExactEvidence(raw: unknown): ExactEvidence {
   ) {
     throw new Error("cutover exact evidence is invalid");
   }
-  const result = canonicalEvidence(Object.fromEntries(entries) as ExactEvidence);
+  const result = canonicalEvidence(Object.fromEntries(entries));
   if (JSON.stringify(result) !== JSON.stringify(raw)) {
     throw new Error("cutover exact evidence is not canonical");
   }
@@ -1974,7 +1970,7 @@ function normalizeExactEvidence(raw: unknown): ExactEvidence {
 function canonicalEvidence(evidence: ExactEvidence): ExactEvidence {
   return Object.fromEntries(
     Object.entries(evidence).sort(([left], [right]) => left.localeCompare(right)),
-  ) as ExactEvidence;
+  );
 }
 
 function validateControlTiming(
@@ -2068,7 +2064,7 @@ function observationTiming(
     const observations = control.markerAudit!.observations;
     const base = observations.length === 0
       ? control.markerAudit!.writeCompletedAt
-      : observations[observations.length - 1]!.observedAt;
+      : observations[observations.length - 1].observedAt;
     return now.getTime() < Date.parse(base) + MARKER_OBSERVATION_WAIT_MS
       ? "early"
       : "ok";
@@ -2093,7 +2089,7 @@ function clearBlocked(control: CutoverControlRecord): CutoverControlRecord {
   if (control.phase !== "blocked") return control;
   const { blocked: _blocked, recoverPhase, ...rest } = control;
   if (!recoverPhase) throw new Error("cutover recovery phase is invalid");
-  return { ...rest, phase: recoverPhase } as CutoverControlRecord;
+  return { ...rest, phase: recoverPhase };
 }
 
 function scanRecord(started: Date, completed: Date, count: number): ScanRecord {

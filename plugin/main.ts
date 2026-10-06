@@ -12,7 +12,6 @@ import type {
   FullTextLegacyMigrationLease,
   FullTextGenerationMaintenanceReport,
   KnowledgeBaseChunkHit,
-  DirectionDiffSuggestion,
   IncrementalSuggestionsDocument,
   ClusteringInputPaper,
   ProposalAcceptanceReceipt,
@@ -69,7 +68,6 @@ synchronizeFullTextGenerationIndex,
 IncrementalSuggestionsStore,
 centerCorpusChunks,
 loadClusteringInput,
-PDF_IDENTIFICATION_EVIDENCE_VERSION,
 sha256Hex,
 type OperationHandle,
 type OperationKind,
@@ -274,9 +272,6 @@ class SettingsOperationRegistry extends OperationRegistry {
 }
 
 let lastCacheCleanupDate: string | null = null;
-
-export const IDENTIFICATION_HEAD_BYTES = 4 * 1024 * 1024;
-const IDENTIFICATION_TAIL_BYTES = 1024 * 1024;
 
 /**
  * Minimum buffer-pool size before the incremental direction update runs the

@@ -292,7 +292,7 @@ export async function scanLegacyAutoDeliveryEvidence(
   }
   const evidence: Record<string, "done" | "attempted"> = {};
   let cursor: string | undefined;
-  do {
+  for (;;) {
     const page = await env.STORE.list({
       prefix: IDEMP_PREFIX,
       ...(cursor ? { cursor } : {}),
@@ -325,8 +325,8 @@ export async function scanLegacyAutoDeliveryEvidence(
         }
         identity = await hashLegacyAutoDeliveryIdentity(
           identitySecret,
-          plain[1]!,
-          plain[2]!,
+          plain[1],
+          plain[2],
         );
       }
       const raw = await env.STORE.get(key);
@@ -345,7 +345,7 @@ export async function scanLegacyAutoDeliveryEvidence(
       throw new Error("legacy automatic delivery scan did not advance");
     }
     cursor = page.cursor;
-  } while (true);
+  }
   return evidence;
 }
 

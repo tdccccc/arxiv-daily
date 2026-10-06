@@ -18,6 +18,35 @@ export function nativeSourceHash() {
 }
 export function sha256(bytes) { return createHash("sha256").update(bytes).digest("hex"); }
 
+/**
+ * Thrown when the native C++ toolchain itself (the `cmake` executable) is
+ * missing, as opposed to a real configure/compile failure. Callers that can
+ * tolerate running without an embedded native storage backend (non-release
+ * builds) may catch this specific error and fall back; any other error from
+ * `buildNative` is a genuine build problem and must not be swallowed.
+ */
+export class NativeToolchainUnavailableError extends Error {
+  constructor(message, options) {
+    super(message, options);
+    this.name = "NativeToolchainUnavailableError";
+  }
+}
+
+function runCmake(args, stdio) {
+  try {
+    execFileSync("cmake", args, { stdio });
+  } catch (error) {
+    // A synchronous spawn of a missing executable throws with code ENOENT
+    // (status/signal null) before cmake ever runs. Any other failure —
+    // non-zero exit, killed by signal, bad arguments — is a real build
+    // problem and must propagate unchanged.
+    if (error && error.code === "ENOENT") {
+      throw new NativeToolchainUnavailableError("cmake was not found on PATH; install CMake and a C++ toolchain to build the native storage backend.", { cause: error });
+    }
+    throw error;
+  }
+}
+
 /** Reproduces the manually verified CMake build using installed tools only. */
 export function buildNative({ buildDir = join(nativeRoot, "build"), force = false, stdio = "inherit" } = {}) {
   if (!["linux", "darwin", "win32"].includes(process.platform) || !["x64", "arm64"].includes(process.arch)) {
@@ -46,8 +75,8 @@ export function buildNative({ buildDir = join(nativeRoot, "build"), force = fals
   } else if (process.platform === "darwin") {
     args.push(`-DCMAKE_OSX_ARCHITECTURES=${process.arch === "arm64" ? "arm64" : "x86_64"}`);
   }
-  execFileSync("cmake", args, { stdio });
-  execFileSync("cmake", ["--build", buildDir, "--config", "Release"], { stdio });
+  runCmake(args, stdio);
+  runCmake(["--build", buildDir, "--config", "Release"], stdio);
   const metadata = { target, sourceHash, sha256: sha256(readFileSync(bindingPath)), nodeApi: 8 };
   mkdirSync(buildDir, { recursive: true });
   writeFileSync(metadataPath, `${JSON.stringify(metadata, null, 2)}\n`);

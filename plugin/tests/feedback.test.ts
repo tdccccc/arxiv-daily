@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import {
+  ARXIV_DAILY_AUTHOR_URL,
   ARXIV_DAILY_DOCS_URL,
   ARXIV_DAILY_ISSUES_URL,
   ARXIV_DAILY_REPO_URL,
@@ -34,7 +35,7 @@ describe("feedback links", () => {
     expect(buildFeatureRequestUrl()).toBe(`${ARXIV_DAILY_ISSUES_URL}/new`);
   });
 
-  it("keeps dual manifests identical and includes authorUrl", () => {
+  it("keeps dual manifests identical and points authorUrl at the author, not the repo", () => {
     const root = JSON.parse(
       readFileSync(resolve(process.cwd(), "../manifest.json"), "utf-8"),
     );
@@ -42,7 +43,8 @@ describe("feedback links", () => {
       readFileSync(resolve(process.cwd(), "manifest.json"), "utf-8"),
     );
     expect(plugin).toEqual(root);
-    expect(plugin.authorUrl).toBe(ARXIV_DAILY_REPO_URL);
+    expect(plugin.authorUrl).toBe(ARXIV_DAILY_AUTHOR_URL);
+    expect(plugin.authorUrl).not.toBe(ARXIV_DAILY_REPO_URL);
   });
 
   it("wires settings and dashboard feedback entry points", () => {

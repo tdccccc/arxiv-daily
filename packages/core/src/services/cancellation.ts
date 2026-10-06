@@ -114,11 +114,11 @@ export function isCancellationError(error: unknown): boolean {
 
 function isAbortError(error: unknown): boolean {
   if (!error || typeof error !== "object") return false;
-  const anyError = error as any;
-  return anyError.name === "AbortError" || anyError.code === "ABORT_ERR";
+  const candidate: { name?: unknown; code?: unknown } = error;
+  return candidate.name === "AbortError" || candidate.code === "ABORT_ERR";
 }
 
 function cancelReason(signal: AbortSignal): string {
-  const reason = (signal as any).reason;
+  const reason: unknown = signal.reason;
   return typeof reason === "string" && reason ? reason : "cancelled by user";
 }

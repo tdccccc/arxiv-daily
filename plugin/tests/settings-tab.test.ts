@@ -1129,7 +1129,7 @@ describe("personal library settings layout", () => {
   it("gives the description column a floor rather than letting it collapse", () => {
     const css = readFileSync(resolve(process.cwd(), "styles.css"), "utf-8");
     const match = css.match(
-      /\.arxiv-daily-settings \.setting-item:has\(> \.arxiv-daily-settings__library-controls\) \.setting-item-info \{([^}]*)\}/,
+      /\.arxiv-daily-settings \.setting-item\.arxiv-daily-settings__library-row \.setting-item-info \{([^}]*)\}/,
     );
     expect(match).not.toBeNull();
     expect(match![1]).toMatch(/min-width:\s*var\(--arxiv-daily-library-description-floor\);/);

@@ -3,7 +3,7 @@ import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { randomUUID } from "node:crypto";
 import { gzipSync } from "node:zlib";
-import { buildNative, nativeRoot, nativeSourceHash, sha256 } from "./native-build.mjs";
+import { NativeToolchainUnavailableError, buildNative, nativeRoot, nativeSourceHash, sha256 } from "./native-build.mjs";
 
 export const NATIVE_TARGETS = ["linux-x64", "linux-arm64", "darwin-x64", "darwin-arm64", "win32-x64", "win32-arm64"];
 const prebuilds = join(nativeRoot, "prebuilds");
@@ -52,8 +52,24 @@ export function exportNativeBuild({ directory = prebuilds, expectedTarget } = {}
 }
 
 export function nativeAssetsForBuild({ release = process.env.ARXIV_DAILY_NATIVE_RELEASE === "1", directory = prebuilds } = {}) {
-  const targets = release ? NATIVE_TARGETS : [exportNativeBuild({ directory })];
-  return readNativeAssets({ directory, targets });
+  if (release) return readNativeAssets({ directory, targets: NATIVE_TARGETS });
+  let target;
+  try {
+    target = exportNativeBuild({ directory });
+  } catch (error) {
+    if (!(error instanceof NativeToolchainUnavailableError)) throw error;
+    // Development/CI builds without a C++ toolchain still need to produce a
+    // usable bundle: ship it with no embedded native asset rather than fail.
+    // Runtime (native-storage-loader.ts / storage-adapter.ts) already treats
+    // a missing platform asset as "no native backend" and falls back to the
+    // Linux descriptor-anchored backend or fails closed per ADR 0009 — it
+    // never silently degrades to an unsynced, backup-less write. Release
+    // builds (ARXIV_DAILY_NATIVE_RELEASE=1) are unaffected: they always read
+    // the full verified prebuilt matrix above and fail hard if it is missing.
+    console.warn(`[arxiv-daily] ${error.message} Building without an embedded native storage backend for this platform: private writes will use the Linux fallback or fail closed (ADR 0009). Install CMake and a C++ toolchain to include it.`);
+    return {};
+  }
+  return readNativeAssets({ directory, targets: [target] });
 }
 
 export function nativeAssetsForTests() {

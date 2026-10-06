@@ -2,6 +2,7 @@ import type { PluginSettings } from "./types";
 import { arxivCategories } from "./categories";
 import { minutesFromHHMM } from "../utils/time";
 import { requireLoopbackSidecarUrl } from "../documents/sidecar-document-parser";
+import { hasControlCharacter } from "../utils/control-characters";
 
 export interface ValidationResult {
   ok: boolean;
@@ -36,7 +37,7 @@ export function validateVaultRelativeDirectory(
   }
   const value = input.trim().replace(/\\/g, "/").normalize("NFC");
   if (!value) return { ok: false, reason: "must not be empty" };
-  if (/[\u0000-\u001f\u007f]/u.test(value)) {
+  if (hasControlCharacter(value)) {
     return { ok: false, reason: "must not contain control characters" };
   }
   if (/^(?:\/|[a-z]:|\/\/)/i.test(value)) {
@@ -79,7 +80,7 @@ export function validateLlmConfig(settings: PluginSettings): ValidationResult {
  * and directions now live inside topics, so a topic is the only thing that can
  * select a paper — and the only thing worth checking for.
  */
-export interface FilterValidationOptions {}
+export type FilterValidationOptions = Record<string, never>;
 
 export function validateFilterConfig(
   settings: PluginSettings,

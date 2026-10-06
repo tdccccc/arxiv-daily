@@ -32,7 +32,7 @@ export function parseAtomPapers(
 ): AtomPaperMeta[] {
   const out: AtomPaperMeta[] = [];
   const doc = markupParser.parseFromString(xml, "text/xml");
-  const entries = Array.from(doc.querySelectorAll("entry")) as unknown as Element[];
+  const entries = Array.from(doc.querySelectorAll("entry"));
   for (const entry of entries) {
     const idEl = entry.querySelector("id");
     if (!idEl) continue;
@@ -44,7 +44,7 @@ export function parseAtomPapers(
     const title = text(entry.querySelector("title"));
     const abstract = text(entry.querySelector("summary"));
     const authors = (
-      Array.from(entry.querySelectorAll("author > name")) as unknown as Element[]
+      Array.from(entry.querySelectorAll("author > name"))
     )
       .map((el) => text(el))
       .filter(Boolean);
@@ -54,7 +54,7 @@ export function parseAtomPapers(
     });
     const primaryCategory = primaryCategoryElement?.getAttribute("term")?.trim() ?? "";
     const categories = (
-      Array.from(entry.querySelectorAll("category")) as unknown as Element[]
+      Array.from(entry.querySelectorAll("category"))
     )
       .map((el) => el.getAttribute("term")?.trim() ?? "")
       .filter((category): category is string => Boolean(category));

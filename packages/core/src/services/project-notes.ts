@@ -134,7 +134,7 @@ function relativePath(fromFile: string, toFile: string): string {
   while (i < fromDir.length && i < toParts.length && fromDir[i] === toParts[i]) {
     i++;
   }
-  const up = Array(fromDir.length - i).fill("..");
+  const up = Array.from({ length: fromDir.length - i }, () => "..");
   const down = toParts.slice(i);
   return [...up, ...down].join("/") || toParts[toParts.length - 1] || ".";
 }

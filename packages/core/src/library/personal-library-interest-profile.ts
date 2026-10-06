@@ -1,5 +1,4 @@
 import {
-  decodePersonalLibraryCatalog,
   type PersonalLibraryPaperRecord,
 } from "./personal-library-catalog";
 import { paperKeyFromArxivId } from "../services/paper-key";
@@ -178,8 +177,13 @@ export function createPersonalLibraryPaperEvidenceFingerprint(
 export function createPersonalLibraryCatalogInputManifest(
   papers: readonly PersonalLibraryProposalPaper[],
 ): PersonalLibraryRepresentativeEvidence[] {
-  if (!Array.isArray(papers) || papers.length === 0
-    || papers.length > PERSONAL_LIBRARY_MAX_SELECTED_CATALOG_PAPERS) {
+  // `Array.isArray` narrows a readonly array parameter's element type to
+  // `any`, so the runtime guard runs against an untyped alias instead of
+  // `papers` itself, keeping `papers: readonly PersonalLibraryProposalPaper[]`
+  // intact for the rest of this function.
+  const maybePapers: unknown = papers;
+  if (!Array.isArray(maybePapers) || maybePapers.length === 0
+    || maybePapers.length > PERSONAL_LIBRARY_MAX_SELECTED_CATALOG_PAPERS) {
     throw new TypeError("catalog input must contain a bounded explicit paper selection");
   }
   const manifest = papers.map((paper) => ({
@@ -346,9 +350,10 @@ function decodeDirectionProposal(value: unknown, maxCandidates: number): Persona
   let coveredPaperKeys: string[] | undefined;
   if (hasCoveredPaperKeys) {
     const manifestKeys = new Set(catalogInputPapers.map(({ paperKey }) => paperKey));
-    if (!Array.isArray(value.coveredPaperKeys)
+    if (!isUnknownArray(value.coveredPaperKeys)
       || value.coveredPaperKeys.length > PERSONAL_LIBRARY_MAX_SELECTED_CATALOG_PAPERS
-      || !value.coveredPaperKeys.every((key: unknown) => isCanonicalProposalPaperKey(key) && manifestKeys.has(key))
+      || !value.coveredPaperKeys.every((key): key is string => isCanonicalProposalPaperKey(key))
+      || !value.coveredPaperKeys.every((key) => manifestKeys.has(key))
       || !isStrictlyOrderedUnique(value.coveredPaperKeys)) return null;
     coveredPaperKeys = [...value.coveredPaperKeys];
   }
@@ -364,9 +369,10 @@ function decodeDirectionProposal(value: unknown, maxCandidates: number): Persona
       if (!isExactObject(item, ["topicId", "directionId", "directionText", "paperKeys"])
         || !isOpaqueId(item.topicId) || !isOpaqueId(item.directionId)
         || !isBoundedText(item.directionText, PERSONAL_LIBRARY_MAX_DESCRIPTION_LENGTH)
-        || !Array.isArray(item.paperKeys) || item.paperKeys.length === 0
+        || !isUnknownArray(item.paperKeys) || item.paperKeys.length === 0
+        || !item.paperKeys.every((key): key is string => typeof key === "string")
         || !isStrictlyOrderedUnique(item.paperKeys)
-        || item.paperKeys.some((key: unknown) => typeof key !== "string" || !covered.has(key) || assigned.has(key))) return null;
+        || item.paperKeys.some((key) => !covered.has(key) || assigned.has(key))) return null;
       const identity = JSON.stringify([item.topicId, item.directionId]);
       if (directions.has(identity)) return null;
       directions.add(identity);
@@ -383,11 +389,15 @@ function decodeDirectionProposal(value: unknown, maxCandidates: number): Persona
     const hasTargetTopicId = isPlainObject(rawTopic) && Object.hasOwn(rawTopic, "targetTopicId");
     if (!isExactObject(rawTopic, ["id", "suggestedName", "directions", ...(hasTargetTopicId ? ["targetTopicId"] : [])])
       || !isOpaqueId(rawTopic.id)
-      || (hasTargetTopicId && !isOpaqueId(rawTopic.targetTopicId))
       || !isBoundedText(rawTopic.suggestedName, PERSONAL_LIBRARY_MAX_NAME_LENGTH)
       || !Array.isArray(rawTopic.directions)
       || rawTopic.directions.length < 1
       || rawTopic.directions.length > PERSONAL_LIBRARY_MAX_PROPOSAL_TOPICS) return null;
+    let targetTopicId: string | undefined;
+    if (hasTargetTopicId) {
+      if (!isOpaqueId(rawTopic.targetTopicId)) return null;
+      targetTopicId = rawTopic.targetTopicId;
+    }
     const directions: PersonalLibraryDirectionCandidate[] = [];
     for (const raw of rawTopic.directions) {
       const candidate = decodeCandidate(raw);
@@ -401,7 +411,7 @@ function decodeDirectionProposal(value: unknown, maxCandidates: number): Persona
     topics.push({
       id: rawTopic.id,
       suggestedName: rawTopic.suggestedName,
-      ...(hasTargetTopicId ? { targetTopicId: rawTopic.targetTopicId } : {}),
+      ...(targetTopicId === undefined ? {} : { targetTopicId }),
       directions,
     });
   }
@@ -656,13 +666,17 @@ function isNonNegativeSafeInteger(value: unknown): value is number {
   return Number.isSafeInteger(value) && (value as number) >= 0;
 }
 
-function isPlainObject(value: unknown): value is Record<string, any> {
+function isUnknownArray(value: unknown): value is unknown[] {
+  return Array.isArray(value);
+}
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
-  const prototype = Object.getPrototypeOf(value);
+  const prototype: unknown = Object.getPrototypeOf(value);
   return prototype === Object.prototype || prototype === null;
 }
 
-function isExactObject(value: unknown, keys: readonly string[]): value is Record<string, any> {
+function isExactObject(value: unknown, keys: readonly string[]): value is Record<string, unknown> {
   if (!isPlainObject(value)) return false;
   const actual = Object.keys(value).sort(codeUnitCompare);
   const expected = [...keys].sort(codeUnitCompare);

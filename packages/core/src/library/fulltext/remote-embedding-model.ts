@@ -77,13 +77,14 @@ export function createRemoteEmbeddingModel(
       throw statusError(response.status, response.bodyText ?? "", apiKey);
     }
     const data = parseData(response.bodyText ?? "", apiKey);
-    if (!Array.isArray(data) || data.length !== batch.length) {
+    if (!isUnknownArray(data) || data.length !== batch.length) {
       throw new Error("Remote embedding response is missing a complete `data` array");
     }
-    const byIndex = new Map<number, { embedding?: unknown }>();
+    const byIndex = new Map<number, Record<string, unknown>>();
     for (const item of data) {
-      const index = typeof item?.index === "number" ? item.index : byIndex.size;
-      byIndex.set(index, item);
+      const record = isPlainRecord(item) ? item : {};
+      const index = typeof record.index === "number" ? record.index : byIndex.size;
+      byIndex.set(index, record);
     }
     return batch.map((_, index) => {
       const item = byIndex.get(index);
@@ -120,6 +121,14 @@ export function createRemoteEmbeddingModel(
       return vectors;
     },
   };
+}
+
+function isUnknownArray(value: unknown): value is unknown[] {
+  return Array.isArray(value);
+}
+
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
 }
 
 function parseData(bodyText: string, apiKey: string): unknown {

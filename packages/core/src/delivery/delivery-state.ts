@@ -314,7 +314,7 @@ export function supportsAutomaticEmailDelivery(storage: StorageAdapter): boolean
   return Boolean(
     storage.createTextExclusive &&
       storage.guardClaimNamespace &&
-      storage.list,
+      !!storage.list,
   );
 }
 

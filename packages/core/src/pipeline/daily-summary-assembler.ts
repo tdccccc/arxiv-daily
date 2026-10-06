@@ -91,8 +91,9 @@ export function validateDailySummaryOmissions(
   const byTopic = new Map<string, number>();
   const counts = input.omittedByTopic;
   if (counts === undefined) return { total: 0, byTopic };
+  const countsPrototype: unknown = typeof counts === "object" && counts !== null ? Object.getPrototypeOf(counts) : undefined;
   if (typeof counts !== "object" || counts === null || Array.isArray(counts)
-    || ![Object.prototype, null].includes(Object.getPrototypeOf(counts))) {
+    || (countsPrototype !== Object.prototype && countsPrototype !== null)) {
     throw new Error("preflightDailySummaryAssembly: invalid omittedByTopic object");
   }
   const tags = new Set(input.arxivSettings.topics.map(({ tag }) => tag));

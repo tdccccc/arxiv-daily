@@ -4,6 +4,10 @@ import { getBusinessSetting } from "./schema";
 import type { PluginSettings } from "./types";
 import { isDetailSelectionProfile, sanitizeDetailSelection } from "./detail-selection";
 import { validateLocalPdfParserSidecarConfig, validateScheduleConfig, validateSchedulerConfig, validateVaultRelativeDirectory, vaultRelativeDirectoriesCollide } from "./validation";
+import { hasControlCharacter } from "../utils/control-characters";
+
+// Tab, LF, and CR are the only control characters a multiline text field may contain.
+const MULTILINE_ALLOWED_CONTROL_CODES = new Set([0x09, 0x0a, 0x0d]);
 
 /** Host-neutral editing rules. Incomplete drafts are valid; execution checks readiness separately. */
 export function normalizeSettingsEdits(candidate: PluginSettings, changedKeys: readonly string[]): PluginSettings {
@@ -102,7 +106,7 @@ export function normalizeSettingsEdits(candidate: PluginSettings, changedKeys: r
 }
 function invalid(field: string): never { throw new Error(`Invalid ${field}`); }
 function text(value: unknown, field: string, multiline = false, trim = true): string {
-  if (typeof value !== "string" || value.length > 20000 || (multiline ? /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/u : /[\u0000-\u001f\u007f]/u).test(value)) invalid(field);
+  if (typeof value !== "string" || value.length > 20000 || hasControlCharacter(value, multiline ? MULTILINE_ALLOWED_CONTROL_CODES : undefined)) invalid(field);
   return trim ? value.trim() : value;
 }
 function bool(value: unknown, field: string): void { if (typeof value !== "boolean") invalid(field); }

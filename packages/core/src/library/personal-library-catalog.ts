@@ -668,13 +668,13 @@ function isOptionalPositiveSafeInteger(value: unknown): value is number | undefi
   return value === undefined || (Number.isSafeInteger(value) && (value as number) > 0);
 }
 
-function isPlainObject(value: unknown): value is Record<string, any> {
+function isPlainObject(value: unknown): value is Record<string, unknown> {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
-  const prototype = Object.getPrototypeOf(value);
+  const prototype: unknown = Object.getPrototypeOf(value);
   return prototype === Object.prototype || prototype === null;
 }
 
-function isExactObject(value: unknown, keys: readonly string[]): value is Record<string, any> {
+function isExactObject(value: unknown, keys: readonly string[]): value is Record<string, unknown> {
   if (!isPlainObject(value)) return false;
   const actual = Object.keys(value).sort();
   const expected = [...keys].sort();
@@ -707,18 +707,6 @@ function readError(result: DocumentReadResult): unknown {
   return result.kind === "corrupt" || result.kind === "unreadable" ? result.error : undefined;
 }
 
-async function writePrivateText(
-  storage: StorageAdapter,
-  path: string,
-  content: string,
-): Promise<void> {
-  if (storage.writeTextWithMode) {
-    await storage.writeTextWithMode(path, content, 0o600);
-  } else {
-    await storage.writeText(path, content);
-  }
-}
-
 async function ensureDirDeep(storage: StorageAdapter, dir: string): Promise<void> {
   const parts = storage.normalizePath(dir).split("/").filter(Boolean);
   let current = "";
@@ -728,6 +716,3 @@ async function ensureDirDeep(storage: StorageAdapter, dir: string): Promise<void
   }
 }
 
-async function removeIfExists(storage: StorageAdapter, path: string): Promise<void> {
-  if (await storage.exists(path)) await storage.remove(path);
-}

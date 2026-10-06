@@ -1,4 +1,5 @@
 import { isCancellationError, throwIfCancelled } from "../services/cancellation";
+import { setTimer, clearTimer } from "./timers";
 
 const MAX_RETRY_DELAY_MS = 1_800_000;
 
@@ -51,14 +52,14 @@ function jitterDelay(ms: number): number {
 function sleep(ms: number, signal?: AbortSignal): Promise<void> {
   throwIfCancelled(signal);
   return new Promise((resolve, reject) => {
-    const timeout = setTimeout(done, ms);
+    const timeout = setTimer(done, ms);
     const onAbort = () => {
-      clearTimeout(timeout);
+      clearTimer(timeout);
       cleanup();
       try {
         throwIfCancelled(signal);
       } catch (e) {
-        reject(e);
+        reject(e instanceof Error ? e : new Error(String(e), { cause: e }));
       }
     };
     function done() {

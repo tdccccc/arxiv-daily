@@ -4,6 +4,11 @@ export const ARXIV_DAILY_REPO_URL = "https://github.com/tdccccc/arxiv-daily";
 export const ARXIV_DAILY_DOCS_URL =
   "https://github.com/tdccccc/arxiv-daily/blob/main/docs/getting-started.md";
 export const ARXIV_DAILY_ISSUES_URL = `${ARXIV_DAILY_REPO_URL}/issues`;
+/**
+ * manifest.json's `authorUrl`. Obsidian's plugin review requires this to
+ * point at the author, not at the plugin's own repository.
+ */
+export const ARXIV_DAILY_AUTHOR_URL = "https://github.com/tdccccc";
 
 /** Build a low-friction GitHub issue URL with only the plugin version. */
 export function buildBugReportUrl(pluginVersion: string): string {

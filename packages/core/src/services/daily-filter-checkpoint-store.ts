@@ -22,7 +22,6 @@ import {
   decodeNoveltyFingerprintInput,
   fingerprintNoveltyCheckpointInput,
   isPreparedNoveltyCheckpoint,
-  prepareNoveltyCheckpoint,
   type NoveltyCheckpointRecord,
   type PreparedNoveltyCheckpoint,
 } from "../pipeline/personalized-novelty";
@@ -581,7 +580,7 @@ function decodeFingerprintInput(value: unknown): DailyFilterCheckpointFingerprin
     !isRequestIdentity(value.request.identity) ||
     !isGeneration(value.generation)
   ) return null;
-  return clone(value) as DailyFilterCheckpointFingerprintInput;
+  return clone(value) as unknown as DailyFilterCheckpointFingerprintInput;
 }
 
 function isRequestIdentity(value: unknown): value is {
@@ -628,6 +627,7 @@ function isGeneration(value: unknown): value is CheckpointGenerationIdentity {
   }
   if (value.mode.kind === "anthropic-thinking") {
     return value.provider === "anthropic" && isExactObject(value.mode, ["kind", "budgetTokens"]) &&
+      typeof value.mode.budgetTokens === "number" &&
       Number.isSafeInteger(value.mode.budgetTokens) && value.mode.budgetTokens > 0;
   }
   if (value.mode.kind === "anthropic-adaptive") {
@@ -797,13 +797,13 @@ function isIsoDate(value: unknown): value is string {
   return typeof value === "string" && Number.isFinite(Date.parse(value));
 }
 
-function isPlainObject(value: unknown): value is Record<string, any> {
+function isPlainObject(value: unknown): value is Record<string, unknown> {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
-  const prototype = Object.getPrototypeOf(value);
+  const prototype: unknown = Object.getPrototypeOf(value);
   return prototype === Object.prototype || prototype === null;
 }
 
-function isExactObject(value: unknown, keys: readonly string[]): value is Record<string, any> {
+function isExactObject(value: unknown, keys: readonly string[]): value is Record<string, unknown> {
   if (!isPlainObject(value)) return false;
   const actual = Object.keys(value).sort();
   const expected = [...keys].sort();

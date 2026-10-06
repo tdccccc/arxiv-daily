@@ -56,8 +56,23 @@ interface Delimiter {
 
 const TEX_COMMAND = /\\[A-Za-z]+/g;
 const DISPLAY_ENVIRONMENT = /\\(?:begin|end)\s*\{(?:equation\*?|align\*?|alignat\*?|gather\*?|multline\*?|displaymath|eqnarray\*?|split|cases|matrix|pmatrix|bmatrix|Bmatrix|vmatrix|Vmatrix)\}/g;
-const AUTOLINK_URI = /^[A-Za-z][A-Za-z0-9+.-]{1,31}:[^\x00-\x20<>]*$/u;
+const AUTOLINK_URI_SCHEME = /^[A-Za-z][A-Za-z0-9+.-]{1,31}:/;
 const AUTOLINK_EMAIL = /^[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+@[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)+$/u;
+
+// Equivalent to /^[A-Za-z][A-Za-z0-9+.-]{1,31}:[^\x00-\x20<>]*$/u: a scheme
+// prefix followed by any run of characters that excludes C0 controls, space,
+// "<", and ">". Scanning char codes for the tail (rather than a second
+// control-character-ranged class) avoids tripping no-control-regex while
+// matching the identical set of strings.
+function isAutolinkUri(body: string): boolean {
+  const scheme = AUTOLINK_URI_SCHEME.exec(body);
+  if (!scheme) return false;
+  for (let index = scheme[0].length; index < body.length; index += 1) {
+    const char = body[index];
+    if (body.charCodeAt(index) <= 0x20 || char === "<" || char === ">") return false;
+  }
+  return true;
+}
 
 function isEscaped(value: string, offset: number): boolean {
   let slashes = 0;
@@ -172,7 +187,7 @@ function protectedMarkdownMask(value: string): boolean[] {
     const close = value.indexOf(">", start + 1);
     if (close < 0) continue;
     const body = value.slice(start + 1, close);
-    if (AUTOLINK_URI.test(body) || AUTOLINK_EMAIL.test(body)) markRange(mask, start, close + 1);
+    if (isAutolinkUri(body) || AUTOLINK_EMAIL.test(body)) markRange(mask, start, close + 1);
   }
 
   for (let start = 1; start < value.length - 1; start += 1) {

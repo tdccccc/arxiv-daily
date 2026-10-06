@@ -19,7 +19,6 @@ import {
   finishEvidenceStreamClosure,
   validateEvidenceStreamClosure,
   type EvidenceBlock,
-  type EvidenceBlockRecord,
   type EvidenceStreamClosureState,
   type FullTextGenerationPaths,
   type GenerationDescriptor,
@@ -636,14 +635,14 @@ export class FullTextGenerationIndexStore {
     try {
       releaseAdmission = this.acquireAdmission();
     } catch (caught) {
-      return Promise.reject(caught);
+      return Promise.reject(caught instanceof Error ? caught : new Error(String(caught), { cause: caught }));
     }
     try {
       return enqueueWriter(this.storage, this.paths.currentPath, () => this.stageAndPromoteSerial(input))
-        .finally(() => releaseAdmission!());
+        .finally(() => releaseAdmission());
     } catch (caught) {
       releaseAdmission();
-      return Promise.reject(caught);
+      return Promise.reject(caught instanceof Error ? caught : new Error(String(caught), { cause: caught }));
     }
   }
 
@@ -1364,11 +1363,11 @@ export class FullTextGenerationIndexStore {
       iterateEvidenceBlocks: () => rawIterate("evidence") as AsyncIterable<OpenedEvidenceObject>,
     };
     const guardedIterate = (kind?: GenerationObjectReference["kind"]): AsyncIterable<OpenedGenerationObject> => {
-      const self = this;
+      const iteratePublicGenerationObjects = this.iteratePublicGenerationObjects.bind(this);
       return (async function* () {
         const finish = beginOperation();
         try {
-          yield* self.iteratePublicGenerationObjects(generation, privateDescriptor, diagnostics, kind);
+          yield* iteratePublicGenerationObjects(generation, privateDescriptor, diagnostics, kind);
         } finally {
           finish();
         }
@@ -2106,10 +2105,6 @@ function sameOccurrence(left: LexicalOccurrence, right: LexicalOccurrence): bool
   return left.chunkOrdinal === right.chunkOrdinal && left.namespace === right.namespace
     && left.term === right.term && left.tf === right.tf;
 }
-function sameNamespaceTerm(left: LexicalOccurrence, right: LexicalOccurrence): boolean {
-  return left.namespace === right.namespace && left.term === right.term;
-}
-
 function validateReferencePath(reference: GenerationObjectReference): void {
   if (!reference || typeof reference !== "object"
     || typeof reference.path !== "string"
@@ -2475,7 +2470,7 @@ function generationObjectIterator(value: unknown): AsyncIterator<GenerationObjec
     const iterator = syncFactory.call(candidate);
     if (!iterator || typeof iterator.next !== "function") throw new Error("generation object iterator is invalid");
     return {
-      next: async (value?: unknown) => iterator.next(value as never),
+      next: async (value?: unknown) => iterator.next(value),
       return: iterator.return ? async (value?: unknown) => iterator.return!(value) : undefined,
       throw: iterator.throw ? async (error?: unknown) => iterator.throw!(error) : undefined,
     };

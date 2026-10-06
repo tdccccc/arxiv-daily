@@ -14,8 +14,8 @@ import { renderPersonalNoveltyMarker } from "./personal-novelty-marker";
 import { renderTopicDirectionMarker } from "./topic-direction-marker";
 import type {
   PersonalNoveltyDifferenceType,
-  PersonalNoveltyWithBasis,
 } from "./personalized-novelty";
+import { hasControlCharacter } from "../utils/control-characters";
 
 export const DAILY_SUMMARY_EMERGENCY_MARKER =
   "<!-- arxiv-daily-emergency-report:v1 -->";
@@ -418,7 +418,7 @@ function normalizeLocalPath(parts: string[]): string[] | null {
       else normalized.push(part);
       continue;
     }
-    if (!part || /[\u0000-\u001f\u007f]/.test(part)) return null;
+    if (!part || hasControlCharacter(part)) return null;
     normalized.push(part);
   }
   return normalized;

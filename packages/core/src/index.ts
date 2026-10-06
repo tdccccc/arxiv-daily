@@ -1,5 +1,3 @@
-/// <reference path="./prompts/md.d.ts" />
-
 export * from "./core/adapters";
 export * from "./utils/calendar";
 export * from "./delivery";
@@ -149,6 +147,7 @@ export * from "./utils/redaction";
 export * from "./utils/retry";
 export * from "./utils/slugify";
 export * from "./utils/time";
+export * from "./utils/timers";
 
 export * from "./settings/appearance";
 export { settingsMessages } from "./presentation/settings-translations";

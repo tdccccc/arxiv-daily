@@ -66,8 +66,18 @@ export async function saveWorkbenchSettings(configPath: string, body: unknown): 
   } finally { await lease.release(); }
 }
 
+// Equivalent to /[\u0000-\u001f]/u: any C0 control character (DEL is
+// deliberately allowed, matching the original pattern). Scanning char codes
+// avoids tripping no-control-regex while matching the same set of strings.
+function hasC0ControlCharacter(value: string): boolean {
+  for (let index = 0; index < value.length; index += 1) {
+    if (value.charCodeAt(index) <= 0x1f) return true;
+  }
+  return false;
+}
+
 function resolveVaultRoot(input: unknown): string {
-  if (typeof input !== "string" || !input.trim() || input.length > 20000 || /[\u0000-\u001f]/u.test(input)) invalid("请填写有效的 vaultRoot。");
+  if (typeof input !== "string" || !input.trim() || input.length > 20000 || hasC0ControlCharacter(input)) invalid("请填写有效的 vaultRoot。");
   let value = input.trim();
   if (value === "~") value = os.homedir();
   else if (value.startsWith("~/")) value = path.join(os.homedir(), value.slice(2));

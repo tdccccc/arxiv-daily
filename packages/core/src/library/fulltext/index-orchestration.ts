@@ -40,6 +40,7 @@ import { FullTextGenerationIndexStoreError, type FullTextGenerationIndexStore } 
 import { searchGenerationDense } from "./retrieval";
 import { extractTitleFromFirstPage } from "./title-extraction";
 import { extractAbstractFromPages, MAX_LEADING_PAGES } from "./abstract-extraction";
+import { setTimer } from "../../utils/timers";
 
 export interface FullTextIndexPaperOutcome {
   paperKey: string;
@@ -978,8 +979,7 @@ async function searchOpenedGeneration(
  */
 function yieldToEventLoop(): Promise<void> {
   return new Promise((resolve) => {
-    if (typeof setTimeout === "function") setTimeout(resolve, 0);
-    else resolve();
+    setTimer(resolve, 0);
   });
 }
 

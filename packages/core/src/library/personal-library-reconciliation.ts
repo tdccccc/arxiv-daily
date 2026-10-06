@@ -206,7 +206,7 @@ export async function reconcilePersonalLibraryCatalog(
     try {
       resolved = await input.resolver.resolve(idsToResolve, input.signal);
       throwIfCancelled(input.signal);
-    } catch (error) {
+    } catch {
       throwIfCancelled(input.signal);
       resolverFailed = true;
     }

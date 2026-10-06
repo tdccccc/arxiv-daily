@@ -49,6 +49,7 @@ import { createEvidenceChunkId, type EvidenceLocator } from "./evidence-chunk";
 import { LEGACY_EVIDENCE_DERIVATION, type FullTextPaperDocument } from "./knowledge-base";
 import type { EvidenceBlock } from "./generation-index-format";
 import { FullTextGenerationIndexStoreError, type OpenedFullTextGeneration } from "./generation-index-store";
+import { setTimer } from "../../utils/timers";
 
 /** One matching chunk of a paper, with its similarity score. */
 export interface KnowledgeBaseChunkHit {
@@ -577,6 +578,6 @@ function throwIfCancelled(signal?: AbortSignal): void {
 
 async function yieldToTimer(signal?: AbortSignal): Promise<void> {
   throwIfCancelled(signal);
-  await new Promise<void>((resolve) => setTimeout(resolve, 0));
+  await new Promise<void>((resolve) => setTimer(resolve, 0));
   throwIfCancelled(signal);
 }

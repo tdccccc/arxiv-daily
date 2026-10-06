@@ -25,6 +25,7 @@ import type {
   FullTextPaperDocument,
 } from "../fulltext/knowledge-base";
 import type { ClusteringInputPaper } from "../clustering/clusterer";
+import { setTimer } from "../../utils/timers";
 
 export interface DirectionScore {
   directionId: string;
@@ -131,7 +132,7 @@ export async function suggestIncrementalPlacement(
     if (anchor.length > 0) anchorByDirection.set(direction.id, anchor);
   }
 
-  const placements: Record<string, PlacementDecision> = Object.create(null);
+  const placements = Object.create(null) as Record<string, PlacementDecision>;
   const skipped: string[] = [];
   for (const paper of uncovered) {
     if (paper.chunks.length === 0) {
@@ -272,7 +273,6 @@ function requireFiniteInRange(
 /** Let queued host events run before continuing a long vector load. */
 function yieldToEventLoop(): Promise<void> {
   return new Promise((resolve) => {
-    if (typeof setTimeout === "function") setTimeout(resolve, 0);
-    else resolve();
+    setTimer(resolve, 0);
   });
 }

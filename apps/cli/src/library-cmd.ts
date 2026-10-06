@@ -122,7 +122,7 @@ export async function runCliLibrary(config: CliRuntimeConfig, args: string[], io
       const flags = parseFlags(rest, ["input"]);
       const file = required(flags.input, "input");
       if ((await fs.stat(file)).size > 256 * 1024) throw new CliConfigError("review input exceeds 256 KiB");
-      let request: Record<string, unknown>;
+      let request: unknown;
       try { request = JSON.parse(await fs.readFile(file, "utf8")); }
       catch { throw new CliConfigError("review input must contain valid JSON"); }
       print(reviewView(await applyReview(context.workflow, request, signal)));
@@ -211,8 +211,13 @@ function revision(value: unknown): number {
   if ((typeof value !== "number" && typeof value !== "string") || value === "" || !Number.isSafeInteger(parsed) || parsed < 0) throw new CliConfigError("A current revision is required");
   return parsed;
 }
-async function applyReview(workflow: LibraryWorkflow, request: Record<string, unknown>, signal: AbortSignal) {
-  if (!request || typeof request !== "object" || Array.isArray(request)) throw new CliConfigError("review input must be an object");
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+async function applyReview(workflow: LibraryWorkflow, requestInput: unknown, signal: AbortSignal) {
+  if (!isRecord(requestInput)) throw new CliConfigError("review input must be an object");
+  const request = requestInput;
   if (request.operation === "update-candidate") return workflow.updateCandidate({ signal, expectedProposalRevision: revision(request.expectedProposalRevision), candidateId: required(request.candidateId, "candidateId"), patch: request.patch as PersonalLibraryDirectionTextPatch, ...(request.representativePaperKeys ? { representativePaperKeys: request.representativePaperKeys as string[] } : {}) });
   if (request.operation === "accept-topics") {
     if (!Array.isArray(request.topicIds) || !request.topicIds.every(value => typeof value === "string" && value.trim())) throw new CliConfigError("topicIds must be an array of topic IDs");

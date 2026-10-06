@@ -4,6 +4,7 @@ import type { LlmSettings } from "../settings/types";
 import type { HttpClient } from "../core/adapters";
 import { isCancellationError, throwIfCancelled } from "../services/cancellation";
 import { redactError, redactText } from "../utils/redaction";
+import { setTimer, clearTimer } from "../utils/timers";
 import {
   parseTokenUsage,
   usageIsComplete,
@@ -247,7 +248,7 @@ export class LlmClient {
       data &&
       typeof data === "object" &&
       "data" in data &&
-      Array.isArray((data as { data: unknown }).data)
+      Array.isArray(data.data)
     ) {
       return (data as { data: Array<{ id?: string }> }).data
         .map((model) => model.id)
@@ -599,7 +600,7 @@ function nextStreamChunk(
   throwIfCancelled(signal);
   return new Promise((resolve, reject) => {
     let settled = false;
-    const timeout = setTimeout(() => {
+    const timeout = setTimer(() => {
       const error = new StreamIdleTimeoutError();
       finish();
       reject(error);
@@ -610,13 +611,13 @@ function nextStreamChunk(
       try {
         throwIfCancelled(signal);
       } catch (e) {
-        reject(e);
+        reject(e instanceof Error ? e : new Error(String(e), { cause: e }));
       }
     };
     const finish = () => {
       if (settled) return;
       settled = true;
-      clearTimeout(timeout);
+      clearTimer(timeout);
       signal?.removeEventListener("abort", onAbort);
     };
     signal?.addEventListener("abort", onAbort, { once: true });
@@ -629,9 +630,9 @@ function nextStreamChunk(
         finish();
         resolve(value);
       },
-      (error) => {
+      (error: unknown) => {
         finish();
-        reject(error);
+        reject(error instanceof Error ? error : new Error(String(error), { cause: error }));
       },
     );
   });

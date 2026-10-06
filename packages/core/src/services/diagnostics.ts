@@ -189,10 +189,6 @@ function formatTimestamp(timestamp: number): string {
   return date.toISOString();
 }
 
-function formatList(items: string[]): string {
-  return items.length ? items.join(", ") : "none";
-}
-
 function formatPaperIndex(diag: PaperIndexDiagnostics | undefined): string[] {
   if (!diag) return ["  unavailable"];
   const lines = [

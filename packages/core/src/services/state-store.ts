@@ -64,7 +64,7 @@ export class StateStore {
   get(date: string): RunStateEntry {
     return (
       this.state[date] ?? {
-        status: "pending" as RunStatus,
+        status: "pending",
         lastAttempt: 0,
         attempts: 0,
       }
@@ -427,7 +427,7 @@ function parseRunState(
   raw: string,
   strict = false,
 ): { runState: RunState } {
-  const parsed = JSON.parse(raw);
+  const parsed: unknown = JSON.parse(raw);
   const isRecord = parsed && typeof parsed === "object" && !Array.isArray(parsed);
   if (
     isRecord &&

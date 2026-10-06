@@ -22,7 +22,6 @@ import {
   encodeLexicalPostingsBlock,
   encodePaperMetadataBlock,
   encodeVectorBlock,
-  lexicalTermBucket,
   type EvidenceBlockRecord,
   type GenerationDescriptor,
   type GenerationIndexDerivation,
@@ -386,7 +385,7 @@ async function buildGeneration(
     catch (caught) { if (isAbortError(caught)) throw caught; throw buildError("invalid-source", `failed to load ready source paper: ${paperKey}`, caught); }
     throwIfAborted(input.signal); diagnostics.peakLoadedPapers = Math.max(diagnostics.peakLoadedPapers, 1);
     validateSourceBinding(paperKey, record, document, manifest);
-    const bound = document!;
+    const bound = document;
     if (bound.chunks.length > 0) {
       const paperOrdinal = indexedPaperCount; const paperChunkStart = chunkCount;
       for (let chunkIndex = 0; chunkIndex < bound.chunks.length; chunkIndex += 1) {
@@ -468,7 +467,7 @@ async function buildGeneration(
             else if (failure === undefined) throw cleanup;
           }
         }
-        if (failure !== undefined) throw failure;
+        if (failure !== undefined) throw failure instanceof Error ? failure : new Error(String(failure), { cause: failure });
       })();
       return {
         [Symbol.asyncIterator]() {
@@ -511,7 +510,7 @@ async function buildDictionaries(
     const bytes = encodeDictionary(() => encodeLexicalDictionaryBlock({ dictionaryOrdinal, postingStart, postingCount, entries,
       queryCatalog: lexicalQueryCatalog(entries, entryBuckets), bucketMask: lexicalBucketMask(entries, entryBuckets) }));
     trackOneBuffer(diagnostics, bytes);
-    const reference = await put("lexical-dictionary", `objects/dictionary-${pad(dictionaryOrdinal)}.bin`, bytes, postingStart, postingCount);
+    await put("lexical-dictionary", `objects/dictionary-${pad(dictionaryOrdinal)}.bin`, bytes, postingStart, postingCount);
     for (const bucket of buckets) routing[bucket]!.push(dictionaryOrdinal);
     routeRefCount += buckets.size; entries = []; entryItemsBytes = 0; queryCatalogItemsBytes = 0; postingStart += postingCount; postingCount = 0;
   };
