@@ -220,6 +220,8 @@ export class ArxivDailySettingTab extends PluginSettingTab {
   private readonly declarativeKeyRevisions = new Map<string, number>();
   private readonly pendingTopicEdits = new Set<Promise<void>>();
   private declarativeSetupGuideRow: Setting | undefined;
+  /** Survives a row re-render so an in-flight "Get models" fetch isn't lost. */
+  private fetchedModelOptions: string[] | undefined;
   private pendingTopicFocusId: string | undefined;
   /** Kept on the tab so a guide re-render during the run still shows it. */
   private firstReportRunning = false;
@@ -2254,6 +2256,15 @@ export class ArxivDailySettingTab extends PluginSettingTab {
   /** Remember the host row so the guide can update without replacing active inputs. */
   public setDeclarativeSetupGuideRow(setting: Setting): void {
     this.declarativeSetupGuideRow = setting;
+  }
+
+  /** Last models fetched via "Get models", so a re-render mid-fetch can restore them. */
+  public getFetchedModelOptions(): string[] | undefined {
+    return this.fetchedModelOptions;
+  }
+
+  public setFetchedModelOptions(models: string[] | undefined): void {
+    this.fetchedModelOptions = models;
   }
 
   public refreshDeclarativeSetupGuide(): void {

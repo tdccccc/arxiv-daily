@@ -164,6 +164,11 @@ export function renderModelRow(tab: ArxivDailySettingTab, setting: Setting): voi
   input.value = tab.plugin.settings.llm.model;
   const suggestions = setting.controlEl.createEl("datalist");
   suggestions.id = listId;
+  // A re-render (e.g. the setup guide appearing/disappearing) reuses this same
+  // Setting but rebuilds its children, so restore any previously fetched list.
+  for (const model of tab.getFetchedModelOptions() ?? []) {
+    suggestions.createEl("option", { value: model });
+  }
   input.addEventListener("change", () => {
     const next = input.value.trim();
     if (next === tab.plugin.settings.llm.model) {
@@ -200,9 +205,14 @@ export function renderModelRow(tab: ArxivDailySettingTab, setting: Setting): voi
         tab.plugin.getHttpClient(),
       );
       const models = await client.fetchModels();
-      suggestions.replaceChildren();
+      tab.setFetchedModelOptions(models);
+      // Re-query instead of reusing the closed-over `suggestions`: a redraw
+      // that happened while the fetch was in flight replaced it with a new,
+      // empty datalist, and writing to the old detached one would be invisible.
+      const liveSuggestions = setting.controlEl.querySelector("datalist");
+      liveSuggestions?.replaceChildren();
       for (const model of models) {
-        suggestions.createEl("option", { value: model });
+        liveSuggestions?.createEl("option", { value: model });
       }
       if (models.length > 0) {
         new Notice(modelFetchNoticeMessage({ kind: "success", count: models.length }));

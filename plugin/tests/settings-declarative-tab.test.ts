@@ -2012,6 +2012,41 @@ describe("model field", () => {
     fetchModels.mockRestore();
     tab.containerEl.remove();
   });
+
+  it("still shows fetched models after the row redraws while the fetch is in flight", async () => {
+    const { tab, plugin } = makeTab();
+    (plugin as unknown as { getHttpClient: () => unknown }).getHttpClient = () => ({});
+    let resolveFetch: ((models: string[]) => void) | undefined;
+    const fetchModels = vi
+      .spyOn(LlmClient.prototype, "fetchModels")
+      .mockImplementation(() => new Promise((resolve) => { resolveFetch = resolve; }));
+    document.body.appendChild(tab.containerEl);
+    const setting = new Setting(tab.containerEl);
+    renderModelRow(tab, setting);
+    const button = Array.from(setting.controlEl.querySelectorAll("button"))
+      .find((candidate) => candidate.textContent === "Get models")!;
+
+    button.click();
+    await vi.waitFor(() => expect(fetchModels).toHaveBeenCalled());
+
+    // Obsidian reuses the same Setting row and calls the render callback
+    // again on update() (e.g. the setup guide appearing/disappearing while
+    // the fetch is still pending). That rebuilds the row's children, so the
+    // button and datalist clicked above are replaced before the fetch
+    // resolves.
+    renderModelRow(tab, setting);
+
+    resolveFetch!(["provider-a", "provider-b"]);
+    await vi.waitFor(() => {
+      const options = Array.from(
+        setting.settingEl.querySelectorAll<HTMLOptionElement>("datalist option"),
+      ).map((option) => option.value);
+      expect(options).toEqual(["provider-a", "provider-b"]);
+    });
+
+    fetchModels.mockRestore();
+    tab.containerEl.remove();
+  });
 });
 
 describe("local parser sidecar address", () => {
