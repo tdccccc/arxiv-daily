@@ -1987,8 +1987,14 @@ describe("model field", () => {
     await vi.waitFor(() => expect(settings.llm.model).toBe("my-model"));
   });
 
-  it("offers fetched models as suggestions without replacing the current one", async () => {
+  it("lists every fetched model as a selectable option, even one not matching the typed name", async () => {
+    // A <datalist> tied to the model input would only ever suggest options
+    // matching what's already typed (Chromium/Electron filters it that
+    // way); happy-dom doesn't reproduce that filtering, so this asserts the
+    // select's full option list directly, which must be unfiltered by
+    // construction regardless of the input's text.
     const { tab, plugin, settings } = makeTab();
+    settings.llm.model = "some-unrelated-typed-name";
     (plugin as unknown as { getHttpClient: () => unknown }).getHttpClient = () => ({});
     const fetchModels = vi
       .spyOn(LlmClient.prototype, "fetchModels")
@@ -2003,12 +2009,81 @@ describe("model field", () => {
 
     await vi.waitFor(() => expect(fetchModels).toHaveBeenCalled());
     await vi.waitFor(() => {
-      const options = Array.from(
-        setting.settingEl.querySelectorAll<HTMLOptionElement>("datalist option"),
-      ).map((option) => option.value);
-      expect(options).toEqual(["provider-a", "provider-b"]);
+      const select = setting.controlEl.querySelector<HTMLSelectElement>(
+        "select.arxiv-daily-settings__model-select",
+      )!;
+      const options = Array.from(select.querySelectorAll<HTMLOptionElement>("option"))
+        .map((option) => option.value);
+      expect(options).toEqual(["", "provider-a", "provider-b"]);
+      expect(select.classList.contains("is-visible")).toBe(true);
+      // Not in the list, so the placeholder is selected rather than forcing a match.
+      expect(select.value).toBe("");
     });
-    expect(settings.llm.model).toBe(DEFAULT_SETTINGS.llm.model);
+    expect(settings.llm.model).toBe("some-unrelated-typed-name");
+    fetchModels.mockRestore();
+    tab.containerEl.remove();
+  });
+
+  it("saves a model chosen from the fetched select, the same way as typing one", async () => {
+    const { tab, plugin, settings } = makeTab();
+    (plugin as unknown as { getHttpClient: () => unknown }).getHttpClient = () => ({});
+    const fetchModels = vi
+      .spyOn(LlmClient.prototype, "fetchModels")
+      .mockResolvedValue(["provider-a", "provider-b"]);
+    document.body.appendChild(tab.containerEl);
+    const setting = new Setting(tab.containerEl);
+    renderModelRow(tab, setting);
+    const button = Array.from(setting.controlEl.querySelectorAll("button"))
+      .find((candidate) => candidate.textContent === "Get models")!;
+    button.click();
+    await vi.waitFor(() => expect(fetchModels).toHaveBeenCalled());
+    const select = setting.controlEl.querySelector<HTMLSelectElement>(
+      "select.arxiv-daily-settings__model-select",
+    )!;
+    await vi.waitFor(() => expect(select.classList.contains("is-visible")).toBe(true));
+
+    select.value = "provider-b";
+    select.dispatchEvent(new Event("change"));
+
+    await vi.waitFor(() => expect(settings.llm.model).toBe("provider-b"));
+    const input = setting.controlEl.querySelector<HTMLInputElement>(
+      "input.arxiv-daily-settings__model-input",
+    )!;
+    expect(input.value).toBe("provider-b");
+    fetchModels.mockRestore();
+    tab.containerEl.remove();
+  });
+
+  it("drops the cached fetched list once the endpoint it came from changes", async () => {
+    const { tab, plugin, settings } = makeTab();
+    (plugin as unknown as { getHttpClient: () => unknown }).getHttpClient = () => ({});
+    const fetchModels = vi
+      .spyOn(LlmClient.prototype, "fetchModels")
+      .mockResolvedValue(["provider-a", "provider-b"]);
+    document.body.appendChild(tab.containerEl);
+    const setting = new Setting(tab.containerEl);
+    renderModelRow(tab, setting);
+    const button = Array.from(setting.controlEl.querySelectorAll("button"))
+      .find((candidate) => candidate.textContent === "Get models")!;
+    button.click();
+    await vi.waitFor(() => expect(fetchModels).toHaveBeenCalled());
+    await vi.waitFor(() => {
+      const select = setting.controlEl.querySelector<HTMLSelectElement>(
+        "select.arxiv-daily-settings__model-select",
+      )!;
+      expect(select.classList.contains("is-visible")).toBe(true);
+    });
+
+    // The provider URL changed (a new row for the same setting, as a
+    // redraw would produce) — the previous fetch no longer applies.
+    settings.llm.baseUrl = "https://a-different-provider.example.com/v1";
+    renderModelRow(tab, setting);
+
+    const select = setting.controlEl.querySelector<HTMLSelectElement>(
+      "select.arxiv-daily-settings__model-select",
+    )!;
+    expect(select.classList.contains("is-visible")).toBe(false);
+    expect(select.querySelectorAll("option").length).toBe(0);
     fetchModels.mockRestore();
     tab.containerEl.remove();
   });
@@ -2032,16 +2107,18 @@ describe("model field", () => {
     // Obsidian reuses the same Setting row and calls the render callback
     // again on update() (e.g. the setup guide appearing/disappearing while
     // the fetch is still pending). That rebuilds the row's children, so the
-    // button and datalist clicked above are replaced before the fetch
+    // button and select clicked above are replaced before the fetch
     // resolves.
     renderModelRow(tab, setting);
 
     resolveFetch!(["provider-a", "provider-b"]);
     await vi.waitFor(() => {
-      const options = Array.from(
-        setting.settingEl.querySelectorAll<HTMLOptionElement>("datalist option"),
-      ).map((option) => option.value);
-      expect(options).toEqual(["provider-a", "provider-b"]);
+      const select = setting.controlEl.querySelector<HTMLSelectElement>(
+        "select.arxiv-daily-settings__model-select",
+      )!;
+      const options = Array.from(select.querySelectorAll<HTMLOptionElement>("option"))
+        .map((option) => option.value);
+      expect(options).toEqual(["", "provider-a", "provider-b"]);
     });
 
     fetchModels.mockRestore();

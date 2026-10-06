@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { startProbeListener } from "../desktop-acceptance/probe-listener.mjs";
+import { startModelsListener, startProbeListener } from "../desktop-acceptance/probe-listener.mjs";
 
 test("the listener reports loopback urls a sidecar client can be pointed at", async () => {
   const listener = await startProbeListener();
@@ -56,5 +56,27 @@ test("each listener takes its own port so runs do not collide", async () => {
   } finally {
     await a.close();
     await b.close();
+  }
+});
+
+test("the models listener answers any request with an OpenAI-compatible model list", async () => {
+  const listener = await startModelsListener({ models: ["a", "b"] });
+  try {
+    const response = await fetch(`${listener.origin}/v1/models`);
+    assert.equal(response.ok, true);
+    assert.deepEqual(await response.json(), { data: [{ id: "a" }, { id: "b" }] });
+    assert.equal(listener.requests().length, 1);
+    assert.equal(listener.requests()[0].path, "/v1/models");
+  } finally {
+    await listener.close();
+  }
+});
+
+test("the models listener defaults to two distinguishable stub models", async () => {
+  const listener = await startModelsListener();
+  try {
+    assert.deepEqual(listener.models, ["stub-model-a", "stub-model-b"]);
+  } finally {
+    await listener.close();
   }
 });

@@ -221,7 +221,7 @@ export class ArxivDailySettingTab extends PluginSettingTab {
   private readonly pendingTopicEdits = new Set<Promise<void>>();
   private declarativeSetupGuideRow: Setting | undefined;
   /** Survives a row re-render so an in-flight "Get models" fetch isn't lost. */
-  private fetchedModelOptions: string[] | undefined;
+  private fetchedModelOptions: { key: string; models: string[] } | undefined;
   private pendingTopicFocusId: string | undefined;
   /** Kept on the tab so a guide re-render during the run still shows it. */
   private firstReportRunning = false;
@@ -2258,13 +2258,18 @@ export class ArxivDailySettingTab extends PluginSettingTab {
     this.declarativeSetupGuideRow = setting;
   }
 
-  /** Last models fetched via "Get models", so a re-render mid-fetch can restore them. */
-  public getFetchedModelOptions(): string[] | undefined {
-    return this.fetchedModelOptions;
+  /**
+   * Last models fetched via "Get models", keyed by the endpoint settings
+   * (provider/base URL/API key) that produced them. A re-render mid-fetch
+   * restores them; a mismatched key (the endpoint changed) acts as empty,
+   * so a stale list from another provider is never shown.
+   */
+  public getFetchedModelOptions(key: string): string[] | undefined {
+    return this.fetchedModelOptions?.key === key ? this.fetchedModelOptions.models : undefined;
   }
 
-  public setFetchedModelOptions(models: string[] | undefined): void {
-    this.fetchedModelOptions = models;
+  public setFetchedModelOptions(key: string, models: string[]): void {
+    this.fetchedModelOptions = { key, models };
   }
 
   public refreshDeclarativeSetupGuide(): void {

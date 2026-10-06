@@ -13,7 +13,13 @@ import {
   renderRunWindowTimeSelect,
   validateOutputDirectoryDraft,
 } from "./tab";
-import { arxivCategories, isValidMaxDailyPapers, LlmClient, normalizeMaxDailyPapers } from "@arxiv-daily/core";
+import {
+  arxivCategories,
+  isValidMaxDailyPapers,
+  LlmClient,
+  normalizeMaxDailyPapers,
+  type LlmSettings,
+} from "@arxiv-daily/core";
 
 /**
  * Prepare a declarative row for (re)rendering. Obsidian reuses the same
@@ -145,49 +151,89 @@ export function renderReasoningEffortRow(
   });
 }
 
-let modelSuggestionListCount = 0;
+/**
+ * Identifies the endpoint a fetched model list came from. fetchModels()
+ * only depends on baseUrl/apiKey, but provider is included too so a
+ * provider switch alone is enough to stop showing a stale list.
+ */
+function modelFetchCacheKey(llm: LlmSettings): string {
+  return [llm.provider, llm.baseUrl, llm.apiKey].join("\u0000");
+}
 
 /**
- * Model name: typed freely and saved when editing ends. Get models only
- * fills the suggestion list — providers without a model list still work,
- * and a current model missing from the list is kept. Shared by display().
+ * Show every fetched model as a plain option, regardless of what's typed in
+ * the model input: Chromium/Electron filters <datalist> suggestions by the
+ * input's current text, so a datalist can only ever suggest options that
+ * match what's already there. Hidden when there's nothing to pick from.
+ */
+function populateModelSelect(select: HTMLSelectElement, models: string[], currentModel: string): void {
+  select.replaceChildren();
+  select.toggleClass("is-visible", models.length > 0);
+  if (models.length === 0) return;
+  select.createEl("option", { value: "", text: "Pick a fetched model…" });
+  for (const model of models) {
+    select.createEl("option", { value: model, text: model });
+  }
+  select.value = models.includes(currentModel) ? currentModel : "";
+}
+
+/**
+ * Model name: typed freely and saved when editing ends. "Get models" also
+ * reveals a select listing every fetched model (see populateModelSelect for
+ * why a plain <datalist> can't do this); providers without a model list
+ * still work via the free-text input, and a current model missing from the
+ * list is kept. Shared by display().
  */
 export function renderModelRow(tab: ArxivDailySettingTab, setting: Setting): void {
   prepareRow(setting);
-  modelSuggestionListCount += 1;
-  const listId = `arxiv-daily-model-options-${modelSuggestionListCount}`;
   const input = setting.controlEl.createEl("input", {
     cls: "arxiv-daily-settings__model-input",
     type: "text",
-    attr: { list: listId, placeholder: "Model name", "aria-label": "Model" },
+    attr: { placeholder: "Model name", "aria-label": "Model" },
   });
   input.value = tab.plugin.settings.llm.model;
-  const suggestions = setting.controlEl.createEl("datalist");
-  suggestions.id = listId;
-  // A re-render (e.g. the setup guide appearing/disappearing) reuses this same
-  // Setting but rebuilds its children, so restore any previously fetched list.
-  for (const model of tab.getFetchedModelOptions() ?? []) {
-    suggestions.createEl("option", { value: model });
-  }
-  input.addEventListener("change", () => {
-    const next = input.value.trim();
+
+  const select = setting.controlEl.createEl("select", {
+    cls: "arxiv-daily-settings__model-select",
+    attr: { "aria-label": "Fetched models" },
+  });
+  const cacheKey = modelFetchCacheKey(tab.plugin.settings.llm);
+  // A re-render (e.g. the setup guide appearing/disappearing) reuses this
+  // same Setting but rebuilds its children, so restore a previous fetch —
+  // but only if it's still for the endpoint currently configured.
+  let currentModels = tab.getFetchedModelOptions(cacheKey) ?? [];
+  populateModelSelect(select, currentModels, input.value);
+
+  const commitModel = (next: string): void => {
     if (next === tab.plugin.settings.llm.model) {
       input.value = next;
+      populateModelSelect(select, currentModels, next);
       return;
     }
     const revision = tab.beginControlChange(input);
     tab.runAction("save model", async () => {
       try {
         await tab.changeSettingValue("llm.model", next);
-        if (tab.isCurrentControlChange(input, revision)) input.value = next;
+        if (tab.isCurrentControlChange(input, revision)) {
+          input.value = next;
+          populateModelSelect(select, currentModels, next);
+        }
         tab.refreshSetupGuide();
       } catch (error) {
         if (tab.isCurrentControlChange(input, revision)) {
-          input.value = tab.restoreCurrentStringControlValue(error, "llm.model");
+          const restored = tab.restoreCurrentStringControlValue(error, "llm.model");
+          input.value = restored;
+          populateModelSelect(select, currentModels, restored);
         }
         throw error;
       }
     });
+  };
+
+  input.addEventListener("change", () => commitModel(input.value.trim()));
+  select.addEventListener("change", () => {
+    const next = select.value;
+    if (next) commitModel(next);
   });
 
   const button = setting.controlEl.createEl("button", {
@@ -205,14 +251,18 @@ export function renderModelRow(tab: ArxivDailySettingTab, setting: Setting): voi
         tab.plugin.getHttpClient(),
       );
       const models = await client.fetchModels();
-      tab.setFetchedModelOptions(models);
-      // Re-query instead of reusing the closed-over `suggestions`: a redraw
-      // that happened while the fetch was in flight replaced it with a new,
-      // empty datalist, and writing to the old detached one would be invisible.
-      const liveSuggestions = setting.controlEl.querySelector("datalist");
-      liveSuggestions?.replaceChildren();
-      for (const model of models) {
-        liveSuggestions?.createEl("option", { value: model });
+      currentModels = models;
+      tab.setFetchedModelOptions(cacheKey, models);
+      // Re-query instead of reusing the closed-over `select`: a redraw that
+      // happened while the fetch was in flight replaced it with a new one,
+      // and writing into the old detached select would be invisible. If the
+      // endpoint settings changed since the fetch started, this result is
+      // for a provider the row no longer reflects, so skip applying it.
+      if (modelFetchCacheKey(tab.plugin.settings.llm) === cacheKey) {
+        const liveSelect = setting.controlEl.querySelector<HTMLSelectElement>(
+          "select.arxiv-daily-settings__model-select",
+        );
+        if (liveSelect) populateModelSelect(liveSelect, models, tab.plugin.settings.llm.model);
       }
       if (models.length > 0) {
         new Notice(modelFetchNoticeMessage({ kind: "success", count: models.length }));

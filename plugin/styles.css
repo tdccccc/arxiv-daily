@@ -275,7 +275,12 @@
 }
 
 .arxiv-daily-settings__model-select {
+  display: none;
   min-width: 160px;
+}
+
+.arxiv-daily-settings__model-select.is-visible {
+  display: inline-block;
 }
 
 .arxiv-daily-settings__time-field {

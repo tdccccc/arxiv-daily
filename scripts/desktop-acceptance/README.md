@@ -195,7 +195,7 @@ If the harness cannot run, these steps are the equivalent record:
 | `diagnostics.mjs` | Console and page-error collection |
 | `probe-listener.mjs` | Real loopback socket that observes the plugin's HTTP |
 | `trust.mjs` | Trust prompt and plugin readiness |
-| `scenarios.mjs` | The sidecar, migration and PDF location scenarios |
+| `scenarios.mjs` | The sidecar, migration, PDF location and Get models scenarios |
 | `library-settings.mjs` | The personal library settings page walk |
 | `screenshots.mjs` | Element-clipped PNGs of the states worth looking at |
 | `settings-fixture.mjs` | The persisted states each session starts from |

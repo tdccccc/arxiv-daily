@@ -4,6 +4,7 @@
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import {
+  getModelsScenario,
   pdfPageLocationScenario,
   runScenarios,
   settingsMigrationScenario,
@@ -14,7 +15,7 @@ import { blockersFromError } from "./app-state.mjs";
 import { librarySettingsScenarios } from "./library-settings.mjs";
 import { topicDirectionsScenarios } from "./topic-directions.mjs";
 import { describeBlockers, preflight } from "./preflight.mjs";
-import { startProbeListener } from "./probe-listener.mjs";
+import { startModelsListener, startProbeListener } from "./probe-listener.mjs";
 import { runDesktopSession } from "./session.mjs";
 import { createScreenshotWriter, resolveScreenshotDir } from "./screenshots.mjs";
 import {
@@ -56,6 +57,7 @@ if (!environment.ok) {
 // renderer's debugging protocol. It refuses every request, which is exactly the
 // condition the probe-failure fallback exists for.
 const listener = await startProbeListener();
+const modelsListener = await startModelsListener();
 
 const sessions = [];
 let outcome;
@@ -73,6 +75,7 @@ try {
         () => sidecarDisabledScenario({ session, listener }),
         () => pdfPageLocationScenario({ session }),
         () => sidecarEnabledIgnoredScenario({ session, listener }),
+        () => getModelsScenario({ session, listener: modelsListener }),
       ]);
       return {
         results,
@@ -125,6 +128,7 @@ try {
   sessions.push({ name: "personal library settings page", ...libraryOutcome });
 } catch (error) {
   await listener.close();
+  await modelsListener.close();
   // An unusable application is an environment problem, not a product one, so it
   // exits the way a preflight blocker does. Any results computed before it was
   // noticed were discarded by the session guard and are deliberately not
@@ -140,9 +144,11 @@ try {
   process.exit(1);
 }
 await listener.close();
+await modelsListener.close();
 
 console.log(`build under test   ${sessions[0].pluginVersion}`);
 console.log(`sidecar requests   ${listener.requests().length} (to the harness's own listener)`);
+console.log(`model fetch requests ${modelsListener.requests().length} (to the harness's own listener)`);
 const libraryRun = sessions.find((run) => run.screenshots);
 if (libraryRun) {
   console.log(`library folder     ${libraryRun.libraryRoot}`);
