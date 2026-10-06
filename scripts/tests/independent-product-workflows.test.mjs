@@ -286,3 +286,11 @@ test("DSH verification follows the optional library runtime embedded in its CLI"
     assert.ok(workflow.on[event].paths.includes("tools/node-library-runtime/**"), `${event} must verify runtime-manifest changes in the packed DSH CLI`);
   }
 });
+
+test("DSH verification provides pnpm before installing the packed plugin into DSH", async () => {
+  const steps = parse(await readFile(`${root}/.github/workflows/dsh-plugin.yml`, "utf8")).jobs.verify.steps;
+  const pnpm = steps.findIndex((step) => /npm install --global pnpm@\d+\.\d+\.\d+$/.test(step.run ?? ""));
+  const integration = steps.findIndex((step) => (step.run ?? "").includes("extensions/dsh-arxiv-daily/tests/*.test.mjs"));
+  assert.ok(pnpm !== -1, "dsh plugin add needs a pinned pnpm on PATH");
+  assert.ok(pnpm < integration, "pnpm must be installed before the DSH integration tests run");
+});
