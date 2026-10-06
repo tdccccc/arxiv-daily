@@ -1015,14 +1015,13 @@ class FullTextRuntimeDiagnosticsModal extends Modal {
         .setCta()
         .onClick(async () => {
           try {
-            const ownerDocument = textarea.ownerDocument;
-            const clipboard = ownerDocument.defaultView?.navigator.clipboard;
-            if (clipboard?.writeText) {
-              await clipboard.writeText(this.report);
-            } else {
+            const clipboard = textarea.ownerDocument.defaultView?.navigator.clipboard;
+            if (!clipboard?.writeText) {
               textarea.select();
-              ownerDocument.execCommand("copy");
+              new Notice("Clipboard unavailable; diagnostics text is selected");
+              return;
             }
+            await clipboard.writeText(this.report);
             new Notice("arXiv Daily: diagnostics copied");
           } catch {
             textarea.select();

@@ -216,6 +216,7 @@ function isEffectiveGenerationMode(value: unknown, provider: string): boolean {
   if (value.kind === "anthropic-thinking") {
     return provider === "anthropic" &&
       isExactObject(value, ["kind", "budgetTokens"]) &&
+      typeof value.budgetTokens === "number" &&
       Number.isSafeInteger(value.budgetTokens) && value.budgetTokens > 0;
   }
   if (value.kind === "reasoning-thinking") {
@@ -583,6 +584,7 @@ export function decodeDailyPaperResult(
     }
     if (
       (value.reasonCode !== "validation-exhausted" && value.reasonCode !== "transport-exhausted") ||
+      typeof value.attempts !== "number" ||
       !Number.isSafeInteger(value.attempts) ||
       value.attempts < 1 ||
       value.attempts > DAILY_PAPER_SUMMARY_MAX_ATTEMPTS ||
@@ -715,13 +717,13 @@ function isNonEmptyString(value: unknown): value is string {
   return typeof value === "string" && value.trim().length > 0;
 }
 
-function isPlainObject(value: unknown): value is Record<string, any> {
+function isPlainObject(value: unknown): value is Record<string, unknown> {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
-  const prototype = Object.getPrototypeOf(value);
+  const prototype: unknown = Object.getPrototypeOf(value);
   return prototype === Object.prototype || prototype === null;
 }
 
-function isExactObject(value: unknown, keys: readonly string[]): value is Record<string, any> {
+function isExactObject(value: unknown, keys: readonly string[]): value is Record<string, unknown> {
   if (!isPlainObject(value)) return false;
   const actual = Object.keys(value).sort();
   const expected = [...keys].sort();

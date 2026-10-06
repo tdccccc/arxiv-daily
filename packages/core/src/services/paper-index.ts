@@ -15,7 +15,6 @@ import { modernArxivResources } from "../utils/arxiv";
 import {
   formatPaperKey,
   paperKeyFromArxivId,
-  parsePaperKey,
   resolvePaperLookupKey,
   tryParsePaperKey,
 } from "./paper-key";
@@ -102,7 +101,7 @@ export interface PaperInboxPaths {
 export interface PaperIndexInspection {
   inbox: PaperInbox;
   /** Validated on-disk document before schema/key normalization. */
-  document: unknown | null;
+  document: unknown;
   sourcePath: string | null;
   recoveredFromBackup: boolean;
 }
@@ -962,7 +961,7 @@ function setSummariesInInbox(
 
 function normalizeInbox(raw: unknown, now: Date): PaperInbox {
   if (!isPlainRecord(raw)) throw new Error("paper index must be an object");
-  const obj = raw as any;
+  const obj = raw;
   if (
     obj.schemaVersion !== 1 &&
     obj.schemaVersion !== 2 &&
@@ -994,7 +993,7 @@ function normalizeInbox(raw: unknown, now: Date): PaperInbox {
  * - already-normalized paperKey (`arxiv:…` or future sources)
  */
 function normalizeEntry(id: string, raw: unknown): PaperIndexEntry {
-  const obj = (raw && typeof raw === "object" ? raw : {}) as any;
+  const obj = (raw && typeof raw === "object" ? raw : {}) as Record<string, unknown>;
   const { paperKey, source, externalId, resources } = resolveEntryIdentity(id, obj);
   const status = isPaperStatus(obj.status) ? obj.status : "inbox";
   const priority = isPaperPriority(obj.priority) ? obj.priority : "normal";
@@ -1260,7 +1259,7 @@ function sameSummary(
   return keys.every((key) => a?.[key] === b?.[key]);
 }
 
-function normalizeAuthors(value: string | string[] | unknown): string[] {
+function normalizeAuthors(value: unknown): string[] {
   if (Array.isArray(value)) {
     return value.map((v) => String(v).trim()).filter(Boolean);
   }
@@ -1284,7 +1283,7 @@ function stringOr(value: unknown, fallback: string): string {
 
 function isPlainRecord(value: unknown): value is Record<string, unknown> {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
-  const prototype = Object.getPrototypeOf(value);
+  const prototype: unknown = Object.getPrototypeOf(value);
   return prototype === Object.prototype || prototype === null;
 }
 

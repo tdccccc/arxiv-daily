@@ -617,6 +617,7 @@ describe("personal library settings row", () => {
     document.body.appendChild(descEl);
     const setting = {
       controlEl: { addClass: vi.fn() },
+      settingEl: { addClass: vi.fn() },
       descEl,
       setDesc: vi.fn().mockReturnThis(),
       addButton(callback: (button: any) => void) {
@@ -632,6 +633,7 @@ describe("personal library settings row", () => {
           setButtonText(text: string) { state.text = text; return button; },
           setCta() { state.cta = true; return button; },
           setWarning() { state.warning = true; return button; },
+          setDestructive() { state.warning = true; return button; },
           setDisabled(disabled: boolean) { state.disabled = disabled; return button; },
           onClick(click: () => void) { state.click = click; return button; },
         };

@@ -266,8 +266,6 @@ export async function runInit(opts: InitOptions = {}): Promise<number> {
   }
 
   // write step
-  const preset =
-    PROVIDER_PRESETS[state.providerId] ?? PROVIDER_PRESETS.custom!;
   const cacheDir = path.join(state.vaultRoot, ".cache", "arxiv-daily");
   const body = renderInitToml({
     vaultRoot: state.vaultRoot,

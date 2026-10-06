@@ -26,8 +26,16 @@ export function buildCronLines(
   return lines;
 }
 
+function hasControlCharacter(value: string): boolean {
+  for (let i = 0; i < value.length; i += 1) {
+    const code = value.charCodeAt(i);
+    if (code <= 0x1f || code === 0x7f) return true;
+  }
+  return false;
+}
+
 function cronExecutable(binaryPath: string): string {
-  if (!binaryPath || /[\u0000-\u001f\u007f]/.test(binaryPath)) {
+  if (!binaryPath || hasControlCharacter(binaryPath)) {
     throw new Error("CLI executable path is empty or contains control characters");
   }
   // Cron removes the backslash before %, but preserves other shell escapes.

@@ -536,8 +536,7 @@
   margin-bottom: 0;
 }
 
-.arxiv-daily-settings__topic-host
-  .arxiv-daily-settings__topic-row:has(.arxiv-daily-settings__topic-directions),
+.arxiv-daily-settings__topic-host .arxiv-daily-settings__topic-row--has-directions,
 .arxiv-daily-settings__topic-host .arxiv-daily-settings__hint,
 .arxiv-daily-settings__topic-host .arxiv-daily-settings__topic-footer {
   grid-column: 1 / -1;
@@ -554,8 +553,7 @@
     grid-template-columns: minmax(0, 1fr);
   }
 
-  .arxiv-daily-settings__topic-host
-    .arxiv-daily-settings__topic-row:has(.arxiv-daily-settings__topic-directions),
+  .arxiv-daily-settings__topic-host .arxiv-daily-settings__topic-row--has-directions,
   .arxiv-daily-settings__topic-host .arxiv-daily-settings__topic-footer {
     grid-column: 1;
   }
@@ -731,11 +729,16 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .arxiv-daily-settings *,
-  .arxiv-daily-settings *::before,
-  .arxiv-daily-settings *::after {
-    scroll-behavior: auto !important;
-    transition-duration: 0.01ms !important;
+  /* Doubled class (not a typo) raises specificity to (0,2,0) so this wins on
+     specificity alone, with no priority flag needed, over every other rule
+     in this file that sets transition/scroll-behavior (currently only
+     .arxiv-daily-progress__fill's transition, at (0,1,0)) regardless of
+     source order. */
+  .arxiv-daily-settings.arxiv-daily-settings *,
+  .arxiv-daily-settings.arxiv-daily-settings *::before,
+  .arxiv-daily-settings.arxiv-daily-settings *::after {
+    scroll-behavior: auto;
+    transition-duration: 0.01ms;
   }
 }
 
@@ -2115,7 +2118,7 @@ span.arxiv-daily-dashboard__calendar-day.is-today {
  * one whose description came out as an 81px ribbon. Readability is the
  * invariant; one line is what happens when readability leaves room for it.
  */
-.arxiv-daily-settings .setting-item:has(> .arxiv-daily-settings__library-controls) {
+.arxiv-daily-settings .setting-item.arxiv-daily-settings__library-row {
   /*
    * The only knob. The desktop acceptance harness calls the sentence unreadable
    * below 150px, or below twelve characters a line; this floor sits above both
@@ -2155,7 +2158,7 @@ span.arxiv-daily-dashboard__calendar-day.is-today {
  * description column is the one the strip may not encroach on. Its floor is the
  * strip's cap read from the left, so the two rules cannot drift apart.
  */
-.arxiv-daily-settings .setting-item:has(> .arxiv-daily-settings__library-controls) .setting-item-info {
+.arxiv-daily-settings .setting-item.arxiv-daily-settings__library-row .setting-item-info {
   min-width: var(--arxiv-daily-library-description-floor);
 }
 
@@ -2200,7 +2203,7 @@ span.arxiv-daily-dashboard__calendar-day.is-today {
     max-width: 100%;
   }
 
-  .arxiv-daily-settings .setting-item:has(> .arxiv-daily-settings__library-controls) .setting-item-info {
+  .arxiv-daily-settings .setting-item.arxiv-daily-settings__library-row .setting-item-info {
     min-width: 0;
   }
 }

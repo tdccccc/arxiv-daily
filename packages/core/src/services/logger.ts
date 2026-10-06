@@ -96,9 +96,12 @@ export class Logger {
   info(msg: string, ...rest: unknown[]) {
     if (this.allowed("info")) {
       // Keep operational detail available in the diagnostics buffer without
-      // flooding the production console at the default info level.
+      // flooding the production console at the default info level. Obsidian's
+      // plugin guidelines only allow warn/error/debug console methods, so
+      // this uses console.debug rather than console.info; it is still gated
+      // to the opt-in debug log level.
       if (this.level === "debug") {
-        console.info("[arxiv-daily]", this.sanitizeText(msg), ...this.sanitizeRest(rest));
+        console.debug("[arxiv-daily]", this.sanitizeText(msg), ...this.sanitizeRest(rest));
       }
       this.push("info", msg, ...rest);
     }

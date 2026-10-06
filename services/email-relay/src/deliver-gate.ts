@@ -617,17 +617,17 @@ async function readIndex(storage: DurableObjectTransaction): Promise<LedgerIndex
     if (
       !value ||
       typeof value !== "object" ||
-      !isHash((value as LedgerIndexEntry).keyHash) ||
-      ((value as LedgerIndexEntry).keyKind !== "auto" &&
-        (value as LedgerIndexEntry).keyKind !== "test") ||
-      seen.has((value as LedgerIndexEntry).keyHash)
+      !isHash(value.keyHash) ||
+      (value.keyKind !== "auto" &&
+        value.keyKind !== "test") ||
+      seen.has(value.keyHash)
     ) {
       throw new Error("ledger index entry is invalid");
     }
-    seen.add((value as LedgerIndexEntry).keyHash);
+    seen.add(value.keyHash);
     entries.push({
-      keyHash: (value as LedgerIndexEntry).keyHash,
-      keyKind: (value as LedgerIndexEntry).keyKind,
+      keyHash: value.keyHash,
+      keyKind: value.keyKind,
     });
   }
   return { schemaVersion: 2, entries };

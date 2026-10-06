@@ -1,6 +1,7 @@
 import type { StorageAdapter } from "../core/adapters";
 import type { OutputSettings } from "../settings/types";
 import { daysBefore, formatDate, todayInTz } from "../utils/time";
+import { clearTimer, setTimer } from "../utils/timers";
 import type { Logger } from "./logger";
 import { dailySelectionMarkerRegExp } from "./daily-selection-marker";
 import { LOOKBACK_DAYS } from "./scheduling/constants";
@@ -102,7 +103,7 @@ function stateForSelection(
 }
 
 export class DailySelectionSyncService {
-  private timers = new Map<string, ReturnType<typeof setTimeout>>();
+  private timers = new Map<string, ReturnType<typeof setTimer>>();
 
   constructor(
     private opts: {
@@ -122,8 +123,8 @@ export class DailySelectionSyncService {
     const path = this.opts.storage.normalizePath(file?.path ?? "");
     if (!this.isDailyPath(path)) return;
     const existing = this.timers.get(path);
-    if (existing) clearTimeout(existing);
-    const timer = setTimeout(() => {
+    if (existing) clearTimer(existing);
+    const timer = setTimer(() => {
       this.timers.delete(path);
       this.syncPath(path).catch((e) =>
         this.opts.logger.error(`daily-selection: sync failed for ${path}`, e),
@@ -177,7 +178,7 @@ export class DailySelectionSyncService {
   }
 
   clear(): void {
-    for (const timer of this.timers.values()) clearTimeout(timer);
+    for (const timer of this.timers.values()) clearTimer(timer);
     this.timers.clear();
   }
 

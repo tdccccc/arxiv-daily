@@ -146,6 +146,25 @@ function isLogLevel(value: string): value is LogLevel {
 }
 
 /**
+ * Style a button as destructive. `setDestructive` replaced `setWarning` in
+ * Obsidian 1.13.0 (above this plugin's 1.4.0 `minAppVersion`), so this calls
+ * it only when the running app supports it and otherwise falls back to the
+ * older styling via a structural type (not the deprecated declaration) so
+ * the fallback itself does not re-trigger the deprecation warning.
+ */
+interface LegacyWarningButton {
+  setWarning(): unknown;
+}
+
+function applyDestructiveButtonStyle(button: ButtonComponent): void {
+  if (requireApiVersion("1.13.0")) {
+    button.setDestructive();
+  } else {
+    (button as unknown as LegacyWarningButton).setWarning();
+  }
+}
+
+/**
  * How often the Library row may be rewritten while a run reports.
  *
  * Indexing reports once per paper, which on a large library is several times a
@@ -547,6 +566,11 @@ export class ArxivDailySettingTab extends PluginSettingTab {
     });
     setting.setDesc(row.description);
     setting.controlEl.addClass("arxiv-daily-settings__library-controls");
+    // Mirrors styles.css's `.setting-item:has(> .arxiv-daily-settings__library-controls)`
+    // as a static class on the row itself, added at the same moment the
+    // control class above is, since the control is always a direct child of
+    // this setting item for the lifetime of this row.
+    setting.settingEl.addClass("arxiv-daily-settings__library-row");
     const live: LibraryRowElements = { descEl: setting.descEl };
 
     setting.addButton((button) =>
@@ -573,9 +597,9 @@ export class ArxivDailySettingTab extends PluginSettingTab {
     const cancel = row.cancel;
     if (cancel) {
       setting.addButton((button) => {
+        button.setButtonText(cancel.label);
+        applyDestructiveButtonStyle(button);
         button
-          .setButtonText(cancel.label)
-          .setWarning()
           .setDisabled(cancel.disabled)
           .onClick(() => this.cancelLibraryIndexing());
         live.cancel = button;
@@ -2917,8 +2941,12 @@ export class ArxivDailySettingTab extends PluginSettingTab {
     };
 
     // Directions
+    // The row always holds the directions list created just below (it is
+    // only ever emptied/repopulated, never removed), so the CSS that makes
+    // this row span the grid can key off a static class here instead of a
+    // `:has()` selector.
     const dirRow = form.createDiv({
-      cls: "arxiv-daily-settings__topic-row",
+      cls: ["arxiv-daily-settings__topic-row", "arxiv-daily-settings__topic-row--has-directions"],
     });
     const dirId = `${idPrefix}-directions`;
     const dirHintId = `${dirId}-hint`;
