@@ -111,7 +111,7 @@ function extractFallbackId(block: string): string | null {
     return null;
   }
   const paperId = extractArxivId(block);
-  return marker[1] === paperId ? marker[1]! : null;
+  return marker[1] === paperId ? marker[1] : null;
 }
 
 function hasAbsentAbstractMarker(block: string, id: string): boolean {

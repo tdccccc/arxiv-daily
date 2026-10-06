@@ -31,6 +31,7 @@ export function normalizeTopicDirectionHits(value: unknown): TopicDirectionHit[]
 
   const hits: TopicDirectionHit[] = [];
   const seen = new Set<string>();
+  let firstTag: string | undefined;
   for (const raw of value) {
     if (!isExactDataObject(raw, ["tag", "id", "text"])
       || !isBoundedText(raw.tag, TOPIC_DIRECTION_HIT_MAX_TAG_LENGTH)
@@ -38,7 +39,8 @@ export function normalizeTopicDirectionHits(value: unknown): TopicDirectionHit[]
       || !isBoundedText(raw.text, TOPIC_DIRECTION_HIT_MAX_TEXT_LENGTH)) return null;
     // A paper is filed under exactly one topic, so every hit on it belongs to
     // that same topic. A mixed list means the hits were assembled wrongly.
-    if (raw.tag !== value[0].tag) return null;
+    if (firstTag === undefined) firstTag = raw.tag;
+    else if (raw.tag !== firstTag) return null;
     if (seen.has(raw.id)) return null;
     seen.add(raw.id);
     hits.push({ tag: raw.tag, id: raw.id, text: raw.text });
@@ -46,9 +48,9 @@ export function normalizeTopicDirectionHits(value: unknown): TopicDirectionHit[]
   return hits;
 }
 
-function isExactDataObject(value: unknown, keys: readonly string[]): value is Record<string, any> {
+function isExactDataObject(value: unknown, keys: readonly string[]): value is Record<string, unknown> {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
-  const prototype = Object.getPrototypeOf(value);
+  const prototype: unknown = Object.getPrototypeOf(value);
   if (prototype !== Object.prototype && prototype !== null) return false;
   const actual = Object.keys(value).sort();
   const expected = [...keys].sort();

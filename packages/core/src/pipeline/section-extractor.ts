@@ -28,7 +28,7 @@ function normalizeText(text: string): string {
   return text
     .toLowerCase()
     .replace(/\\[a-z]+/g, " ")
-    .replace(/^\s*(\d+(\.\d+)*|[ivxlcdm]+|[a-z])\s*[\).:-]?\s+/i, "")
+    .replace(/^\s*(\d+(\.\d+)*|[ivxlcdm]+|[a-z])\s*[).:-]?\s+/i, "")
     .replace(/[^a-z0-9]+/g, " ")
     .trim();
 }
@@ -152,7 +152,13 @@ function preserveFigureAndTableText(doc: Document) {
       el.parentNode.removeChild(el);
       continue;
     }
-    const replacement = doc.createElement("p");
+    // `doc` here is never an Obsidian document — this parser also runs in
+    // Node (CLI) against a linkedom-backed Document — so `createEl` isn't
+    // available. Narrowing the static type to just `createElement` keeps the
+    // call honest about that and clears Obsidian's DOM-helper lint, which
+    // otherwise assumes any `Document`-shaped value is Obsidian's.
+    const documentFactory: Pick<Document, "createElement"> = doc;
+    const replacement = documentFactory.createElement("p");
     replacement.textContent = isTable
       ? `Table text: ${text}`
       : `Figure caption: ${text}`;

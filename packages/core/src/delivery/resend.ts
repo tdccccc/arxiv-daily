@@ -1,5 +1,6 @@
 import { isHttpTransportError, type HttpClient } from "../core/adapters";
 import { isCancellationError, throwIfCancelled } from "../services/cancellation";
+import { setTimer, clearTimer } from "../utils/timers";
 import type { ResendEmailPayload } from "./types";
 
 export const RESEND_API_URL = "https://api.resend.com/emails";
@@ -200,17 +201,17 @@ function hasProviderAcceptance(bodyText: string): boolean {
 function defaultSleep(ms: number, signal?: AbortSignal): Promise<void> {
   throwIfCancelled(signal);
   return new Promise((resolve, reject) => {
-    const timeout = setTimeout(() => {
+    const timeout = setTimer(() => {
       cleanup();
       resolve();
     }, ms);
     const onAbort = () => {
-      clearTimeout(timeout);
+      clearTimer(timeout);
       cleanup();
       try {
         throwIfCancelled(signal);
       } catch (e) {
-        reject(e);
+        reject(e instanceof Error ? e : new Error(String(e), { cause: e }));
       }
     };
     function cleanup() {

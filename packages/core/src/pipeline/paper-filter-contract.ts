@@ -259,6 +259,7 @@ export function decodePaperFilterRecords(
       return { ok: false, reason: `paper ${record.id} names no direction for its topic` };
     }
     const chosen = new Set<string>();
+    const directions: string[] = [];
     for (const ref of record.directions) {
       // A reference is valid only inside the topic the paper was filed under,
       // so a mismatch is a contract violation rather than a silent drop.
@@ -269,9 +270,10 @@ export function decodePaperFilterRecords(
         return { ok: false, reason: `paper ${record.id} has a duplicate direction` };
       }
       chosen.add(ref);
+      directions.push(ref);
     }
     seen.add(record.id);
-    records.push({ id: record.id, category: record.category, directions: [...record.directions], relevanceScore: record.relevanceScore });
+    records.push({ id: record.id, category: record.category, directions, relevanceScore: record.relevanceScore });
   }
   return { ok: true, value: records };
 }

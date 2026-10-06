@@ -1,7 +1,10 @@
 import { LLM_REQUEST_CONTRACT_VERSION, type ChatMessage, type CallOptions } from "../llm/client";
 import type { MetricsObserver } from "../metrics/generation";
 import { isCancellationError, throwIfCancelled } from "../services/cancellation";
-import { buildCheckpointGenerationIdentity } from "../services/daily-summary-checkpoint-store";
+import {
+  buildCheckpointGenerationIdentity,
+  type CheckpointGenerationIdentity,
+} from "../services/daily-summary-checkpoint-store";
 import { paperKeyFromArxivId } from "../services/paper-key";
 import type { LlmSettings } from "../settings/types";
 import { sha256Hex } from "../utils/digest";
@@ -23,6 +26,10 @@ export const PERSONAL_NOVELTY_DIFFERENCE_TYPES = [
 ] as const;
 export type PersonalNoveltyDifferenceType =
   (typeof PERSONAL_NOVELTY_DIFFERENCE_TYPES)[number];
+
+function isPersonalNoveltyDifferenceType(value: unknown): value is PersonalNoveltyDifferenceType {
+  return (PERSONAL_NOVELTY_DIFFERENCE_TYPES as readonly unknown[]).includes(value);
+}
 
 /** Whole-run bound: at most this many library-derived papers receive results. */
 export const PERSONAL_NOVELTY_MAX_PAPERS = 400 as const;
@@ -607,13 +614,13 @@ export function decodePersonalNovelty(
   ])) {
     return { ok: false, reason: "wrong-shape" };
   }
-  if (!PERSONAL_NOVELTY_DIFFERENCE_TYPES.includes(value.differenceType)) {
+  if (!isPersonalNoveltyDifferenceType(value.differenceType)) {
     return { ok: false, reason: "difference-type-invalid" };
   }
   if (!Array.isArray(value.comparisonBasis) || !hasOwnDataArrayEntries(value.comparisonBasis)
     || value.comparisonBasis.length < 1
     || !value.comparisonBasis.every(
-      (key: unknown) => typeof key === "string" && basisPaperKeys.has(key),
+      (key): key is string => typeof key === "string" && basisPaperKeys.has(key),
     )
     || !isStrictlyOrderedUnique(value.comparisonBasis)) {
     return { ok: false, reason: "basis-invalid" };
@@ -646,7 +653,7 @@ export function normalizePersonalNovelty(value: unknown): PersonalNovelty | null
   if (!isExactOwnDataObject(value, [
     "differenceType", "comparisonBasis", "evidenceDepth", "explanation",
   ])) return null;
-  if (!PERSONAL_NOVELTY_DIFFERENCE_TYPES.includes(value.differenceType)) return null;
+  if (!isPersonalNoveltyDifferenceType(value.differenceType)) return null;
   if (!isOwnDataArray(value.comparisonBasis, 1, PERSONAL_NOVELTY_MAX_COMPARISON_BASIS)
     || !value.comparisonBasis.every(isCanonicalArxivPaperKey)
     || !isStrictlyOrderedUnique(value.comparisonBasis)) return null;
@@ -678,17 +685,15 @@ export function normalizePersonalNoveltyWithBasis(value: unknown): PersonalNovel
   });
   if (!novelty) return null;
   if (!isExactOwnDataObject(value.comparisonBasisTitles, novelty.comparisonBasis)) return null;
+  const comparisonBasisTitles: Record<string, string> = {};
   for (const paperKey of novelty.comparisonBasis) {
-    if (!isBoundedText(
-      value.comparisonBasisTitles[paperKey],
-      PERSONAL_NOVELTY_MAX_TITLE_CODE_UNITS,
-    )) return null;
+    const title = value.comparisonBasisTitles[paperKey];
+    if (!isBoundedText(title, PERSONAL_NOVELTY_MAX_TITLE_CODE_UNITS)) return null;
+    comparisonBasisTitles[paperKey] = title;
   }
   return deepFreeze({
     ...novelty,
-    comparisonBasisTitles: Object.fromEntries(
-      novelty.comparisonBasis.map((paperKey) => [paperKey, value.comparisonBasisTitles[paperKey]]),
-    ),
+    comparisonBasisTitles,
   });
 }
 
@@ -830,20 +835,19 @@ export function decodeNoveltyFingerprintInput(
  */
 export function isValidNoveltyPlan(plan: unknown): plan is PersonalNoveltyCallPlan {
   if (!isExactDataObject(plan, ["entries", "totals"])
-    || !Array.isArray(plan.entries) || !hasOwnDataArrayEntries(plan.entries)
+    || !isOwnDataArray(plan.entries, 0, PERSONAL_NOVELTY_MAX_PAPERS)
     || !isExactDataObject(plan.totals, [
       "papers", "calls", "aggregatePromptCodeUnits", "aggregateCompletionTokens",
-    ]) || !Object.values(plan.totals).every((entry) => Number.isSafeInteger(entry) && entry >= 0)
-    || plan.entries.length > PERSONAL_NOVELTY_MAX_PAPERS) return false;
+    ]) || !Object.values(plan.totals).every(isNonNegativeSafeInteger)) return false;
   const seen = new Set<string>();
   let previousKey = "";
   let callCount = 0;
   let aggregatePromptCodeUnits = 0;
   for (const entry of plan.entries) {
-    if (typeof entry !== "object" || entry === null
-      || (entry as { kind?: unknown }).kind !== "call"
-        && (entry as { kind?: unknown }).kind !== "no-novelty") return false;
-    if (entry.kind === "no-novelty") {
+    if (typeof entry !== "object" || entry === null) return false;
+    const kind = (entry as { kind?: unknown }).kind;
+    if (kind !== "call" && kind !== "no-novelty") return false;
+    if (kind === "no-novelty") {
       if (!isExactDataObject(entry, ["paperKey", "kind", "reason"])
         || entry.reason !== "plan-too-large") return false;
     } else if (!isExactDataObject(entry, ["paperKey", "kind", "request"])) {
@@ -853,13 +857,17 @@ export function isValidNoveltyPlan(plan: unknown): plan is PersonalNoveltyCallPl
       || (previousKey !== "" && codeUnitCompare(previousKey, entry.paperKey) >= 0)) return false;
     seen.add(entry.paperKey);
     previousKey = entry.paperKey;
-    if (entry.kind === "no-novelty") continue;
+    if (kind === "no-novelty") continue;
     const request = entry.request;
     if (!isExactDataObject(request, ["messages", "options", "identity"])
       || !Array.isArray(request.messages) || !hasOwnDataArrayEntries(request.messages)
       || request.messages.length !== 2
-      || !request.messages.every((message: unknown) => isExactDataObject(message, ["role", "content"])
-        && (message.role === "system" || message.role === "user") && typeof message.content === "string")
+      || !request.messages.every(
+        (message): message is { role: "system" | "user"; content: string } =>
+          isExactDataObject(message, ["role", "content"])
+          && (message.role === "system" || message.role === "user")
+          && typeof message.content === "string",
+      )
       || request.messages[0]!.content !== systemPrompt
       || !request.messages[1]!.content.startsWith(USER_PREFIX)
       || !request.messages[1]!.content.endsWith(USER_SUFFIX)
@@ -924,12 +932,14 @@ export function decodeNoveltyCheckpointRecords(
   const seen = new Set<string>();
   let previousKey = "";
   for (const raw of value) {
-    if (typeof raw !== "object" || raw === null
-      || ((raw as { status?: unknown }).status !== "novelty"
-        && (raw as { status?: unknown }).status !== "no-novelty")) {
+    if (typeof raw !== "object" || raw === null) {
       return { ok: false, reason: "novelty record is malformed" };
     }
-    if (raw.status === "novelty") {
+    const rawStatus = (raw as { status?: unknown }).status;
+    if (rawStatus !== "novelty" && rawStatus !== "no-novelty") {
+      return { ok: false, reason: "novelty record is malformed" };
+    }
+    if (rawStatus === "novelty") {
       if (!isExactDataObject(raw, ["paperKey", "status", "novelty"])) {
         return { ok: false, reason: "novelty record is malformed" };
       }
@@ -1318,7 +1328,15 @@ function singlePaperMatches(
   return { paperMatches: [match], directionRepresentatives: matches.directionRepresentatives };
 }
 
-function isCheckpointGenerationIdentity(value: unknown): boolean {
+function isPositiveSafeInteger(value: unknown): value is number {
+  return typeof value === "number" && Number.isSafeInteger(value) && value > 0;
+}
+
+function isNonNegativeSafeInteger(value: unknown): value is number {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
+}
+
+function isCheckpointGenerationIdentity(value: unknown): value is CheckpointGenerationIdentity {
   if (!isExactDataObject(value, ["requestContractVersion", "provider", "endpointDigest", "model", "mode"])
     || value.requestContractVersion !== LLM_REQUEST_CONTRACT_VERSION
     || typeof value.provider !== "string" || typeof value.model !== "string"
@@ -1332,7 +1350,7 @@ function isCheckpointGenerationIdentity(value: unknown): boolean {
   if (value.mode.kind === "anthropic-thinking") {
     return value.provider === "anthropic"
       && isExactDataObject(value.mode, ["kind", "budgetTokens"])
-      && Number.isSafeInteger(value.mode.budgetTokens) && value.mode.budgetTokens > 0;
+      && isPositiveSafeInteger(value.mode.budgetTokens);
   }
   if (value.mode.kind === "anthropic-adaptive") {
     return value.provider === "anthropic" && isExactDataObject(value.mode, ["kind", "reasoningEffort"])
@@ -1347,9 +1365,9 @@ function codeUnitCompare(left: string, right: string): number {
   return left < right ? -1 : left > right ? 1 : 0;
 }
 
-function isExactDataObject(value: unknown, keys: readonly string[]): value is Record<string, any> {
+function isExactDataObject(value: unknown, keys: readonly string[]): value is Record<string, unknown> {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
-  const prototype = Object.getPrototypeOf(value);
+  const prototype: unknown = Object.getPrototypeOf(value);
   if (prototype !== Object.prototype && prototype !== null) return false;
   const actual = Object.keys(value).sort(codeUnitCompare);
   const expected = [...keys].sort(codeUnitCompare);
@@ -1367,9 +1385,9 @@ function isExactDataObject(value: unknown, keys: readonly string[]): value is Re
  * an exact key set. Used by the novelty normalize helpers so hostile metadata
  * cannot smuggle extra state into rendering, markers, or the index.
  */
-function isExactOwnDataObject(value: unknown, keys: readonly string[]): value is Record<string, any> {
+function isExactOwnDataObject(value: unknown, keys: readonly string[]): value is Record<string, unknown> {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
-  const prototype = Object.getPrototypeOf(value);
+  const prototype: unknown = Object.getPrototypeOf(value);
   if (prototype !== Object.prototype && prototype !== null) return false;
   const ownKeys = Reflect.ownKeys(value);
   if (ownKeys.length !== keys.length) return false;
