@@ -365,7 +365,10 @@ async function readJson(req: IncomingMessage): Promise<Record<string, unknown>> 
   if (req.headers["content-type"]?.split(";")[0]?.trim() !== "application/json") throw new WorkbenchError(415, "请发送 JSON 请求。");
   const chunks: Buffer[] = [];
   let size = 0;
-  for await (const chunk of req) {
+  // Node yields Buffer chunks here because no encoding was set on the
+  // request stream; the cast makes that guarantee explicit instead of
+  // letting `chunk` flow through as the iterable's default `any`.
+  for await (const chunk of req as AsyncIterable<Buffer>) {
     size += chunk.length;
     if (size > 65536) throw new WorkbenchError(413, "请求过大。");
     chunks.push(Buffer.from(chunk));

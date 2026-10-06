@@ -347,8 +347,12 @@ function mapTopic(raw: unknown, index: number): Topic {
   // everything else goes through normalizeTopic so the plugin and the CLI
   // derive the description shadow the same way (ADR 0012).
   // Read-only loads must not invent fresh direction identities on every read.
-  const directions = Array.isArray(raw.directions)
-    ? raw.directions.map((direction, directionIndex) => isRecord(direction)
+  // `Array.isArray` is typed `(arg: any) => arg is any[]` in lib.es5, so an
+  // explicit `unknown[]` annotation (rather than relying on the narrowed
+  // type) keeps the elements honestly unknown instead of silently `any`.
+  const rawDirections: unknown[] | undefined = Array.isArray(raw.directions) ? raw.directions : undefined;
+  const directions = rawDirections
+    ? rawDirections.map((direction, directionIndex) => isRecord(direction)
       ? { ...direction, id: typeof direction.id === "string" && direction.id.trim()
         ? direction.id : `cli-direction-${sha256Hex(`${id}:${directionIndex}:${String(direction.text ?? "")}`).slice(0, 16)}` }
       : direction)

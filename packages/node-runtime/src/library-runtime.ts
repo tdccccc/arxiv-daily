@@ -59,12 +59,15 @@ async function prepare(directory: string, manifest: PackageManifest, lockfile: u
 }
 
 interface PackageManifest { dependencies: Record<string, string> }
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
 async function installed(directory: string, manifest: PackageManifest): Promise<boolean> {
   for (const [name, version] of Object.entries(manifest.dependencies)) {
     try {
       const file = path.join(directory, "node_modules", name, "package.json");
-      const value = JSON.parse(await fs.readFile(file, "utf8"));
-      if (value.name !== name || value.version !== version) return false;
+      const value: unknown = JSON.parse(await fs.readFile(file, "utf8"));
+      if (!isRecord(value) || value.name !== name || value.version !== version) return false;
     } catch { return false; }
   }
   return true;
@@ -106,8 +109,13 @@ export function createNodeLibraryEmbeddingModel(cacheDir: string, options: { sig
     async loadPipeline() {
       const { embedding } = nodeLibraryRuntimePaths(cacheDir);
       const require = await requireInstalled(embedding, embeddingPackage);
-      const imported = await import(pathToFileURL(require.resolve("@huggingface/transformers")).href);
-      const module = (imported.default ?? imported) as {
+      // The module specifier is dynamic, so TS can only type this import as
+      // `any`; routing it through an `unknown`-typed binding keeps that from
+      // leaking into the rest of the function before the one deliberate cast
+      // to the shape this loader actually relies on.
+      const imported: unknown = await import(pathToFileURL(require.resolve("@huggingface/transformers")).href);
+      const resolved: unknown = isRecord(imported) ? imported.default ?? imported : imported;
+      const module = resolved as {
         env: { cacheDir: string; allowRemoteModels: boolean };
         pipeline(task: string, model: string, options: Record<string, unknown>): Promise<TransformersFeatureExtractor>;
       };

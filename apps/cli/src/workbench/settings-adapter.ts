@@ -1,6 +1,13 @@
 import { DEFAULT_SETTINGS, getBusinessSetting, normalizeSettingsEdits, type PluginSettings } from '@arxiv-daily/core';
 import type { CliRuntimeConfig } from '../config';
 
+// Matches the permissive `!topic || typeof topic !== 'object'` guard this
+// replaced: truthy and `typeof === 'object'`, arrays included (same as the
+// condition it names, just given a type so property access stays checked).
+function isNonNullObject(value: unknown): value is Record<string, unknown> {
+ return Boolean(value) && typeof value === 'object';
+}
+
 /** Only host wire names live here; defaults and editing rules come from core. */
 const paths: Record<string, readonly [string,string]> = {
  'llm.apiKey':['llm','api_key'],'llm.provider':['llm','provider'],'llm.baseUrl':['llm','base_url'],'llm.model':['llm','model'],'llm.thinkingMode':['llm','thinking_mode'],'llm.reasoningEffort':['llm','reasoning_effort'],
@@ -26,11 +33,14 @@ export function patchWorkbenchBusinessSettings(document: Record<string,unknown>,
   if(JSON.stringify(target[field])!==JSON.stringify(value))changed.push(key);
   // Older clients omit directions; they cannot replace an accepted direction list
   // merely by resubmitting the compatibility description shadow.
-  if (key === 'arxiv.topics' && Array.isArray(value)) value = value.map(topic => {
-   if (!topic || typeof topic !== 'object' || Object.hasOwn(topic, 'directions')) return topic;
-   const existing = before.arxiv.topics.find(saved => saved.id === topic.id);
-   return existing ? { ...topic, directions: structuredClone(existing.directions) } : topic;
-  });
+  if (key === 'arxiv.topics' && Array.isArray(value)) {
+   const topics: unknown[] = value;
+   value = topics.map(topic => {
+    if (!isNonNullObject(topic) || Object.hasOwn(topic, 'directions')) return topic;
+    const existing = before.arxiv.topics.find(saved => saved.id === topic.id);
+    return existing ? { ...topic, directions: structuredClone(existing.directions) } : topic;
+   });
+  }
   target[field]=value;
  }
  for(const [source,key] of Object.entries(flat))if(Object.hasOwn(input,source))assign(key,input[source]);
@@ -51,6 +61,6 @@ export function patchWorkbenchBusinessSettings(document: Record<string,unknown>,
   const value=(normalized[group] as unknown as Record<string,unknown>)[field];
   if(value===undefined||JSON.stringify(value)===JSON.stringify((before[group] as unknown as Record<string,unknown>)[field]))continue;
   const table=document[tableName];
-  document[tableName]={...(table&&typeof table==='object'&&!Array.isArray(table)?table as Record<string,unknown>:{}),[column]:value};
+  document[tableName]={...(table&&typeof table==='object'&&!Array.isArray(table)?table:{}),[column]:value};
  }
 }
