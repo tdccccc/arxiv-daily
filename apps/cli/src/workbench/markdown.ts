@@ -90,7 +90,7 @@ function frontmatter(source: string): { body: string; metadata: Record<string, s
       } catch { /* An invalid scalar is omitted, never interpreted as code or YAML. */ }
     } else if (/^'(?:[^']|'')*'$/.test(value)) {
       metadata[field[1]!] = value.slice(1, -1).replace(/''/g, "'");
-    } else if (value && !/^[\[\]{}|>&*!]/.test(value)) {
+    } else if (value && !/^[[\]{}|>&*!]/.test(value)) {
       metadata[field[1]!] = value.replace(/[ \t]+#.*$/, "");
     }
   }
@@ -106,9 +106,21 @@ function inlineText(tokens: Token[]): string {
   }).join("").trim();
 }
 
+// Equivalent to the C0-control/space/DEL/backslash character class this
+// replaced. Scanning char codes (rather than a control-character-ranged
+// regex class) avoids tripping no-control-regex while matching the same set
+// of disallowed destination characters.
+function hasUnsafeDestinationCharacter(value: string): boolean {
+  for (let index = 0; index < value.length; index += 1) {
+    const code = value.charCodeAt(index);
+    if (code <= 0x20 || code === 0x7f || value[index] === "\\") return true;
+  }
+  return false;
+}
+
 function safeDestination(target: string, kind: "link" | "image", allowLocal: boolean): string | null {
   const value = target.trim();
-  if (!value || /[\u0000-\u0020\u007f\\]/.test(value) || value.startsWith("//")) return null;
+  if (!value || hasUnsafeDestinationCharacter(value) || value.startsWith("//")) return null;
   const scheme = /^([a-z][a-z0-9+.-]*):/i.exec(value)?.[1]?.toLowerCase();
   if (scheme) {
     if (scheme === "http" || scheme === "https") {

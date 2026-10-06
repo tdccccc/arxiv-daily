@@ -29,7 +29,7 @@ const symbols = {
 };
 
 export function mountWorkbench(root: HTMLElement, options: WorkbenchClientOptions = {}): () => void {
-  const fetcher = options.fetch ?? globalThis.fetch.bind(globalThis);
+  const fetcher = options.fetch ?? window.fetch.bind(window);
   const lifetime = new AbortController();
   let disposed = false, generation = 0;
   let disposeContent: (() => void) | undefined;
@@ -71,7 +71,7 @@ export function mountWorkbench(root: HTMLElement, options: WorkbenchClientOption
 interface ReadingNavigation { session: string; index: number; end: number; scrolls: Map<number, number>; pending: boolean }
 
 function mountWorkbenchContent(root: HTMLElement, options: WorkbenchClientOptions, navigation: ReadingNavigation, onAppearanceSaved: (value: UiAppearancePreferences) => Promise<void>): () => void {
-  const fetcher = options.fetch ?? globalThis.fetch.bind(globalThis);
+  const fetcher = options.fetch ?? window.fetch.bind(window);
   const lifetime = new AbortController();
   let disposed = false;
   let status: ProductStatus | null = null;
@@ -98,8 +98,8 @@ function mountWorkbenchContent(root: HTMLElement, options: WorkbenchClientOption
   let runVersion = 0;
   let currentRun: WorkbenchRun | null = null;
   let dismissedRun = "";
-  let searchTimer: ReturnType<typeof setTimeout> | undefined;
-  let pollTimer: ReturnType<typeof setTimeout> | undefined;
+  let searchTimer: number | undefined;
+  let pollTimer: number | undefined;
   let returnFocus: HTMLElement | null = null;
   let dialog: HTMLDialogElement | null = null;
   let fontSize = Math.max(14, Math.min(22, Number(preference("font-size")) || 17));
@@ -283,7 +283,7 @@ function mountWorkbenchContent(root: HTMLElement, options: WorkbenchClientOption
     if (setupRequired) { await showSettings(); return; }
     if (push) rememberScroll();
     leaveLibrary();
-    clearTimeout(searchTimer); listVersion += 1; documentVersion += 1;
+    window.clearTimeout(searchTimer); listVersion += 1; documentVersion += 1;
     selectedView = "library"; selectedKey = ""; selectedPath = ""; activePaper = null;
     root.dataset.view = "library"; root.classList.remove("is-reading", "show-filters");
     find(".toc-pane").innerHTML = "";
@@ -294,7 +294,7 @@ function mountWorkbenchContent(root: HTMLElement, options: WorkbenchClientOption
   async function showReview(push = true): Promise<void> {
     if (setupRequired) { await showSettings(); return; }
     if (push) rememberScroll();
-    leaveLibrary(); clearTimeout(searchTimer); listVersion += 1; documentVersion += 1;
+    leaveLibrary(); window.clearTimeout(searchTimer); listVersion += 1; documentVersion += 1;
     selectedView = "review"; selectedKey = ""; selectedPath = ""; activePaper = null;
     root.dataset.view = "review"; root.classList.remove("is-reading", "show-filters");
     find(".toc-pane").innerHTML = "";
@@ -501,8 +501,8 @@ function mountWorkbenchContent(root: HTMLElement, options: WorkbenchClientOption
     renderRun();
     if (run) void reviewView?.handleRun(run);
     if (run?.id !== previous?.id || run?.status !== previous?.status || run?.date !== previous?.date) void calendar.refresh();
-    clearTimeout(pollTimer);
-    if (run?.status === "running") pollTimer = setTimeout(() => { void pollRun(); }, options.pollIntervalMs ?? 1200);
+    window.clearTimeout(pollTimer);
+    if (run?.status === "running") pollTimer = window.setTimeout(() => { void pollRun(); }, options.pollIntervalMs ?? 1200);
     if (run && run.status !== "running" && previous?.id === run.id && previous.status === "running") {
       if (selectedView === "library") void showLibrary(false);
       if (root.dataset.view === "list") { listScroll = reading.scrollTop; void loadList(true); }
@@ -636,9 +636,9 @@ function mountWorkbenchContent(root: HTMLElement, options: WorkbenchClientOption
     if (target instanceof HTMLInputElement && target.type === "search") {
       query = target.value.trim();
       listVersion += 1;
-      clearTimeout(searchTimer);
+      window.clearTimeout(searchTimer);
       offset = 0; documentVersion += 1;
-      searchTimer = setTimeout(() => { void showList(true, false, root.classList.contains("show-filters")); }, options.searchDelayMs ?? 180);
+      searchTimer = window.setTimeout(() => { void showList(true, false, root.classList.contains("show-filters")); }, options.searchDelayMs ?? 180);
     }
     if (target instanceof HTMLSelectElement && target.dataset.mark === "status") {
       const key = target.closest<HTMLElement>("[data-key]")!.dataset.key!; void saveMark(key, "status", target.value);
@@ -666,7 +666,7 @@ function mountWorkbenchContent(root: HTMLElement, options: WorkbenchClientOption
     switchCollection(values[next]!, true);
   }
   function popstate(): void {
-    listVersion += 1; documentVersion += 1; clearTimeout(searchTimer);
+    listVersion += 1; documentVersion += 1; window.clearTimeout(searchTimer);
     const entry = history.state?.readingNavigation;
     if (entry?.session === navigation.session && Number.isInteger(entry.index) && entry.index >= 0 && entry.index <= navigation.end) navigation.index = entry.index;
     else {
@@ -700,7 +700,7 @@ function mountWorkbenchContent(root: HTMLElement, options: WorkbenchClientOption
     calendar.dispose(); disposeSidebar(); leaveLibrary();
     systemTheme?.removeEventListener?.("change", applyTheme);
     lifetime.abort();
-    clearTimeout(searchTimer); clearTimeout(pollTimer);
+    window.clearTimeout(searchTimer); window.clearTimeout(pollTimer);
     closeDialog();
     root.removeEventListener("click", click); root.removeEventListener("input", input); root.removeEventListener("change", input); root.removeEventListener("submit", submit);
     root.removeEventListener("keydown", keydown);

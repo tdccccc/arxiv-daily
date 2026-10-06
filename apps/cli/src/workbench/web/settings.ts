@@ -142,7 +142,7 @@ export function bindSettings(form: HTMLFormElement, snapshot: SettingsSnapshot, 
   if(host.innerHTML!==content)host.innerHTML=content;
  }
  let disposed=false, rootEditing=false, closing=false;
- let timer: ReturnType<typeof setTimeout>|undefined;
+ let timer: number|undefined;
  let draining: Promise<boolean>|undefined;
  let actionGate: Promise<void>|undefined;
  let appliedAppearance={...(options.appearance??DEFAULT_UI_APPEARANCE)};
@@ -214,16 +214,16 @@ export function bindSettings(form: HTMLFormElement, snapshot: SettingsSnapshot, 
   }catch(error){if(!disposed&&form.isConnected){find('[role="alert"]').hidden=false;find('[role="alert"]').textContent=t(error instanceof Error?error.message:'自动保存失败，修改仍保留。');saveStatus('自动保存失败，修改仍保留。',true);}return false;}
  }
  async function flush(force=true):Promise<boolean> {
-  if(timer){clearTimeout(timer);timer=undefined;}
+  if(timer){window.clearTimeout(timer);timer=undefined;}
   if(disposed)return false;
   if(draining){const success=await draining;if(!success)return false;return flush(force);}
   const pending=drain(force);draining=pending;
   try{return await pending;}finally{if(draining===pending)draining=undefined;}
  }
  function scheduleSave(immediate=false) {
-  if(disposed)return;form.dataset.edited='true';if(timer)clearTimeout(timer);
+  if(disposed)return;form.dataset.edited='true';if(timer)window.clearTimeout(timer);
   saveStatus('修改尚未保存…');
-  if(immediate)void flush(false);else timer=setTimeout(()=>{timer=undefined;void flush(false);},500);
+  if(immediate)void flush(false);else timer=window.setTimeout(()=>{timer=undefined;void flush(false);},500);
  }
  async function saveDraft(refreshGuide=false){if(!await flush())throw new Error(t('请先解决自动保存问题，再继续操作。'));if(refreshGuide)refreshVisibleSetupGuide();return currentSnapshot;}
  async function close():Promise<boolean>{if(closing)return false;closing=true;try{if(!await flush())return false;await saved();return true;}finally{closing=false;}}
@@ -301,7 +301,7 @@ export function bindSettings(form: HTMLFormElement, snapshot: SettingsSnapshot, 
   if(name==='close'){void close();return;}
   if(name==='retry-save'){void flush();return;}
   if(name==='discard-close'){find('.settings-action-host').innerHTML=`<div class="settings-confirm" role="group" aria-label="${escape(t('放弃未保存修改并关闭'))}"><p>${escape(t('尚未保存的修改将被放弃，已保存的设置保持不变。'))}</p>${button('confirm-discard-close','放弃修改并关闭')}${button('cancel-action','Cancel')}</div>`;return;}
-  if(name==='confirm-discard-close'){if(timer){clearTimeout(timer);timer=undefined;}void (async()=>{if(draining)await draining;if(!disposed)await saved();})();return;}
+  if(name==='confirm-discard-close'){if(timer){window.clearTimeout(timer);timer=undefined;}void (async()=>{if(draining)await draining;if(!disposed)await saved();})();return;}
   if(name==='show-secret'){
    const field=target.previousElementSibling as HTMLInputElement;
    if(field.type==='text'){field.type='password';if(field.dataset.revealed==='true'){field.value='';delete field.dataset.revealed;}target.textContent=t('Show');return;}
@@ -338,5 +338,5 @@ export function bindSettings(form: HTMLFormElement, snapshot: SettingsSnapshot, 
  form.addEventListener('submit',event=>{event.preventDefault();void close();});
  conditions();
  if(!snapshot.setupRequired)void refreshLibrary().catch(error=>{if(form.isConnected)find('[data-library-row] .setting-item-description').textContent=error instanceof Error?error.message:t('Unable to load library.');});
- return {flush:()=>flush(),close,dispose(){disposed=true;if(timer)clearTimeout(timer);}};
+ return {flush:()=>flush(),close,dispose(){disposed=true;if(timer)window.clearTimeout(timer);}};
 }

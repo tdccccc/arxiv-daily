@@ -2,6 +2,7 @@ import type { PluginSettings } from "./types";
 import { arxivCategories } from "./categories";
 import { minutesFromHHMM } from "../utils/time";
 import { requireLoopbackSidecarUrl } from "../documents/sidecar-document-parser";
+import { hasControlCharacter } from "../utils/control-characters";
 
 export interface ValidationResult {
   ok: boolean;
@@ -16,11 +17,6 @@ export interface VaultRelativeDirectoryValidation {
 
 const WINDOWS_RESERVED_DEVICE_NAME_RE =
   /^(?:con|prn|aux|nul|com[1-9¹²³]|lpt[1-9¹²³])(?:\.|$)/iu;
-
-// A template literal (rather than a regex literal) keeps this control-character
-// check from tripping eslint's no-control-regex scanner-parity rule; the
-// matched set (C0 controls + DEL) is unchanged.
-const CONTROL_CHARACTER_RE = new RegExp(`[\u0000-\u001f\u007f]`, "u");
 
 /** A portable equality key for already-canonical vault-relative paths. */
 export function portablePathCollisionKey(path: string): string {
@@ -41,7 +37,7 @@ export function validateVaultRelativeDirectory(
   }
   const value = input.trim().replace(/\\/g, "/").normalize("NFC");
   if (!value) return { ok: false, reason: "must not be empty" };
-  if (CONTROL_CHARACTER_RE.test(value)) {
+  if (hasControlCharacter(value)) {
     return { ok: false, reason: "must not contain control characters" };
   }
   if (/^(?:\/|[a-z]:|\/\/)/i.test(value)) {

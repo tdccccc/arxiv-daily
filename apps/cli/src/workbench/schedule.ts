@@ -1,4 +1,4 @@
-import type { PluginSettings } from "@arxiv-daily/core";
+import { clearRepeatingTimer, setRepeatingTimer, type PluginSettings } from "@arxiv-daily/core";
 /** UI-process cadence only; the shared scheduler owns windows, weekdays and completion. */
 export class WorkbenchSchedule {
   constructor(private busy: () => boolean, private run: () => void) {}
@@ -6,8 +6,8 @@ export class WorkbenchSchedule {
   update(schedule: PluginSettings["schedule"] | undefined): void {
     this.close();
     if (!schedule?.enabled) return;
-    this.timer = setInterval(() => { if (!this.busy()) this.run(); }, Math.max(1, schedule.tickIntervalMin) * 60_000);
+    this.timer = setRepeatingTimer(() => { if (!this.busy()) this.run(); }, Math.max(1, schedule.tickIntervalMin) * 60_000);
     this.timer.unref?.();
   }
-  close(): void { clearInterval(this.timer); this.timer = undefined; }
+  close(): void { clearRepeatingTimer(this.timer); this.timer = undefined; }
 }

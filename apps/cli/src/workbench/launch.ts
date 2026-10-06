@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { clearTimer, setTimer } from "@arxiv-daily/core";
 import { loadCliConfig, type CliRuntimeConfig } from "../config";
 import { resolveCliConfigPath } from "../config-path";
 import { isCliRunEvent, type CliIo } from "../main-types";
@@ -67,8 +68,8 @@ async function openBrowser(url: string): Promise<boolean> {
   const args = process.platform === "win32" ? ["url.dll,FileProtocolHandler", url] : [url];
   return new Promise(resolve => {
     const child = spawn(command, args, { stdio: "ignore", detached: true, windowsHide: true });
-    const timer = setTimeout(() => { child.unref(); resolve(true); }, 4000);
-    child.once("error", () => { clearTimeout(timer); resolve(false); });
-    child.once("exit", code => { clearTimeout(timer); resolve(code === 0); });
+    const timer = setTimer(() => { child.unref(); resolve(true); }, 4000);
+    child.once("error", () => { clearTimer(timer); resolve(false); });
+    child.once("exit", code => { clearTimer(timer); resolve(code === 0); });
   });
 }
