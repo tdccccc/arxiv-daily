@@ -22,6 +22,10 @@ import {
 import { dataExport, dataImport } from "./data-cmd";
 import { runUpdate } from "./update-cmd";
 import { getCliVersion } from "./version";
+import { inspectPapers, inspectProduct } from "./inspect-cmd";
+import { runCliLibrary } from "./library-cmd";
+import { runWorkbench } from "./workbench/launch";
+import { validateFrameOrigin } from "./workbench/embedding";
 
 export type { CliIo, WritableTextStream } from "./main-types";
 
@@ -33,6 +37,7 @@ export interface CliCommandRuntime {
   };
   scheduler?: {
     runForDateNow(date: string): Promise<CliRunResult>;
+    tick?: () => Promise<void>;
   };
   manualFetch: {
     fetchAndSummarize(id: string, date: string, signal?: AbortSignal): Promise<ManualFetchResult>;
@@ -40,6 +45,7 @@ export interface CliCommandRuntime {
   operations?: OperationRegistry;
   host?: HostAdapters;
   settings?: CliRuntimeConfig["settings"];
+  dispose?: () => void;
 }
 
 export interface RunCliOptions {
@@ -63,14 +69,19 @@ export interface RunCliOptions {
     import?: typeof dataImport;
   };
   update?: typeof runUpdate;
+  ui?: typeof runWorkbench;
   isTTY?: boolean;
 }
 
 type CliCommand =
   | { name: "help" }
   | { name: "init" }
+  | { name: "status" }
+  | { name: "ui"; port: number; open: boolean; frameOrigin?: string }
+  | { name: "papers"; query: string; offset: number; limit: number }
+  | { name: "library"; args: string[] }
   | { name: "update"; checkOnly?: boolean; yes?: boolean }
-  | { name: "run"; mode: "today" | "date" | "id"; date?: string; id?: string }
+  | { name: "run"; mode: "today" | "date" | "id" | "scheduled"; date?: string; id?: string }
   | { name: "email"; sub: "test" | "status" | "verify-start"; date?: string }
   | { name: "schedule"; sub: "show" | "install" | "uninstall" }
   | { name: "data"; sub: "export"; out?: string }
@@ -78,6 +89,15 @@ type CliCommand =
 
 const USAGE = `Usage:
   arxiv-daily init
+  arxiv-daily status
+  arxiv-daily ui [--port PORT] [--no-open] [--frame-origin ORIGIN]
+  arxiv-daily papers [--query TEXT] [--offset N] [--limit N]
+  arxiv-daily library connect PATH
+  arxiv-daily library status|prepare|scan|index|propose|directions|update|revoke
+  arxiv-daily library authorize --fingerprint HASH
+  arxiv-daily library confirm --candidate ID --proposal-revision N --profile-revision N
+  arxiv-daily library search --query TEXT [--mode hybrid|lexical|dense] [--limit N]
+  arxiv-daily library review --input REQUEST.json
   arxiv-daily update [--check] [--yes]
   arxiv-daily run --today
   arxiv-daily run --date YYYY-MM-DD
@@ -97,9 +117,10 @@ Config: $XDG_CONFIG_HOME/arxiv-daily/config.toml (run init first)
 
 export async function runCli(opts: RunCliOptions = {}): Promise<number> {
   const argv = opts.argv ?? process.argv.slice(2);
-  const rawIo = opts.io ?? { stdout: process.stdout, stderr: process.stderr };
+  const rawIo: CliIo = opts.io ?? { stdout: process.stdout, stderr: process.stderr };
   let secrets: string[] = [];
   const io: CliIo = {
+    onRunResult: rawIo.onRunResult,
     stdout: { write: (chunk) => rawIo.stdout.write(redactText(String(chunk), { secrets })) },
     stderr: { write: (chunk) => rawIo.stderr.write(redactText(String(chunk), { secrets })) },
   };
@@ -138,12 +159,33 @@ export async function runCli(opts: RunCliOptions = {}): Promise<number> {
       });
     }
 
-    const config = await loadConfig({ env });
+    let config: CliRuntimeConfig;
+    try { config = await loadConfig({ env }); }
+    catch (error) {
+      if (parsed.name === "ui" && error instanceof CliConfigError && (error.cause as NodeJS.ErrnoException)?.code === "ENOENT") {
+        return await (opts.ui ?? runWorkbench)(undefined, io, { port: parsed.port, open: parsed.open, env, ...(parsed.frameOrigin ? { frameOrigin: parsed.frameOrigin } : {}) });
+      }
+      throw error;
+    }
     secrets = [
       config.settings.llm.apiKey,
       config.settings.email.apiKey,
       config.settings.email.hostedToken,
+      config.settings.embedding.apiKey,
     ].filter((value): value is string => Boolean(value));
+
+    if (parsed.name === "status") {
+      writeLine(io.stdout, JSON.stringify(await inspectProduct(config)));
+      return 0;
+    }
+    if (parsed.name === "ui") {
+      return await (opts.ui ?? runWorkbench)(config, io, { port: parsed.port, open: parsed.open, env, ...(parsed.frameOrigin ? { frameOrigin: parsed.frameOrigin } : {}) });
+    }
+    if (parsed.name === "papers") {
+      writeLine(io.stdout, JSON.stringify(await inspectPapers(config, parsed.query, parsed.offset, parsed.limit)));
+      return 0;
+    }
+    if (parsed.name === "library") return await runCliLibrary(config, parsed.args, io);
 
     if (parsed.name === "schedule") {
       if (parsed.sub === "show") {
@@ -188,6 +230,10 @@ export async function runCli(opts: RunCliOptions = {}): Promise<number> {
       return 2;
     }
 
+    if (parsed.name === "run" && parsed.mode === "scheduled") {
+      config = { ...config, settings: { ...config.settings, schedule: config.workbenchSchedule ?? config.settings.schedule } };
+      if (!config.settings.schedule.enabled) return 0;
+    }
     const runtime = await buildRuntime(config);
     const removeSignalHandlers = installSignalHandlers(runtime.operations, io);
     try {
@@ -203,6 +249,11 @@ export async function runCli(opts: RunCliOptions = {}): Promise<number> {
       }
 
       if (parsed.name === "run") {
+        if (parsed.mode === "scheduled") {
+          if (!runtime.scheduler?.tick) throw new Error("Scheduled runs require the shared scheduler");
+          await runtime.scheduler.tick();
+          return 0;
+        }
         if (parsed.mode === "id") {
           if (!parsed.id) throw new Error("run --id requires an arXiv id");
           const date =
@@ -254,6 +305,7 @@ export async function runCli(opts: RunCliOptions = {}): Promise<number> {
       }
     } finally {
       removeSignalHandlers();
+      runtime.dispose?.();
     }
   } catch (e) {
     writeLine(io.stderr, (e as Error).message);
@@ -287,6 +339,43 @@ function parseCli(argv: string[]): CliCommand {
   const [commandName, ...commandArgs] = rest;
   if (!commandName || commandName === "help") return { name: "help" };
   if (commandName === "init") return { name: "init" };
+  if (commandName === "library") return { name: "library", args: commandArgs };
+  if (commandName === "ui") {
+    let port = 0;
+    let open = true;
+    let hasPort = false;
+    let frameOrigin: string | undefined;
+    for (let i = 0; i < commandArgs.length; i++) {
+      const flag = commandArgs[i];
+      if (flag === "--frame-origin" && frameOrigin === undefined) { frameOrigin = validateFrameOrigin(commandArgs[++i] || ""); continue; }
+      if (flag === "--no-open") { open = false; continue; }
+      if (flag === "--port" && !hasPort) {
+        const value = commandArgs[++i];
+        if (!value || !/^\d+$/.test(value) || Number(value) > 65535) throw new Error("ui --port requires an integer from 0 to 65535");
+        port = Number(value);
+        hasPort = true;
+        continue;
+      }
+      throw new Error("ui accepts --port PORT, --no-open and --frame-origin ORIGIN only");
+    }
+    return { name: "ui", port, open, ...(frameOrigin ? { frameOrigin } : {}) };
+  }
+  if (commandName === "status") {
+    if (commandArgs.length) throw new Error("status takes no arguments");
+    return { name: "status" };
+  }
+  if (commandName === "papers") {
+    for (let i = 0; i < commandArgs.length; i += 2) {
+      if (!["--query", "--offset", "--limit"].includes(commandArgs[i] ?? "")) throw new Error("papers accepts --query, --offset, and --limit");
+      optionValue(commandArgs.slice(i), commandArgs[i]!);
+    }
+    const offset = Number(optionValue(commandArgs, "--offset") ?? 0);
+    const limit = Number(optionValue(commandArgs, "--limit") ?? 30);
+    if (!Number.isSafeInteger(offset) || offset < 0 || !Number.isSafeInteger(limit) || limit < 1 || limit > 100) {
+      throw new Error("papers requires offset >= 0 and limit 1..100");
+    }
+    return { name: "papers", query: optionValue(commandArgs, "--query") ?? "", offset, limit };
+  }
 
   if (commandName === "update") {
     return {
@@ -297,6 +386,10 @@ function parseCli(argv: string[]): CliCommand {
   }
 
   if (commandName === "run") {
+    if (commandArgs.includes("--scheduled")) {
+      if (commandArgs.length !== 1) throw new Error("run --scheduled takes no other options");
+      return { name: "run", mode: "scheduled" };
+    }
     const today = commandArgs.includes("--today");
     const date = optionValue(commandArgs, "--date");
     const id = optionValue(commandArgs, "--id");
@@ -381,10 +474,18 @@ function optionValue(argv: string[], option: string): string | undefined {
 }
 
 function writeRunResult(io: CliIo, date: string, result: CliRunResult): number {
+  io.onRunResult?.({ date, kind: result.kind,
+    ...("outcome" in result ? { outcome: result.outcome } : {}),
+    ...(result.kind === "completed" ? { papersWritten: result.papersWritten } : {}),
+  });
+  if (result.kind === "pending" && result.outcome === "awaiting_announcement") {
+    writeLine(io.stdout, `run ${date}: awaiting_announcement (${result.reason})`);
+    return 0;
+  }
   if (result.kind === "completed") {
     writeLine(
       io.stdout,
-      `run ${date}: completed (${result.papersWritten} papers written)`,
+      `run ${date}: completed (${result.papersWritten} papers written)${result.outcome ? ` [${result.outcome}]` : ""}`,
     );
     return 0;
   }
@@ -448,7 +549,13 @@ async function defaultBuildRuntime(
 }
 
 if (typeof require !== "undefined" && require.main === module) {
-  void runCli()
+  void runCli({ io: {
+    stdout: process.stdout,
+    stderr: process.stderr,
+    onRunResult: event => {
+      if (process.connected && process.send) process.send({ type: "arxiv-daily/run-result", event }, () => {});
+    },
+  } })
     .then((code) => {
       process.exitCode = code;
     })

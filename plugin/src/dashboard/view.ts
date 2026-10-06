@@ -1018,7 +1018,7 @@ class ArxivDailyDashboardView extends ItemView {
       const ariaLabel = this.getCalendarCellAriaLabel(cell);
       if (ariaLabel) {
         day.setAttribute("aria-label", ariaLabel);
-        if (cell.emptyReason === "permanent-failure") day.setAttribute("title", ariaLabel);
+        day.setAttribute("title", ariaLabel);
       }
 
       if (!cell.date) {
@@ -1034,7 +1034,12 @@ class ArxivDailyDashboardView extends ItemView {
 
       if (cell.date === today) day.addClass("is-today");
 
-      if (!isButtonElement(day)) continue;
+      if (!isButtonElement(day)) {
+        if (cell.state === "no-relevant-papers") {
+          day.createSpan({ cls: "arxiv-daily-dashboard__calendar-day-count", text: "0" });
+        }
+        continue;
+      }
       switch (cell.state) {
         case "has-report":
           this.renderReportCell(day, cell);
@@ -1271,11 +1276,6 @@ class ArxivDailyDashboardView extends ItemView {
 
     this.notice(`arXiv Daily: running for ${date}…`);
     await this.plugin.recentDates.refresh();
-    if (date !== this.todayDate() && !this.plugin.recentDates.hasDate(date)) {
-      this.notice(`arXiv Daily ${date}: arXiv not updated`);
-      await this.reloadIndex();
-      return;
-    }
 
     this.plugin.logger.info(`dashboard: manual calendar run requested for ${date}`);
     const result = await this.plugin.scheduler.runForDateNow(date, {

@@ -43,7 +43,8 @@
     "vite": "$vite",
     "obsidian": {
       "moment": "2.31.0"
-    }
+    },
+    "source-map-js": "^1.2.2"
   },
   "devDependencies": {
     "@eslint/js": "^9.39.5",

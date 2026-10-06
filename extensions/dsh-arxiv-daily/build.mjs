@@ -1,0 +1,21 @@
+import esbuild from 'esbuild';
+import { copyFile, cp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { dirname, resolve } from 'node:path';
+import { fileURLToPath, pathToFileURL } from 'node:url';
+const here = dirname(fileURLToPath(import.meta.url));
+const root = resolve(here, '../..');
+// The existing build owns all product behavior and embedded native/UI assets.
+await import(pathToFileURL(resolve(root, 'apps/cli/esbuild.config.mjs')).href);
+const packed = resolve(here, 'dist/package');
+await rm(packed, { recursive: true, force: true });
+await mkdir(resolve(packed, 'lib'), { recursive: true });
+for (const file of ['package.json', 'cordis.patch.yml', 'README.md', 'icon.svg', 'locale']) await cp(resolve(here, file), resolve(packed, file), { recursive: true });
+for (const file of ['LICENSE', 'THIRD_PARTY_NOTICES.md']) await copyFile(resolve(root, file), resolve(packed, file));
+await copyFile(resolve(root, 'apps/cli/dist/arxiv-daily-cli.cjs'), resolve(packed, 'lib/arxiv-daily-cli.cjs'));
+await esbuild.build({ entryPoints: [resolve(here, 'src/host.mjs')], outfile: resolve(packed, 'lib/index.mjs'), platform: 'node', format: 'esm', target: 'node22', bundle: true });
+await esbuild.build({ entryPoints: [resolve(here, 'src/client-entry.mjs')], outfile: resolve(packed, 'lib/client.js'), platform: 'browser', format: 'iife', target: 'es2022', bundle: true });
+const pkg = JSON.parse(await readFile(resolve(packed, 'package.json'), 'utf8'));
+pkg.os = process.env.ARXIV_DAILY_NATIVE_RELEASE === '1' ? ['linux', 'darwin', 'win32'] : [process.platform];
+pkg.cpu = process.env.ARXIV_DAILY_NATIVE_RELEASE === '1' ? ['x64', 'arm64'] : [process.arch];
+await writeFile(resolve(packed, 'package.json'), `${JSON.stringify(pkg, null, 2)}\n`);
+console.log(`Built ${pkg.name}@${pkg.version}: ${packed}`);

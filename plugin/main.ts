@@ -36,8 +36,7 @@ import { RunHistoryStore } from "@arxiv-daily/core";
 import { DAILY_RUN_LOCK_KEY, RunLock } from "@arxiv-daily/core";
 import {
 ArxivLibraryMetadataResolver,
-extractPdfIdentificationEvidence,
-searchArxivTitle,
+createPdfLibraryFileIdentifier,
 createPersonalLibraryIdentificationFingerprint,
 createPersonalLibraryScopeFingerprint,
 OperationRegistry,
@@ -109,8 +108,8 @@ import type { HostAdapters, HttpClient } from "@arxiv-daily/core";
 import {
   deliverDailyEmailIfEnabled,
   resolveResendApiKey,
-  sampleDailyDigest,
-  startHostedEmailVerification,
+  sendSettingsTestEmail,
+  requestSettingsEmailVerification,
   supportsAutomaticEmailDelivery,
 } from "@arxiv-daily/core";
 import { registerDashboardView } from "./src/dashboard/view";
@@ -1382,66 +1381,7 @@ export default class ArxivDailyPlugin extends Plugin {
       // Content-based identification (strategy v2): files whose names carry
       // no arXiv ID are identified from PDF text evidence, with an arXiv
       // title-search fallback. Failures keep files unresolved.
-      identifyFile: {
-        version: PDF_IDENTIFICATION_EVIDENCE_VERSION,
-        // Identification reads bounded ranges only (header + tail), never
-        // the whole file: arXiv page headers, XMP, and Info metadata all
-        // live there, and full-file reads made scans hang on large PDFs.
-        identify: async (logicalPath, signal, size) => {
-          const source = this.librarySource;
-          if (!source) return null;
-          try {
-            const [head, tail] = await Promise.all([
-              source.readBinary(logicalPath, { signal, start: 0, end: IDENTIFICATION_HEAD_BYTES }),
-              size && size > IDENTIFICATION_HEAD_BYTES
-                ? source.readBinary(logicalPath, {
-                    signal,
-                    start: size - IDENTIFICATION_TAIL_BYTES,
-                    end: size,
-                  })
-                : Promise.resolve(new ArrayBuffer(0)),
-            ]);
-            const combined = new Uint8Array(head.byteLength + tail.byteLength);
-            combined.set(new Uint8Array(head), 0);
-            combined.set(new Uint8Array(tail), head.byteLength);
-            const evidence = extractPdfIdentificationEvidence(combined);
-            const directId = evidence.arxivId
-              ? normalizeArxivId(evidence.arxivId)
-              : null;
-            if (directId) {
-              // The document title is an independent witness: a title
-              // search that resolves to a DIFFERENT paper means the direct
-              // ID is a reference-list misidentification ("… arXiv:0912.0201
-              // …" in the references) — trust the title search. A failed or
-              // empty search keeps the direct ID (garbage document titles
-              // must not demote real papers).
-              if (evidence.title && !/^arxiv:/i.test(evidence.title)) {
-                try {
-                  const result = await searchArxivTitle(this.host.http, evidence.title, signal);
-                  if (result.arxivId) {
-                    const searched = normalizeArxivId(result.arxivId);
-                    if (searched && searched !== directId) return searched;
-                  }
-                } catch {
-                  // Search failure keeps the direct ID.
-                }
-              }
-              return directId;
-            }
-            if (evidence.title) {
-              try {
-                const result = await searchArxivTitle(this.host.http, evidence.title, signal);
-                return result.arxivId ? normalizeArxivId(result.arxivId) : null;
-              } catch {
-                return null;
-              }
-            }
-          } catch {
-            return null;
-          }
-          return null;
-        },
-      },
+      identifyFile: createPdfLibraryFileIdentifier({ source, http: this.host.http }),
       signal: operation.signal,
     });
     operation.signal.throwIfAborted();
@@ -2795,24 +2735,12 @@ export default class ArxivDailyPlugin extends Plugin {
   }
 
   async sendTestEmail(date?: string): Promise<string> {
-    const day =
-      date ??
-      formatDate(todayInTz(new Date(), this.settings.arxiv.timezone));
-    const digest = sampleDailyDigest({
-      date: day,
-      language: this.settings.output.summaryLanguage,
-      categories: arxivCategories(this.settings.arxiv).join(", "),
-      dailyPath: `${this.settings.output.dailyDir}/${day}.md`,
-    });
-    const email = { ...this.settings.email, enabled: true };
-    const result = await deliverDailyEmailIfEnabled(digest, {
+    const result = await sendSettingsTestEmail({
+      settings: this.settings,
       storage: this.host.storage,
       http: this.host.http,
-      output: this.settings.output,
-      email,
-      apiKey: resolveResendApiKey(this.settings.email),
       logger: this.logger,
-      force: true,
+      date,
     });
     return testEmailResultMessage(result, this.automaticEmailSupported());
   }
@@ -2820,10 +2748,10 @@ export default class ArxivDailyPlugin extends Plugin {
   async sendHostedVerificationEmail(): Promise<string> {
     const to = this.settings.email.to?.trim() ?? "";
     if (!to) throw new Error("Enter your email before sending a verification message");
-    await startHostedEmailVerification({
+    await requestSettingsEmailVerification({
+      settings: this.settings,
       http: this.host.http,
       baseUrl: this.settings.email.hostedBaseUrl,
-      email: to,
     });
     return "Verification email sent. Open the link, then paste the code from that page into Verification code.";
   }

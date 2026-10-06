@@ -168,6 +168,12 @@ export interface PluginSettings {
   onboarding: OnboardingSettings;
 }
 
+export type RunOutcome =
+  | "awaiting_announcement"
+  | "no_updates"
+  | "no_matches"
+  | "papers_written";
+
 export type RunStatus =
   | "pending"
   | "running"
@@ -180,6 +186,9 @@ export interface RunStateEntry {
   status: RunStatus;
   lastAttempt: number;
   attempts: number;
+  /** Actual failures; absent in legacy state, where attempts is the fallback. */
+  failureAttempts?: number;
+  outcome?: RunOutcome;
   error?: string;
   papersWritten?: number;
 }

@@ -231,7 +231,7 @@ describe("ManualFetchService", () => {
       "2026-05-12",
       expect.any(String),
       undefined,
-      expect.objectContaining({ replaceExisting: true }),
+      expect.objectContaining({ replaceExisting: true, metrics: expect.objectContaining({ pipelineElapsedMs: expect.any(Number) }) }),
     );
   });
 

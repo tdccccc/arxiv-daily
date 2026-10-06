@@ -11,6 +11,9 @@ import {
   LlmClient,
   Logger,
   PROVIDER_PRESETS,
+  getBusinessSetting,
+  TIMEZONE_OPTIONS,
+  normalizeSettingsEdits,
   startHostedEmailVerification,
 } from "@arxiv-daily/core";
 import { buildNodeHostAdapters, NodeStorageAdapter } from "@arxiv-daily/node-runtime";
@@ -36,19 +39,17 @@ export interface InitOptions {
   }) => Promise<string[]>;
 }
 
-const COMMON_TIMEZONES = [
-  "Asia/Shanghai",
-  "Asia/Tokyo",
-  "Asia/Singapore",
-  "Asia/Kolkata",
-  "Europe/London",
-  "Europe/Berlin",
-  "Europe/Paris",
-  "America/New_York",
-  "America/Los_Angeles",
-  "America/Chicago",
-  "UTC",
-] as const;
+function wizardOptions(id: "reasoningEffort" | "emailMode" | "summaryLanguage") {
+  return Object.entries(getBusinessSetting(id).options ?? {}).map(([value, label]) => ({ value, label }));
+}
+
+function validateSharedWizardField(field: "llm.baseUrl" | "arxiv.timezone", value: string): string | undefined {
+  const candidate = structuredClone(DEFAULT_SETTINGS);
+  if (field === "llm.baseUrl") candidate.llm.baseUrl = value;
+  else candidate.arxiv.timezone = value;
+  try { normalizeSettingsEdits(candidate, [field]); return undefined; }
+  catch (error) { return error instanceof Error ? error.message : "Invalid setting"; }
+}
 
 const BACK = "__back__" as const;
 
@@ -391,7 +392,7 @@ async function runStep(
         initialValue: state.baseUrl,
         placeholder:
           def || "https://api.example.com/v1",
-        validate: (s) => (s.trim() ? undefined : "Base URL is required"),
+        validate: (s) => s.trim() ? validateSharedWizardField("llm.baseUrl", s) : "Base URL is required",
         allowBack: canBack,
       });
       if (v.nav !== "next") return v.nav;
@@ -533,11 +534,8 @@ async function runStep(
       }
       const effort = await askSelect(opts, {
         message: `Reasoning effort (default: ${state.reasoningEffort})`,
-        options: [
-          { value: "low", label: "low", hint: "faster, cheaper" },
-          { value: "medium", label: "medium" },
-          { value: "high", label: "high", hint: "recommended" },
-        ],
+        // The previous confirmation already represents the shared "none" option.
+        options: wizardOptions("reasoningEffort").filter(option => option.value !== "none"),
         initialValue:
           state.reasoningEffort === "low" ||
           state.reasoningEffort === "medium" ||
@@ -555,16 +553,7 @@ async function runStep(
         message: "Email digests after a successful daily run? (default: Skip)",
         options: [
           { value: "skip", label: "Skip for now", hint: "local files only" },
-          {
-            value: "self",
-            label: "Send yourself",
-            hint: "your Resend API key",
-          },
-          {
-            value: "hosted",
-            label: "Official delivery (Beta)",
-            hint: "verify email; shared free quota",
-          },
+          ...wizardOptions("emailMode"),
         ],
         initialValue: state.emailChoice,
         allowBack: canBack,
@@ -715,7 +704,7 @@ async function runStep(
       const pick = await askSelect(opts, {
         message: `Timezone for “today” (default: ${state.timezone})`,
         options: [
-          ...COMMON_TIMEZONES.map((tz) => ({ value: tz, label: tz })),
+          ...TIMEZONE_OPTIONS,
           { value: "__other__", label: "Other IANA name…" },
         ],
         initialValue: state.timezone,
@@ -726,7 +715,7 @@ async function runStep(
         const typed = await askText(opts, {
           message: "IANA timezone",
           initialValue: state.timezone,
-          validate: (s) => (s.trim() ? undefined : "Required"),
+          validate: (s) => validateSharedWizardField("arxiv.timezone", s),
           allowBack: true,
         });
         if (typed.nav !== "next") return typed.nav;
@@ -739,10 +728,7 @@ async function runStep(
     case "language": {
       const pick = await askSelect(opts, {
         message: `Summary language (default: ${state.summaryLanguage})`,
-        options: [
-          { value: "zh", label: "Chinese (zh)" },
-          { value: "en", label: "English (en)" },
-        ],
+        options: wizardOptions("summaryLanguage"),
         initialValue: state.summaryLanguage,
         allowBack: canBack,
       });

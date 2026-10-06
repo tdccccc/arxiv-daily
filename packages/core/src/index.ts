@@ -1,6 +1,7 @@
 /// <reference path="./prompts/md.d.ts" />
 
 export * from "./core/adapters";
+export * from "./utils/calendar";
 export * from "./delivery";
 export * from "./dashboard/detail-summary";
 export * from "./dashboard/history-sync";
@@ -8,6 +9,7 @@ export * from "./dashboard/model";
 export * from "./dashboard/paper-search-index";
 export * from "./dashboard/paper-note-classifier";
 export * from "./documents/parsed-document";
+export * from "./documents/pdfjs-document-parser";
 export * from "./documents/sidecar-document-parser";
 export * from "./documents/sidecar-document-parser-client";
 export * from "./library/arxiv-library-metadata-resolver";
@@ -34,6 +36,9 @@ export * from "./library/incremental/placeable-direction";
 export * from "./library/incremental/placement";
 export * from "./library/incremental/recluster";
 export * from "./library/incremental/suggestions-store";
+export * from "./library/library-connection";
+export * from "./library/library-workflow";
+export * from "./library/pdf-library-file-identifier";
 export * from "./library/fulltext/ports";
 export * from "./library/fulltext/pdf-text-compat";
 export * from "./library/fulltext/remote-embedding-model";
@@ -41,6 +46,7 @@ export * from "./library/fulltext/retrieval";
 export * from "./library/fulltext/retrieval-evaluation";
 export * from "./library/fulltext/title-extraction";
 export * from "./library/fulltext/title-similarity";
+export * from "./library/fulltext/transformers-embedding-model";
 export * from "./library/pdf-identification-evidence";
 export * from "./library/pdf-text-utils";
 export * from "./library/personal-library-catalog";
@@ -143,3 +149,11 @@ export * from "./utils/redaction";
 export * from "./utils/retry";
 export * from "./utils/slugify";
 export * from "./utils/time";
+
+export * from "./settings/appearance";
+export { settingsMessages } from "./presentation/settings-translations";
+export { readingMessages } from "./presentation/reading-translations";
+export { workbenchMessages } from "./presentation/workbench-translations";
+export * from "./settings/editing";
+export * from "./services/settings-operations";
+export * from "./settings/schema";

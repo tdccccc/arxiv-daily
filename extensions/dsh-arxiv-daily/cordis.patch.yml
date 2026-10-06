@@ -1,0 +1,4 @@
+- insert:
+    - id: dsh-arxiv-daily
+      name: dsh-arxiv-daily
+      config: {}

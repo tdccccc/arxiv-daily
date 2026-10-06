@@ -1,0 +1,22 @@
+import { afterEach, expect, it, vi } from "vitest";
+import * as fs from "node:fs/promises";
+import * as os from "node:os";
+import * as path from "node:path";
+import { stringify } from "smol-toml";
+import { type PipelineDeps } from "@arxiv-daily/core";
+import { buildNodeHostAdapters } from "@arxiv-daily/node-runtime";
+import { loadCliConfig } from "../src/config";
+import { buildCliRuntime } from "../src/runtime";
+const roots:string[]=[];
+afterEach(async()=>{await Promise.all(roots.splice(0).map(root=>fs.rm(root,{recursive:true,force:true})));});
+it.each(['manual','library'] as const)('uses %s directions through the same ordinary topic pipeline without opening a library',async origin=>{
+ const root=await fs.mkdtemp(path.join(os.tmpdir(),'cli-topic-runtime-'));roots.push(root);
+ const configPath=path.join(root,'config.toml');
+ await fs.writeFile(configPath,stringify({schema_version:1,vault_root:root,llm:{api_key:'fixture'},arxiv:{topics:[{id:'research',name:'Research',tag:'research',directions:[{id:'evaluation',text:'Agent evaluation',origin}],detail:false}]},library:{schemaVersion:1,selectedRoot:'/does-not-exist',rootIdentity:'1:2',eligibleExtensions:['.pdf'],processingDepth:'metadata-and-abstracts'}}));
+ const config=await loadCliConfig({configPath}); const fetch=vi.fn(async()=>{throw new Error('Unexpected network');});
+ const runtime=await buildCliRuntime(config,{host:buildNodeHostAdapters({rootDir:root,fetch})});
+ const deps=(runtime.pipeline as unknown as {deps:PipelineDeps}).deps;
+ expect(deps.arxiv.topics[0]?.directions).toEqual([{id:'evaluation',text:'Agent evaluation',origin}]);
+ expect(deps).not.toHaveProperty('personalizedDiscovery'); expect(deps).not.toHaveProperty('personalizedDiscoverySignal');
+ expect(fetch).not.toHaveBeenCalled();
+});

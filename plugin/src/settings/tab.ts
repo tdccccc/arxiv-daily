@@ -1,3 +1,6 @@
+import { isValidLocalTime, runWindowTimeOptions, getTopicSettingField } from "@arxiv-daily/core";
+import { getBusinessSetting, TIMEZONE_OPTIONS, REASONING_EFFORT_OPTIONS, type BusinessSettingId, type BusinessSettingsContext } from "@arxiv-daily/core";
+export { TIMEZONE_OPTIONS } from "@arxiv-daily/core";
 import {
   App,
   type ButtonComponent,
@@ -73,6 +76,11 @@ import {
 } from "../library/modal";
 import { renderSensitiveInput } from "./sensitive-input";
 
+
+function addBusinessOptions<T extends { addOption(value: string, label: string): unknown }>(dropdown: T, id: BusinessSettingId, context: Partial<BusinessSettingsContext> = {}): T {
+  for (const [value,label] of Object.entries(getBusinessSetting(id,context).options ?? {})) dropdown.addOption(value,label);
+  return dropdown;
+}
 
 export function validateOutputDirectoryDraft(
   draft: string,
@@ -1461,7 +1469,7 @@ export class ArxivDailySettingTab extends PluginSettingTab {
       );
 
     // Reasoning effort — provider-specific options + custom input
-    const efforts = ["low", "medium", "high"];
+    const efforts = Object.keys(REASONING_EFFORT_OPTIONS).filter(value => value !== "none");
     new Setting(containerEl)
       .setName("Reasoning effort")
       .setDesc("How hard the model tries when thinking mode is on. Higher may be slower and cost more.")
@@ -1609,12 +1617,7 @@ export class ArxivDailySettingTab extends PluginSettingTab {
         "How often the plugin writes a longer note for a paper. Only topics with detail report turned on are considered. Manual “summarize paper” is unchanged.",
       )
       .addDropdown((d) => {
-        d.addOption("conservative", "Fewer")
-          .addOption("balanced", "Recommended")
-          .addOption("broad", "More");
-        if (s.detailSelection.profile === "custom") {
-          d.addOption("custom", "Custom (current values)");
-        }
+        addBusinessOptions(d, "detailProfile", { detailProfile: s.detailSelection.profile });
         d.setValue(s.detailSelection.profile).onChange(async (profile) => {
           if (
             profile !== "conservative" &&
@@ -1709,9 +1712,7 @@ export class ArxivDailySettingTab extends PluginSettingTab {
       .setName("Link style")
       .setDesc("How links between notes are written in daily reports.")
       .addDropdown((d) =>
-        d
-          .addOption("wikilink", "Obsidian wikilink")
-          .addOption("relative", "Standard relative link")
+        addBusinessOptions(d, "linkStyle")
           .setValue(s.output.linkStyle ?? "wikilink")
           .onChange(async (v) => {
             await this.saveLegacyControl(
@@ -1733,9 +1734,7 @@ export class ArxivDailySettingTab extends PluginSettingTab {
       .setName("Summary language")
       .setDesc("Language for daily reports and paper notes.")
       .addDropdown((d) =>
-        d
-          .addOption("zh", "Chinese")
-          .addOption("en", "English")
+        addBusinessOptions(d, "summaryLanguage")
           .setValue(s.output.summaryLanguage ?? "zh")
           .onChange(async (v) => {
             await this.saveLegacyControl(
@@ -1800,8 +1799,7 @@ export class ArxivDailySettingTab extends PluginSettingTab {
           : "Local downloads its model once (about 130 MB) on the first index build, then embeds on this device. Switch to remote only if you have an embeddings API.",
       )
       .addDropdown((d) => {
-        d.addOption("local", "Local (default, one-time model download)");
-        d.addOption("remote", "Remote (fast, titles and abstracts leaves this device)");
+        addBusinessOptions(d, "embeddingMode");
         d.setValue(s.embedding.mode);
         d.onChange(async (v) => {
           const next = v === "remote" ? "remote" : "local";
@@ -1955,8 +1953,7 @@ export class ArxivDailySettingTab extends PluginSettingTab {
           : "Send yourself uses your own Resend account (no project quota). Official delivery (Beta) is a limited free option for light personal use.",
       )
       .addDropdown((d) => {
-        d.addOption("self", "Send yourself");
-        d.addOption("hosted", "Official delivery (beta)");
+        addBusinessOptions(d, "emailMode");
         d.setValue(hostedMode ? "hosted" : "self");
         d.onChange(async (value) => {
           const saved = await this.saveLegacyControl(
@@ -2094,11 +2091,7 @@ export class ArxivDailySettingTab extends PluginSettingTab {
 
     this.attachHelp(
       new Setting(containerEl).setName("Log level").addDropdown((d) =>
-        d
-          .addOption("debug", "Debug")
-          .addOption("info", "Info")
-          .addOption("warn", "Warn")
-          .addOption("error", "Error")
+        addBusinessOptions(d, "logLevel")
           .setValue(s.advanced.logLevel)
           .onChange(async (value) => {
             if (!isLogLevel(value)) return;
@@ -2872,11 +2865,11 @@ export class ArxivDailySettingTab extends PluginSettingTab {
     const nameHintId = `${nameId}-hint`;
     nameRow.createEl("label", {
       cls: "arxiv-daily-settings__topic-label",
-      text: "Name",
+      text: getTopicSettingField("name").name,
       attr: { for: nameId },
     });
     if (!compact) {
-      this.hint(nameRow, "Heading text used as the section title in the daily report.", nameHintId);
+      this.hint(nameRow, getTopicSettingField("name").description, nameHintId);
     }
     const nameInput = nameRow.createEl("input", {
       cls: "arxiv-daily-settings__topic-name-input",
@@ -2886,7 +2879,7 @@ export class ArxivDailySettingTab extends PluginSettingTab {
         : { id: nameId, "aria-describedby": nameHintId },
     });
     nameInput.value = topic.name;
-    nameInput.placeholder = "Topic name";
+    nameInput.placeholder = getTopicSettingField("name").placeholder;
 
     const refreshHeader = () => {
       titleSpan.textContent = topic.name.trim() || "(unnamed)";
@@ -3105,7 +3098,7 @@ export class ArxivDailySettingTab extends PluginSettingTab {
     const detailCheckbox = detailLabel.createEl("input", { type: "checkbox" });
     detailCheckbox.checked = topic.detail;
     detailCheckbox.addClass("arxiv-daily-settings__topic-detail-checkbox");
-    detailLabel.appendText("Detail report");
+    detailLabel.appendText(getTopicSettingField("detail").name);
     const refreshDetail = () => {
       // Refresh the header star indicator without a full re-render.
       star?.remove();
@@ -3261,35 +3254,7 @@ export function uniqueTopicTag(
   }
 }
 
-export function isValidLocalTime(value: string): boolean {
-  return /^(?:[01]\d|2[0-3]):[0-5]\d$/.test(value);
-}
-
-export interface RunWindowTimeOption {
-  value: string;
-  label: string;
-  valid: boolean;
-}
-
-export function runWindowTimeOptions(current: string): RunWindowTimeOption[] {
-  const values: RunWindowTimeOption[] = [];
-  for (let hour = 0; hour < 24; hour += 1) {
-    for (let minute = 0; minute < 60; minute += 15) {
-      const value = `${String(hour).padStart(2, "0")}:${String(minute).padStart(2, "0")}`;
-      values.push({ value, label: value, valid: true });
-    }
-  }
-
-  if (!values.some((option) => option.value === current)) {
-    const valid = isValidLocalTime(current);
-    values.push({
-      value: current,
-      label: valid ? current : `${current || "(empty)"} — invalid`,
-      valid,
-    });
-  }
-  return values.sort((a, b) => a.value.localeCompare(b.value));
-}
+export { isValidLocalTime, runWindowTimeOptions, type RunWindowTimeOption } from "@arxiv-daily/core";
 
 export function renderRunWindowTimeSelect(
   parent: HTMLElement,
@@ -3340,17 +3305,6 @@ export function renderRunWindowTimeSelect(
 }
 
 /** Timezone presets for the arXiv section; shared by display() and the 1.13+ rows. */
-export const TIMEZONE_OPTIONS: ReadonlyArray<{ value: string; label: string }> = [
-  { value: "Asia/Shanghai", label: "Shanghai (UTC+8)" },
-  { value: "Asia/Tokyo", label: "Tokyo (UTC+9)" },
-  { value: "US/Eastern", label: "US East (UTC-5)" },
-  { value: "US/Pacific", label: "US West (UTC-8)" },
-  { value: "Europe/London", label: "London (UTC+0)" },
-  { value: "Europe/Berlin", label: "Berlin (UTC+1)" },
-  { value: "Europe/Moscow", label: "Moscow (UTC+3)" },
-  { value: "Australia/Sydney", label: "Sydney (UTC+10)" },
-  { value: "UTC", label: "UTC" },
-];
 
 export function addCategoryOptions(
   selectEl: HTMLSelectElement,

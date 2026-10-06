@@ -66,7 +66,11 @@ describe("PipelineResult types", () => {
 });
 
 describe("Pipeline arXiv 0 papers handling", () => {
-  it("should return pending when arXiv returns 0 papers", async () => {
+  it.each([
+    ["2026-06-22", "completed", "no_updates"],
+    ["2026-06-23", "pending", "awaiting_announcement"],
+    ["2026-10-03", "completed", "no_updates"],
+  ])("classifies source availability for %s", async (date, kind, outcome) => {
     const fetcher = {
       fetchRecent: vi.fn().mockResolvedValue(emptyPapersHtml),
       fetchMetadataByIds: vi.fn(),
@@ -103,8 +107,9 @@ describe("Pipeline arXiv 0 papers handling", () => {
       detailSelection: testDetailSelection,
     });
 
-    const result = await pipeline.runForDate("2026-06-22");
-    expect(result).toEqual({ kind: "pending", reason: "no papers from arXiv" });
+    const result = await pipeline.runForDate(date);
+    expect(result).toMatchObject({ kind, outcome });
+    expect(llm.call).not.toHaveBeenCalled();
     expect(writer.writeEmptyDaily).not.toHaveBeenCalled();
   });
 });
@@ -166,6 +171,7 @@ describe("Pipeline LLM 0 papers handling", () => {
     expect(result.kind).toBe("completed");
     if (result.kind === "completed") {
       expect(result.papersWritten).toBe(0);
+      expect(result.outcome).toBe("no_matches");
     }
     // Should NOT write empty file
     expect(writer.writeEmptyDaily).not.toHaveBeenCalled();

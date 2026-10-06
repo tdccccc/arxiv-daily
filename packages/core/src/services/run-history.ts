@@ -1,5 +1,5 @@
 import type { PipelineResult } from "../pipeline/pipeline";
-import type { OutputSettings, RunStatus } from "../settings/types";
+import type { OutputSettings, RunOutcome, RunStatus } from "../settings/types";
 import type { StorageAdapter } from "../core/adapters";
 import { deriveStorageStateStorePaths } from "./state-store";
 import type { Logger } from "./logger";
@@ -34,6 +34,8 @@ export interface RunHistoryRecord {
   errorMessage?: string;
   dailyPath?: string;
   attempts?: number;
+  failureAttempts?: number;
+  outcome?: RunOutcome;
 }
 
 export interface RunHistoryStorePaths {
@@ -164,6 +166,8 @@ function formatRunHistoryRecord(record: RunHistoryRecord): string {
     `trigger=${record.trigger}`,
   ];
   if (record.status) parts.push(`status=${record.status}`);
+  if (record.outcome) parts.push(`outcome=${record.outcome}`);
+  if (record.failureAttempts != null) parts.push(`failures=${record.failureAttempts}`);
   if (record.resultKind) parts.push(`result=${record.resultKind}`);
   if (record.papersWritten != null) parts.push(`papers=${record.papersWritten}`);
   if (record.requestedPapersWritten != null) {

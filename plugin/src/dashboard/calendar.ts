@@ -11,6 +11,8 @@ export type CalendarCellState =
 export type CalendarEmptyReason =
   | "blank"
   | "arxiv-not-updated"
+  | "awaiting-announcement"
+  | "not-run"
   | "future"
   | "before-tracking"
   | "report-missing"
@@ -64,6 +66,14 @@ export function resolveCalendarCellState({
     return { state: "empty", emptyReason: "permanent-failure" };
   }
 
+  if (runState?.status === "pending" && runState.outcome === "awaiting_announcement") {
+    return { state: runnable ? "runnable" : "empty", emptyReason: "awaiting-announcement" };
+  }
+
+  if (runState?.status === "completed" && runState.outcome === "no_matches") {
+    return { state: "no-relevant-papers" };
+  }
+
   if (isArxivNotUpdatedRunState(runState)) {
     return { state: "empty", emptyReason: "arxiv-not-updated" };
   }
@@ -96,7 +106,8 @@ export function isCalendarRunWhitelisted(
     );
   }
 
-  return input.recentDates.has(input.date);
+  return input.recentDates.has(input.date) ||
+    (input.runState?.status === "pending" && input.runState.outcome === "awaiting_announcement");
 }
 
 export interface CalendarEmptyReasonInput {
@@ -122,7 +133,7 @@ export function resolveCalendarEmptyReason(
   ) {
     return "before-tracking";
   }
-  return "arxiv-not-updated";
+  return "not-run";
 }
 
 export function calendarCellAriaLabel(cell: CalendarCell): string | undefined {
@@ -134,8 +145,16 @@ export function calendarCellAriaLabel(cell: CalendarCell): string | undefined {
   }
 
   if (cell.state === "no-relevant-papers") {
-    return `${date}: open daily report, no relevant papers`;
+    return cell.report
+      ? `${date}: open daily report, no relevant papers`
+      : `${date}: no matching papers`;
   }
+
+  if (cell.emptyReason === "awaiting-announcement") {
+    return `${date}: awaiting arXiv announcement${cell.state === "runnable" ? ", retry daily report" : ""}`;
+  }
+
+  if (cell.emptyReason === "not-run") return `${date}: not run`;
 
   if (cell.state === "runnable") {
     return `${date}: run daily report`;
@@ -173,7 +192,8 @@ export function isButtonElement(element: HTMLElement): element is HTMLButtonElem
 export function isArxivNotUpdatedRunState(runState?: RunStateEntry): boolean {
   return (
     runState?.status === "skipped" ||
-    (runState?.status === "completed" && runState.papersWritten === 0)
+    (runState?.status === "completed" &&
+      (runState.outcome === "no_updates" || (!runState.outcome && runState.papersWritten === 0)))
   );
 }
 
@@ -212,56 +232,4 @@ export function latestReportMonth(reports: DailyReportDay[]): string | null {
   return latest ? latest.slice(0, 7) : null;
 }
 
-export function shiftMonth(month: string, delta: number): string {
-  const [rawYear, rawMonthIndex] = month.split("-").map(Number);
-  if (
-    typeof rawYear !== "number" ||
-    typeof rawMonthIndex !== "number" ||
-    !Number.isFinite(rawYear) ||
-    !Number.isFinite(rawMonthIndex)
-  ) {
-    return month;
-  }
-  const year = rawYear;
-  const monthIndex = rawMonthIndex;
-  const date = new Date(Date.UTC(year, monthIndex - 1 + delta, 1));
-  return `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, "0")}`;
-}
-
-export function calendarCells(month: string): Array<{ date: string | null }> {
-  const [rawYear, rawMonthIndex] = month.split("-").map(Number);
-  if (
-    typeof rawYear !== "number" ||
-    typeof rawMonthIndex !== "number" ||
-    !Number.isFinite(rawYear) ||
-    !Number.isFinite(rawMonthIndex)
-  ) {
-    return [];
-  }
-  const year = rawYear;
-  const monthIndex = rawMonthIndex;
-  const first = new Date(Date.UTC(year, monthIndex - 1, 1));
-  const daysInMonth = new Date(Date.UTC(year, monthIndex, 0)).getUTCDate();
-  const mondayOffset = (first.getUTCDay() + 6) % 7;
-  const cells: Array<{ date: string | null }> = Array.from(
-    { length: mondayOffset },
-    () => ({ date: null }),
-  );
-  for (let day = 1; day <= daysInMonth; day++) {
-    cells.push({
-      date: `${month}-${String(day).padStart(2, "0")}`,
-    });
-  }
-  while (cells.length % 7 !== 0) cells.push({ date: null });
-  return cells;
-}
-
-export function parseCalendarDate(date: string): { y: number; m: number; d: number } | null {
-  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(date);
-  if (!match) return null;
-  return {
-    y: Number(match[1]),
-    m: Number(match[2]),
-    d: Number(match[3]),
-  };
-}
+export { calendarCells, shiftMonth, parseCalendarDate } from "@arxiv-daily/core";

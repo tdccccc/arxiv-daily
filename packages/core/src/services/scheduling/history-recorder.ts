@@ -1,3 +1,4 @@
+import type { RunOutcome } from "../../settings/types";
 import type { Logger } from "../logger";
 import type {
   RunHistoryRecord,
@@ -26,6 +27,7 @@ export class HistoryRecorder {
       trigger,
       status: "running",
       attempts: this.deps.store().get(date).attempts,
+      failureAttempts: this.deps.store().get(date).failureAttempts,
     }, at);
   }
 
@@ -36,6 +38,7 @@ export class HistoryRecorder {
       papersWritten: number;
       requestedPapersWritten: number;
       preservedPapersWritten: boolean;
+      outcome?: RunOutcome;
     },
     at?: Date,
   ): Promise<void> {
@@ -47,13 +50,15 @@ export class HistoryRecorder {
       status: "completed",
       resultKind: "completed",
       papersWritten: detail.papersWritten,
+      outcome: detail.outcome,
       requestedPapersWritten: detail.requestedPapersWritten,
       preservedPapersWritten: detail.preservedPapersWritten || undefined,
       attempts: entry.attempts,
+      failureAttempts: entry.failureAttempts,
     }, at);
   }
 
-  async recordPending(date: string, trigger: RunHistoryTrigger, reason: string, at?: Date): Promise<void> {
+  async recordPending(date: string, trigger: RunHistoryTrigger, reason: string, at?: Date, outcome?: RunOutcome): Promise<void> {
     await this.record({
       date,
       event: "pending",
@@ -61,6 +66,9 @@ export class HistoryRecorder {
       status: "pending",
       resultKind: "pending",
       reason,
+      outcome,
+      attempts: this.deps.store().get(date).attempts,
+      failureAttempts: this.deps.store().get(date).failureAttempts,
     }, at);
   }
 
@@ -81,6 +89,7 @@ export class HistoryRecorder {
       reason,
       errorMessage: reason,
       attempts: entry.attempts,
+      failureAttempts: entry.failureAttempts,
     }, at);
   }
 
@@ -100,6 +109,7 @@ export class HistoryRecorder {
       reason,
       errorMessage: reason,
       attempts: entry.attempts,
+      failureAttempts: entry.failureAttempts,
     }, at);
   }
 
@@ -123,6 +133,7 @@ export class HistoryRecorder {
       reason,
       errorMessage: reason,
       attempts: entry.attempts,
+      failureAttempts: entry.failureAttempts,
     }, at);
   }
 

@@ -2,7 +2,7 @@
 
 Command-line tool for [arXiv Daily](https://github.com/tdccccc/arxiv-daily): fetch arXiv by category, filter with an LLM by your research topics, and write Markdown **daily reports** (and optional **paper notes**).
 
-Works standalone on a server or always-on machine. The Obsidian plugin is separate; both can share the same vault folder layout.
+Works standalone in a terminal, local browser, or on a server or always-on machine. The Obsidian plugin is separate; both can share the same vault folder layout.
 
 ## Requirements
 
@@ -77,6 +77,15 @@ Remove those yourself if you want a full cleanup.
 
 ```text
 arxiv-daily init
+arxiv-daily status
+arxiv-daily ui [--port PORT] [--no-open]
+arxiv-daily papers [--query TEXT] [--offset N] [--limit N]
+arxiv-daily library connect PATH
+arxiv-daily library status|prepare|scan|index|propose|directions|revoke
+arxiv-daily library authorize --fingerprint HASH
+arxiv-daily library confirm --candidate ID --proposal-revision N
+arxiv-daily library search --query TEXT [--mode hybrid|lexical|dense] [--limit N]
+arxiv-daily library review --input REQUEST.json
 arxiv-daily update [--check] [--yes]
 arxiv-daily run --today
 arxiv-daily run --date YYYY-MM-DD
@@ -90,7 +99,53 @@ arxiv-daily help
 
 - **`update`** — check npm for a newer `arxiv-daily` and optionally `npm install -g` it. Config is not touched. `--check` only reports; `--yes` skips the confirm prompt.
 - **`run --today`** — one day only (typical cron entry). Missed days: `run --date …`.
+- **`status`** — JSON overview of the configured output paths, topics, model readiness, paper count, and latest run states. Does not start generation or return model endpoints/credentials.
+- **`papers`** — paginated JSON from the existing Paper Index; `--query` reuses Dashboard lexical search. Default limit 30, maximum 100. Does not query arXiv or the model.
 - **`schedule install`** — writes managed user crontab lines (Linux/macOS/WSL). Not supported on native Windows Task Scheduler; use WSL or the Obsidian plugin for desktop scheduling.
+
+## Local reading workbench
+
+Run `arxiv-daily ui` (with or without an existing configuration) to open the local browser reader. The command prints a full `Workbench:` URL and keeps the service running until Ctrl+C. Use `--no-open` to open the URL yourself or `--port 8123` to choose a fixed port; the default chooses an available loopback port. It serves only on `127.0.0.1`.
+
+Browse daily reports and paper notes, search their titles/authors/IDs/dates, and read existing Markdown with tables, code, images and scientific math. Relative links and unambiguous Obsidian wikilinks navigate between existing reports. Source and PDF buttons open original papers. No reading action changes the original Markdown or calls a model; browser assets and math fonts are embedded in the CLI.
+
+The left sidebar contains the calendar and search/topic/reading filters. The right side starts with all indexed discoveries, including papers without detailed notes, with sorting and pagination. Selecting a date filters its papers; an explicit action opens the complete saved report. Opening a paper shows its saved overview and detail actions. Back/forward stays within the current workbench reading history, restoring filters, anchors and scroll positions; unavailable directions are disabled. History does not persist across workbench restarts. Return to list restores list filters, page and scroll position. “Browse Markdown files” also exposes standalone notes. Other days show their persisted state and offer a date-prefilled generation/retry form when available. Completed zero-match runs remain distinct from ungenerated days, and completed runs whose files are missing do not offer a misleading rerun. Dates use the configured product timezone; browsing does not infer arXiv publication availability or trigger generation.
+
+Waiting for an announcement, confirmed no updates, no filtering matches and genuine failures have distinct statuses. Waiting does not consume the ordinary failure retry budget.
+
+Summary sources and following appendix material are separated from the body. The reading footer shows input/output/total tokens, generation duration and the generation timestamp in UTC. Older missing values are shown as not recorded; file modification time is never substituted. A paper overview that uses its source daily report’s metrics labels that report-wide scope.
+
+Larger colored day cells show paper counts directly. Known run totals take precedence; otherwise existing Paper Index references can provide a count for older reports. Missing counts remain unknown (—), not zero. Drag the sidebar separator or use its arrow keys to resize; the sidebar can also collapse. Width and collapse preferences persist beside CLI configuration across service ports. Mobile navigation opens through the calendar/filter button, with matching light/dark status colors.
+
+Reading status (unmarked/to-read/read) and independent favorites persist through the shared Paper Index. Existing legacy states remain until explicitly changed, stale conflicting edits are rejected, and marking never rewrites Markdown.
+
+Explicit generation actions invoke the same daily/manual CLI workflow, including configured email delivery, and show progress, cancellation and final results. Settings follows the Obsidian 1.13+ section order and controls, including model suggestions, categories, topics, detail policy, output and schedule, personal library, email, advanced and help. With no configuration it opens first-run setup automatically. Save activates the settings immediately; secret inputs stay blank and preserve existing keys when left empty. Show explicitly reveals a saved key through a revision-checked local POST; Hide clears a revealed saved key. Get models populates the dropdown attached to the same editable Model field; it supports typing, filtering and keyboard selection. Changes from another editor are rejected instead of overwritten, and settings cannot be saved during an active generation task. Embedding, email and automatic detail policy are editable; legacy PDF sidecar values remain stored while their retired settings controls stay hidden. Library indexing and explicit email/model-list actions reuse the shared workflows. Enable and Check every (minutes) run shared scheduler checks while the workbench process is open, using a separate workbench_schedule TOML table; existing external cron intent is preserved. The initial workbench is a reader, not a Markdown editor or full Obsidian host. Settings already supports connecting, authorizing and indexing a library. Dedicated library-search and direction-review pages, and fuller run management, remain planned; use the commands below for library search and proposal acceptance.
+
+For the workbench described here, use the current source build until a CLI release containing these changes is published:
+
+```bash
+npm ci
+npm run build --workspace apps/cli
+npm run cli -- ui
+```
+
+Run these from the repository root. Source builds require CMake, a C++ compiler and Node-API headers for native storage. The same workbench is available inside [DSH](../../extensions/dsh-arxiv-daily/README.md); [Claude Code CLI](../../extensions/claude-code-arxiv-daily/README.md) can open it in your browser. Neither integration requires Obsidian.
+
+Settings changes save automatically. Closing settings waits for pending saves; failures keep the editor open so you can retry. Automatic daily reports remain optional after completing your first report.
+
+## Optional personal library
+
+In the workbench, connect and index a folder from **Settings**, then open **Personal library** to browse/search titles and abstracts or open local PDFs (up to 25 MiB). **Review directions** provides proposal editing, representative evidence, previews, explicit partial acceptance, and a library overview. Accepted directions become ordinary research-topic settings; opening either page does not automatically call a model. The commands below remain available for terminal use.
+
+After basic setup, `library connect` selects a read-only PDF source. `library status` displays the processing scope and endpoint-bound authorization fingerprint. Authorize only the displayed scope using `library authorize --fingerprint …`; `library revoke` revokes it.
+
+Run `library prepare` to install pinned optional PDF/runtime components in the configured cache, then `library scan` and `library index`. Local embedding uses the same e5 q8 model and downloads weights on first use. Remote embedding skips the local CPU component and requires the displayed title-and-abstract processing authorization. Local indexing can run before model-processing authorization; direction generation requires authorization.
+
+`library propose` generates topic-grouped direction candidates. Review `library directions`, then confirm a candidate using its displayed proposal revision, or accept selected topics with `library review`. Acceptance atomically writes normal topic settings and receipts. These directions participate in ordinary daily filtering alongside manually entered directions.
+
+The catalog, title-and-abstract indexes and proposals use existing core formats under the active output layout. Accepted topics and their receipts are saved together in the CLI TOML. Library settings live in the CLI TOML and are not automatically synchronized with Obsidian settings. Connection/authorization updates preserve setting values but normalize TOML formatting. Avoid concurrent library rebuild/review writers from different hosts against the same output directory.
+
+For review request schemas and the auxiliary Claude Code workflow, see [the command reference in the source repository](https://github.com/tdccccc/arxiv-daily/blob/main/extensions/claude-code-arxiv-daily/references/commands.md). The Node CPU runtime has been exercised on Linux Node 20.19 and 22; Windows/macOS CPU smoke remains to be completed before general release.
 
 ## Interrupted daily runs and checkpoints
 

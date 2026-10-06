@@ -33,3 +33,6 @@ export { StreamResourceOpener } from "./resource-opener";
 export { EnvSecretProvider } from "./secrets";
 export { NodeStorageAdapter } from "./storage-adapter";
 export { LinkedomMarkupParser } from "./markup-parser";
+export * from "./library-runtime";
+export { NodeFileLock } from "./file-lock";
+export { openScopedLibrarySource, type OpenedScopedLibrarySource } from "./scoped-library-source";

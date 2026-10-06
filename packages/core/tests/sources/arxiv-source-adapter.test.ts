@@ -157,6 +157,45 @@ describe("ArxivSourceAdapter", () => {
     expect(fetcher.fetchMetadataByIds).toHaveBeenCalled();
   });
 
+  it.each([
+    ["2026-10-03", false, "pending", "awaiting_announcement"],
+    ["2026-10-02", false, "ok", "no_updates"],
+    ["2026-10-03", true, "error", undefined],
+  ])("classifies announcement availability for %s (network failure: %s)", async (date, fails, kind, outcome) => {
+    const html = '<dl id="articles"><h3>Fri, 2 Oct 2026 (showing 0 of 0 entries)</h3></dl>';
+    const fetchRecent = vi.fn().mockResolvedValue(html);
+    if (fails) fetchRecent.mockRejectedValueOnce(new Error("network down"));
+    const enrich = vi.fn();
+    const adapter = new ArxivSourceAdapter({
+      fetcher: { fetchRecent, fetchMetadataByIds: enrich } as any,
+      paperFetcher: { fetch: vi.fn() } as any,
+      markupParser, logger: new Logger("error"),
+      defaultCategories: ["astro-ph.CO", "astro-ph.GA"],
+    });
+    const result = await adapter.listForDate(date);
+    expect(result).toMatchObject({ kind, ...(outcome ? { outcome } : {}) });
+    expect(enrich).not.toHaveBeenCalled();
+    if (kind === "error") expect(result).toMatchObject({ failureKind: "failed_transient", reason: expect.stringContaining("network down") });
+  });
+
+  it.each([
+    ['<dl id="articles"><h3>Thu, 1 Oct 2026</h3></dl>', "pending"],
+    ['<html>upstream maintenance</html>', "error"],
+    ['<dl id="articles"><h3>Thu, 1 Oct 2026</h3></dl><dl id="articles"><h3>Mon, 5 Oct 2026</h3></dl>', "error"],
+  ])("does not finalize partial, malformed or unexplained missing announcements", async (other, kind) => {
+    const enrich = vi.fn();
+    const adapter = new ArxivSourceAdapter({
+      fetcher: {
+        fetchRecent: vi.fn().mockResolvedValueOnce('<dl id="articles"><h3>Fri, 2 Oct 2026</h3></dl>').mockResolvedValueOnce(other),
+        fetchMetadataByIds: enrich,
+      } as any,
+      paperFetcher: { fetch: vi.fn() } as any,
+      markupParser, logger: new Logger("error"), defaultCategories: ["astro-ph.CO", "astro-ph.GA"],
+    });
+    expect(await adapter.listForDate("2026-10-02")).toMatchObject({ kind });
+    expect(enrich).not.toHaveBeenCalled();
+  });
+
   it("fetchContent delegates to PaperContentFetcher and normalizes", async () => {
     const paperFetcher = {
       fetch: vi.fn().mockResolvedValue({
@@ -255,8 +294,8 @@ describe("ArxivSourceAdapter", () => {
       failureKind: "failed_permanent",
     });
     await expect(adapter.listForDate(shift(dates.at(-1)!, 1))).resolves.toMatchObject({
-      kind: "error",
-      failureKind: "failed_transient",
+      kind: "pending",
+      outcome: "awaiting_announcement",
     });
   });
 
