@@ -25,7 +25,7 @@ function setup(first = false, fail = false, configPath?: string, override?: (pat
         if (fail) return json({ error: "配置已被其他窗口修改，请重新加载" }, 409);
         if (configPath) {
           try { await saveWorkbenchSettings(configPath, JSON.parse(String(init.body))); }
-          catch (error) { return json({ error: String(error) }, 400); }
+          catch (error) { return json({ error: error instanceof Error ? error.message : "invalid settings" }, 400); }
         }
         configured = true;
       }
