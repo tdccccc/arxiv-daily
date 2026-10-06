@@ -70,6 +70,18 @@ export function mountWorkbench(root: HTMLElement, options: WorkbenchClientOption
 
 interface ReadingNavigation { session: string; index: number; end: number; scrolls: Map<number, number>; pending: boolean }
 
+// `history.state` is typed `any` by the DOM lib (it holds whatever a page
+// pushes), but this page only ever pushes this shape itself (see the
+// `history.pushState`/`replaceState` calls below). Reading it through
+// `unknown` keeps that assumption local instead of letting `any` flow out to
+// every call site that reads navigation/scroll state back; every field here
+// is optional, so a bare object already satisfies the return type.
+interface WorkbenchHistoryState { listScroll?: number; readingNavigation?: { session: string; index: number } }
+function workbenchHistoryState(): WorkbenchHistoryState {
+  const state: unknown = history.state;
+  return state && typeof state === "object" ? state : {};
+}
+
 function mountWorkbenchContent(root: HTMLElement, options: WorkbenchClientOptions, navigation: ReadingNavigation, onAppearanceSaved: (value: UiAppearancePreferences) => Promise<void>): () => void {
   const fetcher = options.fetch ?? window.fetch.bind(window);
   const lifetime = new AbortController();
@@ -231,7 +243,7 @@ function mountWorkbenchContent(root: HTMLElement, options: WorkbenchClientOption
     offset = Math.max(0, Number(params.get("offset")) || 0); selectedDate = routeDate();
     documentsMode = params.get("files") === "1"; kind = params.get("kind") === "daily" ? "daily" : params.get("kind") === "papers" ? "papers" : "all";
     selectedPath = params.get("document") || ""; selectedKey = params.get("paper") || "";
-    listScroll = scrollPositions.get(listIdentity()) ?? history.state?.listScroll ?? 0;
+    listScroll = scrollPositions.get(listIdentity()) ?? workbenchHistoryState().listScroll ?? 0;
   }
   function syncFilters(): void {
     find<HTMLInputElement>('input[type="search"]').value = query;
@@ -667,7 +679,7 @@ function mountWorkbenchContent(root: HTMLElement, options: WorkbenchClientOption
   }
   function popstate(): void {
     listVersion += 1; documentVersion += 1; window.clearTimeout(searchTimer);
-    const entry = history.state?.readingNavigation;
+    const entry = workbenchHistoryState().readingNavigation;
     if (entry?.session === navigation.session && Number.isInteger(entry.index) && entry.index >= 0 && entry.index <= navigation.end) navigation.index = entry.index;
     else {
       // Unknown browser entries are a new local boundary, never a license to leave the frame.
