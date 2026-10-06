@@ -171,7 +171,7 @@ test("non-release builds fall back to no embedded native asset (with a warning) 
     const script = `
       console.warn = (...args) => console.log(...args);
       import(${JSON.stringify(pathToFileURL(resolve("scripts/native-assets.mjs")).href)}).then(({ nativeAssetsForBuild }) => {
-        const assets = nativeAssetsForBuild({ directory: ${JSON.stringify(outputDirectory)} });
+        const assets = nativeAssetsForBuild({ release: false, directory: ${JSON.stringify(outputDirectory)} });
         console.log(JSON.stringify(assets));
       });
     `;
