@@ -2,7 +2,6 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { createHash } from "node:crypto";
 import { createRequire } from "node:module";
-import { pathToFileURL } from "node:url";
 import { spawn } from "node:child_process";
 import {
   PdfJsDocumentParser, LOCAL_EMBEDDING_MODEL_REPO,
@@ -94,7 +93,14 @@ export async function createNodeLibraryDocumentParser(cacheDir: string): Promise
   const { pdf } = nodeLibraryRuntimePaths(cacheDir);
   const require = await requireInstalled(pdf, pdfPackage);
   const root = path.dirname(require.resolve("pdfjs-dist/package.json"));
-  const module = await import(pathToFileURL(require.resolve("pdfjs-dist/legacy/build/pdf.mjs")).href) as PdfJsLib;
+  // pdfjs-dist ships this build as ESM-only (no CJS entry point), but Node
+  // has supported `require()`-ing an ESM module with no top-level await
+  // since v20.19.0/v22.12.0 — this project's minimum supported Node — so
+  // this loads through the sandboxed `require` above instead of a dynamic
+  // `import()` whose specifier is only known at runtime (it lives under the
+  // user's configured cache directory, prepared by
+  // `prepareNodeLibraryRuntime`).
+  const module = require("pdfjs-dist/legacy/build/pdf.mjs") as PdfJsLib;
   return new PdfJsDocumentParser(module, {
     provenance: { id: "node-pdfjs", version: "5.4.624" },
     cMapUrl: path.join(root, "cmaps") + path.sep,
