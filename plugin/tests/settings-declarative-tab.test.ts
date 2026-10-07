@@ -1987,63 +1987,102 @@ describe("model field", () => {
     await vi.waitFor(() => expect(settings.llm.model).toBe("my-model"));
   });
 
-  it("lists every fetched model as a selectable option, even one not matching the typed name", async () => {
-    // A <datalist> tied to the model input would only ever suggest options
-    // matching what's already typed (Chromium/Electron filters it that
-    // way); happy-dom doesn't reproduce that filtering, so this asserts the
-    // select's full option list directly, which must be unfiltered by
-    // construction regardless of the input's text.
+  it("suggests nothing before any fetch, so typing works like a plain input", () => {
+    const { tab } = makeTab();
+    const setting = new Setting(tab.containerEl);
+    renderModelRow(tab, setting);
+
+    const suggest = tab.getModelInputSuggest()!;
+    expect(suggest.hasModels()).toBe(false);
+    expect(suggest.previewSuggestions("anything")).toEqual([]);
+  });
+
+  it("shows every fetched model when the input holds the saved, non-matching name", async () => {
+    // The input's text is the already-saved model, which the fetched list
+    // does not contain — this must still show everything, not filter down
+    // to zero matches (the bug a filtering <datalist> had).
     const { tab, plugin, settings } = makeTab();
     settings.llm.model = "some-unrelated-typed-name";
     (plugin as unknown as { getHttpClient: () => unknown }).getHttpClient = () => ({});
     const fetchModels = vi
       .spyOn(LlmClient.prototype, "fetchModels")
       .mockResolvedValue(["provider-a", "provider-b"]);
-    document.body.appendChild(tab.containerEl);
     const setting = new Setting(tab.containerEl);
     renderModelRow(tab, setting);
     const button = Array.from(setting.controlEl.querySelectorAll("button"))
       .find((candidate) => candidate.textContent === "Get models")!;
 
     button.click();
-
     await vi.waitFor(() => expect(fetchModels).toHaveBeenCalled());
-    await vi.waitFor(() => {
-      const select = setting.controlEl.querySelector<HTMLSelectElement>(
-        "select.arxiv-daily-settings__model-select",
-      )!;
-      const options = Array.from(select.querySelectorAll<HTMLOptionElement>("option"))
-        .map((option) => option.value);
-      expect(options).toEqual(["", "provider-a", "provider-b"]);
-      expect(select.classList.contains("is-visible")).toBe(true);
-      // Not in the list, so the placeholder is selected rather than forcing a match.
-      expect(select.value).toBe("");
-    });
+
+    const suggest = tab.getModelInputSuggest()!;
+    await vi.waitFor(() => expect(suggest.hasModels()).toBe(true));
+    expect(suggest.previewSuggestions("some-unrelated-typed-name")).toEqual(["provider-a", "provider-b"]);
+    expect(suggest.previewSuggestions("")).toEqual(["provider-a", "provider-b"]);
     expect(settings.llm.model).toBe("some-unrelated-typed-name");
     fetchModels.mockRestore();
-    tab.containerEl.remove();
   });
 
-  it("saves a model chosen from the fetched select, the same way as typing one", async () => {
+  it("orders and marks the current model first when the provider listed it", async () => {
+    const { tab, plugin, settings } = makeTab();
+    settings.llm.model = "provider-b";
+    (plugin as unknown as { getHttpClient: () => unknown }).getHttpClient = () => ({});
+    const fetchModels = vi
+      .spyOn(LlmClient.prototype, "fetchModels")
+      .mockResolvedValue(["provider-a", "provider-b"]);
+    const setting = new Setting(tab.containerEl);
+    renderModelRow(tab, setting);
+    const button = Array.from(setting.controlEl.querySelectorAll("button"))
+      .find((candidate) => candidate.textContent === "Get models")!;
+    button.click();
+    const suggest = tab.getModelInputSuggest()!;
+    await vi.waitFor(() => expect(suggest.hasModels()).toBe(true));
+
+    expect(suggest.previewSuggestions("provider-b")).toEqual(["provider-b", "provider-a"]);
+    const currentEl = document.createElement("div");
+    suggest.renderSuggestion("provider-b", currentEl);
+    expect(currentEl.textContent).toContain("current");
+    const otherEl = document.createElement("div");
+    suggest.renderSuggestion("provider-a", otherEl);
+    expect(otherEl.textContent).not.toContain("current");
+    fetchModels.mockRestore();
+  });
+
+  it("filters suggestions by case-insensitive substring once the typed text no longer matches the saved model", async () => {
+    const { tab, plugin } = makeTab();
+    (plugin as unknown as { getHttpClient: () => unknown }).getHttpClient = () => ({});
+    const fetchModels = vi
+      .spyOn(LlmClient.prototype, "fetchModels")
+      .mockResolvedValue(["gpt-4o-mini", "gpt-4.1", "claude-sonnet"]);
+    const setting = new Setting(tab.containerEl);
+    renderModelRow(tab, setting);
+    const button = Array.from(setting.controlEl.querySelectorAll("button"))
+      .find((candidate) => candidate.textContent === "Get models")!;
+    button.click();
+    const suggest = tab.getModelInputSuggest()!;
+    await vi.waitFor(() => expect(suggest.hasModels()).toBe(true));
+
+    expect(suggest.previewSuggestions("GPT-4")).toEqual(["gpt-4o-mini", "gpt-4.1"]);
+    expect(suggest.previewSuggestions("sonnet")).toEqual(["claude-sonnet"]);
+    expect(suggest.previewSuggestions("no-such-model")).toEqual([]);
+    fetchModels.mockRestore();
+  });
+
+  it("saves a model chosen from the suggest, the same way as typing one", async () => {
     const { tab, plugin, settings } = makeTab();
     (plugin as unknown as { getHttpClient: () => unknown }).getHttpClient = () => ({});
     const fetchModels = vi
       .spyOn(LlmClient.prototype, "fetchModels")
       .mockResolvedValue(["provider-a", "provider-b"]);
-    document.body.appendChild(tab.containerEl);
     const setting = new Setting(tab.containerEl);
     renderModelRow(tab, setting);
     const button = Array.from(setting.controlEl.querySelectorAll("button"))
       .find((candidate) => candidate.textContent === "Get models")!;
     button.click();
-    await vi.waitFor(() => expect(fetchModels).toHaveBeenCalled());
-    const select = setting.controlEl.querySelector<HTMLSelectElement>(
-      "select.arxiv-daily-settings__model-select",
-    )!;
-    await vi.waitFor(() => expect(select.classList.contains("is-visible")).toBe(true));
+    const suggest = tab.getModelInputSuggest()!;
+    await vi.waitFor(() => expect(suggest.hasModels()).toBe(true));
 
-    select.value = "provider-b";
-    select.dispatchEvent(new Event("change"));
+    suggest.selectSuggestion("provider-b");
 
     await vi.waitFor(() => expect(settings.llm.model).toBe("provider-b"));
     const input = setting.controlEl.querySelector<HTMLInputElement>(
@@ -2051,7 +2090,6 @@ describe("model field", () => {
     )!;
     expect(input.value).toBe("provider-b");
     fetchModels.mockRestore();
-    tab.containerEl.remove();
   });
 
   it("drops the cached fetched list once the endpoint it came from changes", async () => {
@@ -2060,32 +2098,20 @@ describe("model field", () => {
     const fetchModels = vi
       .spyOn(LlmClient.prototype, "fetchModels")
       .mockResolvedValue(["provider-a", "provider-b"]);
-    document.body.appendChild(tab.containerEl);
     const setting = new Setting(tab.containerEl);
     renderModelRow(tab, setting);
     const button = Array.from(setting.controlEl.querySelectorAll("button"))
       .find((candidate) => candidate.textContent === "Get models")!;
     button.click();
-    await vi.waitFor(() => expect(fetchModels).toHaveBeenCalled());
-    await vi.waitFor(() => {
-      const select = setting.controlEl.querySelector<HTMLSelectElement>(
-        "select.arxiv-daily-settings__model-select",
-      )!;
-      expect(select.classList.contains("is-visible")).toBe(true);
-    });
+    await vi.waitFor(() => expect(tab.getModelInputSuggest()!.hasModels()).toBe(true));
 
     // The provider URL changed (a new row for the same setting, as a
     // redraw would produce) — the previous fetch no longer applies.
     settings.llm.baseUrl = "https://a-different-provider.example.com/v1";
     renderModelRow(tab, setting);
 
-    const select = setting.controlEl.querySelector<HTMLSelectElement>(
-      "select.arxiv-daily-settings__model-select",
-    )!;
-    expect(select.classList.contains("is-visible")).toBe(false);
-    expect(select.querySelectorAll("option").length).toBe(0);
+    expect(tab.getModelInputSuggest()!.hasModels()).toBe(false);
     fetchModels.mockRestore();
-    tab.containerEl.remove();
   });
 
   it("still shows fetched models after the row redraws while the fetch is in flight", async () => {
@@ -2095,7 +2121,6 @@ describe("model field", () => {
     const fetchModels = vi
       .spyOn(LlmClient.prototype, "fetchModels")
       .mockImplementation(() => new Promise((resolve) => { resolveFetch = resolve; }));
-    document.body.appendChild(tab.containerEl);
     const setting = new Setting(tab.containerEl);
     renderModelRow(tab, setting);
     const button = Array.from(setting.controlEl.querySelectorAll("button"))
@@ -2107,22 +2132,29 @@ describe("model field", () => {
     // Obsidian reuses the same Setting row and calls the render callback
     // again on update() (e.g. the setup guide appearing/disappearing while
     // the fetch is still pending). That rebuilds the row's children, so the
-    // button and select clicked above are replaced before the fetch
+    // suggest instance registered above is replaced before the fetch
     // resolves.
     renderModelRow(tab, setting);
+    const redrawnSuggest = tab.getModelInputSuggest()!;
 
     resolveFetch!(["provider-a", "provider-b"]);
-    await vi.waitFor(() => {
-      const select = setting.controlEl.querySelector<HTMLSelectElement>(
-        "select.arxiv-daily-settings__model-select",
-      )!;
-      const options = Array.from(select.querySelectorAll<HTMLOptionElement>("option"))
-        .map((option) => option.value);
-      expect(options).toEqual(["", "provider-a", "provider-b"]);
-    });
+    await vi.waitFor(() => expect(redrawnSuggest.hasModels()).toBe(true));
+    expect(redrawnSuggest.previewSuggestions("")).toEqual(["provider-a", "provider-b"]);
 
     fetchModels.mockRestore();
-    tab.containerEl.remove();
+  });
+
+  it("closes the previous suggest instance instead of leaving it attached when the row redraws", () => {
+    const { tab } = makeTab();
+    const setting = new Setting(tab.containerEl);
+    renderModelRow(tab, setting);
+    const first = tab.getModelInputSuggest()!;
+    const closeSpy = vi.spyOn(first, "close");
+
+    renderModelRow(tab, setting);
+
+    expect(closeSpy).toHaveBeenCalledTimes(1);
+    expect(tab.getModelInputSuggest()).not.toBe(first);
   });
 });
 

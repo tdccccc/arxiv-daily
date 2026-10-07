@@ -329,13 +329,17 @@ export async function getModelsScenario({ session, listener }) {
   // The loopback round trip and the row's own re-render both need a moment.
   await wait(evaluate, 1000);
 
+  // Obsidian's AbstractInputSuggest popup is a floating ".suggestion-
+  // container" appended to <body>, not inside the settings row — it opens
+  // on its own once ModelInputSuggest.showAll() fires after a successful
+  // fetch, so there is nothing left to click here.
   const raw = await evaluate(`(() => {
-    ${MODEL_ROW_LOOKUP}
-    const select = modelRow?.querySelector("select.arxiv-daily-settings__model-select");
-    if (!select) return JSON.stringify({ error: "no fetched-models select found in the Model row" });
+    const container = document.querySelector(".suggestion-container");
+    if (!container) return JSON.stringify({ error: "no suggestion popup opened after Get models" });
     return JSON.stringify({
-      visible: select.classList.contains("is-visible"),
-      options: Array.from(select.querySelectorAll("option")).map((o) => o.value),
+      items: Array.from(container.querySelectorAll(".suggestion-item")).map(
+        (el) => (el.textContent ?? "").trim(),
+      ),
     });
   })()`);
   const result = JSON.parse(raw);
@@ -344,17 +348,17 @@ export async function getModelsScenario({ session, listener }) {
   if (listener.requests().length === 0) {
     return fail(name, "clicking Get models never reached the stub listener");
   }
-  const missing = listener.models.filter((model) => !result.options.includes(model));
-  if (!result.visible || missing.length > 0) {
+  const missing = listener.models.filter((model) => !result.items.includes(model));
+  if (missing.length > 0) {
     return fail(
       name,
-      `expected the select visible and listing ${JSON.stringify(listener.models)} despite the typed ` +
+      `expected the suggestion popup to list ${JSON.stringify(listener.models)} despite the typed ` +
         `"unrelated-typed-model", got ${raw}`,
     );
   }
   return pass(
     name,
-    `Get models against ${listener.origin} populated the select with all ${listener.models.length} ` +
+    `Get models against ${listener.origin} opened a suggestion popup listing all ${listener.models.length} ` +
       "fetched model(s) even though the model field held an unrelated typed name",
   );
 }

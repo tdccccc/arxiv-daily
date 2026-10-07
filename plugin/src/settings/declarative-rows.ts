@@ -5,6 +5,7 @@ import {
   type Setting,
 } from "obsidian";
 import type { ArxivDailySettingTab } from "./tab";
+import { ModelInputSuggest } from "./model-suggest";
 import { renderSensitiveInput } from "./sensitive-input";
 import {
   addCategoryOptions,
@@ -161,28 +162,11 @@ function modelFetchCacheKey(llm: LlmSettings): string {
 }
 
 /**
- * Show every fetched model as a plain option, regardless of what's typed in
- * the model input: Chromium/Electron filters <datalist> suggestions by the
- * input's current text, so a datalist can only ever suggest options that
- * match what's already there. Hidden when there's nothing to pick from.
- */
-function populateModelSelect(select: HTMLSelectElement, models: string[], currentModel: string): void {
-  select.replaceChildren();
-  select.toggleClass("is-visible", models.length > 0);
-  if (models.length === 0) return;
-  select.createEl("option", { value: "", text: "Pick a fetched model…" });
-  for (const model of models) {
-    select.createEl("option", { value: model, text: model });
-  }
-  select.value = models.includes(currentModel) ? currentModel : "";
-}
-
-/**
- * Model name: typed freely and saved when editing ends. "Get models" also
- * reveals a select listing every fetched model (see populateModelSelect for
- * why a plain <datalist> can't do this); providers without a model list
- * still work via the free-text input, and a current model missing from the
- * list is kept. Shared by display().
+ * Model name: one box you both type into and pick from. Typing always
+ * works, even for providers without a model list or before any fetch; once
+ * "Get models" succeeds, the same input offers every fetched model through
+ * a type-ahead (ModelInputSuggest) rather than a second control, and a
+ * current model missing from the list is kept. Shared by display().
  */
 export function renderModelRow(tab: ArxivDailySettingTab, setting: Setting): void {
   prepareRow(setting);
@@ -193,48 +177,42 @@ export function renderModelRow(tab: ArxivDailySettingTab, setting: Setting): voi
   });
   input.value = tab.plugin.settings.llm.model;
 
-  const select = setting.controlEl.createEl("select", {
-    cls: "arxiv-daily-settings__model-select",
-    attr: { "aria-label": "Fetched models" },
-  });
   const cacheKey = modelFetchCacheKey(tab.plugin.settings.llm);
-  // A re-render (e.g. the setup guide appearing/disappearing) reuses this
-  // same Setting but rebuilds its children, so restore a previous fetch —
-  // but only if it's still for the endpoint currently configured.
-  let currentModels = tab.getFetchedModelOptions(cacheKey) ?? [];
-  populateModelSelect(select, currentModels, input.value);
 
   const commitModel = (next: string): void => {
     if (next === tab.plugin.settings.llm.model) {
       input.value = next;
-      populateModelSelect(select, currentModels, next);
       return;
     }
     const revision = tab.beginControlChange(input);
     tab.runAction("save model", async () => {
       try {
         await tab.changeSettingValue("llm.model", next);
-        if (tab.isCurrentControlChange(input, revision)) {
-          input.value = next;
-          populateModelSelect(select, currentModels, next);
-        }
+        if (tab.isCurrentControlChange(input, revision)) input.value = next;
         tab.refreshSetupGuide();
       } catch (error) {
         if (tab.isCurrentControlChange(input, revision)) {
-          const restored = tab.restoreCurrentStringControlValue(error, "llm.model");
-          input.value = restored;
-          populateModelSelect(select, currentModels, restored);
+          input.value = tab.restoreCurrentStringControlValue(error, "llm.model");
         }
         throw error;
       }
     });
   };
 
+  // One suggest instance per render, replacing (and closing) whichever one
+  // the last render for this row registered — a redraw (e.g. the setup
+  // guide appearing/disappearing) reuses this same Setting but rebuilds its
+  // children, so the previous instance's input is gone and it must not be
+  // left open or attached underneath the new one.
+  const suggest = new ModelInputSuggest(tab.app, input, commitModel);
+  tab.setModelInputSuggest(suggest);
+  input.addEventListener("focus", () => suggest.showAll());
+  // A re-render reuses this same Setting but rebuilds its children, so
+  // restore a previous fetch — but only if it's still for the endpoint
+  // currently configured.
+  suggest.setModels(tab.getFetchedModelOptions(cacheKey) ?? [], input.value);
+
   input.addEventListener("change", () => commitModel(input.value.trim()));
-  select.addEventListener("change", () => {
-    const next = select.value;
-    if (next) commitModel(next);
-  });
 
   const button = setting.controlEl.createEl("button", {
     text: "Get models",
@@ -251,18 +229,17 @@ export function renderModelRow(tab: ArxivDailySettingTab, setting: Setting): voi
         tab.plugin.getHttpClient(),
       );
       const models = await client.fetchModels();
-      currentModels = models;
       tab.setFetchedModelOptions(cacheKey, models);
-      // Re-query instead of reusing the closed-over `select`: a redraw that
-      // happened while the fetch was in flight replaced it with a new one,
-      // and writing into the old detached select would be invisible. If the
-      // endpoint settings changed since the fetch started, this result is
-      // for a provider the row no longer reflects, so skip applying it.
+      // Looked up fresh instead of reusing the closed-over `suggest`: a
+      // redraw that happened while the fetch was in flight registered a
+      // new instance for the new input, and updating this one would be
+      // invisible. If the endpoint settings changed since the fetch
+      // started, this result is for a provider the row no longer
+      // reflects, so skip applying it.
       if (modelFetchCacheKey(tab.plugin.settings.llm) === cacheKey) {
-        const liveSelect = setting.controlEl.querySelector<HTMLSelectElement>(
-          "select.arxiv-daily-settings__model-select",
-        );
-        if (liveSelect) populateModelSelect(liveSelect, models, tab.plugin.settings.llm.model);
+        const liveSuggest = tab.getModelInputSuggest();
+        liveSuggest?.setModels(models, tab.plugin.settings.llm.model);
+        liveSuggest?.showAll();
       }
       if (models.length > 0) {
         new Notice(modelFetchNoticeMessage({ kind: "success", count: models.length }));

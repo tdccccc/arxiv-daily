@@ -75,6 +75,7 @@ import {
   confirmLibraryRevocation,
 } from "../library/modal";
 import { renderSensitiveInput } from "./sensitive-input";
+import type { ModelInputSuggest } from "./model-suggest";
 
 
 function addBusinessOptions<T extends { addOption(value: string, label: string): unknown }>(dropdown: T, id: BusinessSettingId, context: Partial<BusinessSettingsContext> = {}): T {
@@ -222,6 +223,8 @@ export class ArxivDailySettingTab extends PluginSettingTab {
   private declarativeSetupGuideRow: Setting | undefined;
   /** Survives a row re-render so an in-flight "Get models" fetch isn't lost. */
   private fetchedModelOptions: { key: string; models: string[] } | undefined;
+  /** The model field's current type-ahead, so a redraw can close the old one. */
+  private modelInputSuggest: ModelInputSuggest | undefined;
   private pendingTopicFocusId: string | undefined;
   /** Kept on the tab so a guide re-render during the run still shows it. */
   private firstReportRunning = false;
@@ -2270,6 +2273,22 @@ export class ArxivDailySettingTab extends PluginSettingTab {
 
   public setFetchedModelOptions(key: string, models: string[]): void {
     this.fetchedModelOptions = { key, models };
+  }
+
+  /**
+   * Registers the model field's current type-ahead, closing and replacing
+   * whichever one a previous render left behind: AbstractInputSuggest binds
+   * permanently to the input element it is constructed with, so a redraw
+   * (which rebuilds that input) always needs a new instance, and the old
+   * one must not be left attached or open underneath it.
+   */
+  public setModelInputSuggest(suggest: ModelInputSuggest): void {
+    this.modelInputSuggest?.close();
+    this.modelInputSuggest = suggest;
+  }
+
+  public getModelInputSuggest(): ModelInputSuggest | undefined {
+    return this.modelInputSuggest;
   }
 
   public refreshDeclarativeSetupGuide(): void {

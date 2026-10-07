@@ -348,3 +348,52 @@ export class Menu {
 export async function requestUrl(_opts: any): Promise<{ status: number; text: string }> {
   return { status: 200, text: "" };
 }
+
+export abstract class PopoverSuggest<T> {
+  isOpen = false;
+  constructor(readonly app: App) {}
+  open(): void {
+    this.isOpen = true;
+  }
+  close(): void {
+    this.isOpen = false;
+  }
+  abstract renderSuggestion(value: T, el: HTMLElement): void;
+  abstract selectSuggestion(value: T, evt: MouseEvent | KeyboardEvent): void;
+}
+
+/**
+ * Mirrors the documented contract closely enough to exercise real
+ * getSuggestions/selectSuggestion overrides: an "input" event on the bound
+ * element recomputes suggestions and opens/closes accordingly, the same
+ * event ModelInputSuggest.showAll() dispatches to force a refresh.
+ */
+export abstract class AbstractInputSuggest<T> extends PopoverSuggest<T> {
+  limit = 100;
+  suggestions: T[] = [];
+
+  constructor(app: App, protected readonly textInputEl: HTMLInputElement | HTMLDivElement) {
+    super(app);
+    this.textInputEl.addEventListener("input", () => { void this.refresh(); });
+  }
+
+  private async refresh(): Promise<void> {
+    this.suggestions = await this.getSuggestions(this.getValue());
+    if (this.suggestions.length > 0) this.open();
+    else this.close();
+  }
+
+  setValue(value: string): void {
+    (this.textInputEl as HTMLInputElement).value = value;
+  }
+
+  getValue(): string {
+    return (this.textInputEl as HTMLInputElement).value;
+  }
+
+  protected abstract getSuggestions(query: string): T[] | Promise<T[]>;
+
+  onSelect(_callback: (value: T, evt: MouseEvent | KeyboardEvent) => any): this {
+    return this;
+  }
+}
