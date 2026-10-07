@@ -75,6 +75,7 @@ import {
   confirmLibraryRevocation,
 } from "../library/modal";
 import { renderSensitiveInput } from "./sensitive-input";
+import type { ModelInputSuggest } from "./model-suggest";
 
 
 function addBusinessOptions<T extends { addOption(value: string, label: string): unknown }>(dropdown: T, id: BusinessSettingId, context: Partial<BusinessSettingsContext> = {}): T {
@@ -220,6 +221,10 @@ export class ArxivDailySettingTab extends PluginSettingTab {
   private readonly declarativeKeyRevisions = new Map<string, number>();
   private readonly pendingTopicEdits = new Set<Promise<void>>();
   private declarativeSetupGuideRow: Setting | undefined;
+  /** Survives a row re-render so an in-flight "Get models" fetch isn't lost. */
+  private fetchedModelOptions: { key: string; models: string[] } | undefined;
+  /** The model field's current type-ahead, so a redraw can close the old one. */
+  private modelInputSuggest: ModelInputSuggest | undefined;
   private pendingTopicFocusId: string | undefined;
   /** Kept on the tab so a guide re-render during the run still shows it. */
   private firstReportRunning = false;
@@ -2254,6 +2259,36 @@ export class ArxivDailySettingTab extends PluginSettingTab {
   /** Remember the host row so the guide can update without replacing active inputs. */
   public setDeclarativeSetupGuideRow(setting: Setting): void {
     this.declarativeSetupGuideRow = setting;
+  }
+
+  /**
+   * Last models fetched via "Get models", keyed by the endpoint settings
+   * (provider/base URL/API key) that produced them. A re-render mid-fetch
+   * restores them; a mismatched key (the endpoint changed) acts as empty,
+   * so a stale list from another provider is never shown.
+   */
+  public getFetchedModelOptions(key: string): string[] | undefined {
+    return this.fetchedModelOptions?.key === key ? this.fetchedModelOptions.models : undefined;
+  }
+
+  public setFetchedModelOptions(key: string, models: string[]): void {
+    this.fetchedModelOptions = { key, models };
+  }
+
+  /**
+   * Registers the model field's current type-ahead, closing and replacing
+   * whichever one a previous render left behind: AbstractInputSuggest binds
+   * permanently to the input element it is constructed with, so a redraw
+   * (which rebuilds that input) always needs a new instance, and the old
+   * one must not be left attached or open underneath it.
+   */
+  public setModelInputSuggest(suggest: ModelInputSuggest): void {
+    this.modelInputSuggest?.close();
+    this.modelInputSuggest = suggest;
+  }
+
+  public getModelInputSuggest(): ModelInputSuggest | undefined {
+    return this.modelInputSuggest;
   }
 
   public refreshDeclarativeSetupGuide(): void {

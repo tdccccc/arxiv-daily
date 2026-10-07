@@ -202,7 +202,7 @@ If the harness cannot run, these steps are the equivalent record:
 | `diagnostics.mjs` | Console and page-error collection |
 | `probe-listener.mjs` | Real loopback socket that observes the plugin's HTTP |
 | `trust.mjs` | Trust prompt and plugin readiness |
-| `scenarios.mjs` | The sidecar, migration and PDF location scenarios |
+| `scenarios.mjs` | The sidecar, migration, PDF location and Get models scenarios |
 | `library-settings.mjs` | The personal library settings page walk |
 | `topic-directions.mjs` | The topic direction list's collapse/wrap geometry |
 | `direction-review.mjs` | The library direction review dialog's redesigned default page |

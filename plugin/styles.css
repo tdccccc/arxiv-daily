@@ -274,8 +274,9 @@
   display: block;
 }
 
-.arxiv-daily-settings__model-select {
-  min-width: 160px;
+.arxiv-daily-settings__model-suggestion-current {
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
 }
 
 .arxiv-daily-settings__time-field {

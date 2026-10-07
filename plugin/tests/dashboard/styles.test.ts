@@ -13,9 +13,6 @@ describe("dashboard and settings styles", () => {
     expect(styles).toMatch(
       /\.arxiv-daily-settings__llm-url-input\s*\{[^}]*width:\s*380px;/s,
     );
-    expect(styles).toMatch(
-      /\.arxiv-daily-settings__model-select\s*\{[^}]*min-width:\s*160px;/s,
-    );
   });
 
   it("renders the schedule run window controls", () => {

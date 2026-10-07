@@ -5,6 +5,7 @@ import {
   type Setting,
 } from "obsidian";
 import type { ArxivDailySettingTab } from "./tab";
+import { ModelInputSuggest } from "./model-suggest";
 import { renderSensitiveInput } from "./sensitive-input";
 import {
   addCategoryOptions,
@@ -13,7 +14,13 @@ import {
   renderRunWindowTimeSelect,
   validateOutputDirectoryDraft,
 } from "./tab";
-import { arxivCategories, isValidMaxDailyPapers, LlmClient, normalizeMaxDailyPapers } from "@arxiv-daily/core";
+import {
+  arxivCategories,
+  isValidMaxDailyPapers,
+  LlmClient,
+  normalizeMaxDailyPapers,
+  type LlmSettings,
+} from "@arxiv-daily/core";
 
 /**
  * Prepare a declarative row for (re)rendering. Obsidian reuses the same
@@ -145,27 +152,34 @@ export function renderReasoningEffortRow(
   });
 }
 
-let modelSuggestionListCount = 0;
+/**
+ * Identifies the endpoint a fetched model list came from. fetchModels()
+ * only depends on baseUrl/apiKey, but provider is included too so a
+ * provider switch alone is enough to stop showing a stale list.
+ */
+function modelFetchCacheKey(llm: LlmSettings): string {
+  return [llm.provider, llm.baseUrl, llm.apiKey].join("\u0000");
+}
 
 /**
- * Model name: typed freely and saved when editing ends. Get models only
- * fills the suggestion list — providers without a model list still work,
- * and a current model missing from the list is kept. Shared by display().
+ * Model name: one box you both type into and pick from. Typing always
+ * works, even for providers without a model list or before any fetch; once
+ * "Get models" succeeds, the same input offers every fetched model through
+ * a type-ahead (ModelInputSuggest) rather than a second control, and a
+ * current model missing from the list is kept. Shared by display().
  */
 export function renderModelRow(tab: ArxivDailySettingTab, setting: Setting): void {
   prepareRow(setting);
-  modelSuggestionListCount += 1;
-  const listId = `arxiv-daily-model-options-${modelSuggestionListCount}`;
   const input = setting.controlEl.createEl("input", {
     cls: "arxiv-daily-settings__model-input",
     type: "text",
-    attr: { list: listId, placeholder: "Model name", "aria-label": "Model" },
+    attr: { placeholder: "Model name", "aria-label": "Model" },
   });
   input.value = tab.plugin.settings.llm.model;
-  const suggestions = setting.controlEl.createEl("datalist");
-  suggestions.id = listId;
-  input.addEventListener("change", () => {
-    const next = input.value.trim();
+
+  const cacheKey = modelFetchCacheKey(tab.plugin.settings.llm);
+
+  const commitModel = (next: string): void => {
     if (next === tab.plugin.settings.llm.model) {
       input.value = next;
       return;
@@ -183,7 +197,22 @@ export function renderModelRow(tab: ArxivDailySettingTab, setting: Setting): voi
         throw error;
       }
     });
-  });
+  };
+
+  // One suggest instance per render, replacing (and closing) whichever one
+  // the last render for this row registered — a redraw (e.g. the setup
+  // guide appearing/disappearing) reuses this same Setting but rebuilds its
+  // children, so the previous instance's input is gone and it must not be
+  // left open or attached underneath the new one.
+  const suggest = new ModelInputSuggest(tab.app, input, commitModel);
+  tab.setModelInputSuggest(suggest);
+  input.addEventListener("focus", () => suggest.showAll());
+  // A re-render reuses this same Setting but rebuilds its children, so
+  // restore a previous fetch — but only if it's still for the endpoint
+  // currently configured.
+  suggest.setModels(tab.getFetchedModelOptions(cacheKey) ?? [], input.value);
+
+  input.addEventListener("change", () => commitModel(input.value.trim()));
 
   const button = setting.controlEl.createEl("button", {
     text: "Get models",
@@ -200,9 +229,17 @@ export function renderModelRow(tab: ArxivDailySettingTab, setting: Setting): voi
         tab.plugin.getHttpClient(),
       );
       const models = await client.fetchModels();
-      suggestions.replaceChildren();
-      for (const model of models) {
-        suggestions.createEl("option", { value: model });
+      tab.setFetchedModelOptions(cacheKey, models);
+      // Looked up fresh instead of reusing the closed-over `suggest`: a
+      // redraw that happened while the fetch was in flight registered a
+      // new instance for the new input, and updating this one would be
+      // invisible. If the endpoint settings changed since the fetch
+      // started, this result is for a provider the row no longer
+      // reflects, so skip applying it.
+      if (modelFetchCacheKey(tab.plugin.settings.llm) === cacheKey) {
+        const liveSuggest = tab.getModelInputSuggest();
+        liveSuggest?.setModels(models, tab.plugin.settings.llm.model);
+        liveSuggest?.showAll();
       }
       if (models.length > 0) {
         new Notice(modelFetchNoticeMessage({ kind: "success", count: models.length }));

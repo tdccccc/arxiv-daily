@@ -1,5 +1,5 @@
 /**
- * The four desktop acceptance scenarios P7 could not produce by hand, each an
+ * Desktop acceptance scenarios that could not be produced by hand, each an
  * independent assertion over one real Obsidian session.
  */
 
@@ -261,6 +261,106 @@ export async function settingsMigrationScenario({ session }) {
     return fail(name, `migrated settings are missing: ${missing.join(", ")}`);
   }
   return pass(name, `legacy settings migrated with ${sections.length} sections and the sidecar left disabled`);
+}
+
+const MODEL_ROW_LOOKUP = `
+  const content = document.querySelector(".vertical-tab-content.arxiv-daily-settings")
+    ?? document.querySelector(".vertical-tab-content.is-active")
+    ?? document.querySelector(".vertical-tab-content");
+  const rows = Array.from(content ? content.querySelectorAll(".setting-item") : []);
+  const modelRow = rows.find(
+    (el) => (el.querySelector(".setting-item-name")?.textContent ?? "").trim() === "Model",
+  );
+`;
+
+/**
+ * Proves the real "Get models" button surfaces every fetched model as a
+ * pickable option, regardless of what is already typed into the model
+ * field.
+ *
+ * This is the one check that can actually catch a regression back to the
+ * pre-fix UI (a `<datalist>` tied to the model input): Chromium/Electron
+ * filters datalist suggestions by the input's current text, so the popup
+ * only ever showed options matching what was already typed — happy-dom has
+ * no such filtering, so the unit suite cannot see it. Driving the real
+ * renderer against a real loopback listener is what makes the absence of
+ * that filtering meaningful here.
+ */
+export async function getModelsScenario({ session, listener }) {
+  const name = "get-models-lists-every-fetched-model";
+  const { evaluate } = session;
+
+  const pointed = await evaluate(`(async () => {
+    try {
+      const plugin = app.plugins.plugins["arxiv-daily"];
+      await plugin.settingsChanges.changeValue("llm.baseUrl", ${JSON.stringify(listener.origin)});
+      await plugin.settingsChanges.changeValue("llm.apiKey", "stub-api-key");
+      // Deliberately not one of the listener's models: the datalist
+      // filtering bug hid every suggestion behind whatever text this holds.
+      await plugin.settingsChanges.changeValue("llm.model", "unrelated-typed-model");
+      return "ok";
+    } catch (error) {
+      return "ERROR: " + (error?.message ?? String(error));
+    }
+  })()`);
+  if (typeof pointed === "string" && pointed.startsWith("ERROR:")) {
+    return fail(name, `could not point the LLM endpoint at the stub listener: ${pointed.slice(7).trim()}`);
+  }
+
+  // Explicit return: leaving the expression's value as openTabById's own
+  // return trips CDP ("Object reference chain is too long") trying to
+  // serialize whatever internal object that call hands back.
+  await evaluate('(() => { app.setting.open(); app.setting.openTabById("arxiv-daily"); return "opened"; })()');
+  await wait(evaluate, 300);
+
+  const clicked = await evaluate(`(() => {
+    ${MODEL_ROW_LOOKUP}
+    if (!modelRow) return "ERROR: no Model row found in the settings tab";
+    const button = Array.from(modelRow.querySelectorAll(".setting-item-control button"))
+      .find((b) => (b.textContent ?? "").trim() === "Get models");
+    if (!button) return "ERROR: no Get models button found in the Model row";
+    button.click();
+    return "ok";
+  })()`);
+  if (typeof clicked === "string" && clicked.startsWith("ERROR:")) {
+    return fail(name, clicked.slice(7).trim());
+  }
+
+  // The loopback round trip and the row's own re-render both need a moment.
+  await wait(evaluate, 1000);
+
+  // Obsidian's AbstractInputSuggest popup is a floating ".suggestion-
+  // container" appended to <body>, not inside the settings row — it opens
+  // on its own once ModelInputSuggest.showAll() fires after a successful
+  // fetch, so there is nothing left to click here.
+  const raw = await evaluate(`(() => {
+    const container = document.querySelector(".suggestion-container");
+    if (!container) return JSON.stringify({ error: "no suggestion popup opened after Get models" });
+    return JSON.stringify({
+      items: Array.from(container.querySelectorAll(".suggestion-item")).map(
+        (el) => (el.textContent ?? "").trim(),
+      ),
+    });
+  })()`);
+  const result = JSON.parse(raw);
+  if (result.error) return fail(name, result.error);
+
+  if (listener.requests().length === 0) {
+    return fail(name, "clicking Get models never reached the stub listener");
+  }
+  const missing = listener.models.filter((model) => !result.items.includes(model));
+  if (missing.length > 0) {
+    return fail(
+      name,
+      `expected the suggestion popup to list ${JSON.stringify(listener.models)} despite the typed ` +
+        `"unrelated-typed-model", got ${raw}`,
+    );
+  }
+  return pass(
+    name,
+    `Get models against ${listener.origin} opened a suggestion popup listing all ${listener.models.length} ` +
+      "fetched model(s) even though the model field held an unrelated typed name",
+  );
 }
 
 /**

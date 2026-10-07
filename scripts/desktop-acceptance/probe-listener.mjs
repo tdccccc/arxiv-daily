@@ -40,3 +40,42 @@ export async function startProbeListener({ status = 503, body = "probe listener:
     },
   };
 }
+
+/**
+ * A real loopback listener an LLM endpoint setting can point at, answering
+ * every request with an OpenAI-compatible model list.
+ *
+ * Same rationale as `startProbeListener`: the plugin's "Get models" request
+ * goes out through Obsidian's `requestUrl` in the Electron main process, so
+ * only a real socket — not the renderer's Network domain — can confirm it
+ * was sent, and only a 2xx response lets the scenario see what the settings
+ * UI does with a real fetch's result.
+ */
+export async function startModelsListener({ models = ["stub-model-a", "stub-model-b"] } = {}) {
+  const requests = [];
+  const server = http.createServer((req, res) => {
+    requests.push({ method: req.method, path: req.url });
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({ data: models.map((id) => ({ id })) }));
+  });
+
+  await new Promise((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", resolve);
+  });
+  const { port } = server.address();
+  const origin = `http://127.0.0.1:${port}`;
+
+  let closed = false;
+  return {
+    origin,
+    port,
+    models,
+    requests: () => [...requests],
+    async close() {
+      if (closed) return;
+      closed = true;
+      await new Promise((resolve) => server.close(resolve));
+    },
+  };
+}

@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  getModelsScenario,
   pdfPageLocationScenario,
   runScenarios,
   settingsMigrationScenario,
@@ -285,4 +286,84 @@ test("runScenarios turns a thrown scenario into a failure rather than aborting t
   assert.equal(results.passed, false);
   assert.match(results.scenarios[0].detail, /blew up/);
   assert.equal(results.scenarios[1].passed, true);
+});
+
+/** Stand-in for startModelsListener: a fixed origin, model list and request count. */
+function fakeModelsListener(models = ["stub-model-a", "stub-model-b"], requestCount = 1) {
+  return {
+    origin: "http://127.0.0.1:45999",
+    models,
+    requests: () => Array.from({ length: requestCount }, () => ({ method: "GET", path: "/v1/models" })),
+  };
+}
+
+const modelsAnswers = ({ items = ["stub-model-a", "stub-model-b"] } = {}) => [
+  ["settingsChanges.changeValue", "ok"],
+  ["app.setting.open", "opened"],
+  ["setTimeout", "waited"],
+  ["button.click()", "ok"],
+  ["suggestion-container", JSON.stringify({ items })],
+];
+
+test("the get-models scenario passes when the popup lists every fetched model despite an unrelated typed name", async () => {
+  const listener = fakeModelsListener();
+  const session = fakeSession(modelsAnswers());
+  const result = await getModelsScenario({ session, listener });
+  assert.equal(result.passed, true);
+  assert.match(result.detail, /2/);
+});
+
+test("the get-models scenario fails when no suggestion popup opened", async () => {
+  const listener = fakeModelsListener();
+  const session = fakeSession([
+    ["settingsChanges.changeValue", "ok"],
+    ["app.setting.open", "opened"],
+    ["setTimeout", "waited"],
+    ["button.click()", "ok"],
+    ["suggestion-container", JSON.stringify({ error: "no suggestion popup opened after Get models" })],
+  ]);
+  const result = await getModelsScenario({ session, listener });
+  assert.equal(result.passed, false);
+  assert.match(result.detail, /no suggestion popup/);
+});
+
+test("the get-models scenario fails when a fetched model is missing from the popup", async () => {
+  // This is the regression this scenario exists to catch: a <datalist>
+  // filtered by the typed-but-unrelated model name would hide it this way.
+  const listener = fakeModelsListener();
+  const session = fakeSession(modelsAnswers({ items: ["stub-model-a"] }));
+  const result = await getModelsScenario({ session, listener });
+  assert.equal(result.passed, false);
+  assert.match(result.detail, /stub-model-b/);
+});
+
+test("the get-models scenario fails when clicking Get models never reached the listener", async () => {
+  const listener = fakeModelsListener(["stub-model-a", "stub-model-b"], 0);
+  const session = fakeSession(modelsAnswers());
+  const result = await getModelsScenario({ session, listener });
+  assert.equal(result.passed, false);
+  assert.match(result.detail, /never reached/);
+});
+
+test("the get-models scenario reports honestly when no Model row is found", async () => {
+  const listener = fakeModelsListener();
+  const session = fakeSession([
+    ["settingsChanges.changeValue", "ok"],
+    ["app.setting.open", "opened"],
+    ["setTimeout", "waited"],
+    ["button.click()", "ERROR: no Model row found in the settings tab"],
+  ]);
+  const result = await getModelsScenario({ session, listener });
+  assert.equal(result.passed, false);
+  assert.match(result.detail, /no Model row/);
+});
+
+test("the get-models scenario fails when the settings transaction rejected pointing at the listener", async () => {
+  const listener = fakeModelsListener();
+  const session = fakeSession([
+    ["settingsChanges.changeValue", "ERROR: Invalid LLM configuration"],
+  ]);
+  const result = await getModelsScenario({ session, listener });
+  assert.equal(result.passed, false);
+  assert.match(result.detail, /Invalid LLM configuration/);
 });
