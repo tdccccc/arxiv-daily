@@ -5,7 +5,6 @@ export const workbenchMessages: ReadonlyArray<readonly [string, string]> = [
   ["放弃修改并关闭", "Discard changes and close"],
   ["修改会自动保存并立即生效。", "Changes are saved automatically and take effect immediately."],
   ["重试保存", "Retry saving"],
-  ["完成", "Done"],
   ["已自动保存", "Saved automatically"],
   ["正在自动保存…", "Saving automatically…"],
   ["修改尚未保存…", "Changes pending…"],

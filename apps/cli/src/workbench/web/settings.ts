@@ -154,7 +154,6 @@ export function settingsForm(snapshot: SettingsSnapshot, firstReportComplete = f
    h("span", { class: "settings-save-status", role: "status" }),
    h("button", { type: "button", "data-settings": "retry-save", hidden: true }, t('重试保存')),
    h("button", { type: "button", "data-settings": "discard-close", hidden: true }, t('放弃未保存修改并关闭')),
-   button('close','完成'),
   ),
  );
 }
@@ -325,10 +324,11 @@ export function bindSettings(form: HTMLFormElement, snapshot: SettingsSnapshot, 
   try{
    if(!await flush()){
     // First run only: an empty/invalid save root blocks every business save (there is nowhere to
-    // write the config yet), which used to trap Done forever. Let it close anyway — the draft
-    // business edits are discarded (they never reached the server) and the main view explains
-    // setup isn't finished with a way back in. A genuine autosave failure (network, revision
-    // conflict, …) still blocks close so nothing already-typed is lost silently.
+    // write the config yet), which used to trap the dialog open forever (close had no other
+    // trigger than this). Let it close anyway — the draft business edits are discarded (they
+    // never reached the server) and the main view explains setup isn't finished with a way back
+    // in. A genuine autosave failure (network, revision conflict, …) still blocks close so
+    // nothing already-typed is lost silently.
     if(!currentSnapshot.setupRequired||!rootBlocksClose)return false;
    }
    await saved();return true;
@@ -357,7 +357,9 @@ export function bindSettings(form: HTMLFormElement, snapshot: SettingsSnapshot, 
   if(result.run){onRun?.(result.run);if(name==='library-build'&&library){library.run=result.run;renderLibrary();lockLibraryInputs(result.run.status==='running');}find('.settings-action-status').textContent=result.run.label;}
  }
  function lockLibraryInputs(locked: boolean) {
-  for(const control of Array.from(form.querySelectorAll<HTMLInputElement|HTMLSelectElement|HTMLTextAreaElement|HTMLButtonElement>('input,select,textarea,button:not([data-settings="library-cancel"]):not([data-settings="close"]):not([data-settings-nav])')))control.disabled=locked;
+  // The dialog's × (close-dialog) button lives outside this form (see `showDialog` in app.ts), so
+  // it's never touched here regardless — it keeps working to close the dialog while locked.
+  for(const control of Array.from(form.querySelectorAll<HTMLInputElement|HTMLSelectElement|HTMLTextAreaElement|HTMLButtonElement>('input,select,textarea,button:not([data-settings="library-cancel"]):not([data-settings-nav])')))control.disabled=locked;
   if(!locked)renderLibrary();
  }
  form.addEventListener('workbench-run',event=>{
@@ -405,7 +407,6 @@ export function bindSettings(form: HTMLFormElement, snapshot: SettingsSnapshot, 
   }
   const target=event.target instanceof HTMLElement?event.target.closest<HTMLButtonElement>('[data-settings]'):null;if(!target)return;
   const name=target.dataset.settings!;
-  if(name==='close'){void close();return;}
   if(name==='retry-save'){void flush();return;}
   if(name==='discard-close'){
    find('.settings-action-host').replaceChildren(

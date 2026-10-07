@@ -410,7 +410,7 @@ it('finishes first setup after appearance is changed and then returned to its or
  const theme=root.querySelector<HTMLSelectElement>('[name="appearance.theme"]')!;theme.value='dark';theme.dispatchEvent(new Event('change',{bubbles:true}));
  await vi.waitFor(()=>expect(root.dataset.theme).toBe('dark'));
  theme.value='light';theme.dispatchEvent(new Event('change',{bubbles:true}));await vi.waitFor(()=>expect(root.dataset.theme).toBe('light'));
- root.querySelector<HTMLButtonElement>('[data-settings="close"]')!.click();
+ root.querySelector<HTMLButtonElement>('[data-action="close-dialog"]')!.click();
  await vi.waitFor(()=>expect(root.querySelector('.paper-workspace')).toBeTruthy());expect(root.querySelector('dialog')).toBeNull();
 });
 
@@ -433,14 +433,14 @@ it.each(['button','escape'])('keeps daily discovery off after switching it off a
  const saves=fetcher.mock.calls.filter(([url,init])=>String(url)==='api/settings'&&init?.method==='POST');expect(saves).toHaveLength(1);expect(JSON.parse(String(saves[0]![1]!.body)).values.schedule.enabled).toBe(false);
 });
 
-it('closes first-run settings via a single Done click after only changing language, without a save root, and does not bounce back open', async () => {
+it('closes first-run settings via × after only changing language, without a save root, and does not bounce back open', async () => {
  setUiLanguage('zh');
  const { root, fetcher } = setup(true, false, undefined, (path, init) => path === 'api/settings' && !init?.method ? json({ setupRequired: true, revision: null, configPath: '/config.toml', values: { ...values, vaultRoot: '' } }) : undefined);
  await vi.waitFor(() => expect(root.querySelector('.settings-form')).toBeTruthy());
  const language = root.querySelector<HTMLSelectElement>('[name="appearance.language"]')!;
  language.value = 'en'; language.dispatchEvent(new Event('change', { bubbles: true }));
- await vi.waitFor(() => expect(root.querySelector('[data-settings="close"]')?.textContent).toBe('Done'));
- root.querySelector<HTMLButtonElement>('[data-settings="close"]')!.click();
+ await vi.waitFor(() => expect(root.querySelector('#dialog-title')?.textContent).toBe('Welcome to arXiv Daily'));
+ root.querySelector<HTMLButtonElement>('[data-action="close-dialog"]')!.click();
  await vi.waitFor(() => expect(root.querySelector('dialog')).toBeNull());
  // Main UI behind the dialog is re-localized, not just the (now closed) dialog.
  expect(root.querySelector('[data-action="generate"]')?.textContent).toContain('Generate');
@@ -456,7 +456,7 @@ it('closes first-run settings via a single Done click after only changing langua
  await vi.waitFor(() => expect(root.querySelector('.settings-form')).toBeTruthy());
 });
 
-it('applies a language change to the main workbench immediately while Settings stays open, and closing afterward still works', async () => {
+it('applies a language change to the main workbench immediately while Settings stays open, and closing via Escape afterward still works', async () => {
  setUiLanguage('zh');
  const { root } = setup(false);
  await vi.waitFor(() => expect(root.querySelector('.paper-workspace')).toBeTruthy());
@@ -468,7 +468,7 @@ it('applies a language change to the main workbench immediately while Settings s
  // Relocalizing the main view must not have lost the open dialog.
  expect(root.querySelector('dialog')).toBeTruthy();
  await vi.waitFor(() => expect(root.querySelector('.settings-form')).toBeTruthy());
- root.querySelector<HTMLButtonElement>('[data-settings="close"]')!.click();
+ root.querySelector('dialog')!.dispatchEvent(new Event('cancel', { cancelable: true }));
  await vi.waitFor(() => expect(root.querySelector('dialog')).toBeNull());
  expect(root.querySelector('.paper-workspace')).toBeTruthy();
 });

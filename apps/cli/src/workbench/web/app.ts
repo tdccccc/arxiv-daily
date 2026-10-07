@@ -606,9 +606,10 @@ function mountWorkbenchContent(root: HTMLElement, options: WorkbenchClientOption
         appearance = { ...next };
         applyTheme();
         document.documentElement.lang = next.language === 'zh' ? 'zh-CN' : 'en'; document.title = t('arxiv-daily · 阅读工作台');
-        // If this change was discovered mid-`close()` (Done/submit), the dialog is already being
-        // torn down by that flow — let its own `saved()` callback above remount once it's
-        // actually closed, instead of remounting (and possibly reopening) out from under it here.
+        // If this change was discovered mid-`close()` (× / Escape / submit), the dialog is
+        // already being torn down by that flow — let its own `saved()` callback above remount
+        // once it's actually closed, instead of remounting (and possibly reopening) out from
+        // under it here.
         if (meta?.closing) return;
         activeDialog.querySelector('#dialog-title')!.textContent = t(setupRequired ? '首次使用 arXiv Daily' : '设置');
         activeDialog.querySelector('[data-action="close-dialog"]')!.setAttribute('aria-label', t('关闭弹窗'));
