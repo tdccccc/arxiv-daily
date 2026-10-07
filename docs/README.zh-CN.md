@@ -4,7 +4,7 @@
 
 [新手教程](getting-started.zh-CN.md) · [English README](../README.md) · [Getting Started](getting-started.md)
 
-**arXiv Daily** 是以 **Obsidian 插件**为主要入口的个人研究助手：抓取关注分类的论文，按研究主题中的具体方向筛选，保存可搜索、可链接、可长期保留的日报与论文总结。独立阅读工作台也可在浏览器或 DeepSeek Harness（DSH）中使用，无需 Obsidian；Claude Code CLI 是可选的 Agent 辅助入口。
+**arXiv Daily** 是以 **Obsidian 插件**为主要入口的个人研究助手：抓取关注分类的论文，按研究主题中的具体方向筛选，保存可搜索、可链接、可长期保留的日报与论文总结。独立阅读工作台也可在浏览器或 DeepSeek Harness（DSH）中使用，无需 Obsidian。
 
 ## 它能帮你做什么
 
@@ -39,7 +39,7 @@ arxiv-daily/
 | **Obsidian 插件** | 在 Vault 内阅读和整理研究资料 | 原生插件设置；Obsidian 打开时调度 |
 | **独立阅读工作台** | 不依赖 Obsidian 阅读与生成报告 | 图形设置保存到 CLI TOML；工作台运行时调度 |
 | **DSH 插件** | 在 DSH 固定侧栏打开同一工作台 | 复用 CLI / 工作台配置与本地研究记录 |
-| **CLI / Claude Code CLI** | 终端操作、外部定时或 Agent 辅助 | CLI TOML；可选系统 cron；Claude 调用相同产品命令 |
+| **CLI** | 终端操作或外部定时 | CLI TOML；可选系统 cron |
 
 已有 Obsidian 用户可以从**插件**开始；希望独立使用则选择**工作台**。核心文献流程不依赖 Agent 对话。
 
@@ -114,8 +114,6 @@ node apps/cli/dist/arxiv-daily-cli.cjs ui
 
 在 DSH 内使用，请参考 [DSH 构建与安装指南](../extensions/dsh-arxiv-daily/README.md)。安装后点击左侧“设置”上方的 **arxiv-daily**，或从右侧栏入口打开，无需先发消息。本地包包含构建平台对应的原生模块；已验证 Linux/x64 与实际 DSH Host 集成，跨平台分发和 Electron 视觉表现尚未完整验收。
 
-需要对话辅助时，可选用 [Claude Code CLI 集成](../extensions/claude-code-arxiv-daily/README.md)。它调用相同的筛选和总结流程；arXiv Daily 使用自己配置的模型端点，与 Claude 的对话模型独立。
-
 当前工作台支持阅读 Markdown，尚不提供 Markdown 编辑。左侧 **个人文献库** 可浏览目录、检索已索引的标题与摘要、打开本地 PDF；**方向审核** 提供候选与文献库概览，可检查代表论文、修改或移动候选、预览匹配，并明确选择接受到研究主题。连接和索引仍在设置中。候选只有接受后才参与每日发现；更完整的运行管理仍待补充。[CLI 指南](../apps/cli/README.md) 保留对应终端命令。
 
 ---
@@ -159,25 +157,8 @@ npm uninstall -g arxiv-daily
 
 更多：[CLI 安装与命令参考](../apps/cli/README.md)。
 
-### 从本仓库开发
-
-```bash
-npm ci
-npm run build
-npm run cli -- run --today    # 运行 apps/cli/dist/arxiv-daily-cli.cjs
-```
-
 ---
 
-## 开发
+## 许可证
 
-```bash
-npm ci
-npm run check:boundaries
-npm run lint
-npm run typecheck
-npm test
-npm run build
-```
-
-单一 npm workspace：`packages/core`、`packages/node-runtime`、`apps/cli`、`plugin`。发版版本同步：`npm run sync:release-version -- <ver>`。
+MIT — 见 [LICENSE](../LICENSE)。

@@ -4,7 +4,7 @@ Follow research directions, filter new arXiv papers, and keep daily reports and 
 
 [Getting Started](docs/getting-started.md) · [中文说明](docs/README.zh-CN.md) · [新手教程](docs/getting-started.zh-CN.md)
 
-**arXiv Daily** is a personal research companion built around the **Obsidian plugin**. It fetches the categories you follow, selects papers matching the directions inside your research topics, and saves daily reports and paper notes you can search, link, and keep. A standalone reading workbench also works without Obsidian, in your browser or inside DeepSeek Harness (DSH); Claude Code CLI is an optional agent entry.
+**arXiv Daily** is a personal research companion built around the **Obsidian plugin**. It fetches the categories you follow, selects papers matching the directions inside your research topics, and saves daily reports and paper notes you can search, link, and keep. A standalone reading workbench also works without Obsidian, in your browser or inside DeepSeek Harness (DSH).
 
 ## What it does
 
@@ -39,7 +39,7 @@ arxiv-daily/
 | **Obsidian plugin** | Reading and maintaining research in your vault | Native plugin settings; scheduling while Obsidian is open |
 | **Standalone workbench** | Reading and generating reports without Obsidian | Graphical settings backed by CLI TOML; scheduling while the workbench runs |
 | **DSH plugin** | The same workbench in a fixed DSH sidebar | Reuses the CLI/workbench configuration and local records |
-| **CLI / Claude Code CLI** | Terminal tasks, external scheduling, or agent-assisted operations | CLI TOML; optional system cron; Claude invokes the same product commands |
+| **CLI** | Terminal tasks or external scheduling | CLI TOML; optional system cron |
 
 Start with **Obsidian** if you already use it. Choose the **workbench** if you want a standalone reader. Research does not depend on an agent conversation.
 
@@ -115,8 +115,6 @@ The left calendar shows report status and paper counts; the right side starts wi
 
 To embed this workbench in DSH, follow the [DSH build and installation guide](extensions/dsh-arxiv-daily/README.md). Open **arxiv-daily** above Settings in the left sidebar or from the right sidebar; no message is required. The local package includes native modules for its build platform. Linux/x64 and DSH Host integration have been tested; cross-platform packages and Electron visual behavior are not fully verified.
 
-For conversational assistance, use the optional [Claude Code CLI integration](extensions/claude-code-arxiv-daily/README.md). It invokes the same discovery and note-generation workflows, using arXiv Daily's configured model endpoint independently of Claude's conversation model.
-
 The workbench reads Markdown; it does not edit it. **Personal library** opens catalog browsing, indexed title/abstract search, and local PDFs. **Review directions** shows proposals and a library overview: inspect representative papers, edit or move candidates, preview matches, and explicitly accept selected directions into research topics. Connection and indexing remain in settings. Proposed directions only affect discovery after acceptance. Richer run management remains planned; the [CLI guide](apps/cli/README.md) also documents terminal library commands.
 
 ---
@@ -160,25 +158,8 @@ On **Windows**, prefer **WSL** for CLI + cron, or the **Obsidian plugin** for de
 
 More: [CLI installation and command reference](apps/cli/README.md).
 
-### From this repository (developers)
-
-```bash
-npm ci
-npm run build
-npm run cli -- run --today    # runs apps/cli/dist/arxiv-daily-cli.cjs
-```
-
 ---
 
-## Development
+## License
 
-```bash
-npm ci
-npm run check:boundaries
-npm run lint
-npm run typecheck
-npm test
-npm run build
-```
-
-One npm workspace: `packages/core` (pipeline), `packages/node-runtime`, `apps/cli`, `plugin` (Obsidian UI). Release version sync: `npm run sync:release-version -- <ver>`.
+MIT — see [LICENSE](LICENSE).
