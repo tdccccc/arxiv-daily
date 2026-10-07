@@ -226,7 +226,7 @@ export function bindSettings(form: HTMLFormElement, snapshot: SettingsSnapshot, 
   const content=settingsSetupGuide(currentSnapshot,firstReportComplete);
   if(!content || !host.firstElementChild || !content.isEqualNode(host.firstElementChild))host.replaceChildren(...(content?[content]:[]));
  }
- let disposed=false, rootEditing=false, closing=false, rootBlocksClose=false;
+ let disposed=false, rootEditing=false, closing=false, rootBlocksClose=false, rootBlocksCloseDirty=false;
  let timer: number|undefined;
  let draining: Promise<boolean>|undefined;
  let actionGate: Promise<void>|undefined;
@@ -267,7 +267,7 @@ export function bindSettings(form: HTMLFormElement, snapshot: SettingsSnapshot, 
   const clean=structuredClone(value) as ReturnType<typeof values>&{apiKey?:string};delete clean.apiKey;delete (clean.embedding as {apiKey?:string}).apiKey;delete (clean.email as {apiKey?:string}).apiKey;delete (clean.email as {hostedToken?:string}).hostedToken;return clean;
  }
  async function drain(force:boolean):Promise<boolean> {
-  rootBlocksClose=false;
+  rootBlocksClose=false;rootBlocksCloseDirty=false;
   try {
    while(!disposed&&form.isConnected){
     if(actionGate)await actionGate;
@@ -300,7 +300,7 @@ export function bindSettings(form: HTMLFormElement, snapshot: SettingsSnapshot, 
      await options.onAppearanceSaved?.(nextAppearance,{closing});
      continue;
     }
-    if(waitingForRoot&&(businessChanged||currentSnapshot.setupRequired)){saveStatus('请先填写完整的保存根目录。');if(force){find('[role="alert"]').hidden=false;find('[role="alert"]').textContent=t('请先填写完整的保存根目录。');}rootBlocksClose=true;return false;}
+    if(waitingForRoot&&(businessChanged||currentSnapshot.setupRequired)){saveStatus('请先填写完整的保存根目录。');if(force){find('[role="alert"]').hidden=false;find('[role="alert"]').textContent=t('请先填写完整的保存根目录。');}rootBlocksClose=true;rootBlocksCloseDirty=businessChanged;return false;}
     find('[role="alert"]').hidden=true;saveStatus('已自动保存');return true;
    }
    return false;
@@ -319,17 +319,42 @@ export function bindSettings(form: HTMLFormElement, snapshot: SettingsSnapshot, 
   if(immediate)void flush(false);else timer=window.setTimeout(()=>{timer=undefined;void flush(false);},500);
  }
  async function saveDraft(refreshGuide=false){if(!await flush())throw new Error(t('请先解决自动保存问题，再继续操作。'));if(refreshGuide)refreshVisibleSetupGuide();return currentSnapshot;}
+ function showRootMissingDiscard() {
+  find('.settings-action-host').replaceChildren(
+   h("div", { class: "settings-confirm", role: "group", "aria-label": t('放弃未保存修改并关闭') },
+    h("p", null, t('保存根目录尚未填写，这些修改无法保存，关闭后将被放弃。')),
+    button('focus-vault-root','返回填写保存根目录'),
+    button('confirm-discard-close','放弃修改并关闭'),
+   ),
+  );
+  revealConfirm();
+ }
+ // The action host sits at the end of the scrolling settings content, so a confirmation rendered
+ // there is usually out of view; bring it in and focus its first choice so the click visibly lands.
+ function revealConfirm() {
+  const confirm=find('.settings-action-host .settings-confirm');
+  confirm.scrollIntoView?.({block:'nearest',behavior:window.matchMedia?.('(prefers-reduced-motion: reduce)').matches?'instant':'smooth'});
+  confirm.querySelector<HTMLButtonElement>('button')?.focus({preventScroll:true});
+ }
  async function close():Promise<boolean>{
   if(closing)return false;closing=true;
   try{
    if(!await flush()){
     // First run only: an empty/invalid save root blocks every business save (there is nowhere to
     // write the config yet), which used to trap the dialog open forever (close had no other
-    // trigger than this). Let it close anyway — the draft business edits are discarded (they
-    // never reached the server) and the main view explains setup isn't finished with a way back
-    // in. A genuine autosave failure (network, revision conflict, …) still blocks close so
-    // nothing already-typed is lost silently.
+    // trigger than this). A genuine autosave failure (network, revision conflict, …) still blocks
+    // close so nothing already-typed is lost silently — that's any other reason for `flush()`
+    // failing.
     if(!currentSnapshot.setupRequired||!rootBlocksClose)return false;
+    if(rootBlocksCloseDirty){
+     // A real unsaved draft (topics, API key, …) can't be saved without a root. Ask instead of
+     // discarding it silently: offer to go back and fill in the root, or discard and close — the
+     // same explicit choice the "自动保存失败" path already offers.
+     showRootMissingDiscard();
+     return false;
+    }
+    // Nothing of substance to lose (the user never typed into a business field, or only changed
+    // appearance, which already saved independently of the root) — close right away.
    }
    await saved();return true;
   }finally{closing=false;}
@@ -416,9 +441,17 @@ export function bindSettings(form: HTMLFormElement, snapshot: SettingsSnapshot, 
      button('cancel-action','Cancel'),
     ),
    );
+   revealConfirm();
    return;
   }
   if(name==='confirm-discard-close'){if(timer){window.clearTimeout(timer);timer=undefined;}void (async()=>{if(draining)await draining;if(!disposed)await saved();})();return;}
+  if(name==='focus-vault-root'){
+   find('.settings-action-host').replaceChildren();
+   const field=find<HTMLInputElement>('[name="vaultRoot"]');
+   field.scrollIntoView?.({block:'center',behavior:window.matchMedia?.('(prefers-reduced-motion: reduce)').matches?'instant':'smooth'});
+   field.focus({preventScroll:true});
+   return;
+  }
   if(name==='show-secret'){
    const field=target.previousElementSibling as HTMLInputElement;
    if(field.type==='text'){field.type='password';if(field.dataset.revealed==='true'){field.value='';delete field.dataset.revealed;}target.textContent=t('Show');return;}

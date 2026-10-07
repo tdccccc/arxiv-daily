@@ -62,9 +62,32 @@ it('waits for a complete first-use root and flushes on close once chosen',async(
  const {form,request,binding}=await setup(true);field(form,'vaultRoot').value='/chosen';
  expect(await binding.close()).toBe(true);expect(posts(request)).toHaveLength(1);expect((posts(request)[0]![1] as any).values.vaultRoot).toBe('/chosen');
 });
-it('closes during first-use even without a save root, discarding the unsaved draft',async()=>{
- const {form,binding,closed}=await setup(true);change(form,'model','draft');await settle();
+it('closes immediately during first-use when there is no unsaved business draft to lose',async()=>{
+ const {binding,closed}=await setup(true);
  expect(await binding.close()).toBe(true);expect(closed).toHaveBeenCalledOnce();
+});
+it('closes immediately during first-use when only appearance changed, without a save root',async()=>{
+ const {form,binding,closed,appearance}=await setup(true);change(form,'appearance.language','en');
+ await vi.waitFor(()=>expect(appearance).toHaveBeenCalled());
+ expect(await binding.close()).toBe(true);expect(closed).toHaveBeenCalledOnce();
+});
+it('asks before discarding an unsaved first-use draft that a missing save root blocks',async()=>{
+ const {form,binding,closed}=await setup(true);change(form,'model','draft');await settle();
+ expect(await binding.close()).toBe(false);expect(closed).not.toHaveBeenCalled();
+ expect(form.querySelector('.settings-action-host')?.textContent).toContain('保存根目录尚未填写');
+ expect(document.activeElement).toBe(form.querySelector('[data-settings="focus-vault-root"]'));
+ (form.querySelector('[data-settings="confirm-discard-close"]') as HTMLButtonElement).click();
+ await settle();
+ expect(closed).toHaveBeenCalledOnce();
+});
+it('lets the user go back and fill in the root instead of discarding the first-use draft',async()=>{
+ const {form,binding,closed}=await setup(true);change(form,'model','draft');await settle();
+ expect(await binding.close()).toBe(false);expect(closed).not.toHaveBeenCalled();
+ (form.querySelector('[data-settings="focus-vault-root"]') as HTMLButtonElement).click();
+ expect(form.querySelector('.settings-action-host')?.textContent).toBe('');
+ expect(document.activeElement).toBe(field(form,'vaultRoot'));
+ expect(field(form,'model').value).toBe('draft');
+ expect(closed).not.toHaveBeenCalled();
 });
 it('flushes pending edits before an explicit model fetch and does not invoke tasks automatically',async()=>{
  const {form,request}=await setup();field(form,'model').value='draft-model';field(form,'model').dispatchEvent(new Event('input',{bubbles:true}));

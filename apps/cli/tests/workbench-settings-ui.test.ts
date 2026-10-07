@@ -472,3 +472,25 @@ it('applies a language change to the main workbench immediately while Settings s
  await vi.waitFor(() => expect(root.querySelector('dialog')).toBeNull());
  expect(root.querySelector('.paper-workspace')).toBeTruthy();
 });
+
+it('asks before discarding a typed first-run business draft blocked by a missing save root, and lets the user go back instead', async () => {
+ setUiLanguage('zh');
+ const { root, fetcher } = setup(true, false, undefined, (path, init) => path === 'api/settings' && !init?.method ? json({ setupRequired: true, revision: null, configPath: '/config.toml', values: { ...values, vaultRoot: '' } }) : undefined);
+ await vi.waitFor(() => expect(root.querySelector('.settings-form')).toBeTruthy());
+ input(root, 'model', 'typed-model-draft');
+ root.querySelector<HTMLButtonElement>('[data-action="close-dialog"]')!.click();
+ await vi.waitFor(() => expect(root.querySelector('.settings-action-host')?.textContent).toContain('保存根目录尚未填写'));
+ // Still open — the draft (typed-model-draft) is not discarded just by asking to close.
+ expect(root.querySelector('dialog')).toBeTruthy();
+ root.querySelector<HTMLButtonElement>('[data-settings="focus-vault-root"]')!.click();
+ expect(root.querySelector('.settings-action-host')?.textContent).toBe('');
+ expect(root.querySelector<HTMLInputElement>('[name="model"]')!.value).toBe('typed-model-draft');
+ expect(root.querySelector('dialog')).toBeTruthy();
+ expect(root.querySelector<HTMLInputElement>('[name="vaultRoot"]')).toBe(document.activeElement);
+ // Closing again and this time choosing to discard actually closes.
+ root.querySelector<HTMLButtonElement>('[data-action="close-dialog"]')!.click();
+ await vi.waitFor(() => expect(root.querySelector('[data-settings="confirm-discard-close"]')).toBeTruthy());
+ root.querySelector<HTMLButtonElement>('[data-settings="confirm-discard-close"]')!.click();
+ await vi.waitFor(() => expect(root.querySelector('dialog')).toBeNull());
+ expect(fetcher.mock.calls.some(([u, init]) => String(u) === 'api/settings' && (init as RequestInit | undefined)?.method === 'POST')).toBe(false);
+});
