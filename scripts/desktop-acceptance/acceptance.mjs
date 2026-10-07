@@ -11,6 +11,7 @@ import {
   sidecarEnabledIgnoredScenario,
 } from "./scenarios.mjs";
 import { blockersFromError } from "./app-state.mjs";
+import { directionReviewScenarios } from "./direction-review.mjs";
 import { librarySettingsScenarios } from "./library-settings.mjs";
 import { topicDirectionsScenarios } from "./topic-directions.mjs";
 import { describeBlockers, preflight } from "./preflight.mjs";
@@ -111,6 +112,7 @@ try {
       const results = await runScenarios([
         () => librarySettingsScenarios({ session, screenshots }),
         () => topicDirectionsScenarios({ session, screenshots }),
+        () => directionReviewScenarios({ session, screenshots }),
       ]);
       return {
         results,
