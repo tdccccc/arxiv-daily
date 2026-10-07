@@ -432,3 +432,43 @@ it.each(['button','escape'])('keeps daily discovery off after switching it off a
  expect(root.querySelector<HTMLInputElement>('[name="schedule.enabled"]')!.checked).toBe(false);
  const saves=fetcher.mock.calls.filter(([url,init])=>String(url)==='api/settings'&&init?.method==='POST');expect(saves).toHaveLength(1);expect(JSON.parse(String(saves[0]![1]!.body)).values.schedule.enabled).toBe(false);
 });
+
+it('closes first-run settings via a single Done click after only changing language, without a save root, and does not bounce back open', async () => {
+ setUiLanguage('zh');
+ const { root, fetcher } = setup(true, false, undefined, (path, init) => path === 'api/settings' && !init?.method ? json({ setupRequired: true, revision: null, configPath: '/config.toml', values: { ...values, vaultRoot: '' } }) : undefined);
+ await vi.waitFor(() => expect(root.querySelector('.settings-form')).toBeTruthy());
+ const language = root.querySelector<HTMLSelectElement>('[name="appearance.language"]')!;
+ language.value = 'en'; language.dispatchEvent(new Event('change', { bubbles: true }));
+ await vi.waitFor(() => expect(root.querySelector('[data-settings="close"]')?.textContent).toBe('Done'));
+ root.querySelector<HTMLButtonElement>('[data-settings="close"]')!.click();
+ await vi.waitFor(() => expect(root.querySelector('dialog')).toBeNull());
+ // Main UI behind the dialog is re-localized, not just the (now closed) dialog.
+ expect(root.querySelector('[data-action="generate"]')?.textContent).toContain('Generate');
+ // Setup isn't finished (no save root was ever chosen), so the reading pane explains that and
+ // offers a way back in — it must not have auto-reopened Settings on its own.
+ const panelButton = root.querySelector<HTMLButtonElement>('.empty-reading [data-action="settings"]');
+ expect(panelButton).toBeTruthy();
+ await new Promise(resolve => setTimeout(resolve, 20));
+ expect(root.querySelector('dialog')).toBeNull();
+ // The unsaved draft (just the language change here) never reached the server.
+ expect(fetcher.mock.calls.some(([u, init]) => String(u) === 'api/settings' && (init as RequestInit | undefined)?.method === 'POST')).toBe(false);
+ panelButton!.click();
+ await vi.waitFor(() => expect(root.querySelector('.settings-form')).toBeTruthy());
+});
+
+it('applies a language change to the main workbench immediately while Settings stays open, and closing afterward still works', async () => {
+ setUiLanguage('zh');
+ const { root } = setup(false);
+ await vi.waitFor(() => expect(root.querySelector('.paper-workspace')).toBeTruthy());
+ root.querySelector<HTMLButtonElement>('[data-action="settings"]')!.click();
+ await vi.waitFor(() => expect(root.querySelector('.settings-form')).toBeTruthy());
+ const language = root.querySelector<HTMLSelectElement>('[name="appearance.language"]')!;
+ language.value = 'en'; language.dispatchEvent(new Event('change', { bubbles: true }));
+ await vi.waitFor(() => expect(root.querySelector('[data-action="generate"]')?.textContent).toContain('Generate'));
+ // Relocalizing the main view must not have lost the open dialog.
+ expect(root.querySelector('dialog')).toBeTruthy();
+ await vi.waitFor(() => expect(root.querySelector('.settings-form')).toBeTruthy());
+ root.querySelector<HTMLButtonElement>('[data-settings="close"]')!.click();
+ await vi.waitFor(() => expect(root.querySelector('dialog')).toBeNull());
+ expect(root.querySelector('.paper-workspace')).toBeTruthy();
+});
