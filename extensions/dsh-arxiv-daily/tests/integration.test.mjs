@@ -29,7 +29,7 @@ for (const firstRun of [false, true]) test(`${firstRun ? 'first-run' : 'configur
   const profile = JSON.parse(await readFile(join(env.DSH_HOME, 'profiles/web/package.json'), 'utf8'));
   assert.ok(profile.dsh.profile.bundles.includes('dsh-arxiv-daily'));
   const log = join(root, 'requests.jsonl'); await writeFile(log, '');
-  const child = spawn(process.execPath, [dsh.cli, 'web', '--no-open', '--port', '0'], { cwd: root, env: { ...env, NODE_OPTIONS: `--require=${JSON.stringify(resolve(project, 'extensions/claude-code-arxiv-daily/tests/fixtures/core-http.cjs'))}`, ARXIV_CORE_FIXTURE_SCENARIO: 'selected', ARXIV_CORE_FIXTURE_LOG: log }, stdio: ['ignore', 'pipe', 'pipe'] });
+  const child = spawn(process.execPath, [dsh.cli, 'web', '--no-open', '--port', '0'], { cwd: root, env: { ...env, NODE_OPTIONS: `--require=${JSON.stringify(resolve(project, 'extensions/dsh-arxiv-daily/tests/fixtures/core-http.cjs'))}`, ARXIV_CORE_FIXTURE_SCENARIO: 'selected', ARXIV_CORE_FIXTURE_LOG: log }, stdio: ['ignore', 'pipe', 'pipe'] });
   const exited = new Promise(resolve => child.once('close', resolve));
   t.after(async () => { if (child.exitCode === null && child.signalCode === null) { child.kill('SIGTERM'); const timer = setTimeout(() => child.kill('SIGKILL'), 5000); await exited; clearTimeout(timer); } });
   let output = ''; child.stderr.on('data', chunk => { output = (output + chunk).slice(-10000); });

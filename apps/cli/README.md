@@ -47,7 +47,7 @@ Config path:
 - Linux/macOS: `$XDG_CONFIG_HOME/arxiv-daily/config.toml` (default `~/.config/arxiv-daily/config.toml`)
 - Windows: `%APPDATA%\arxiv-daily\config.toml`
 
-Default vault from init: `~/arxiv-daily`. No settings env vars; no `--config` / `--vault-root` flags.
+Default vault from init: `~/arxiv-daily`. No settings env vars; no `--config` / `--vault-root` flags. The config file holds your API keys in plain text — lock it down: `chmod 600 ~/.config/arxiv-daily/config.toml`.
 
 ## Daily paper limit
 
@@ -129,7 +129,7 @@ npm run build --workspace apps/cli
 npm run cli -- ui
 ```
 
-Run these from the repository root. Source builds require CMake, a C++ compiler and Node-API headers for native storage. The same workbench is available inside [DSH](../../extensions/dsh-arxiv-daily/README.md); [Claude Code CLI](../../extensions/claude-code-arxiv-daily/README.md) can open it in your browser. Neither integration requires Obsidian.
+Run these from the repository root. Source builds require CMake, a C++ compiler and Node-API headers for native storage. The same workbench is available inside [DSH](../../extensions/dsh-arxiv-daily/README.md). Neither integration requires Obsidian.
 
 Settings changes save automatically. Closing settings waits for pending saves; failures keep the editor open so you can retry. Automatic daily reports remain optional after completing your first report.
 
@@ -145,7 +145,7 @@ Run `library prepare` to install pinned optional PDF/runtime components in the c
 
 The catalog, title-and-abstract indexes and proposals use existing core formats under the active output layout. Accepted topics and their receipts are saved together in the CLI TOML. Library settings live in the CLI TOML and are not automatically synchronized with Obsidian settings. Connection/authorization updates preserve setting values but normalize TOML formatting. Avoid concurrent library rebuild/review writers from different hosts against the same output directory.
 
-For review request schemas and the auxiliary Claude Code workflow, see [the command reference in the source repository](https://github.com/tdccccc/arxiv-daily/blob/main/extensions/claude-code-arxiv-daily/references/commands.md). The Node CPU runtime has been exercised on Linux Node 20.19 and 22; Windows/macOS CPU smoke remains to be completed before general release.
+The Node CPU runtime has been exercised on Linux Node 20.19 and 22; Windows/macOS CPU smoke remains to be completed before general release.
 
 ## Interrupted daily runs and checkpoints
 

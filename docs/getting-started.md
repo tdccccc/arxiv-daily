@@ -11,7 +11,6 @@ For the product overview, see the [README](../README.md). The numbered guide bel
 | Obsidian desktop plugin | Install and enable the plugin, then follow the steps below |
 | Standalone browser workbench | Build the CLI from source and run `npm run cli -- ui`; see [CLI instructions](../apps/cli/README.md#local-reading-workbench) |
 | DSH | Install the local `0.1.18` package and click `arxiv-daily` above Settings in the left sidebar; see [build, install and upgrade](../extensions/dsh-arxiv-daily/README.md) |
-| Claude Code CLI | Load the plugin and use `/arxiv-daily:open` to open the browser workbench; see [instructions](../extensions/claude-code-arxiv-daily/README.md) |
 
 On first open, configure the output folder, model, arXiv categories and research topics in the standalone workbench. **Settings save automatically**: switches and dropdowns save immediately; text edits save after a short pause. The footer shows save progress or errors. **Done**, × and Escape wait for pending saves before closing; after a failure, you can retry or explicitly discard unsaved edits. Turning daily discovery off stays off when you reopen settings. Automatic reports are optional after your first successful report.
 
@@ -155,6 +154,16 @@ Beta capacity is intentionally small (a few messages per verified inbox per UTC 
 ### After a real run
 
 With auto-send on, a **completed** daily run may email one digest for that date. The same date is not resent by default. **Send test** does not block the real daily for that day.
+
+## Optional: personal library
+
+Connect one local paper-library folder — including a folder outside your vault — to bring your existing literature into daily discovery, from **Settings → arXiv Daily → Personal library**.
+
+- Access is **read-only** and limited to the folder you explicitly select: arXiv Daily cannot write, rename, or delete its files, and symbolic links are not followed.
+- The inventory preview (which PDFs are eligible or ignored) stays local and needs no model-processing authorization.
+- Model processing is separately authorized after you review the selected folder, eligible file types, processing depth, and the effective model endpoint it will use.
+- Changing the folder, endpoint, eligible file types, or processing depth invalidates that authorization. You can revoke it at any time.
+- The library can propose a few broad topics and directions; only directions you explicitly accept are used for daily filtering.
 
 ## Troubleshooting
 
