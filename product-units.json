@@ -190,7 +190,6 @@
             "scripts/native-build.mjs",
             "scripts/native-assets.mjs",
             "scripts/release-utils.mjs",
-            "extensions/claude-code-arxiv-daily/tests/fixtures/core-http.cjs",
             ".github/workflows/dsh-plugin.yml",
             "product-units.json",
             "scripts/check-product-units.mjs",

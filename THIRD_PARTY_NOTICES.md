@@ -33,7 +33,7 @@ THE SOFTWARE.
 
 ## Local reading workbench dependencies
 
-The Node CLI and Claude Code bundle also include the following Markdown and math rendering libraries. Their notices are embedded in the CLI and available from the local workbench.
+The Node CLI bundle also includes the following Markdown and math rendering libraries. Their notices are embedded in the CLI and available from the local workbench.
 
 ### markdown-it 15.0.2
 

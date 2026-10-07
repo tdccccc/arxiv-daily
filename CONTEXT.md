@@ -9,7 +9,6 @@ Language for arXiv Daily. Implementation details live in code and ADRs, not here
 | **Plugin product** | The Obsidian-facing product: settings UI, Dashboard, in-app scheduler while Obsidian is open. |
 | **CLI product** | The independently runnable product for terminal workflows and external scheduling, with an optional local reading workbench. Same pipeline engine as the plugin product; separate configuration and UX. |
 | **Reading workbench** | The local browser surface for browsing daily reports, reading paper notes, following source links, and starting product tasks. It displays the existing Markdown research record; reading does not replace or rewrite that record. |
-| **Claude Code integration** | An auxiliary conversational entry to arXiv Daily's established paper filtering, daily reports, paper notes, and library-guided discovery. The product works independently of an active agent conversation and does not require Obsidian. |
 | **DSH integration** | The research workbench available inside DeepSeek Harness. Researchers use the same papers, reports, and reading marks across conversations; agent conversation remains an auxiliary entry. |
 | **Host** | A composition root that wires ports (HTTP, storage, etc.) and invokes core. Plugin and CLI are two hosts, not two business cores. |
 | **Core** | Shared pipeline, digest, delivery, index, and validation logic used by both products. |
