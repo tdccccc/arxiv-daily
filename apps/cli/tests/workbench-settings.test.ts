@@ -18,7 +18,7 @@ async function fixture() {
 describe("workbench settings", () => {
   it("starts without config and creates private usable config without exposing secrets", async () => {
     const { configPath, values } = await fixture();
-    expect(await readWorkbenchSettings(configPath)).toMatchObject({ setupRequired: true, revision: null, values: { vaultRoot: "", apiKeyConfigured: false } });
+    expect(await readWorkbenchSettings(configPath)).toMatchObject({ setupRequired: true, revision: null, values: { vaultRoot: path.join(os.homedir(), "arxiv-daily"), apiKeyConfigured: false } });
     const saved = await saveWorkbenchSettings(configPath, { revision: null, values });
     expect(saved.settings.llm.apiKey).toBe("private-test-key");
     expect(saved.settings.arxiv.topics).toEqual(values.topics);

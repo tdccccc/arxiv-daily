@@ -5,6 +5,7 @@ import { parse, stringify } from "smol-toml";
 import { DEFAULT_SETTINGS, arxivCategories, sha256Hex, type Topic } from "@arxiv-daily/core";
 import { NodeFileLock, NodeStorageAdapter } from "@arxiv-daily/node-runtime";
 import { loadCliConfig, type CliRuntimeConfig } from "../config";
+import { defaultCliVaultRoot } from "../config-path";
 import { extendedSettings, type ExtendedSettingsValues } from "./settings-fields";
 import { patchWorkbenchBusinessSettings } from "./settings-adapter";
 import { WorkbenchError } from "./documents";
@@ -25,7 +26,8 @@ export async function readWorkbenchSettings(configPath: string): Promise<Workben
   try { const url = new URL(baseUrl); url.username = ""; url.password = ""; url.search = ""; url.hash = ""; baseUrl = url.toString(); } catch { baseUrl = ""; }
   return {
     setupRequired: config === null, revision: config?.configRevision ?? null, configPath,
-    values: { ...extendedSettings(config), vaultRoot: config?.vaultRoot ?? "", baseUrl, provider: settings.llm.provider, model: settings.llm.model,
+    // First run suggests the same save root as `init`, so edits can autosave from the start.
+    values: { ...extendedSettings(config), vaultRoot: config?.vaultRoot ?? defaultCliVaultRoot(), baseUrl, provider: settings.llm.provider, model: settings.llm.model,
       apiKeyConfigured: Boolean(settings.llm.apiKey.trim()), categories: arxivCategories(settings.arxiv), timezone: settings.arxiv.timezone,
       summaryLanguage: settings.output.summaryLanguage ?? "zh", topics: structuredClone(settings.arxiv.topics),
       dailyDir: settings.output.dailyDir, papersDir: settings.output.papersDir },

@@ -6,9 +6,9 @@ import { setUiLanguage } from "../src/workbench/web/i18n";
 const dispose: Array<() => void> = [];
 afterEach(() => { dispose.splice(0).forEach(fn => fn()); document.body.innerHTML=""; setUiLanguage("zh"); });
 const settle=async()=>{await new Promise(resolve=>setTimeout(resolve,0));};
-async function setup(first=false, custom?: (url:string,body?:unknown)=>Promise<unknown>) {
+async function setup(first=false, custom?: (url:string,body?:unknown)=>Promise<unknown>, firstRoot='') {
  let snapshot=await readWorkbenchSettings('/tmp/arxiv-settings-autosave-fixture/nonexistent.toml');
- snapshot={...snapshot,setupRequired:first,revision:first?null:'r1',values:{...snapshot.values,vaultRoot:first?'':'/notes',model:'old',apiKeyConfigured:true,schedule:{...snapshot.values.schedule,enabled:false}}};
+ snapshot={...snapshot,setupRequired:first,revision:first?null:'r1',values:{...snapshot.values,vaultRoot:first?firstRoot:'/notes',model:'old',apiKeyConfigured:true,schedule:{...snapshot.values.schedule,enabled:false}}};
  let sequence=1;
  const request=vi.fn(async<T>(url:string,body?:unknown):Promise<T>=>{
   if(custom){const result=await custom(url,body);if(result!==undefined)return result as T;}
@@ -61,6 +61,15 @@ it('never writes revealed secrets back and clears newly saved secrets without lo
 it('waits for a complete first-use root and flushes on close once chosen',async()=>{
  const {form,request,binding}=await setup(true);field(form,'vaultRoot').value='/chosen';
  expect(await binding.close()).toBe(true);expect(posts(request)).toHaveLength(1);expect((posts(request)[0]![1] as any).values.vaultRoot).toBe('/chosen');
+});
+it('autosaves first-use edits under the suggested save root and closes without asking',async()=>{
+ const {form,request,binding,closed}=await setup(true,undefined,'/home/user/arxiv-daily');
+ expect(await binding.close()).toBe(true);expect(posts(request)).toHaveLength(0);
+ const second=await setup(true,undefined,'/home/user/arxiv-daily');change(second.form,'model','draft');
+ await vi.waitFor(()=>expect(posts(second.request)).toHaveLength(1));
+ expect((posts(second.request)[0]![1] as any).values).toMatchObject({vaultRoot:'/home/user/arxiv-daily',model:'draft'});
+ expect(await second.binding.close()).toBe(true);expect(second.closed).toHaveBeenCalledOnce();
+ expect(form.querySelector('.settings-confirm')).toBeNull();expect(closed).toHaveBeenCalledOnce();
 });
 it('closes immediately during first-use when there is no unsaved business draft to lose',async()=>{
  const {binding,closed}=await setup(true);

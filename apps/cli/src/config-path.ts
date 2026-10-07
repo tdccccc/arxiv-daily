@@ -15,6 +15,11 @@ export function resolveCliConfigDir(
   return path.join(base, "arxiv-daily");
 }
 
+/** Save root suggested on first setup, shared by `init` and the workbench. */
+export function defaultCliVaultRoot(): string {
+  return path.join(os.homedir(), "arxiv-daily");
+}
+
 /** Fixed path to the CLI TOML config file. */
 export function resolveCliConfigPath(
   env: Record<string, string | undefined> = process.env,
