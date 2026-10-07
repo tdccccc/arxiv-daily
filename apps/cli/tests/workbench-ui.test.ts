@@ -1,6 +1,7 @@
 // @vitest-environment happy-dom
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { mountWorkbench } from "../src/workbench/web/app";
+import { renderMarkdown } from "../src/workbench/markdown";
 
 const daily = { path: "arxiv-daily/daily/2026-10-01.md", kind: "daily", title: "2026-10-01 · 研究日报", date: "2026-10-01", authors: "", arxivId: "", size: 20, modifiedAt: "2026-10-01" };
 const paper = { ...daily, path: "arxiv-daily/papers/2609.12345.md", kind: "papers", title: "Efficient inference", authors: "Ada", arxivId: "2609.12345" };
@@ -26,7 +27,8 @@ function setup(override?: (url: URL, init?: RequestInit) => Response | Promise<R
     if (url.pathname.endsWith("api/documents")) return json({ documents: url.searchParams.get("kind") === "papers" ? [paper] : [daily], total: 1, nextOffset: null, counts: { daily: 1, papers: 1 } });
     if (url.pathname.endsWith("api/document")) {
       const entry = url.searchParams.get("path") === paper.path ? paper : daily;
-      return json({ ...entry, metadata: {}, headings: [{ id: "results", title: "结果", level: 2 }], html: `<h2 id="results">结果</h2><p>Saved research</p><a href="?document=${encodeURIComponent(paper.path)}#results">阅读全文</a>`, related: [], originalUrl: entry.kind === "papers" ? "https://arxiv.org/abs/2609.12345" : null, pdfUrl: null });
+      const rendered = renderMarkdown(`## 结果\n\nSaved research\n\n[阅读全文](?document=${encodeURIComponent(paper.path)}#results)`, { resolveLink: target => target });
+      return json({ ...entry, ...rendered, title: entry.title, related: [], originalUrl: entry.kind === "papers" ? "https://arxiv.org/abs/2609.12345" : null, pdfUrl: null });
     }
     throw new Error(`Unexpected fetch: ${url}`);
   });
@@ -138,7 +140,7 @@ describe("reading workbench UI", () => {
     history.replaceState({}, "", `?document=${encodeURIComponent(paper.path)}`);
     window.dispatchEvent(new PopStateEvent("popstate"));
     await vi.waitFor(() => expect(root.querySelector(".document-title")?.textContent).toBe(paper.title));
-    finishDaily(json({ ...daily, html: "<p>Old article</p>", headings: [], metadata: {}, related: [], originalUrl: null, pdfUrl: null }));
+    finishDaily(json({ ...daily, ...renderMarkdown("Old article"), title: daily.title, related: [], originalUrl: null, pdfUrl: null }));
     await new Promise(resolve => setTimeout(resolve, 20));
     expect(root.querySelector(".document-title")?.textContent).toBe(paper.title);
     expect(root.querySelector("article")?.textContent).not.toContain("Old article");

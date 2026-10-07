@@ -23,7 +23,7 @@ function setup(override?: (url: URL, init?: RequestInit) => Response | Promise<R
     if (url.pathname.endsWith("api/paper")) return json({ paper });
     if (url.pathname.endsWith("api/runs/current")) return json({ run: null });
     if (url.pathname.endsWith("api/documents")) return json({ documents: [{ path: "papers/standalone.md", kind: "papers", title: "Unindexed saved note", date: "", arxivId: "", authors: "", size: 10 }], total: 1, nextOffset: null, counts: { daily: 1, papers: 1 } });
-    if (url.pathname.endsWith("api/document")) return json({ path: url.searchParams.get("path"), kind: "daily", title: "完整研究日报", date: day.date, arxivId: "", authors: "", html: '<h2 id="all">完整 Markdown 内容</h2>', headings: [{ id: "all", title: "完整 Markdown 内容", level: 2 }], related: [], originalUrl: null, pdfUrl: null });
+    if (url.pathname.endsWith("api/document")) return json({ path: url.searchParams.get("path"), kind: "daily", date: day.date, arxivId: "", authors: "", ...renderMarkdown("## 完整 Markdown 内容"), title: "完整研究日报", related: [], originalUrl: null, pdfUrl: null });
     throw new Error(`Unexpected request: ${url}`);
   });
   disposers.push(mountWorkbench(root, { fetch: fetcher, searchDelayMs: 0, pollIntervalMs: 10 }));
@@ -216,7 +216,7 @@ it("renders math in document titles and table of contents", async () => {
  const rendered=renderMarkdown(String.raw`# Expansion $H_0$
 
 ## Matter $\Omega_m$`);
- const {root}=setup(url=>url.pathname.endsWith('api/document')?json({path:'daily/2026-10-01.md',kind:'daily',title:'Expansion $H_0$',date:day.date,arxivId:'',authors:'',html:rendered.html,headings:rendered.headings,related:[],originalUrl:null,pdfUrl:null}):undefined,'?date=2026-10-01');
+ const {root}=setup(url=>url.pathname.endsWith('api/document')?json({path:'daily/2026-10-01.md',kind:'daily',title:'Expansion $H_0$',date:day.date,arxivId:'',authors:'',html:rendered.html,nodes:rendered.nodes,headings:rendered.headings,related:[],originalUrl:null,pdfUrl:null}):undefined,'?date=2026-10-01');
  await ready(root);click(root,'[data-action="read-day"]');
  await vi.waitFor(()=>expect(root.querySelector('article')).toBeTruthy());
  expect(root.querySelector('.document-title .katex')).toBeTruthy();

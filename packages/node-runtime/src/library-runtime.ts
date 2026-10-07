@@ -109,11 +109,14 @@ export function createNodeLibraryEmbeddingModel(cacheDir: string, options: { sig
     async loadPipeline() {
       const { embedding } = nodeLibraryRuntimePaths(cacheDir);
       const require = await requireInstalled(embedding, embeddingPackage);
-      // The module specifier is dynamic, so TS can only type this import as
-      // `any`; routing it through an `unknown`-typed binding keeps that from
-      // leaking into the rest of the function before the one deliberate cast
-      // to the shape this loader actually relies on.
-      const imported: unknown = await import(pathToFileURL(require.resolve("@huggingface/transformers")).href);
+      // @huggingface/transformers publishes a CJS build for Node (see its
+      // package.json "exports"."node"."require"), so this can load through
+      // the sandboxed `require` above instead of a dynamic `import()` whose
+      // specifier is only known at runtime. The result is typed as `any` by
+      // `require`, so it's routed through an `unknown` binding to keep that
+      // from leaking out before the one deliberate cast to the shape this
+      // loader actually relies on.
+      const imported: unknown = require("@huggingface/transformers");
       const resolved: unknown = isRecord(imported) ? imported.default ?? imported : imported;
       const module = resolved as {
         env: { cacheDir: string; allowRemoteModels: boolean };

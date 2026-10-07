@@ -1,5 +1,6 @@
 import { t, setUiLanguage } from "./i18n";
 import type { UiAppearancePreferences } from "@arxiv-daily/core";
+import { h, type DomAttrs } from "./dom";
 import { modelCombobox, mountModelCombobox } from "./model-combobox";
 import { mountSettingsNavigation } from "./settings-navigation";
 import { settingsSetupGuide } from "./settings-setup";
@@ -8,36 +9,78 @@ import type { WorkbenchSettings as SettingsSnapshot } from "../settings";
 import { deriveTopicDescription, normalizeTopic, slugify, isCompletedDiscovery, ARXIV_CATEGORIES, getBusinessSettingsSections, getBusinessSetting, getTopicSettingField, runWindowTimeOptions, isBusinessSettingVisible, TIMEZONE_OPTIONS, type BusinessSetting, type BusinessSettingId, type BusinessSettingsContext, DEFAULT_SETTINGS, DEFAULT_UI_APPEARANCE, libraryRowPresentation, type Topic } from "@arxiv-daily/core";
 import { descriptions } from './settings-copy';
 export type { WorkbenchSettings as SettingsSnapshot } from "../settings";
-const escape = (text: string) => text.replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]!);
-const button = (action: string, label: string) => `<button type="button" data-settings="${action}">${escape(t(label))}</button>`;
+const button = (action: string, label: string) => h("button", { type: "button", "data-settings": action }, t(label));
 const zones = Object.fromEntries(TIMEZONE_OPTIONS.map(zone => [zone.value,zone.label]));
 const controlFields: Record<string,BusinessSettingId> = {maxDailyPapers:'maxDailyPapers',baseUrl:'apiBaseUrl',apiKey:'apiKey',model:'model',reasoningEffort:'reasoningEffort',detailProfile:'detailProfile',timezone:'timezone',dailyDir:'dailyDir',papersDir:'papersDir',linkStyle:'linkStyle',summaryLanguage:'summaryLanguage',logLevel:'logLevel','schedule.enabled':'scheduleEnabled','schedule.tickIntervalMin':'tickInterval','embedding.mode':'embeddingMode','embedding.baseUrl':'embeddingBaseUrl','embedding.apiKey':'embeddingApiKey','embedding.model':'embeddingModel','embedding.dimension':'embeddingDimension','pdfParserSidecar.enabled':'sidecarEnabled','pdfParserSidecar.capabilitiesUrl':'sidecarCapabilitiesUrl','pdfParserSidecar.parseUrl':'sidecarParseUrl','email.mode':'emailMode','email.to':'emailTo','email.apiKey':'emailApiKey','email.hostedToken':'hostedToken','email.fromEmail':'fromEmail','email.fromName':'fromName','email.enabled':'emailEnabled'};
 const controlLabels: Record<string,string> = {vaultRoot:'Save root (absolute path on this device)',timezoneCustom:'Or enter custom timezone',topicName:'Name',topicTag:'Tag',topicDetail:'Detail report',libraryPath:'PDF folder absolute path','appearance.theme':'Theme','appearance.language':'Interface language','schedule.runAtLocal':'Start','schedule.runUntilLocal':'End'};
 function controlLabel(name:string):string{const topicKey=({topicName:'name',topicTag:'tag',topicDetail:'detail'} as const)[name];return t(topicKey?getTopicSettingField(topicKey).name:controlFields[name]?getBusinessSetting(controlFields[name]).name:controlLabels[name]??name);}
-function input(name: string, value: string | number, type = 'text', extra = ''): string { return `<input name="${name}" aria-label="${escape(controlLabel(name))}" type="${type}" value="${escape(String(value))}" ${extra.replace(/placeholder="([^"]*)"/g, (_match, value: string) => `placeholder="${escape(t(value))}"`)}>`; }
-function select(name: string, value: string, options: Record<string, string>, key = name): string { return `<select name="${name}" aria-label="${escape(controlLabel(name))}" data-setting-key="${key}">${Object.entries(options).map(([id,label]) => `<option value="${escape(id)}" ${id === value ? 'selected' : ''}>${escape(t(label))}</option>`).join('')}</select>`; }
-function toggle(name: string, value: boolean, key = name): string { return `<input name="${name}" aria-label="${escape(controlLabel(name))}" type="checkbox" role="switch" data-setting-key="${key}" ${value ? 'checked' : ''}>`; }
-function secret(name: string, configured: boolean): string { return `<div class="settings-secret">${input(name,'','password','autocomplete="new-password"')}<button type="button" data-settings="show-secret" aria-label="${escape(t('Show')+' '+controlLabel(name))}">${escape(t('Show'))}</button><small>${escape(t(configured ? 'Saved. Leave blank to keep unchanged.' : 'Saved only on this device.'))}</small></div>`; }
-function row(name: string, controls: string, desc = descriptions[name] ?? '', extra = ''): string { return `<div class="setting-item" data-setting-name="${escape(name)}" ${extra}><div class="setting-item-info"><div class="setting-item-name">${escape(t(name))}</div><div class="setting-item-description">${escape(t(desc))}</div></div><div class="setting-item-control">${controls}</div></div>`; }
-function group(name: string, content: string): string { return `<section class="settings-section"><h3 data-settings-heading data-settings-key="${escape(name)}">${escape(t(name))}</h3>${content}</section>`; }
-function categoryRow(value: string, index: number): string {
+function input(name: string, value: string | number, type = 'text', extra: { autocomplete?: string; placeholder?: string } = {}): HTMLInputElement {
+ return h("input", { name, "aria-label": controlLabel(name), type, value: String(value), ...(extra.autocomplete ? { autocomplete: extra.autocomplete } : {}), ...(extra.placeholder ? { placeholder: t(extra.placeholder) } : {}) });
+}
+function select(name: string, value: string, options: Record<string, string>, key = name): HTMLSelectElement {
+ return h("select", { name, "aria-label": controlLabel(name), "data-setting-key": key }, ...Object.entries(options).map(([id,label]) => h("option", { value: id, selected: id === value }, t(label))));
+}
+function toggle(name: string, value: boolean, key = name): HTMLInputElement {
+ return h("input", { name, "aria-label": controlLabel(name), type: "checkbox", role: "switch", "data-setting-key": key, checked: value });
+}
+function secret(name: string, configured: boolean): HTMLElement {
+ return h("div", { class: "settings-secret" },
+  input(name, '', 'password', { autocomplete: 'new-password' }),
+  h("button", { type: "button", "data-settings": "show-secret", "aria-label": `${t('Show')} ${controlLabel(name)}` }, t('Show')),
+  h("small", null, t(configured ? 'Saved. Leave blank to keep unchanged.' : 'Saved only on this device.')),
+ );
+}
+function row(name: string, controls: Node | Node[], desc = descriptions[name] ?? '', extra: DomAttrs = {}): HTMLElement {
+ return h("div", { class: "setting-item", "data-setting-name": name, ...extra },
+  h("div", { class: "setting-item-info" }, h("div", { class: "setting-item-name" }, t(name)), h("div", { class: "setting-item-description" }, t(desc))),
+  h("div", { class: "setting-item-control" }, ...(Array.isArray(controls) ? controls : [controls])),
+ );
+}
+function group(name: string, content: Node | Node[]): HTMLElement {
+ return h("section", { class: "settings-section" }, h("h3", { "data-settings-heading": true, "data-settings-key": name }, t(name)), ...(Array.isArray(content) ? content : [content]));
+}
+function categoryRow(value: string, index: number): HTMLElement {
  const known = ARXIV_CATEGORIES.some(group => group.categories.some(c => c.id === value));
- return row(String(index + 1), `<select name="category" aria-label="${escape(t('Category {0}',index+1))}">${ARXIV_CATEGORIES.map(group => `<optgroup label="${escape(t(group.label))}">${group.categories.map(c => `<option value="${c.id}" ${c.id === value ? 'selected' : ''}>${escape(`${c.id} — ${t(c.name)}`)}</option>`).join('')}</optgroup>`).join('')}${!known ? `<option selected value="${escape(value)}">${escape(value)} — ${escape(t('custom'))}</option>` : ''}</select>${button('remove-category','Delete')}`, '', 'data-category-row');
+ return row(String(index + 1), [
+  h("select", { name: "category", "aria-label": t("Category {0}", index + 1) },
+   ...ARXIV_CATEGORIES.map(group => h("optgroup", { label: t(group.label) }, ...group.categories.map(c => h("option", { value: c.id, selected: c.id === value }, `${c.id} — ${t(c.name)}`)))),
+   ...(known ? [] : [h("option", { selected: true, value }, `${value} — ${t('custom')}`)]),
+  ),
+  button('remove-category', 'Delete'),
+ ], '', { "data-category-row": true });
 }
-function directionRow(direction: Topic['directions'][number]): string {
- return `<div data-direction-id="${escape(direction.id)}" data-direction-origin="${escape(direction.origin)}"><textarea name="topicDirection" rows="2" aria-label="${escape(t(getTopicSettingField('directions').name))}" placeholder="${escape(t(getTopicSettingField('directions').placeholder))}">${escape(direction.text)}</textarea>${button('remove-direction','Remove direction')}</div>`;
+function directionRow(direction: Topic['directions'][number]): HTMLElement {
+ return h("div", { "data-direction-id": direction.id, "data-direction-origin": direction.origin },
+  h("textarea", { name: "topicDirection", rows: 2, "aria-label": t(getTopicSettingField('directions').name), placeholder: t(getTopicSettingField('directions').placeholder) }, direction.text),
+  button('remove-direction', 'Remove direction'),
+ );
 }
-function topicRow(raw: Topic, open = false): string {
+function topicRow(raw: Topic, open = false): HTMLElement {
  const topic=normalizeTopic(raw);
- return `<details class="settings-topic" data-topic-id="${escape(topic.id)}" data-topic-tag="${escape(topic.tag)}" data-original-name="${escape(topic.name)}" data-setting-name="${escape(topic.name.trim() || '(unnamed)')}" ${open ? 'open' : ''}><summary><span class="settings-topic-name">${escape(topic.name.trim() || t('(unnamed)'))}</span><span class="settings-topic-star" title="${escape(t('Detail report enabled'))}">${topic.detail ? '★' : ''}</span></summary><div class="settings-topic-body"><label>${escape(t(getTopicSettingField('name').name))}${input('topicName',topic.name)}</label><div>${escape(t(getTopicSettingField('directions').name))}<div class="settings-topic-directions">${topic.directions.map(directionRow).join('')}</div>${button('add-direction','Add direction')}</div><label class="settings-detail-toggle">${escape(t(getTopicSettingField('detail').name))} <input name="topicDetail" type="checkbox" ${topic.detail ? 'checked' : ''}></label>${button('remove-topic','Delete')}</div></details>`;
+ return h("details", { class: "settings-topic", "data-topic-id": topic.id, "data-topic-tag": topic.tag, "data-original-name": topic.name, "data-setting-name": topic.name.trim() || '(unnamed)', open },
+  h("summary", null,
+   h("span", { class: "settings-topic-name" }, topic.name.trim() || t('(unnamed)')),
+   h("span", { class: "settings-topic-star", title: t('Detail report enabled') }, topic.detail ? '★' : ''),
+  ),
+  h("div", { class: "settings-topic-body" },
+   h("label", null, t(getTopicSettingField('name').name), input('topicName', topic.name)),
+   h("div", null,
+    t(getTopicSettingField('directions').name),
+    h("div", { class: "settings-topic-directions" }, ...topic.directions.map(directionRow)),
+    button('add-direction', 'Add direction'),
+   ),
+   h("label", { class: "settings-detail-toggle" }, `${t(getTopicSettingField('detail').name)} `, h("input", { name: "topicDetail", type: "checkbox", checked: topic.detail })),
+   button('remove-topic', 'Delete'),
+  ),
+ );
 }
 function times(value: string): Record<string,string> { return Object.fromEntries(runWindowTimeOptions(value).map(option=>[option.value,option.label])); }
-export function settingsForm(snapshot: SettingsSnapshot, firstReportComplete = false, appearance: UiAppearancePreferences = DEFAULT_UI_APPEARANCE): string {
+export function settingsForm(snapshot: SettingsSnapshot, firstReportComplete = false, appearance: UiAppearancePreferences = DEFAULT_UI_APPEARANCE): HTMLFormElement {
  const d=DEFAULT_SETTINGS, v=Object.assign({ maxDailyPapers:d.output.maxDailyPapers, reasoningEffort: d.llm.thinkingMode ? d.llm.reasoningEffort : 'none', detailProfile: d.detailSelection.profile, linkStyle:d.output.linkStyle, schedule:d.schedule, embedding:{...d.embedding,apiKeyConfigured:false}, pdfParserSidecar:d.pdfParserSidecar, email:{...d.email,apiKeyConfigured:false,hostedTokenConfigured:false}, logLevel:d.advanced.logLevel }, snapshot.values);
  const context: Partial<BusinessSettingsContext> = {emailMode:v.email.mode,embeddingMode:v.embedding.mode,sidecarEnabled:v.pdfParserSidecar.enabled,detailProfile:v.detailProfile,scheduleEnabled:v.schedule.enabled,reasoningEffort:v.reasoningEffort};
  const emailHosted = isBusinessSettingVisible('hostedToken',context);
- function renderField(field: BusinessSetting): string {
-  const id=field.id, opt=field.options??{}; let controls='';
+ function renderField(field: BusinessSetting): HTMLElement {
+  const id=field.id, opt=field.options??{}; let controls: Node[];
   const bindings: Partial<Record<BusinessSettingId,{name:string;value:string|number|boolean}>> = {
    maxDailyPapers:{name:'maxDailyPapers',value:v.maxDailyPapers},scheduleEnabled:{name:'schedule.enabled',value:v.schedule.enabled},apiBaseUrl:{name:'baseUrl',value:v.baseUrl},apiKey:{name:'apiKey',value:v.apiKeyConfigured},reasoningEffort:{name:'reasoningEffort',value:v.reasoningEffort},detailProfile:{name:'detailProfile',value:v.detailProfile},dailyDir:{name:'dailyDir',value:v.dailyDir},papersDir:{name:'papersDir',value:v.papersDir},linkStyle:{name:'linkStyle',value:v.linkStyle},summaryLanguage:{name:'summaryLanguage',value:v.summaryLanguage},tickInterval:{name:'schedule.tickIntervalMin',value:v.schedule.tickIntervalMin},
    embeddingMode:{name:'embedding.mode',value:v.embedding.mode},embeddingBaseUrl:{name:'embedding.baseUrl',value:v.embedding.baseUrl},embeddingApiKey:{name:'embedding.apiKey',value:v.embedding.apiKeyConfigured},embeddingModel:{name:'embedding.model',value:v.embedding.model},embeddingDimension:{name:'embedding.dimension',value:v.embedding.dimension},sidecarEnabled:{name:'pdfParserSidecar.enabled',value:v.pdfParserSidecar.enabled},sidecarCapabilitiesUrl:{name:'pdfParserSidecar.capabilitiesUrl',value:v.pdfParserSidecar.capabilitiesUrl},sidecarParseUrl:{name:'pdfParserSidecar.parseUrl',value:v.pdfParserSidecar.parseUrl},
@@ -45,35 +88,75 @@ export function settingsForm(snapshot: SettingsSnapshot, firstReportComplete = f
   };
   const binding=bindings[id];
   if(binding) {
-   if(field.control==='dropdown')controls=select(binding.name,String(binding.value),opt,field.key);
-   else if(field.control==='toggle')controls=toggle(binding.name,Boolean(binding.value),field.key);
-   else if(field.control==='secret')controls=secret(binding.name,Boolean(binding.value));
-   else if(field.control==='text'||field.control==='number')controls=input(binding.name,binding.value as string|number,field.control==='number'?'number':'text');
+   let control: Node;
+   if(field.control==='dropdown')control=select(binding.name,String(binding.value),opt,field.key);
+   else if(field.control==='toggle')control=toggle(binding.name,Boolean(binding.value),field.key);
+   else if(field.control==='secret')control=secret(binding.name,Boolean(binding.value));
+   else if(field.control==='text'||field.control==='number')control=input(binding.name,binding.value as string|number,field.control==='number'?'number':'text');
    else throw new Error(`Unsupported control ${field.control} for ${id}`);
-   if(id==='emailApiKey'||id==='hostedToken')controls+=button('email-test','Send test');
-   if(id==='emailTo')controls+=`<span data-email-hosted ${emailHosted?'':'hidden'}>${button('email-verify','Send verification')}</span>`;
+   controls=[control];
+   if(id==='emailApiKey'||id==='hostedToken')controls.push(button('email-test','Send test'));
+   if(id==='emailTo')controls.push(h("span", { "data-email-hosted": true, hidden: !emailHosted }, button('email-verify','Send verification')));
   } else {
    switch(id) {
-    case 'model': controls=modelCombobox(v.model)+button('models','Get models')+'<span class="settings-model-status" role="status"></span>';break;
-    case 'timezone': controls=select('timezone',v.timezone,zones)+input('timezoneCustom',Object.hasOwn(zones,v.timezone)?'':v.timezone,'text','placeholder="Or enter custom timezone"');break;
-    case 'runWindow': controls=`<label>${escape(t('Start'))} ${select('schedule.runAtLocal',v.schedule.runAtLocal,times(v.schedule.runAtLocal))}</label><label>${escape(t('End'))} ${select('schedule.runUntilLocal',v.schedule.runUntilLocal,times(v.schedule.runUntilLocal))}</label>`;break;
-    case 'library': controls='<div class="settings-library-controls">'+button('library-connect','Choose folder')+'</div>';break;
+    case 'model': controls=[modelCombobox(v.model), button('models','Get models'), h("span", { class: "settings-model-status", role: "status" })];break;
+    case 'timezone': controls=[select('timezone',v.timezone,zones), input('timezoneCustom',Object.hasOwn(zones,v.timezone)?'':v.timezone,'text',{placeholder:'Or enter custom timezone'})];break;
+    case 'runWindow': controls=[h("label", null, t('Start'), select('schedule.runAtLocal',v.schedule.runAtLocal,times(v.schedule.runAtLocal))), h("label", null, t('End'), select('schedule.runUntilLocal',v.schedule.runUntilLocal,times(v.schedule.runUntilLocal)))];break;
+    case 'library': controls=[h("div", { class: "settings-library-controls" }, button('library-connect','Choose folder'))];break;
     default:throw new Error(`Missing workbench control for ${id}`);
    }
   }
-  const extra=`data-business-setting="${id}" ${field.visible&&!id.startsWith('sidecar')?'':'hidden'} ${id==='library'?'data-library-row':''} ${['emailApiKey','fromEmail','fromName'].includes(id)?'data-email-self':''} ${id==='hostedToken'?'data-email-hosted':''}`;
+  const extra: DomAttrs = {
+   "data-business-setting": id,
+   hidden: !(field.visible && !id.startsWith('sidecar')),
+   ...(id==='library' ? { "data-library-row": true } : {}),
+   ...(['emailApiKey','fromEmail','fromName'].includes(id) ? { "data-email-self": true } : {}),
+   ...(id==='hostedToken' ? { "data-email-hosted": true } : {}),
+  };
   return row(field.name,controls,field.description,extra);
  }
- const appearanceSection=()=>group('Appearance',row('Theme',select('appearance.theme',appearance.theme,{light:'Light',dark:'Dark',system:'System'}))+row('Interface language',select('appearance.language',appearance.language,{zh:'Chinese',en:'English'})));
- const business=getBusinessSettingsSections(context,{includeHidden:true}).map(section=>{
-  if(section.type==='field')return renderField(section.field);
-  if(section.type==='list')return group(section.heading,section.id==='categories'?`<div class="settings-categories">${v.categories.map(categoryRow).join('')}</div>${button('add-category',section.addItemName)}`:`<div class="settings-topic-list">${v.topics.map(topic=>topicRow(topic)).join('')}</div>${button('add-topic',section.addItemName)}`);
-  return (section.id==='advanced'?appearanceSection():'')+group(section.heading,(section.id==='email'?'<div class="settings-email-guide"></div>':'')+section.items.map(renderField).join(''));
- }).join('');
- return `<form class="settings-form"><div class="settings-host-context"><p>${escape(t(snapshot.setupRequired ? '首次使用：选择保存目录，再配置下方 LLM 和研究主题。' : '修改会自动保存并立即生效。'))}</p><label>${escape(t('保存根目录（本机绝对路径）'))}${input('vaultRoot',v.vaultRoot)}</label><p>${escape(t('模型 API 与 DSH / Claude Code 对话模型独立。密钥留空保留现有值。'))}</p><code>${escape(snapshot.configPath)}</code></div><div class="settings-setup-host">${settingsSetupGuide(snapshot,firstReportComplete)}</div>
- ${business}
- ${group('Help & feedback',row('Report a bug',`<a href="https://github.com/tdccccc/arxiv-daily/issues/new?body=-%20arXiv%20Daily%3A%20Workbench" target="_blank" rel="noopener noreferrer">${escape(t('Open'))}</a>`)+row('Request a feature',`<a href="https://github.com/tdccccc/arxiv-daily/issues/new" target="_blank" rel="noopener noreferrer">${escape(t('Open'))}</a>`)+row('Documentation',`<a href="https://github.com/tdccccc/arxiv-daily/blob/main/docs/getting-started.md" target="_blank" rel="noopener noreferrer">${escape(t('Open'))}</a>`)+row('Repository',`<a href="https://github.com/tdccccc/arxiv-daily" target="_blank" rel="noopener noreferrer">${escape(t('Open'))}</a>`))}
- <div class="settings-action-host"></div><p class="settings-action-status" role="status"></p><p class="form-error" role="alert" hidden></p><div class="dialog-footer"><span class="settings-save-status" role="status"></span><button type="button" data-settings="retry-save" hidden>${escape(t('重试保存'))}</button><button type="button" data-settings="discard-close" hidden>${escape(t('放弃未保存修改并关闭'))}</button>${button('close','完成')}</div></form>`;
+ const appearanceSection=()=>group('Appearance',[
+  row('Theme',select('appearance.theme',appearance.theme,{light:'Light',dark:'Dark',system:'System'})),
+  row('Interface language',select('appearance.language',appearance.language,{zh:'Chinese',en:'English'})),
+ ]);
+ const business=getBusinessSettingsSections(context,{includeHidden:true}).flatMap(section=>{
+  if(section.type==='field')return [renderField(section.field)];
+  if(section.type==='list')return [group(section.heading,section.id==='categories'
+   ? [h("div", { class: "settings-categories" }, ...v.categories.map(categoryRow)), button('add-category',section.addItemName)]
+   : [h("div", { class: "settings-topic-list" }, ...v.topics.map(topic=>topicRow(topic))), button('add-topic',section.addItemName)])];
+  return [
+   ...(section.id==='advanced' ? [appearanceSection()] : []),
+   group(section.heading,[
+    ...(section.id==='email' ? [h("div", { class: "settings-email-guide" })] : []),
+    ...section.items.map(renderField),
+   ]),
+  ];
+ });
+ return h("form", { class: "settings-form" },
+  h("div", { class: "settings-host-context" },
+   h("p", null, t(snapshot.setupRequired ? '首次使用：选择保存目录，再配置下方 LLM 和研究主题。' : '修改会自动保存并立即生效。')),
+   h("label", null, t('保存根目录（本机绝对路径）'), input('vaultRoot',v.vaultRoot)),
+   h("p", null, t('模型 API 与 DSH / Claude Code 对话模型独立。密钥留空保留现有值。')),
+   h("code", null, snapshot.configPath),
+  ),
+  h("div", { class: "settings-setup-host" }, settingsSetupGuide(snapshot,firstReportComplete)),
+  ...business,
+  group('Help & feedback',[
+   row('Report a bug', h("a", { href: "https://github.com/tdccccc/arxiv-daily/issues/new?body=-%20arXiv%20Daily%3A%20Workbench", target: "_blank", rel: "noopener noreferrer" }, t('Open'))),
+   row('Request a feature', h("a", { href: "https://github.com/tdccccc/arxiv-daily/issues/new", target: "_blank", rel: "noopener noreferrer" }, t('Open'))),
+   row('Documentation', h("a", { href: "https://github.com/tdccccc/arxiv-daily/blob/main/docs/getting-started.md", target: "_blank", rel: "noopener noreferrer" }, t('Open'))),
+   row('Repository', h("a", { href: "https://github.com/tdccccc/arxiv-daily", target: "_blank", rel: "noopener noreferrer" }, t('Open'))),
+  ]),
+  h("div", { class: "settings-action-host" }),
+  h("p", { class: "settings-action-status", role: "status" }),
+  h("p", { class: "form-error", role: "alert", hidden: true }),
+  h("div", { class: "dialog-footer" },
+   h("span", { class: "settings-save-status", role: "status" }),
+   h("button", { type: "button", "data-settings": "retry-save", hidden: true }, t('重试保存')),
+   h("button", { type: "button", "data-settings": "discard-close", hidden: true }, t('放弃未保存修改并关闭')),
+   button('close','完成'),
+  ),
+ );
 }
 
 export function bindSettings(form: HTMLFormElement, snapshot: SettingsSnapshot, request: <T>(url: string, body?: unknown) => Promise<T>, saved: () => Promise<void>, onRun?: (run: import('../server').WorkbenchRun) => void, firstReportComplete = false, options: { appearance?: UiAppearancePreferences; onAppearanceSaved?: (appearance: UiAppearancePreferences) => Promise<void> } = {}): { flush: () => Promise<boolean>; close: () => Promise<boolean>; dispose: () => void } {
@@ -132,14 +215,17 @@ export function bindSettings(form: HTMLFormElement, snapshot: SettingsSnapshot, 
    else description=t(get('embedding.mode')==='remote'?'Connected: {0}. Authorized to embed titles and abstracts remotely. Build the search index next.':'Selected: {0}. Local embedding stays on this device. Build the search index to search these PDFs.',label);
   }
   find('[data-library-row] .setting-item-description').textContent=description;
-  find('.settings-library-controls').innerHTML=[['library-connect',row.chooseFolder],['library-build',row.primary],['library-cancel',row.cancel],['library-revoke',row.revoke]].map(([action,item])=>{if(!item||typeof item==='string')return '';return `<button type="button" data-settings="${action}" ${item.disabled?'disabled':''}>${escape(t(item.label))}</button>`;}).join('');
+  find('.settings-library-controls').replaceChildren(
+   ...([['library-connect',row.chooseFolder],['library-build',row.primary],['library-cancel',row.cancel],['library-revoke',row.revoke]] as const)
+    .flatMap(([action,item])=>!item||typeof item==='string'?[]:[h("button",{type:"button","data-settings":action,disabled:item.disabled},t(item.label))]),
+  );
  }
  async function refreshLibrary() { library=await request<typeof library>('api/settings/library'); if(form.isConnected){renderLibrary();if(library?.run?.status==='running'){lockLibraryInputs(true);onRun?.(library.run);}} }
  function refreshVisibleSetupGuide() {
   const host=find('.settings-setup-host');
   if(!host.querySelector('.settings-setup'))return;
   const content=settingsSetupGuide(currentSnapshot,firstReportComplete);
-  if(host.innerHTML!==content)host.innerHTML=content;
+  if(!content || !host.firstElementChild || !content.isEqualNode(host.firstElementChild))host.replaceChildren(...(content?[content]:[]));
  }
  let disposed=false, rootEditing=false, closing=false;
  let timer: number|undefined;
@@ -161,15 +247,15 @@ export function bindSettings(form: HTMLFormElement, snapshot: SettingsSnapshot, 
   const actionContent=find('.settings-action-host');
   const hadGuide=Boolean(find('.settings-setup-host').querySelector('.settings-setup'));
   const renderSnapshot:SettingsSnapshot={...currentSnapshot,values:{...currentSnapshot.values,...current,summaryLanguage:current.summaryLanguage as 'zh'|'en',reasoningEffort:current.reasoningEffort,detailProfile:current.detailProfile as SettingsSnapshot['values']['detailProfile'],linkStyle:current.linkStyle as SettingsSnapshot['values']['linkStyle'],logLevel:current.logLevel as SettingsSnapshot['values']['logLevel'],embedding:{...currentSnapshot.values.embedding,...current.embedding,mode:current.embedding.mode as 'local'|'remote'},email:{...currentSnapshot.values.email,...current.email,mode:current.email.mode as 'self'|'hosted'}}};
-  const template=document.createElement('template');template.innerHTML=settingsForm(renderSnapshot,firstReportComplete,selectedAppearance);
-  form.innerHTML=template.content.querySelector('form')!.innerHTML;
+  const rendered=settingsForm(renderSnapshot,firstReportComplete,selectedAppearance);
+  form.replaceChildren(...Array.from(rendered.children));
   find('.settings-topic-list').replaceWith(topics);find('.settings-action-host').replaceWith(actionContent);
   for(const node of Array.from(topics.querySelectorAll('button')))node.textContent=t(node.textContent??'');
   for(const node of Array.from(topics.querySelectorAll('.settings-topic-body > div')))if(node.firstChild?.nodeType===Node.TEXT_NODE)node.firstChild.textContent=t(node.firstChild.textContent?.trim()??'');
   for(const topic of Array.from(topics.querySelectorAll<HTMLElement>('.settings-topic'))){topic.querySelector('.settings-topic-star')!.setAttribute('title',t('Detail report enabled'));if(!topic.querySelector<HTMLInputElement>('[name="topicName"]')!.value.trim())topic.querySelector('.settings-topic-name')!.textContent=t('(unnamed)');}
   for(const label of Array.from(topics.querySelectorAll('label')))if(label.firstChild?.nodeType===Node.TEXT_NODE)label.firstChild.textContent=t(label.firstChild.textContent?.trim()??'');
   for(const control of Array.from(topics.querySelectorAll('input,textarea')))for(const attr of ['aria-label','placeholder'])if(control.hasAttribute(attr))control.setAttribute(attr,t(control.getAttribute(attr)!));
-  if(!hadGuide)find('.settings-setup-host').innerHTML='';
+  if(!hadGuide)find('.settings-setup-host').replaceChildren();
   for(const state of secretStates){const el=form.elements.namedItem(state.name) as HTMLInputElement;el.value=state.value;el.type=state.type;if(state.revealed)el.dataset.revealed=state.revealed;el.closest('.settings-secret')!.querySelector('button')!.textContent=t(el.type==='text'?'Hide':'Show');}
   mountSettingsNavigation(form);modelControl=mountModelCombobox(form);if(modelOptions.length)modelControl.setOptions(modelOptions);
   conditions();renderLibrary();find('.settings-content').scrollTop=scroll;
@@ -300,7 +386,16 @@ export function bindSettings(form: HTMLFormElement, snapshot: SettingsSnapshot, 
   const name=target.dataset.settings!;
   if(name==='close'){void close();return;}
   if(name==='retry-save'){void flush();return;}
-  if(name==='discard-close'){find('.settings-action-host').innerHTML=`<div class="settings-confirm" role="group" aria-label="${escape(t('放弃未保存修改并关闭'))}"><p>${escape(t('尚未保存的修改将被放弃，已保存的设置保持不变。'))}</p>${button('confirm-discard-close','放弃修改并关闭')}${button('cancel-action','Cancel')}</div>`;return;}
+  if(name==='discard-close'){
+   find('.settings-action-host').replaceChildren(
+    h("div", { class: "settings-confirm", role: "group", "aria-label": t('放弃未保存修改并关闭') },
+     h("p", null, t('尚未保存的修改将被放弃，已保存的设置保持不变。')),
+     button('confirm-discard-close','放弃修改并关闭'),
+     button('cancel-action','Cancel'),
+    ),
+   );
+   return;
+  }
   if(name==='confirm-discard-close'){if(timer){window.clearTimeout(timer);timer=undefined;}void (async()=>{if(draining)await draining;if(!disposed)await saved();})();return;}
   if(name==='show-secret'){
    const field=target.previousElementSibling as HTMLInputElement;
@@ -315,23 +410,43 @@ export function bindSettings(form: HTMLFormElement, snapshot: SettingsSnapshot, 
    }).catch(error=>{if(form.isConnected)field.closest('.settings-secret')!.querySelector('small')!.textContent=error instanceof Error?error.message:t('无法显示密钥。');}).finally(()=>{target.disabled=false;target.textContent=t(field.type==='text'?'Hide':'Show');});return;
   }
   if(busy)return;
-  if(name==='add-topic'){find('.settings-topic-list').insertAdjacentHTML('beforeend',topicRow({id:crypto.randomUUID(),name:'',tag:'',description:'',directions:[],detail:true},true));return;}
-  if(name==='add-direction'){target.closest('.settings-topic')!.querySelector('.settings-topic-directions')!.insertAdjacentHTML('beforeend',directionRow({id:crypto.randomUUID(),text:'',origin:'manual'}));return;}
+  if(name==='add-topic'){find('.settings-topic-list').append(topicRow({id:crypto.randomUUID(),name:'',tag:'',description:'',directions:[],detail:true},true));return;}
+  if(name==='add-direction'){target.closest('.settings-topic')!.querySelector('.settings-topic-directions')!.append(directionRow({id:crypto.randomUUID(),text:'',origin:'manual'}));return;}
   if(name==='remove-direction'){target.closest('[data-direction-id]')!.remove();scheduleSave(true);return;}
   if(name==='remove-topic'){target.closest('.settings-topic')!.remove();scheduleSave(true);return;}
-  if(name==='add-category'){const current=values().categories;const next=ARXIV_CATEGORIES.flatMap(g=>g.categories).find(c=>!current.includes(c.id));find('.settings-categories').insertAdjacentHTML('beforeend',categoryRow(next?.id??'cs.LG',current.length));conditions();scheduleSave(true);return;}
+  if(name==='add-category'){const current=values().categories;const next=ARXIV_CATEGORIES.flatMap(g=>g.categories).find(c=>!current.includes(c.id));find('.settings-categories').append(categoryRow(next?.id??'cs.LG',current.length));conditions();scheduleSave(true);return;}
   if(name==='remove-category'){if(form.querySelectorAll('[data-category-row]').length>1)target.closest('[data-category-row]')!.remove();Array.from(form.querySelectorAll<HTMLElement>('[data-category-row]')).forEach((row,i)=>{row.dataset.settingName=String(i+1);row.querySelector('.setting-item-name')!.textContent=String(i+1);});conditions();scheduleSave(true);return;}
-  if(name==='library-connect'){find('.settings-action-host').innerHTML=`<div class="settings-confirm" role="group" aria-label="${escape(t('Choose library folder'))}"><label>${escape(t('PDF folder absolute path'))} ${input('libraryPath','')}</label>${button('confirm-library-connect','Choose folder')}${button('cancel-action','Cancel')}</div>`;find<HTMLInputElement>('[name="libraryPath"]').focus();return;}
-  if(name==='cancel-action'){find('.settings-action-host').innerHTML='';return;}
+  if(name==='library-connect'){
+   find('.settings-action-host').replaceChildren(
+    h("div", { class: "settings-confirm", role: "group", "aria-label": t('Choose library folder') },
+     h("label", null, `${t('PDF folder absolute path')} `, input('libraryPath','')),
+     button('confirm-library-connect','Choose folder'),
+     button('cancel-action','Cancel'),
+    ),
+   );
+   find<HTMLInputElement>('[name="libraryPath"]').focus();return;
+  }
+  if(name==='cancel-action'){find('.settings-action-host').replaceChildren();return;}
   void task(async()=>{
    if(name==='library-cancel'){if(library?.run){libraryCancelling=true;renderLibrary();try{const result=await request<{run:import('../server').WorkbenchRun}>('api/runs/cancel',{id:library.run.id});library.run=result.run;libraryCancelling=result.run.status==='running';onRun?.(result.run);}catch(error){libraryCancelling=false;throw error;}finally{renderLibrary();}}return;}
    await saveDraft();
-   if(name==='confirm-library-connect'){await action('library-connect',{path:get('libraryPath')});find('.settings-action-host').innerHTML='';return;}
+   if(name==='confirm-library-connect'){await action('library-connect',{path:get('libraryPath')});find('.settings-action-host').replaceChildren();return;}
    if(name==='library-build'){
     await refreshLibrary();
-    if(library?.status.kind!=='authorized' && library?.disclosure){find('.settings-action-host').innerHTML=`<div class="settings-confirm" role="group" aria-label="${escape(t('Library processing consent'))}"><h4>${escape(t('Confirm library processing'))}</h4><pre>${escape([t('Folder: {0}',library.disclosure.selectedRoot),t('Eligible files: {0}',library.disclosure.eligibleExtensions.join(', ')),t('Processing depth: {0}',t(library.disclosure.processingDepth==='full-text'?'Titles and abstracts':library.disclosure.processingDepth)),t('Model endpoint: {0}',library.disclosure.endpoint),...(library.disclosure.embeddingEndpoint?[t('Embedding endpoint: {0}',library.disclosure.embeddingEndpoint)]:[])].join('\n'))}</pre>${button('confirm-library-build','Confirm and build index')}${button('cancel-action','Cancel')}</div>`;return;}
+    if(library?.status.kind!=='authorized' && library?.disclosure){
+     const lines=[t('Folder: {0}',library.disclosure.selectedRoot),t('Eligible files: {0}',library.disclosure.eligibleExtensions.join(', ')),t('Processing depth: {0}',t(library.disclosure.processingDepth==='full-text'?'Titles and abstracts':library.disclosure.processingDepth)),t('Model endpoint: {0}',library.disclosure.endpoint),...(library.disclosure.embeddingEndpoint?[t('Embedding endpoint: {0}',library.disclosure.embeddingEndpoint)]:[])];
+     find('.settings-action-host').replaceChildren(
+      h("div", { class: "settings-confirm", role: "group", "aria-label": t('Library processing consent') },
+       h("h4", null, t('Confirm library processing')),
+       h("pre", null, lines.join('\n')),
+       button('confirm-library-build','Confirm and build index'),
+       button('cancel-action','Cancel'),
+      ),
+     );
+     return;
+    }
    }
-   if(name==='confirm-library-build'){if(!library?.disclosure)throw new Error(t('请重新查看授权范围。'));await action('library-build',{fingerprint:library.disclosure.authorizationFingerprint});find('.settings-action-host').innerHTML='';return;}
+   if(name==='confirm-library-build'){if(!library?.disclosure)throw new Error(t('请重新查看授权范围。'));await action('library-build',{fingerprint:library.disclosure.authorizationFingerprint});find('.settings-action-host').replaceChildren();return;}
    await action(name);
   },target);
  });
