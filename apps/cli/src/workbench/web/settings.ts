@@ -154,12 +154,11 @@ export function settingsForm(snapshot: SettingsSnapshot, firstReportComplete = f
    h("span", { class: "settings-save-status", role: "status" }),
    h("button", { type: "button", "data-settings": "retry-save", hidden: true }, t('重试保存')),
    h("button", { type: "button", "data-settings": "discard-close", hidden: true }, t('放弃未保存修改并关闭')),
-   button('close','完成'),
   ),
  );
 }
 
-export function bindSettings(form: HTMLFormElement, snapshot: SettingsSnapshot, request: <T>(url: string, body?: unknown) => Promise<T>, saved: () => Promise<void>, onRun?: (run: import('../server').WorkbenchRun) => void, firstReportComplete = false, options: { appearance?: UiAppearancePreferences; onAppearanceSaved?: (appearance: UiAppearancePreferences) => Promise<void> } = {}): { flush: () => Promise<boolean>; close: () => Promise<boolean>; dispose: () => void } {
+export function bindSettings(form: HTMLFormElement, snapshot: SettingsSnapshot, request: <T>(url: string, body?: unknown) => Promise<T>, saved: () => Promise<void>, onRun?: (run: import('../server').WorkbenchRun) => void, firstReportComplete = false, options: { appearance?: UiAppearancePreferences; onAppearanceSaved?: (appearance: UiAppearancePreferences, meta?: { closing: boolean }) => Promise<void> } = {}): { flush: () => Promise<boolean>; close: () => Promise<boolean>; dispose: () => void } {
  mountSettingsNavigation(form);
  let modelControl=mountModelCombobox(form);
  let modelOptions:string[]=[];
@@ -227,7 +226,7 @@ export function bindSettings(form: HTMLFormElement, snapshot: SettingsSnapshot, 
   const content=settingsSetupGuide(currentSnapshot,firstReportComplete);
   if(!content || !host.firstElementChild || !content.isEqualNode(host.firstElementChild))host.replaceChildren(...(content?[content]:[]));
  }
- let disposed=false, rootEditing=false, closing=false;
+ let disposed=false, rootEditing=false, closing=false, rootBlocksClose=false, rootBlocksCloseDirty=false;
  let timer: number|undefined;
  let draining: Promise<boolean>|undefined;
  let actionGate: Promise<void>|undefined;
@@ -236,7 +235,11 @@ export function bindSettings(form: HTMLFormElement, snapshot: SettingsSnapshot, 
  const appearanceValues=():UiAppearancePreferences=>({theme:get('appearance.theme') as UiAppearancePreferences['theme'],language:get('appearance.language') as UiAppearancePreferences['language']});
  function saveStatus(message:string,failed=false) {
   if(disposed||!form.isConnected)return;
-  find('.settings-save-status').textContent=t(message);
+  const status=find('.settings-save-status');
+  status.textContent=t(message);
+  // The save root message blocks every business save during first run; call it out in the
+  // (always-visible, non-scrolling) footer so it doesn't read as just another transient status.
+  status.classList.toggle('is-warning',message==='请先填写完整的保存根目录。');
   find<HTMLButtonElement>('[data-settings="retry-save"]').hidden=!failed;
   find<HTMLButtonElement>('[data-settings="discard-close"]').hidden=!failed;
  }
@@ -264,6 +267,7 @@ export function bindSettings(form: HTMLFormElement, snapshot: SettingsSnapshot, 
   const clean=structuredClone(value) as ReturnType<typeof values>&{apiKey?:string};delete clean.apiKey;delete (clean.embedding as {apiKey?:string}).apiKey;delete (clean.email as {apiKey?:string}).apiKey;delete (clean.email as {hostedToken?:string}).hostedToken;return clean;
  }
  async function drain(force:boolean):Promise<boolean> {
+  rootBlocksClose=false;rootBlocksCloseDirty=false;
   try {
    while(!disposed&&form.isConnected){
     if(actionGate)await actionGate;
@@ -290,10 +294,13 @@ export function bindSettings(form: HTMLFormElement, snapshot: SettingsSnapshot, 
      const changedLanguage=appliedAppearance.language!==nextAppearance.language;
      appliedAppearance=nextAppearance;setUiLanguage(nextAppearance.language);
      if(changedLanguage)localizeForm(selectedAppearance);
-     await options.onAppearanceSaved?.(nextAppearance);
+     // `closing` tells the caller whether this change was discovered mid-`close()`: in that case
+     // the dialog is about to be torn down anyway, so it should defer any heavier reaction (like
+     // relocalizing the main view) until the dialog is actually gone, instead of reacting here.
+     await options.onAppearanceSaved?.(nextAppearance,{closing});
      continue;
     }
-    if(waitingForRoot&&(businessChanged||currentSnapshot.setupRequired)){saveStatus('请先填写完整的保存根目录。');if(force){find('[role="alert"]').hidden=false;find('[role="alert"]').textContent=t('请先填写完整的保存根目录。');}return false;}
+    if(waitingForRoot&&(businessChanged||currentSnapshot.setupRequired)){saveStatus('请先填写完整的保存根目录。');if(force){find('[role="alert"]').hidden=false;find('[role="alert"]').textContent=t('请先填写完整的保存根目录。');}rootBlocksClose=true;rootBlocksCloseDirty=businessChanged;return false;}
     find('[role="alert"]').hidden=true;saveStatus('已自动保存');return true;
    }
    return false;
@@ -312,7 +319,46 @@ export function bindSettings(form: HTMLFormElement, snapshot: SettingsSnapshot, 
   if(immediate)void flush(false);else timer=window.setTimeout(()=>{timer=undefined;void flush(false);},500);
  }
  async function saveDraft(refreshGuide=false){if(!await flush())throw new Error(t('请先解决自动保存问题，再继续操作。'));if(refreshGuide)refreshVisibleSetupGuide();return currentSnapshot;}
- async function close():Promise<boolean>{if(closing)return false;closing=true;try{if(!await flush())return false;await saved();return true;}finally{closing=false;}}
+ function showRootMissingDiscard() {
+  find('.settings-action-host').replaceChildren(
+   h("div", { class: "settings-confirm", role: "group", "aria-label": t('放弃未保存修改并关闭') },
+    h("p", null, t('保存根目录尚未填写，这些修改无法保存，关闭后将被放弃。')),
+    button('focus-vault-root','返回填写保存根目录'),
+    button('confirm-discard-close','放弃修改并关闭'),
+   ),
+  );
+  revealConfirm();
+ }
+ // The action host sits at the end of the scrolling settings content, so a confirmation rendered
+ // there is usually out of view; bring it in and focus its first choice so the click visibly lands.
+ function revealConfirm() {
+  const confirm=find('.settings-action-host .settings-confirm');
+  confirm.scrollIntoView?.({block:'nearest',behavior:window.matchMedia?.('(prefers-reduced-motion: reduce)').matches?'instant':'smooth'});
+  confirm.querySelector<HTMLButtonElement>('button')?.focus({preventScroll:true});
+ }
+ async function close():Promise<boolean>{
+  if(closing)return false;closing=true;
+  try{
+   if(!await flush()){
+    // First run only: an empty/invalid save root blocks every business save (there is nowhere to
+    // write the config yet), which used to trap the dialog open forever (close had no other
+    // trigger than this). A genuine autosave failure (network, revision conflict, …) still blocks
+    // close so nothing already-typed is lost silently — that's any other reason for `flush()`
+    // failing.
+    if(!currentSnapshot.setupRequired||!rootBlocksClose)return false;
+    if(rootBlocksCloseDirty){
+     // A real unsaved draft (topics, API key, …) can't be saved without a root. Ask instead of
+     // discarding it silently: offer to go back and fill in the root, or discard and close — the
+     // same explicit choice the "自动保存失败" path already offers.
+     showRootMissingDiscard();
+     return false;
+    }
+    // Nothing of substance to lose (the user never typed into a business field, or only changed
+    // appearance, which already saved independently of the root) — close right away.
+   }
+   await saved();return true;
+  }finally{closing=false;}
+ }
  async function task(operation:()=>Promise<void>, actionButton?: HTMLButtonElement) {
   if(busy)return;busy=true;find('[role="alert"]').hidden=true;
 
@@ -336,7 +382,9 @@ export function bindSettings(form: HTMLFormElement, snapshot: SettingsSnapshot, 
   if(result.run){onRun?.(result.run);if(name==='library-build'&&library){library.run=result.run;renderLibrary();lockLibraryInputs(result.run.status==='running');}find('.settings-action-status').textContent=result.run.label;}
  }
  function lockLibraryInputs(locked: boolean) {
-  for(const control of Array.from(form.querySelectorAll<HTMLInputElement|HTMLSelectElement|HTMLTextAreaElement|HTMLButtonElement>('input,select,textarea,button:not([data-settings="library-cancel"]):not([data-settings="close"]):not([data-settings-nav])')))control.disabled=locked;
+  // The dialog's × (close-dialog) button lives outside this form (see `showDialog` in app.ts), so
+  // it's never touched here regardless — it keeps working to close the dialog while locked.
+  for(const control of Array.from(form.querySelectorAll<HTMLInputElement|HTMLSelectElement|HTMLTextAreaElement|HTMLButtonElement>('input,select,textarea,button:not([data-settings="library-cancel"]):not([data-settings-nav])')))control.disabled=locked;
   if(!locked)renderLibrary();
  }
  form.addEventListener('workbench-run',event=>{
@@ -384,7 +432,6 @@ export function bindSettings(form: HTMLFormElement, snapshot: SettingsSnapshot, 
   }
   const target=event.target instanceof HTMLElement?event.target.closest<HTMLButtonElement>('[data-settings]'):null;if(!target)return;
   const name=target.dataset.settings!;
-  if(name==='close'){void close();return;}
   if(name==='retry-save'){void flush();return;}
   if(name==='discard-close'){
    find('.settings-action-host').replaceChildren(
@@ -394,9 +441,17 @@ export function bindSettings(form: HTMLFormElement, snapshot: SettingsSnapshot, 
      button('cancel-action','Cancel'),
     ),
    );
+   revealConfirm();
    return;
   }
   if(name==='confirm-discard-close'){if(timer){window.clearTimeout(timer);timer=undefined;}void (async()=>{if(draining)await draining;if(!disposed)await saved();})();return;}
+  if(name==='focus-vault-root'){
+   find('.settings-action-host').replaceChildren();
+   const field=find<HTMLInputElement>('[name="vaultRoot"]');
+   field.scrollIntoView?.({block:'center',behavior:window.matchMedia?.('(prefers-reduced-motion: reduce)').matches?'instant':'smooth'});
+   field.focus({preventScroll:true});
+   return;
+  }
   if(name==='show-secret'){
    const field=target.previousElementSibling as HTMLInputElement;
    if(field.type==='text'){field.type='password';if(field.dataset.revealed==='true'){field.value='';delete field.dataset.revealed;}target.textContent=t('Show');return;}

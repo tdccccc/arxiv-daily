@@ -17,7 +17,7 @@ import {
   startHostedEmailVerification,
 } from "@arxiv-daily/core";
 import { buildNodeHostAdapters, NodeStorageAdapter } from "@arxiv-daily/node-runtime";
-import { resolveCliConfigPath } from "./config-path";
+import { defaultCliVaultRoot, resolveCliConfigPath } from "./config-path";
 import type { WritableTextStream } from "./main-types";
 
 export interface InitOptions {
@@ -217,7 +217,7 @@ export async function runInit(opts: InitOptions = {}): Promise<number> {
     if (choice.value === "m") fileMode = "merge";
   }
 
-  const defaultVault = path.join(os.homedir(), "arxiv-daily");
+  const defaultVault = defaultCliVaultRoot();
   const state: WizardState = {
     vaultRoot: defaultVault,
     providerId: DEFAULT_SETTINGS.llm.provider,
@@ -341,7 +341,7 @@ async function runStep(
 
   switch (step) {
     case "vault": {
-      const homeDefault = path.join(os.homedir(), "arxiv-daily");
+      const homeDefault = defaultCliVaultRoot();
       const v = await askText(opts, {
         message: `Vault root path (default: ${homeDefault})`,
         placeholder: "~/arxiv-daily",

@@ -6,9 +6,9 @@ import { setUiLanguage } from "../src/workbench/web/i18n";
 const dispose: Array<() => void> = [];
 afterEach(() => { dispose.splice(0).forEach(fn => fn()); document.body.innerHTML=""; setUiLanguage("zh"); });
 const settle=async()=>{await new Promise(resolve=>setTimeout(resolve,0));};
-async function setup(first=false, custom?: (url:string,body?:unknown)=>Promise<unknown>) {
+async function setup(first=false, custom?: (url:string,body?:unknown)=>Promise<unknown>, firstRoot='') {
  let snapshot=await readWorkbenchSettings('/tmp/arxiv-settings-autosave-fixture/nonexistent.toml');
- snapshot={...snapshot,setupRequired:first,revision:first?null:'r1',values:{...snapshot.values,vaultRoot:first?'':'/notes',model:'old',apiKeyConfigured:true,schedule:{...snapshot.values.schedule,enabled:false}}};
+ snapshot={...snapshot,setupRequired:first,revision:first?null:'r1',values:{...snapshot.values,vaultRoot:first?firstRoot:'/notes',model:'old',apiKeyConfigured:true,schedule:{...snapshot.values.schedule,enabled:false}}};
  let sequence=1;
  const request=vi.fn(async<T>(url:string,body?:unknown):Promise<T>=>{
   if(custom){const result=await custom(url,body);if(result!==undefined)return result as T;}
@@ -58,10 +58,45 @@ it('never writes revealed secrets back and clears newly saved secrets without lo
  expect((posts(request).at(-1)![1] as any).values.apiKey).toBe('new-secret');expect(field(form,'apiKey').value).toBe('');
  expect(field(form,'apiKey').closest('.settings-secret')?.textContent).toContain('已保存');
 });
-it('waits for a complete first-use root and flushes on close without choosing a path',async()=>{
- const {form,request,binding,closed}=await setup(true);change(form,'model','draft');await settle();expect(posts(request)).toHaveLength(0);
+it('waits for a complete first-use root and flushes on close once chosen',async()=>{
+ const {form,request,binding}=await setup(true);field(form,'vaultRoot').value='/chosen';
+ expect(await binding.close()).toBe(true);expect(posts(request)).toHaveLength(1);expect((posts(request)[0]![1] as any).values.vaultRoot).toBe('/chosen');
+});
+it('autosaves first-use edits under the suggested save root and closes without asking',async()=>{
+ const {form,request,binding,closed}=await setup(true,undefined,'/home/user/arxiv-daily');
+ expect(await binding.close()).toBe(true);expect(posts(request)).toHaveLength(0);
+ const second=await setup(true,undefined,'/home/user/arxiv-daily');change(second.form,'model','draft');
+ await vi.waitFor(()=>expect(posts(second.request)).toHaveLength(1));
+ expect((posts(second.request)[0]![1] as any).values).toMatchObject({vaultRoot:'/home/user/arxiv-daily',model:'draft'});
+ expect(await second.binding.close()).toBe(true);expect(second.closed).toHaveBeenCalledOnce();
+ expect(form.querySelector('.settings-confirm')).toBeNull();expect(closed).toHaveBeenCalledOnce();
+});
+it('closes immediately during first-use when there is no unsaved business draft to lose',async()=>{
+ const {binding,closed}=await setup(true);
+ expect(await binding.close()).toBe(true);expect(closed).toHaveBeenCalledOnce();
+});
+it('closes immediately during first-use when only appearance changed, without a save root',async()=>{
+ const {form,binding,closed,appearance}=await setup(true);change(form,'appearance.language','en');
+ await vi.waitFor(()=>expect(appearance).toHaveBeenCalled());
+ expect(await binding.close()).toBe(true);expect(closed).toHaveBeenCalledOnce();
+});
+it('asks before discarding an unsaved first-use draft that a missing save root blocks',async()=>{
+ const {form,binding,closed}=await setup(true);change(form,'model','draft');await settle();
  expect(await binding.close()).toBe(false);expect(closed).not.toHaveBeenCalled();
- field(form,'vaultRoot').value='/chosen';await binding.close();expect(posts(request)).toHaveLength(1);expect((posts(request)[0]![1] as any).values.vaultRoot).toBe('/chosen');
+ expect(form.querySelector('.settings-action-host')?.textContent).toContain('保存根目录尚未填写');
+ expect(document.activeElement).toBe(form.querySelector('[data-settings="focus-vault-root"]'));
+ (form.querySelector('[data-settings="confirm-discard-close"]') as HTMLButtonElement).click();
+ await settle();
+ expect(closed).toHaveBeenCalledOnce();
+});
+it('lets the user go back and fill in the root instead of discarding the first-use draft',async()=>{
+ const {form,binding,closed}=await setup(true);change(form,'model','draft');await settle();
+ expect(await binding.close()).toBe(false);expect(closed).not.toHaveBeenCalled();
+ (form.querySelector('[data-settings="focus-vault-root"]') as HTMLButtonElement).click();
+ expect(form.querySelector('.settings-action-host')?.textContent).toBe('');
+ expect(document.activeElement).toBe(field(form,'vaultRoot'));
+ expect(field(form,'model').value).toBe('draft');
+ expect(closed).not.toHaveBeenCalled();
 });
 it('flushes pending edits before an explicit model fetch and does not invoke tasks automatically',async()=>{
  const {form,request}=await setup();field(form,'model').value='draft-model';field(form,'model').dispatchEvent(new Event('input',{bubbles:true}));
@@ -70,7 +105,7 @@ it('flushes pending edits before an explicit model fetch and does not invoke tas
 });
 it('automatically applies appearance while keeping unsaved first-use business inputs',async()=>{
  const {form,request,appearance}=await setup(true);field(form,'model').value='user-draft';field(form,'model').dispatchEvent(new Event('input',{bubbles:true}));
- change(form,'appearance.language','en');await vi.waitFor(()=>expect(appearance).toHaveBeenCalledWith({theme:'light',language:'en'}));
+ change(form,'appearance.language','en');await vi.waitFor(()=>expect(appearance).toHaveBeenCalledWith({theme:'light',language:'en'},{closing:false}));
  expect(posts(request)).toHaveLength(0);expect(field(form,'model').value).toBe('user-draft');expect(form.textContent).toContain('Appearance');expect(form.isConnected).toBe(true);
 });
 
@@ -100,7 +135,7 @@ it('preserves and queues appearance selections changed during an outstanding pre
  const {form,request,appearance}=await setup(false,async(url)=>{if(url==='api/preferences'&&first){first=false;return new Promise(resolve=>{release=resolve;});}});
  change(form,'appearance.language','en');await vi.waitFor(()=>expect(release).toBeTypeOf('function'));
  change(form,'appearance.theme','dark');change(form,'appearance.language','zh');
- release({});await vi.waitFor(()=>expect(appearance).toHaveBeenLastCalledWith({theme:'dark',language:'zh'}));
+ release({});await vi.waitFor(()=>expect(appearance).toHaveBeenLastCalledWith({theme:'dark',language:'zh'},{closing:false}));
  const writes=request.mock.calls.filter(([url])=>url==='api/preferences');expect(writes.map(([,body])=>body)).toEqual([{appearance:{theme:'light',language:'en'}},{appearance:{theme:'dark',language:'zh'}}]);
  expect(field(form,'appearance.theme').value).toBe('dark');expect(field(form,'appearance.language').value).toBe('zh');
 });
