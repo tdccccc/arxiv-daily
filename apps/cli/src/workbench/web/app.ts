@@ -40,7 +40,7 @@ export function mountWorkbench(root: HTMLElement, options: WorkbenchClientOption
   let restoreScroll: MutationObserver | undefined;
   let appearance: UiAppearancePreferences = options.appearance ?? { ...DEFAULT_UI_APPEARANCE, language: getUiLanguage() };
   const navigation = { session: `${Date.now()}-${Math.random()}`, index: 0, end: 0, scrolls: new Map<number, number>(), pending: false };
-  function render(next: UiAppearancePreferences) {
+  function render(next: UiAppearancePreferences, reopenSettings = false) {
     if (disposed) return;
     const scroll = root.querySelector<HTMLElement>('.reading-pane')?.scrollTop ?? 0;
     generation += 1;
@@ -48,9 +48,12 @@ export function mountWorkbench(root: HTMLElement, options: WorkbenchClientOption
     appearance = next; setUiLanguage(next.language);
     document.documentElement.lang = next.language === 'zh' ? 'zh-CN' : 'en';
     document.title = t('arxiv-daily · 阅读工作台');
-    disposeContent = mountWorkbenchContent(root, { ...options, appearance: next }, navigation, async value => {
-      if (value.language !== appearance.language || value.theme !== appearance.theme) render(value);
-    });
+    disposeContent = mountWorkbenchContent(root, { ...options, appearance: next }, navigation, async (value, context) => {
+      // Theme is applied live inside the dialog's own `onAppearanceSaved` (a CSS attribute flip,
+      // no stale strings to fix); only a language change needs this full remount to re-localize
+      // every string the main view already built.
+      if (value.language !== appearance.language) render(value, context?.reopenSettings ?? false);
+    }, reopenSettings);
     if (scroll > 0) {
       restoreScroll = new MutationObserver(() => {
         if (!root.querySelector('.markdown-body, .paper-workspace, .document-list')) return;
@@ -86,7 +89,7 @@ function workbenchHistoryState(): WorkbenchHistoryState {
   return state && typeof state === "object" ? state : {};
 }
 
-function mountWorkbenchContent(root: HTMLElement, options: WorkbenchClientOptions, navigation: ReadingNavigation, onAppearanceSaved: (value: UiAppearancePreferences) => Promise<void>): () => void {
+function mountWorkbenchContent(root: HTMLElement, options: WorkbenchClientOptions, navigation: ReadingNavigation, onAppearanceSaved: (value: UiAppearancePreferences, context?: { reopenSettings: boolean }) => Promise<void>, startWithSettingsOpen = false): () => void {
   const fetcher = options.fetch ?? window.fetch.bind(window);
   const lifetime = new AbortController();
   let disposed = false;
@@ -124,7 +127,6 @@ function mountWorkbenchContent(root: HTMLElement, options: WorkbenchClientOption
   root.dataset.view = "list";
   let appearance = { ...(options.appearance ?? DEFAULT_UI_APPEARANCE) };
   let settingsBinding: ReturnType<typeof bindSettings> | undefined;
-  let settingsAppearanceChanged = false;
   const systemTheme = window.matchMedia?.('(prefers-color-scheme: dark)');
   const applyTheme = () => { root.dataset.theme = appearance.theme === 'system' ? (systemTheme?.matches ? 'dark' : 'light') : appearance.theme; };
   applyTheme(); systemTheme?.addEventListener?.('change', applyTheme);
@@ -582,19 +584,40 @@ function mountWorkbenchContent(root: HTMLElement, options: WorkbenchClientOption
       const snapshot = await request<SettingsSnapshot>("api/settings");
       if (disposed || dialog !== activeDialog) return;
       activeDialog.querySelector(".dialog-description")!.replaceWith(settingsForm(snapshot, status?.recentRuns?.some(isCompletedDiscovery), appearance));
-      settingsAppearanceChanged = false;
       settingsBinding = bindSettings(activeDialog.querySelector("form")!, snapshot, request, async () => {
         if (disposed) return;
         closeDialog();
-        if (settingsAppearanceChanged) { await onAppearanceSaved(appearance); if (disposed) return; }
+        // The dialog is gone now, so this can safely remount the main content if the language
+        // changed during this session (theme already applied live below as it changed; see
+        // `onAppearanceSaved` just below — it only ever remounts for a language difference, so
+        // calling it here unconditionally is a harmless no-op when nothing needs re-localizing).
+        await onAppearanceSaved(appearance);
+        if (disposed) return;
         find(".connection-banner").hidden = true;
         if (!await loadStatus()) return;
         await initializeWorkspace(true);
-      }, acceptRun, status?.recentRuns?.some(isCompletedDiscovery), { appearance, onAppearanceSaved: async next => {
-        settingsAppearanceChanged = true; appearance = { ...next }; applyTheme();
+      }, acceptRun, status?.recentRuns?.some(isCompletedDiscovery), { appearance, onAppearanceSaved: async (next, meta) => {
+        // Theme is just a CSS attribute on the shared root, so apply it immediately either way —
+        // it was already live before this fix. Language is different: every string already built
+        // into the main view's DOM needs re-localizing, and the only thing that knows how to do
+        // that is a full content remount (the top-level `onAppearanceSaved`, see `render` in
+        // `mountWorkbench`). Previously that remount only ran once the dialog had closed, so the
+        // main view stayed in the old language for as long as the dialog was open.
+        appearance = { ...next };
+        applyTheme();
         document.documentElement.lang = next.language === 'zh' ? 'zh-CN' : 'en'; document.title = t('arxiv-daily · 阅读工作台');
-        activeDialog.querySelector('#dialog-title')!.textContent = t('设置');
+        // If this change was discovered mid-`close()` (Done/submit), the dialog is already being
+        // torn down by that flow — let its own `saved()` callback above remount once it's
+        // actually closed, instead of remounting (and possibly reopening) out from under it here.
+        if (meta?.closing) return;
+        activeDialog.querySelector('#dialog-title')!.textContent = t(setupRequired ? '首次使用 arXiv Daily' : '设置');
         activeDialog.querySelector('[data-action="close-dialog"]')!.setAttribute('aria-label', t('关闭弹窗'));
+        if (disposed || dialog !== activeDialog) return;
+        // Still open and edited live (not via close): remounting tears this dialog down with the
+        // rest of the content, so ask for it to be transparently reopened (fresh snapshot) once
+        // the new content is mounted. A no-op if the top-level helper decides no remount is
+        // actually needed (e.g. this was a theme-only change).
+        await onAppearanceSaved(next, { reopenSettings: true });
       } });
     } catch (error) {
       if (disposed || dialog !== activeDialog) return;
@@ -724,17 +747,27 @@ function mountWorkbenchContent(root: HTMLElement, options: WorkbenchClientOption
     void loadStatus().then(ok => { if (ok) void initializeWorkspace(true); });
   }
 
-  async function initializeWorkspace(refresh = false): Promise<void> {
+  function renderSetupPanel(): void {
+    reading.replaceChildren(
+      h("div", { class: "empty-reading" },
+        h("h1", null, t("开始积累你的研究记录")),
+        h("p", null, t("先设置保存目录、模型 API 和关注主题。")),
+        h("button", { class: "primary-button", "data-action": "settings" }, t("开始设置")),
+      ),
+    );
+  }
+
+  async function initializeWorkspace(refresh = false, autoOpenSettings = false): Promise<void> {
     if (disposed) return;
     if (setupRequired) {
-      reading.replaceChildren(
-        h("div", { class: "empty-reading" },
-          h("h1", null, t("开始积累你的研究记录")),
-          h("p", null, t("先设置保存目录、模型 API 和关注主题。")),
-          h("button", { class: "primary-button", "data-action": "settings" }, t("开始设置")),
-        ),
-      );
-      await showSettings(); return;
+      // Show the "setup not finished" panel every time, but only auto-reopen Settings here on an
+      // actual initial mount (see the bootstrap call below) — otherwise closing Settings while
+      // setup is still incomplete would immediately bounce the dialog back open, trapping the
+      // user. From here, the panel's own button (and any action that needs configuration) opens
+      // Settings explicitly instead.
+      renderSetupPanel();
+      if (autoOpenSettings) await showSettings();
+      return;
     }
     void pollRun();
     if (refresh) void calendar.refresh();
@@ -862,7 +895,14 @@ function mountWorkbenchContent(root: HTMLElement, options: WorkbenchClientOption
   history.replaceState({ ...history.state, readingNavigation: { session: navigation.session, index: navigation.index } }, "");
   syncNavigation();
   readRoute(); syncFilters();
-  void loadStatus().then(ok => { if (ok) void initializeWorkspace(); });
+  void loadStatus().then(ok => {
+    if (!ok) return;
+    // Auto-open Settings here: either a genuine first mount in first-run mode (kept behavior), or
+    // this content was just remounted to relocalize the main view after an appearance change made
+    // while Settings was open, in which case it transparently reopens Settings too.
+    void initializeWorkspace(false, true);
+    if (!setupRequired && startWithSettingsOpen) void showSettings();
+  });
   return () => {
     disposed = true;
     settingsBinding?.dispose();

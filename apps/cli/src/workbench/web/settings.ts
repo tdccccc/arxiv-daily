@@ -159,7 +159,7 @@ export function settingsForm(snapshot: SettingsSnapshot, firstReportComplete = f
  );
 }
 
-export function bindSettings(form: HTMLFormElement, snapshot: SettingsSnapshot, request: <T>(url: string, body?: unknown) => Promise<T>, saved: () => Promise<void>, onRun?: (run: import('../server').WorkbenchRun) => void, firstReportComplete = false, options: { appearance?: UiAppearancePreferences; onAppearanceSaved?: (appearance: UiAppearancePreferences) => Promise<void> } = {}): { flush: () => Promise<boolean>; close: () => Promise<boolean>; dispose: () => void } {
+export function bindSettings(form: HTMLFormElement, snapshot: SettingsSnapshot, request: <T>(url: string, body?: unknown) => Promise<T>, saved: () => Promise<void>, onRun?: (run: import('../server').WorkbenchRun) => void, firstReportComplete = false, options: { appearance?: UiAppearancePreferences; onAppearanceSaved?: (appearance: UiAppearancePreferences, meta?: { closing: boolean }) => Promise<void> } = {}): { flush: () => Promise<boolean>; close: () => Promise<boolean>; dispose: () => void } {
  mountSettingsNavigation(form);
  let modelControl=mountModelCombobox(form);
  let modelOptions:string[]=[];
@@ -227,7 +227,7 @@ export function bindSettings(form: HTMLFormElement, snapshot: SettingsSnapshot, 
   const content=settingsSetupGuide(currentSnapshot,firstReportComplete);
   if(!content || !host.firstElementChild || !content.isEqualNode(host.firstElementChild))host.replaceChildren(...(content?[content]:[]));
  }
- let disposed=false, rootEditing=false, closing=false;
+ let disposed=false, rootEditing=false, closing=false, rootBlocksClose=false;
  let timer: number|undefined;
  let draining: Promise<boolean>|undefined;
  let actionGate: Promise<void>|undefined;
@@ -236,7 +236,11 @@ export function bindSettings(form: HTMLFormElement, snapshot: SettingsSnapshot, 
  const appearanceValues=():UiAppearancePreferences=>({theme:get('appearance.theme') as UiAppearancePreferences['theme'],language:get('appearance.language') as UiAppearancePreferences['language']});
  function saveStatus(message:string,failed=false) {
   if(disposed||!form.isConnected)return;
-  find('.settings-save-status').textContent=t(message);
+  const status=find('.settings-save-status');
+  status.textContent=t(message);
+  // The save root message blocks every business save during first run; call it out in the
+  // (always-visible, non-scrolling) footer so it doesn't read as just another transient status.
+  status.classList.toggle('is-warning',message==='请先填写完整的保存根目录。');
   find<HTMLButtonElement>('[data-settings="retry-save"]').hidden=!failed;
   find<HTMLButtonElement>('[data-settings="discard-close"]').hidden=!failed;
  }
@@ -264,6 +268,7 @@ export function bindSettings(form: HTMLFormElement, snapshot: SettingsSnapshot, 
   const clean=structuredClone(value) as ReturnType<typeof values>&{apiKey?:string};delete clean.apiKey;delete (clean.embedding as {apiKey?:string}).apiKey;delete (clean.email as {apiKey?:string}).apiKey;delete (clean.email as {hostedToken?:string}).hostedToken;return clean;
  }
  async function drain(force:boolean):Promise<boolean> {
+  rootBlocksClose=false;
   try {
    while(!disposed&&form.isConnected){
     if(actionGate)await actionGate;
@@ -290,10 +295,13 @@ export function bindSettings(form: HTMLFormElement, snapshot: SettingsSnapshot, 
      const changedLanguage=appliedAppearance.language!==nextAppearance.language;
      appliedAppearance=nextAppearance;setUiLanguage(nextAppearance.language);
      if(changedLanguage)localizeForm(selectedAppearance);
-     await options.onAppearanceSaved?.(nextAppearance);
+     // `closing` tells the caller whether this change was discovered mid-`close()`: in that case
+     // the dialog is about to be torn down anyway, so it should defer any heavier reaction (like
+     // relocalizing the main view) until the dialog is actually gone, instead of reacting here.
+     await options.onAppearanceSaved?.(nextAppearance,{closing});
      continue;
     }
-    if(waitingForRoot&&(businessChanged||currentSnapshot.setupRequired)){saveStatus('请先填写完整的保存根目录。');if(force){find('[role="alert"]').hidden=false;find('[role="alert"]').textContent=t('请先填写完整的保存根目录。');}return false;}
+    if(waitingForRoot&&(businessChanged||currentSnapshot.setupRequired)){saveStatus('请先填写完整的保存根目录。');if(force){find('[role="alert"]').hidden=false;find('[role="alert"]').textContent=t('请先填写完整的保存根目录。');}rootBlocksClose=true;return false;}
     find('[role="alert"]').hidden=true;saveStatus('已自动保存');return true;
    }
    return false;
@@ -312,7 +320,20 @@ export function bindSettings(form: HTMLFormElement, snapshot: SettingsSnapshot, 
   if(immediate)void flush(false);else timer=window.setTimeout(()=>{timer=undefined;void flush(false);},500);
  }
  async function saveDraft(refreshGuide=false){if(!await flush())throw new Error(t('请先解决自动保存问题，再继续操作。'));if(refreshGuide)refreshVisibleSetupGuide();return currentSnapshot;}
- async function close():Promise<boolean>{if(closing)return false;closing=true;try{if(!await flush())return false;await saved();return true;}finally{closing=false;}}
+ async function close():Promise<boolean>{
+  if(closing)return false;closing=true;
+  try{
+   if(!await flush()){
+    // First run only: an empty/invalid save root blocks every business save (there is nowhere to
+    // write the config yet), which used to trap Done forever. Let it close anyway — the draft
+    // business edits are discarded (they never reached the server) and the main view explains
+    // setup isn't finished with a way back in. A genuine autosave failure (network, revision
+    // conflict, …) still blocks close so nothing already-typed is lost silently.
+    if(!currentSnapshot.setupRequired||!rootBlocksClose)return false;
+   }
+   await saved();return true;
+  }finally{closing=false;}
+ }
  async function task(operation:()=>Promise<void>, actionButton?: HTMLButtonElement) {
   if(busy)return;busy=true;find('[role="alert"]').hidden=true;
 

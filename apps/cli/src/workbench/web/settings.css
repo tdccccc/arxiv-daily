@@ -30,6 +30,7 @@
 .settings-confirm { border:1px solid var(--accent); padding:16px; margin:16px 0; border-radius:7px; }
 .settings-confirm pre { white-space:pre-wrap; overflow-wrap:anywhere; font:inherit; }
 .settings-form .dialog-footer { position:sticky; bottom:-24px; background:var(--surface); padding-block:16px; border-top:1px solid var(--line); }
+.settings-save-status.is-warning { color:var(--accent); font-weight:600; }
 @media(max-width:650px) { .setting-item { flex-direction:column; align-items:stretch; gap:12px; }.setting-item-control{max-width:none;justify-content:flex-start;}.settings-secret{justify-content:flex-start;}.settings-secret small{text-align:left;}.settings-host-context label{flex-direction:column;align-items:stretch;} }
 .settings-form input[role=switch] { appearance:none; position:relative; display:inline-block; width:36px; height:20px; flex-shrink:0; border:0; border-radius:20px; background:var(--line); cursor:pointer; vertical-align:middle; transition:background .15s; }
 .settings-form input[role=switch]::before { content:""; position:absolute; top:3px; left:3px; width:14px; height:14px; border-radius:50%; background:var(--surface); box-shadow:0 1px 3px #0003; transition:transform .15s; }
