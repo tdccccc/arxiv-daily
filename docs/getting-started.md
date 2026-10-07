@@ -155,6 +155,16 @@ Beta capacity is intentionally small (a few messages per verified inbox per UTC 
 
 With auto-send on, a **completed** daily run may email one digest for that date. The same date is not resent by default. **Send test** does not block the real daily for that day.
 
+## Optional: personal library
+
+Connect one local paper-library folder — including a folder outside your vault — to bring your existing literature into daily discovery, from **Settings → arXiv Daily → Personal library**.
+
+- Access is **read-only** and limited to the folder you explicitly select: arXiv Daily cannot write, rename, or delete its files, and symbolic links are not followed.
+- The inventory preview (which PDFs are eligible or ignored) stays local and needs no model-processing authorization.
+- Model processing is separately authorized after you review the selected folder, eligible file types, processing depth, and the effective model endpoint it will use.
+- Changing the folder, endpoint, eligible file types, or processing depth invalidates that authorization. You can revoke it at any time.
+- The library can propose a few broad topics and directions; only directions you explicitly accept are used for daily filtering.
+
 ## Troubleshooting
 
 | Problem | What to try |

@@ -47,7 +47,7 @@ Config path:
 - Linux/macOS: `$XDG_CONFIG_HOME/arxiv-daily/config.toml` (default `~/.config/arxiv-daily/config.toml`)
 - Windows: `%APPDATA%\arxiv-daily\config.toml`
 
-Default vault from init: `~/arxiv-daily`. No settings env vars; no `--config` / `--vault-root` flags.
+Default vault from init: `~/arxiv-daily`. No settings env vars; no `--config` / `--vault-root` flags. The config file holds your API keys in plain text — lock it down: `chmod 600 ~/.config/arxiv-daily/config.toml`.
 
 ## Daily paper limit
 
