@@ -8,10 +8,50 @@ export interface RenderMarkdownOptions {
 
 export interface RenderedMarkdown {
   html: string;
+  /**
+   * The same rendered content as `html`, but as a plain serializable token
+   * tree instead of an HTML string. The browser workbench builds real DOM
+   * nodes from this (see `web/markdown-dom.ts`) instead of assigning `html`
+   * through `innerHTML`, so untrusted Markdown never passes through an HTML
+   * parser on the client.
+   */
+  nodes: MarkdownNode[];
   generationMetrics: GenerationMetrics | null;
   title: string;
   headings: Array<{ id: string; title: string; level: number }>;
   metadata: Record<string, string>;
+}
+
+/**
+ * A minimal, JSON-safe projection of a markdown-it `Token`: tag name,
+ * nesting (open/self-closing/close), attributes, text content and children.
+ * `web/markdown-dom.ts` walks this generically the same way markdown-it's
+ * own default renderer walks tokens, so it needs no per-syntax-construct
+ * logic beyond the handful of rules (`code_inline`, `fence`, `image`, the
+ * `reading_math*` tokens, ...) that markdown-it itself special-cases.
+ */
+export interface MarkdownNode {
+  type: string;
+  tag: string;
+  nesting: -1 | 0 | 1;
+  attrs: Array<[string, string]> | null;
+  content: string;
+  info: string;
+  children: MarkdownNode[] | null;
+  meta: { readingAppendix?: boolean } | null;
+}
+
+function toMarkdownNodes(tokens: Token[]): MarkdownNode[] {
+  return tokens.filter(token => !token.hidden).map(token => ({
+    type: token.type,
+    tag: token.tag,
+    nesting: token.nesting as -1 | 0 | 1,
+    attrs: token.attrs ? token.attrs.map(([name, value]): [string, string] => [name, String(value)]) : null,
+    content: token.content,
+    info: token.info,
+    children: token.children ? toMarkdownNodes(token.children) : null,
+    meta: (token.meta as { readingAppendix?: boolean } | null | undefined) ?? null,
+  }));
 }
 
 /** Listing projection: parse headings and metadata without invoking KaTeX or producing HTML. */
@@ -50,6 +90,7 @@ export function renderMarkdown(source: string, options: RenderMarkdownOptions = 
   }
   return {
     html: markdown.renderer.render(tokens, markdown.options, {}),
+    nodes: toMarkdownNodes(tokens),
     generationMetrics: generation.metrics,
     title: metadata.title || headings.find(heading => heading.level === 1)?.title || headings[0]?.title || "",
     headings,
@@ -63,6 +104,14 @@ export function renderInlineMarkdown(source: string, options: RenderMarkdownOpti
   const tokens = markdown.parseInline(source, {});
   for (const token of tokens) if (token.children) resolveDestinations(token.children, options);
   return markdown.renderer.render(tokens, markdown.options, {});
+}
+
+/** Same contract as `renderInlineMarkdown`, projected as nodes instead of an HTML string. */
+export function renderInlineMarkdownNodes(source: string, options: RenderMarkdownOptions = {}): MarkdownNode[] {
+  const markdown = readingParser();
+  const tokens = markdown.parseInline(source, {});
+  for (const token of tokens) if (token.children) resolveDestinations(token.children, options);
+  return toMarkdownNodes(tokens);
 }
 
 function readingParser(): MarkdownParser {

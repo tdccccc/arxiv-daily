@@ -11,6 +11,8 @@ import { mountCalendar } from "./calendar";
 import { mountSidebar } from "./sidebar";
 import type { WorkbenchPaper, WorkbenchPaperList, PaperScope } from "../papers";
 import { scopes, marks, paperRows, dayHeading, overview, scientificInline } from "./papers";
+import { h, svg } from "./dom";
+import { appendMarkdownNodes } from "./markdown-dom";
 
 export interface WorkbenchClientOptions {
   fetch?: typeof fetch;
@@ -23,10 +25,12 @@ type ProductStatus = Awaited<ReturnType<typeof inspectProduct>>;
 type ReadingDocument = Awaited<ReturnType<WorkbenchDocuments["document"]>>;
 interface DocumentList { documents: DocumentEntry[]; total: number; nextOffset: number | null; counts: { daily: number; papers: number } }
 
-const symbols = {
-  search: '<svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="8.5" cy="8.5" r="5.5"/><path d="m13 13 4 4"/></svg>',
-  arrow: '<svg viewBox="0 0 20 20" aria-hidden="true"><path d="M5 15 15 5M5 5h10v10"/></svg>',
-};
+function searchIcon(): SVGElement {
+  return svg("svg", { viewBox: "0 0 20 20", "aria-hidden": "true" }, svg("circle", { cx: "8.5", cy: "8.5", r: "5.5" }), svg("path", { d: "m13 13 4 4" }));
+}
+function arrowIcon(): SVGElement {
+  return svg("svg", { viewBox: "0 0 20 20", "aria-hidden": "true" }, svg("path", { d: "M5 15 15 5M5 5h10v10" }));
+}
 
 export function mountWorkbench(root: HTMLElement, options: WorkbenchClientOptions = {}): () => void {
   const fetcher = options.fetch ?? window.fetch.bind(window);
@@ -125,27 +129,44 @@ function mountWorkbenchContent(root: HTMLElement, options: WorkbenchClientOption
   const applyTheme = () => { root.dataset.theme = appearance.theme === 'system' ? (systemTheme?.matches ? 'dark' : 'light') : appearance.theme; };
   applyTheme(); systemTheme?.addEventListener?.('change', applyTheme);
   root.style.setProperty("--reading-size", `${fontSize}px`);
-  root.innerHTML = `
-    <a class="skip-link" href="#reading-content">${t("跳到正文")}</a>
-    <header class="app-header">
-      <a class="brand" href="./" aria-label="${t("arxiv-daily 首页")}">arxiv<span class="brand-hyphen">-</span>daily</a>
-      <div class="header-actions"><nav class="reading-history" aria-label="${t("阅读历史")}"><button class="quiet-button" data-action="history-back" aria-label="${t("后退")}" title="${t("后退")}" disabled>← <span>${t("后退")}</span></button><button class="quiet-button" data-action="history-forward" aria-label="${t("前进")}" title="${t("前进")}" disabled><span>${t("前进")}</span> →</button></nav><button class="quiet-button" data-action="settings">${t("设置")}</button><button class="primary-button" data-action="generate"><span aria-hidden="true">＋</span> ${t("生成")}</button></div>
-    </header>
-    <div class="connection-banner" role="alert" hidden></div>
-    <div class="workspace">
-      <aside class="library-pane" aria-label="${t("日历与筛选")}">
-        <div class="library-heading"><span>${t("我的阅读")}</span><button class="quiet-button show-filters" data-action="show-filters">${t("返回列表")}</button><button class="icon-button" data-action="refresh" aria-label="${t("刷新文档")}">↻</button></div>
-        <section class="calendar-panel" aria-label="${t("日报日历")}"></section>
-        <label class="search-box">${symbols.search}<input type="search" aria-label="${t("搜索标题、作者、arXiv ID 或日期")}" placeholder="${t("搜索标题、作者或关键词")}" autocomplete="off"></label>
-        <nav class="paper-scopes" aria-label="${t("阅读筛选")}">${Object.entries(scopes).map(([key, label]) => `<button class="scope-button" data-scope="${key}"><span>${t(label)}</span><span data-count="${key}">—</span></button>`).join("")}</nav>
-        <label class="topic-filter">${t("Topic")}<select data-filter="topic" aria-label="${t("筛选主题")}"><option value="">${t("全部主题")}</option></select></label>
-        <div class="navigation-footer"><button class="quiet-button" data-action="personal-library">${t("个人文献库")}</button><button class="quiet-button" data-action="direction-review">${t("方向审核")}</button><button class="quiet-button" data-action="clear-date">${t("浏览全部日期")}</button><button class="quiet-button" data-action="browse-documents">${t("浏览 Markdown 文件 ↗")}</button></div>
-      </aside>
-      <main class="reading-pane" id="reading-content" tabindex="-1"></main>
-      <aside class="toc-pane" aria-label="${t("文章目录")}"></aside>
-    </div>
-    <section class="run-tray" aria-label="${t("生成任务")}" hidden></section>
-    <div class="dialog-host"></div>`;
+  root.replaceChildren(
+    h("a", { class: "skip-link", href: "#reading-content" }, t("跳到正文")),
+    h("header", { class: "app-header" },
+      h("a", { class: "brand", href: "./", "aria-label": t("arxiv-daily 首页") }, "arxiv", h("span", { class: "brand-hyphen" }, "-"), "daily"),
+      h("div", { class: "header-actions" },
+        h("nav", { class: "reading-history", "aria-label": t("阅读历史") },
+          h("button", { class: "quiet-button", "data-action": "history-back", "aria-label": t("后退"), title: t("后退"), disabled: true }, "← ", h("span", null, t("后退"))),
+          h("button", { class: "quiet-button", "data-action": "history-forward", "aria-label": t("前进"), title: t("前进"), disabled: true }, h("span", null, t("前进")), " →"),
+        ),
+        h("button", { class: "quiet-button", "data-action": "settings" }, t("设置")),
+        h("button", { class: "primary-button", "data-action": "generate" }, h("span", { "aria-hidden": "true" }, "＋"), ` ${t("生成")}`),
+      ),
+    ),
+    h("div", { class: "connection-banner", role: "alert", hidden: true }),
+    h("div", { class: "workspace" },
+      h("aside", { class: "library-pane", "aria-label": t("日历与筛选") },
+        h("div", { class: "library-heading" },
+          h("span", null, t("我的阅读")),
+          h("button", { class: "quiet-button show-filters", "data-action": "show-filters" }, t("返回列表")),
+          h("button", { class: "icon-button", "data-action": "refresh", "aria-label": t("刷新文档") }, "↻"),
+        ),
+        h("section", { class: "calendar-panel", "aria-label": t("日报日历") }),
+        h("label", { class: "search-box" }, searchIcon(), h("input", { type: "search", "aria-label": t("搜索标题、作者、arXiv ID 或日期"), placeholder: t("搜索标题、作者或关键词"), autocomplete: "off" })),
+        h("nav", { class: "paper-scopes", "aria-label": t("阅读筛选") }, ...Object.entries(scopes).map(([key, label]) => h("button", { class: "scope-button", "data-scope": key }, h("span", null, t(label)), h("span", { "data-count": key }, "—")))),
+        h("label", { class: "topic-filter" }, t("Topic"), h("select", { "data-filter": "topic", "aria-label": t("筛选主题") }, h("option", { value: "" }, t("全部主题")))),
+        h("div", { class: "navigation-footer" },
+          h("button", { class: "quiet-button", "data-action": "personal-library" }, t("个人文献库")),
+          h("button", { class: "quiet-button", "data-action": "direction-review" }, t("方向审核")),
+          h("button", { class: "quiet-button", "data-action": "clear-date" }, t("浏览全部日期")),
+          h("button", { class: "quiet-button", "data-action": "browse-documents" }, t("浏览 Markdown 文件 ↗")),
+        ),
+      ),
+      h("main", { class: "reading-pane", id: "reading-content", tabindex: -1 }),
+      h("aside", { class: "toc-pane", "aria-label": t("文章目录") }),
+    ),
+    h("section", { class: "run-tray", "aria-label": t("生成任务"), hidden: true }),
+    h("div", { class: "dialog-host" }),
+  );
 
   const find = <T extends HTMLElement = HTMLElement>(selector: string) => root.querySelector<T>(selector)!;
   const reading = find(".reading-pane");
@@ -156,7 +177,7 @@ function mountWorkbenchContent(root: HTMLElement, options: WorkbenchClientOption
       if (selectedDate === day.date && paperList && !documentsMode) {
         paperList.day = day;
         const header = reading.querySelector(".day-reading");
-        if (root.dataset.view === "list" && header) header.outerHTML = dayHeading(day);
+        if (root.dataset.view === "list" && header) { const next = dayHeading(day); if (next) header.replaceWith(next); }
       }
     },
     onError: reportConnection,
@@ -182,7 +203,7 @@ function mountWorkbenchContent(root: HTMLElement, options: WorkbenchClientOption
   function reportConnection(error: unknown): void {
     if (disposed) return;
     const banner = find(".connection-banner");
-    banner.innerHTML = `<span>${escapeHtml(message(error))}</span><button class="quiet-button" data-action="reconnect">${t("重新连接")}</button>`;
+    banner.replaceChildren(h("span", null, message(error)), h("button", { class: "quiet-button", "data-action": "reconnect" }, t("重新连接")));
     banner.hidden = false;
   }
 
@@ -251,25 +272,55 @@ function mountWorkbenchContent(root: HTMLElement, options: WorkbenchClientOption
     find<HTMLSelectElement>('[data-filter="topic"]').value = topic;
     find<HTMLSelectElement>('[data-filter="topic"]').disabled = documentsMode;
   }
-  function listToolbar(): string {
-    return `<div class="paper-list-heading"><div><span class="day-eyebrow">${documentsMode ? t("本地研究记录") : selectedDate || t("我的文献")}</span><h1>${documentsMode ? t("Markdown 文件") : t(scopes[scope])}</h1></div><button class="quiet-button show-filters" data-action="show-filters">${t("日历与筛选")}</button></div>`;
+  function listToolbar(): HTMLElement {
+    return h("div", { class: "paper-list-heading" },
+      h("div", null,
+        h("span", { class: "day-eyebrow" }, documentsMode ? t("本地研究记录") : selectedDate || t("我的文献")),
+        h("h1", null, documentsMode ? t("Markdown 文件") : t(scopes[scope])),
+      ),
+      h("button", { class: "quiet-button show-filters", "data-action": "show-filters" }, t("日历与筛选")),
+    );
   }
   function renderList(): void {
     if (root.dataset.view !== "list" || !paperList) return;
     const unknown = paperList.total === 0 && paperList.day?.reportPath && paperList.day.papers !== 0 && !query && !topic && scope === "all";
-    reading.innerHTML = `<div class="paper-workspace">${listToolbar()}${dayHeading(paperList.day)}<div class="paper-list-tools"><span class="list-caption" aria-live="polite">${unknown ? t("日报已保存，论文索引尚无可用条目") : t("{0} 篇论文", paperList.total)}</span><label>${t("排序")} <select data-filter="sort" aria-label="${t("论文排序")}">${Object.entries({ published: t("发表日期"), title: t("标题"), priority: t("优先级"), relevance: t("相关度") }).map(([value, label]) => `<option value="${value}" ${sort === value ? "selected" : ""}>${t(label)}</option>`).join("")}</select></label><button class="quiet-button" data-action="direction" aria-label="${t("切换排序方向")}">${direction === "asc" ? t("↑ 升序") : t("↓ 降序")}</button></div><div class="paper-list">${paperRows(paperList, pendingMarks) || `<div class="list-empty"><h2>${unknown ? t("可直接阅读完整日报") : t("没有匹配的论文")}</h2><p>${unknown ? t("尚未找到对应的论文索引；原始 Markdown 仍可阅读。") : t("可调整日期或筛选条件，也可通过“生成”获取新论文。")}</p></div>`}</div>${pagination(paperList.total, paperList.nextOffset)}</div>`;
+    const rows = paperRows(paperList, pendingMarks);
+    reading.replaceChildren(
+      h("div", { class: "paper-workspace" },
+        listToolbar(),
+        dayHeading(paperList.day),
+        h("div", { class: "paper-list-tools" },
+          h("span", { class: "list-caption", "aria-live": "polite" }, unknown ? t("日报已保存，论文索引尚无可用条目") : t("{0} 篇论文", paperList.total)),
+          h("label", null, `${t("排序")} `,
+            h("select", { "data-filter": "sort", "aria-label": t("论文排序") },
+              ...Object.entries({ published: t("发表日期"), title: t("标题"), priority: t("优先级"), relevance: t("相关度") }).map(([value, label]) => h("option", { value, selected: sort === value }, label)),
+            ),
+          ),
+          h("button", { class: "quiet-button", "data-action": "direction", "aria-label": t("切换排序方向") }, direction === "asc" ? t("↑ 升序") : t("↓ 降序")),
+        ),
+        h("div", { class: "paper-list" }, rows.length ? rows : h("div", { class: "list-empty" }, h("h2", null, unknown ? t("可直接阅读完整日报") : t("没有匹配的论文")), h("p", null, unknown ? t("尚未找到对应的论文索引；原始 Markdown 仍可阅读。") : t("可调整日期或筛选条件，也可通过“生成”获取新论文。")))),
+        pagination(paperList.total, paperList.nextOffset),
+      ),
+    );
     for (const [key, count] of Object.entries(paperList.counts)) find(`[data-count="${key}"]`).textContent = String(count);
-    find<HTMLSelectElement>('[data-filter="topic"]').innerHTML = `<option value="">${t("全部主题")}</option>${[...new Set([...paperList.topics, ...(topic ? [topic] : [])])].map(value => `<option value="${escapeHtml(value)}">${escapeHtml(value)}</option>`).join("")}`;
+    find<HTMLSelectElement>('[data-filter="topic"]').replaceChildren(
+      h("option", { value: "" }, t("全部主题")),
+      ...[...new Set([...paperList.topics, ...(topic ? [topic] : [])])].map(value => h("option", { value }, value)),
+    );
     syncFilters(); syncMarkValues();
   }
-  function pagination(total: number, next: number | null): string {
-    return `<div class="paper-pagination"><button class="quiet-button" data-action="previous-page" ${offset === 0 ? "disabled" : ""}>${t("← 上一页")}</button><span>${t("第 {0} 页", Math.floor(offset / 20) + 1)}${total ? ` / ${Math.max(1, Math.ceil(total / 20))}` : ""}</span><button class="quiet-button" data-action="next-page" ${next === null ? "disabled" : ""}>${t("下一页 →")}</button></div>`;
+  function pagination(total: number, next: number | null): HTMLElement {
+    return h("div", { class: "paper-pagination" },
+      h("button", { class: "quiet-button", "data-action": "previous-page", disabled: offset === 0 }, t("← 上一页")),
+      h("span", null, `${t("第 {0} 页", Math.floor(offset / 20) + 1)}${total ? ` / ${Math.max(1, Math.ceil(total / 20))}` : ""}`),
+      h("button", { class: "quiet-button", "data-action": "next-page", disabled: next === null }, t("下一页 →")),
+    );
   }
   async function loadList(restore = false): Promise<void> {
     readingReady = false;
     const version = ++listVersion;
     const scroll = restore ? listScroll : 0;
-    reading.innerHTML = `<div class="reading-loading" role="status">${t("正在读取列表…")}</div>`;
+    reading.replaceChildren(h("div", { class: "reading-loading", role: "status" }, t("正在读取列表…")));
     try {
       const params = new URLSearchParams({ q: query, offset: String(offset), limit: "20" });
       if (documentsMode) {
@@ -277,7 +328,21 @@ function mountWorkbenchContent(root: HTMLElement, options: WorkbenchClientOption
         const result = await request<DocumentList>(`api/documents?${params}`);
         if (disposed || version !== listVersion || root.dataset.view !== "list") return;
         entries = result.documents; nextOffset = result.nextOffset;
-        reading.innerHTML = `<div class="paper-workspace">${listToolbar()}<div class="collection-tabs" role="tablist" aria-label="${t("文档类型")}">${Object.entries({ all: t("全部文件"), daily: t("日报"), papers: t("论文总结") }).map(([value, label]) => `<button role="tab" data-kind="${value}" aria-selected="${kind === value}">${t(label)}</button>`).join("")}</div><div class="document-list">${entries.map(entry => `<button class="document-row" data-document="${escapeHtml(entry.path)}"><span class="document-row-meta">${escapeHtml(entry.date || t("已保存文档"))}</span><span class="document-row-title">${scientificInline(entry.title)}</span><span class="document-row-authors">${escapeHtml(entry.authors)}</span></button>`).join("") || `<div class="list-empty">${t("暂无匹配文件")}</div>`}</div>${pagination(result.total, result.nextOffset)}</div>`;
+        const rows = entries.map(entry => h("button", { class: "document-row", "data-document": entry.path },
+          h("span", { class: "document-row-meta" }, entry.date || t("已保存文档")),
+          h("span", { class: "document-row-title" }, scientificInline(entry.title)),
+          h("span", { class: "document-row-authors" }, entry.authors),
+        ));
+        reading.replaceChildren(
+          h("div", { class: "paper-workspace" },
+            listToolbar(),
+            h("div", { class: "collection-tabs", role: "tablist", "aria-label": t("文档类型") },
+              ...Object.entries({ all: t("全部文件"), daily: t("日报"), papers: t("论文总结") }).map(([value, label]) => h("button", { role: "tab", "data-kind": value, "aria-selected": String(kind === value) }, label)),
+            ),
+            h("div", { class: "document-list" }, rows.length ? rows : h("div", { class: "list-empty" }, t("暂无匹配文件"))),
+            pagination(result.total, result.nextOffset),
+          ),
+        );
       } else {
         for (const [key, value] of Object.entries({ scope, topic, sort, direction, date: selectedDate })) if (value) params.set(key, value);
         const result = await request<WorkbenchPaperList>(`api/papers?${params}`);
@@ -287,7 +352,14 @@ function mountWorkbenchContent(root: HTMLElement, options: WorkbenchClientOption
       reading.scrollTop = scroll; readingReady = true;
     } catch (error) {
       if (disposed || version !== listVersion || root.dataset.view !== "list") return;
-      reading.innerHTML = `<div class="empty-reading"><h1>${t("列表暂时不可用")}</h1><p>${escapeHtml(message(error))}</p><button class="quiet-button" data-action="refresh">${t("重试")}</button><button class="quiet-button" data-action="browse-documents">${t("浏览 Markdown 文件")}</button></div>`;
+      reading.replaceChildren(
+        h("div", { class: "empty-reading" },
+          h("h1", null, t("列表暂时不可用")),
+          h("p", null, message(error)),
+          h("button", { class: "quiet-button", "data-action": "refresh" }, t("重试")),
+          h("button", { class: "quiet-button", "data-action": "browse-documents" }, t("浏览 Markdown 文件")),
+        ),
+      );
       readingReady = true; reportConnection(error);
     }
   }
@@ -298,7 +370,7 @@ function mountWorkbenchContent(root: HTMLElement, options: WorkbenchClientOption
     window.clearTimeout(searchTimer); listVersion += 1; documentVersion += 1;
     selectedView = "library"; selectedKey = ""; selectedPath = ""; activePaper = null;
     root.dataset.view = "library"; root.classList.remove("is-reading", "show-filters");
-    find(".toc-pane").innerHTML = "";
+    find(".toc-pane").replaceChildren();
     if (push) route();
     reading.scrollTop = 0; readingReady = true;
     disposeLibrary = mountLibrary(reading, { request, onSettings: () => { void showSettings(); }, onReview: () => { void showReview(); } });
@@ -309,7 +381,7 @@ function mountWorkbenchContent(root: HTMLElement, options: WorkbenchClientOption
     leaveLibrary(); window.clearTimeout(searchTimer); listVersion += 1; documentVersion += 1;
     selectedView = "review"; selectedKey = ""; selectedPath = ""; activePaper = null;
     root.dataset.view = "review"; root.classList.remove("is-reading", "show-filters");
-    find(".toc-pane").innerHTML = "";
+    find(".toc-pane").replaceChildren();
     if (push) route();
     reading.scrollTop = 0; readingReady = true;
     reviewView = mountLibraryReview(reading, { request, onSettings: () => { void showSettings(); }, onLibrary: () => { void showLibrary(); }, onRun: acceptRun });
@@ -322,7 +394,7 @@ function mountWorkbenchContent(root: HTMLElement, options: WorkbenchClientOption
     documentVersion += 1; selectedPath = ""; selectedKey = ""; activePaper = null;
     root.dataset.view = "list"; root.classList.remove("is-reading");
     if (!keepFilters) root.classList.remove("show-filters");
-    find(".toc-pane").innerHTML = "";
+    find(".toc-pane").replaceChildren();
     if (push) route();
     syncFilters();
     await loadList(restore);
@@ -330,14 +402,14 @@ function mountWorkbenchContent(root: HTMLElement, options: WorkbenchClientOption
   function beginReading(captureScroll: boolean): void {
     if (captureScroll) rememberScroll(); leaveLibrary(); readingReady = false; listVersion += 1;
     root.dataset.view = "reading"; root.classList.add("is-reading"); root.classList.remove("show-filters");
-    find(".toc-pane").innerHTML = "";
+    find(".toc-pane").replaceChildren();
   }
   async function openDocument(path: string, historyMode: "push" | "replace" | "none" = "push", hash = "", syncCalendar = true): Promise<void> {
     beginReading(historyMode !== "none");
     const version = ++documentVersion;
     selectedPath = path; selectedKey = ""; activePaper = null;
     if (historyMode !== "none") { route(historyMode); if (hash) { const url = new URL(location.href); url.hash = hash; history.replaceState(history.state, "", url); } }
-    reading.innerHTML = `<div class="reading-loading" role="status">${t("正在打开文档…")}</div>`;
+    reading.replaceChildren(h("div", { class: "reading-loading", role: "status" }, t("正在打开文档…")));
     try {
       const result = await request<ReadingDocument>(`api/document?path=${encodeURIComponent(path)}`);
       if (disposed || version !== documentVersion) return;
@@ -347,7 +419,14 @@ function mountWorkbenchContent(root: HTMLElement, options: WorkbenchClientOption
       readingReady = true;
     } catch (error) {
       if (disposed || version !== documentVersion) return;
-      reading.innerHTML = `<div class="empty-reading"><button class="quiet-button" data-action="back">${t("← 返回列表")}</button><h1>${t("暂时无法打开文档")}</h1><p>${escapeHtml(message(error))}</p><button class="primary-button" data-action="retry-document">${t("重试读取")}</button></div>`;
+      reading.replaceChildren(
+        h("div", { class: "empty-reading" },
+          h("button", { class: "quiet-button", "data-action": "back" }, t("← 返回列表")),
+          h("h1", null, t("暂时无法打开文档")),
+          h("p", null, message(error)),
+          h("button", { class: "primary-button", "data-action": "retry-document" }, t("重试读取")),
+        ),
+      );
       readingReady = true;
       if (message(error).includes("无法连接") || message(error).includes("Cannot connect")) reportConnection(error);
     }
@@ -357,15 +436,22 @@ function mountWorkbenchContent(root: HTMLElement, options: WorkbenchClientOption
     beginReading(push); const version = ++documentVersion;
     selectedKey = key; selectedPath = "";
     if (push) route();
-    reading.innerHTML = `<div class="reading-loading" role="status">${t("正在打开论文…")}</div>`;
+    reading.replaceChildren(h("div", { class: "reading-loading", role: "status" }, t("正在打开论文…")));
     try {
       const result = await request<{ paper: WorkbenchPaper }>(`api/paper?key=${encodeURIComponent(key)}`);
       if (disposed || version !== documentVersion) return;
-      activePaper = result.paper; reading.innerHTML = overview(result.paper, pendingMarks.has(key)); syncMarkValues(); reading.scrollTop = preserveScroll ? scroll : 0; readingReady = true;
+      activePaper = result.paper; reading.replaceChildren(...overview(result.paper, pendingMarks.has(key))); syncMarkValues(); reading.scrollTop = preserveScroll ? scroll : 0; readingReady = true;
     } catch (error) {
       if (disposed || version !== documentVersion) return;
       readingReady = true;
-      reading.innerHTML = `<div class="empty-reading"><button class="quiet-button" data-action="back">${t("← 返回列表")}</button><h1>${t("论文暂时不可用")}</h1><p>${escapeHtml(message(error))}</p><button class="quiet-button" data-action="retry-paper">${t("重试")}</button></div>`;
+      reading.replaceChildren(
+        h("div", { class: "empty-reading" },
+          h("button", { class: "quiet-button", "data-action": "back" }, t("← 返回列表")),
+          h("h1", null, t("论文暂时不可用")),
+          h("p", null, message(error)),
+          h("button", { class: "quiet-button", "data-action": "retry-paper" }, t("重试")),
+        ),
+      );
     }
   }
   async function saveMark(key: string, action: "status" | "star", value: string | boolean): Promise<void> {
@@ -376,7 +462,7 @@ function mountWorkbenchContent(root: HTMLElement, options: WorkbenchClientOption
     function renderMarks(current: WorkbenchPaper): void {
       if (activePaper?.key === key) activePaper = current;
       if (paperList) paperList.papers = paperList.papers.map(item => item.key === key ? current : item);
-      for (const container of Array.from(root.querySelectorAll<HTMLElement>(".paper-marks"))) if (container.dataset.key === key) container.outerHTML = marks(current, pendingMarks.has(key));
+      for (const container of Array.from(root.querySelectorAll<HTMLElement>(".paper-marks"))) if (container.dataset.key === key) container.replaceWith(marks(current, pendingMarks.has(key)));
       syncMarkValues();
     }
     renderMarks(paper);
@@ -399,11 +485,36 @@ function mountWorkbenchContent(root: HTMLElement, options: WorkbenchClientOption
   }
 
   function renderDocument(entry: ReadingDocument): void {
-    reading.innerHTML = `<div class="reading-toolbar"><button class="quiet-button" data-action="back">${t("← 返回列表")}</button><span class="reading-kind">${entry.kind === "daily" ? t("研究日报") : t("论文总结")}</span><div class="reading-controls"><button class="icon-button" data-action="font-down" aria-label="${t("缩小字号")}">A−</button><button class="icon-button" data-action="font-up" aria-label="${t("放大字号")}">A＋</button><a class="quiet-button" data-source="raw" href="api/raw?path=${encodeURIComponent(entry.path)}" target="_blank" rel="noopener noreferrer">Markdown ${symbols.arrow}</a></div></div>
-      <div class="article-wrap"><header class="document-header"><div class="document-eyebrow">${escapeHtml(entry.date || t("已保存文档"))}${entry.arxivId ? ` <span>· arXiv:${escapeHtml(entry.arxivId)}</span>` : ""}</div><h1 class="document-title">${scientificInline(entry.title)}</h1>${entry.authors ? `<p class="document-authors">${escapeHtml(entry.authors)}</p>` : ""}<div class="document-links">${sourceLink(entry.originalUrl, t("arXiv 原文"), "original")}${sourceLink(entry.pdfUrl, t("阅读 PDF"), "pdf")}${entry.related.map(item => `<a href="?document=${encodeURIComponent(item.path)}">${t("来源日报 ·")} ${escapeHtml(item.title)}</a>`).join("")}</div></header><article class="markdown-body" aria-label="${t("文档正文")}"></article><footer class="article-footer"><span>${t("Markdown 保存在本地")}</span><span>${escapeHtml(entry.path)}</span></footer>${generationFooter(entry.generationMetrics, entry.kind === "daily" ? "daily" : "paper")}</div>`;
-    // Body HTML comes from the safe reader; titles use its safe inline projection.
-    find("article").innerHTML = entry.html;
-    const firstHeading = find("article").querySelector("h1");
+    const article = h("article", { class: "markdown-body", "aria-label": t("文档正文") });
+    reading.replaceChildren(
+      h("div", { class: "reading-toolbar" },
+        h("button", { class: "quiet-button", "data-action": "back" }, t("← 返回列表")),
+        h("span", { class: "reading-kind" }, entry.kind === "daily" ? t("研究日报") : t("论文总结")),
+        h("div", { class: "reading-controls" },
+          h("button", { class: "icon-button", "data-action": "font-down", "aria-label": t("缩小字号") }, "A−"),
+          h("button", { class: "icon-button", "data-action": "font-up", "aria-label": t("放大字号") }, "A＋"),
+          h("a", { class: "quiet-button", "data-source": "raw", href: `api/raw?path=${encodeURIComponent(entry.path)}`, target: "_blank", rel: "noopener noreferrer" }, "Markdown ", arrowIcon()),
+        ),
+      ),
+      h("div", { class: "article-wrap" },
+        h("header", { class: "document-header" },
+          h("div", { class: "document-eyebrow" }, entry.date || t("已保存文档"), entry.arxivId ? h("span", null, ` · arXiv:${entry.arxivId}`) : null),
+          h("h1", { class: "document-title" }, scientificInline(entry.title)),
+          entry.authors ? h("p", { class: "document-authors" }, entry.authors) : null,
+          h("div", { class: "document-links" },
+            sourceLink(entry.originalUrl, t("arXiv 原文"), "original"),
+            sourceLink(entry.pdfUrl, t("阅读 PDF"), "pdf"),
+            ...entry.related.map(item => h("a", { href: `?document=${encodeURIComponent(item.path)}` }, `${t("来源日报 ·")} ${item.title}`)),
+          ),
+        ),
+        article,
+        h("footer", { class: "article-footer" }, h("span", null, t("Markdown 保存在本地")), h("span", null, entry.path)),
+        generationFooter(entry.generationMetrics, entry.kind === "daily" ? "daily" : "paper"),
+      ),
+    );
+    // Body nodes come from the safe reader's token stream; titles use its safe inline projection.
+    appendMarkdownNodes(entry.nodes, article);
+    const firstHeading = article.querySelector("h1");
     const firstHeadingMetadata = entry.headings.find(heading => heading.level === 1);
     const sameHeading = firstHeading && firstHeadingMetadata?.id === firstHeading.id
       && firstHeadingMetadata.title.trim() === entry.title.trim();
@@ -411,12 +522,20 @@ function mountWorkbenchContent(root: HTMLElement, options: WorkbenchClientOption
       find(".document-title").id = firstHeading.id;
       firstHeading.remove();
     }
-    find(".toc-pane").innerHTML = entry.headings.length ? `<div class="toc-inner"><span class="toc-label">${t("本页目录")}</span><nav>${entry.headings.map(heading => `<a href="#${encodeURIComponent(heading.id)}" class="toc-level-${heading.level}">${scientificInline(heading.title)}</a>`).join("")}</nav><span class="toc-note">${t("阅读原文，核对结论。")}</span></div>` : "";
+    find(".toc-pane").replaceChildren(
+      ...(entry.headings.length ? [
+        h("div", { class: "toc-inner" },
+          h("span", { class: "toc-label" }, t("本页目录")),
+          h("nav", null, ...entry.headings.map(heading => h("a", { href: `#${encodeURIComponent(heading.id)}`, class: `toc-level-${heading.level}` }, scientificInline(heading.title)))),
+          h("span", { class: "toc-note" }, t("阅读原文，核对结论。")),
+        ),
+      ] : []),
+    );
   }
 
-  function sourceLink(url: string | null, label: string, source: string): string {
-    if (!url || !(/^(?:https?:\/\/|api\/asset\?)/i.test(url))) return "";
-    return `<a data-source="${source}" href="${escapeHtml(url)}" target="_blank" rel="noopener noreferrer">${label} ${symbols.arrow}</a>`;
+  function sourceLink(url: string | null, label: string, source: string): HTMLAnchorElement | null {
+    if (!url || !(/^(?:https?:\/\/|api\/asset\?)/i.test(url))) return null;
+    return h("a", { "data-source": source, href: url, target: "_blank", rel: "noopener noreferrer" }, `${label} `, arrowIcon());
   }
 
   function openHash(hash: string): void {
@@ -443,27 +562,26 @@ function mountWorkbenchContent(root: HTMLElement, options: WorkbenchClientOption
 
   function requestCloseDialog(): void { if (settingsBinding) void settingsBinding.close(); else closeDialog(); }
 
-  function showDialog(title: string, content: string): void {
+  function showDialog(title: string, content: Node | Node[]): void {
     closeDialog();
     returnFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
-    dialog = document.createElement("dialog");
-    dialog.className = "workbench-dialog";
-    dialog.setAttribute("role", "dialog");
-    dialog.setAttribute("aria-modal", "true");
-    dialog.setAttribute("aria-labelledby", "dialog-title");
-    dialog.innerHTML = `<div class="dialog-heading"><h2 id="dialog-title">${title}</h2><button class="icon-button" data-action="close-dialog" aria-label="${t("关闭弹窗")}">×</button></div>${content}`;
+    dialog = h("dialog", { class: "workbench-dialog", role: "dialog", "aria-modal": "true", "aria-labelledby": "dialog-title" });
+    dialog.replaceChildren(
+      h("div", { class: "dialog-heading" }, h("h2", { id: "dialog-title" }, title), h("button", { class: "icon-button", "data-action": "close-dialog", "aria-label": t("关闭弹窗") }, "×")),
+      ...(Array.isArray(content) ? content : [content]),
+    );
     find(".dialog-host").append(dialog);
     if (dialog.showModal) dialog.showModal(); else dialog.setAttribute("open", "");
     dialog.addEventListener("cancel", event => { event.preventDefault(); requestCloseDialog(); });
   }
 
   async function showSettings(): Promise<void> {
-    showDialog(setupRequired ? t("首次使用 arXiv Daily") : t("设置"), `<p class="dialog-description">${t("正在读取设置…")}</p>`);
+    showDialog(setupRequired ? t("首次使用 arXiv Daily") : t("设置"), h("p", { class: "dialog-description" }, t("正在读取设置…")));
     const activeDialog = dialog!;
     try {
       const snapshot = await request<SettingsSnapshot>("api/settings");
       if (disposed || dialog !== activeDialog) return;
-      activeDialog.querySelector(".dialog-description")!.outerHTML = settingsForm(snapshot, status?.recentRuns?.some(isCompletedDiscovery), appearance);
+      activeDialog.querySelector(".dialog-description")!.replaceWith(settingsForm(snapshot, status?.recentRuns?.some(isCompletedDiscovery), appearance));
       settingsAppearanceChanged = false;
       settingsBinding = bindSettings(activeDialog.querySelector("form")!, snapshot, request, async () => {
         if (disposed) return;
@@ -487,7 +605,31 @@ function mountWorkbenchContent(root: HTMLElement, options: WorkbenchClientOption
   function showGeneration(date = ""): void {
     if (setupRequired) { void showSettings(); return; }
     const unavailable = !status || !status.llm.ready;
-    showDialog(t("生成研究内容"), `<p class="dialog-description">${t("筛选与总结由已配置的 arXiv Daily 流程完成，结果保存为 Markdown。")}</p><form class="generation-form"><fieldset class="generation-kind"><legend>${t("内容类型")}</legend><label><input type="radio" name="kind" value="daily" checked> ${t("日报")}</label><label><input type="radio" name="kind" value="paper"> ${t("单篇详细总结")}</label></fieldset><div class="daily-fields"><label class="field-label" for="run-date">${t("日报日期")} <span>${t("留空生成今天的日报")}</span></label><input id="run-date" name="date" type="date"></div><div class="paper-fields" hidden><label class="field-label" for="run-paper">${t("arXiv ID 或链接")}</label><input id="run-paper" name="paper" type="text" placeholder="${t("例如 2609.12345")}" autocomplete="off"></div>${status?.emailEnabled ? `<p class="generation-note">${t("邮件已开启：日报成功后，会按现有配置发送邮件。")}</p>` : ""}${unavailable ? `<p class="generation-note">${t("模型 API 尚未就绪，请先打开“设置”完成配置。")}</p>` : ""}<p class="form-error" role="alert" hidden></p><div class="dialog-footer"><button type="button" class="quiet-button" data-action="close-dialog">${t("取消")}</button><button class="primary-button" type="submit" ${unavailable || currentRun?.status === "running" ? "disabled" : ""}>${t("开始生成")}</button></div></form>`);
+    showDialog(t("生成研究内容"), [
+      h("p", { class: "dialog-description" }, t("筛选与总结由已配置的 arXiv Daily 流程完成，结果保存为 Markdown。")),
+      h("form", { class: "generation-form" },
+        h("fieldset", { class: "generation-kind" },
+          h("legend", null, t("内容类型")),
+          h("label", null, h("input", { type: "radio", name: "kind", value: "daily", checked: true }), ` ${t("日报")}`),
+          h("label", null, h("input", { type: "radio", name: "kind", value: "paper" }), ` ${t("单篇详细总结")}`),
+        ),
+        h("div", { class: "daily-fields" },
+          h("label", { class: "field-label", for: "run-date" }, t("日报日期"), " ", h("span", null, t("留空生成今天的日报"))),
+          h("input", { id: "run-date", name: "date", type: "date" }),
+        ),
+        h("div", { class: "paper-fields", hidden: true },
+          h("label", { class: "field-label", for: "run-paper" }, t("arXiv ID 或链接")),
+          h("input", { id: "run-paper", name: "paper", type: "text", placeholder: t("例如 2609.12345"), autocomplete: "off" }),
+        ),
+        status?.emailEnabled ? h("p", { class: "generation-note" }, t("邮件已开启：日报成功后，会按现有配置发送邮件。")) : null,
+        unavailable ? h("p", { class: "generation-note" }, t("模型 API 尚未就绪，请先打开“设置”完成配置。")) : null,
+        h("p", { class: "form-error", role: "alert", hidden: true }),
+        h("div", { class: "dialog-footer" },
+          h("button", { type: "button", class: "quiet-button", "data-action": "close-dialog" }, t("取消")),
+          h("button", { class: "primary-button", type: "submit", disabled: unavailable || currentRun?.status === "running" }, t("开始生成")),
+        ),
+      ),
+    ]);
     find<HTMLInputElement>("#run-date").value = date;
   }
 
@@ -499,8 +641,17 @@ function mountWorkbenchContent(root: HTMLElement, options: WorkbenchClientOption
     const label = currentRun.outcome && (currentRun.status === "pending" || currentRun.status === "completed") ? t(outcomeLabels[currentRun.outcome]) : labels[currentRun.status];
     const keepOpen = tray.querySelector("details")?.open;
     tray.hidden = false;
-    tray.innerHTML = `<div class="run-heading"><div><span class="run-state ${currentRun.status}" role="status">${label}</span><strong>${escapeHtml(runLabel(currentRun.label))}</strong></div>${currentRun.status === "running" ? `<button class="quiet-button" data-action="cancel-run">${t("取消任务")}</button>` : `<button class="icon-button" data-action="dismiss-run" aria-label="${t("关闭任务状态")}">×</button>`}</div><details ${keepOpen || currentRun.status === "failed" ? "open" : ""}><summary>${t("查看运行详情")}</summary><pre></pre></details>`;
-    tray.querySelector("pre")!.textContent = t(currentRun.output) || t("等待运行输出…");
+    const pre = h("pre");
+    tray.replaceChildren(
+      h("div", { class: "run-heading" },
+        h("div", null, h("span", { class: `run-state ${currentRun.status}`, role: "status" }, label), h("strong", null, runLabel(currentRun.label))),
+        currentRun.status === "running"
+          ? h("button", { class: "quiet-button", "data-action": "cancel-run" }, t("取消任务"))
+          : h("button", { class: "icon-button", "data-action": "dismiss-run", "aria-label": t("关闭任务状态") }, "×"),
+      ),
+      h("details", { open: keepOpen || currentRun.status === "failed" }, h("summary", null, t("查看运行详情")), pre),
+    );
+    pre.textContent = t(currentRun.output) || t("等待运行输出…");
   }
 
   function acceptRun(run: WorkbenchRun | null): void {
@@ -576,7 +727,13 @@ function mountWorkbenchContent(root: HTMLElement, options: WorkbenchClientOption
   async function initializeWorkspace(refresh = false): Promise<void> {
     if (disposed) return;
     if (setupRequired) {
-      reading.innerHTML = `<div class="empty-reading"><h1>${t("开始积累你的研究记录")}</h1><p>${t("先设置保存目录、模型 API 和关注主题。")}</p><button class="primary-button" data-action="settings">${t("开始设置")}</button></div>`;
+      reading.replaceChildren(
+        h("div", { class: "empty-reading" },
+          h("h1", null, t("开始积累你的研究记录")),
+          h("p", null, t("先设置保存目录、模型 API 和关注主题。")),
+          h("button", { class: "primary-button", "data-action": "settings" }, t("开始设置")),
+        ),
+      );
       await showSettings(); return;
     }
     void pollRun();
@@ -724,7 +881,6 @@ function mountWorkbenchContent(root: HTMLElement, options: WorkbenchClientOption
 function preference(key: string, value?: string): string | null {
   try { if (value !== undefined) localStorage.setItem(`arxiv-daily-reader:${key}`, value); return localStorage.getItem(`arxiv-daily-reader:${key}`); } catch { return null; }
 }
-function escapeHtml(value: string): string { return value.replace(/[&<>"']/g, character => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[character]!); }
 function message(error: unknown): string { return error instanceof Error ? t(error.message) : t("操作未完成，请重试。"); }
 function routeDate(): string { const date = new URL(location.href).searchParams.get("date") || ""; return /^\d{4}-\d{2}-\d{2}$/.test(date) ? date : ""; }
 

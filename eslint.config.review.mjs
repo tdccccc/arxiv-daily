@@ -18,6 +18,7 @@
 import { defineConfig } from "eslint/config";
 import tseslint from "typescript-eslint";
 import obsidianmd from "eslint-plugin-obsidianmd";
+import noUnsanitized from "eslint-plugin-no-unsanitized";
 
 // One block per package: each tsconfig's own "include" already matches
 // exactly the glob linted here (src only, no tests), so type-aware parsing
@@ -100,6 +101,15 @@ const obsidianRules = {
   ],
 };
 
+// eslint-plugin-no-unsanitized rules the hosted report's "Unsafe
+// assignment to innerHTML/outerHTML" and "Unsafe call to
+// insertAdjacentHTML/import" findings map onto. Matching this file's
+// warn-only convention above.
+const noUnsanitizedRules = {
+  "no-unsanitized/property": "warn",
+  "no-unsanitized/method": "warn",
+};
+
 export default defineConfig([
   {
     name: "arxiv-daily/review-ignores",
@@ -115,7 +125,7 @@ export default defineConfig([
   ...packages.map(({ name, files, project }) => ({
     name: `arxiv-daily/review-${name}`,
     files,
-    plugins: { "@typescript-eslint": tseslint.plugin, obsidianmd },
+    plugins: { "@typescript-eslint": tseslint.plugin, obsidianmd, "no-unsanitized": noUnsanitized },
     languageOptions: {
       parser: tseslint.parser,
       parserOptions: {
@@ -127,6 +137,7 @@ export default defineConfig([
       ...coreEslintRules,
       ...typeCheckedRules,
       ...obsidianRules,
+      ...noUnsanitizedRules,
     },
   })),
 ]);

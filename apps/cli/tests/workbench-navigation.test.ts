@@ -1,6 +1,7 @@
 // @vitest-environment happy-dom
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { mountWorkbench } from "../src/workbench/web/app";
+import { renderMarkdown } from "../src/workbench/markdown";
 
 const paper = { key: "arxiv:2609.12345", arxivId: "2609.12345", title: "Efficient inference", authors: ["Ada"], published: "2026-09-29", topics: ["Inference"], category: "cs.AI", status: "inbox", priority: "normal", starred: false, abstract: "Original abstract", summary: { coreProblem: "The existing problem", keyMethod: "The saved method", whyRelevant: "Relevant to efficient models" }, detailPath: null, reports: [{ path: "daily/2026-10-01.md", date: "2026-10-01", title: "研究日报", available: true }], originalUrl: "https://arxiv.org/abs/2609.12345", pdfUrl: "https://arxiv.org/pdf/2609.12345", provenance: null, novelty: null };
 const day = { date: "2026-10-01", state: "has-report", reportPath: "daily/2026-10-01.md", reportTitle: "研究日报", papers: 1, message: "日报已保存。", canGenerate: false, actionLabel: null };
@@ -22,7 +23,7 @@ function setup(override?: (url: URL, init?: RequestInit) => Response | Promise<R
     if (url.pathname.endsWith("api/paper")) return json({ paper });
     if (url.pathname.endsWith("api/runs/current")) return json({ run: null });
     if (url.pathname.endsWith("api/documents")) return json({ documents: [{ path: "papers/standalone.md", kind: "papers", title: "Unindexed saved note", date: "", arxivId: "", authors: "", size: 10 }], total: 1, nextOffset: null, counts: { daily: 1, papers: 1 } });
-    if (url.pathname.endsWith("api/document")) return json({ path: url.searchParams.get("path"), kind: "daily", title: "完整研究日报", date: day.date, arxivId: "", authors: "", html: '<h2 id="all">完整 Markdown 内容</h2>', headings: [{ id: "all", title: "完整 Markdown 内容", level: 2 }], related: [], originalUrl: null, pdfUrl: null });
+    if (url.pathname.endsWith("api/document")) return json({ path: url.searchParams.get("path"), kind: "daily", date: day.date, arxivId: "", authors: "", ...renderMarkdown("## 完整 Markdown 内容"), title: "完整研究日报", related: [], originalUrl: null, pdfUrl: null });
     throw new Error(`Unexpected request: ${url}`);
   });
   disposers.push(mountWorkbench(root, { fetch: fetcher, searchDelayMs: 0, pollIntervalMs: 10 }));
@@ -60,7 +61,8 @@ describe("bounded reading navigation", () => {
       const path = url.searchParams.get('path');
       if (path === 'slow.md') return new Promise(resolve => { finishSlow = resolve; });
       if (path === 'missing.md') return json({ error: 'Missing document' }, 404);
-      return json({ path, kind: 'papers', title: path, date: '', authors: '', html: '<h2 id="section">Section</h2><a href="?document=second.md#section">Linked</a><a href="?document=missing.md">Missing</a><a href="?document=slow.md">Slow</a>', headings: [{ id: 'section', title: 'Section', level: 2 }], related: [], originalUrl: null, pdfUrl: null });
+      const rendered = renderMarkdown('## Section\n\n[Linked](?document=second.md#section) [Missing](?document=missing.md) [Slow](?document=slow.md)', { resolveLink: target => target });
+      return json({ path, kind: 'papers', date: '', authors: '', ...rendered, title: path, related: [], originalUrl: null, pdfUrl: null });
     }, '?document=first.md&q=Ada&scope=to_read');
     await vi.waitFor(() => expect(root.querySelector('article')).toBeTruthy());
     const pane = root.querySelector<HTMLElement>('.reading-pane')!;
@@ -82,7 +84,7 @@ describe("bounded reading navigation", () => {
     click(root, 'article a[href="?document=slow.md"]');
     await vi.waitFor(() => expect(finishSlow).toBeTypeOf('function'));
     back(); await vi.waitFor(() => expect(root.querySelector('.document-title')?.textContent).toBe('first.md'));
-    finishSlow(json({ path: 'slow.md', title: 'Stale result', kind: 'papers', date: '', authors: '', html: '<p>Wrong page</p>', headings: [], related: [], originalUrl: null, pdfUrl: null }));
+    finishSlow(json({ path: 'slow.md', kind: 'papers', date: '', authors: '', ...renderMarkdown('Wrong page'), title: 'Stale result', related: [], originalUrl: null, pdfUrl: null }));
     await new Promise(resolve => setTimeout(resolve, 20)); expect(pane.textContent).not.toContain('Wrong page');
     expect(new URL(location.href).searchParams.get('q')).toBe('Ada'); expect(new URL(location.href).searchParams.get('scope')).toBe('to_read');
   });
@@ -101,7 +103,7 @@ describe("bounded reading navigation", () => {
   });
 
   it("keeps the current filters when a same-document Markdown link only supplies its path and anchor", async () => {
-    const { root } = setup(url => url.pathname.endsWith('api/document') ? json({ path: 'first.md', kind: 'papers', title: 'First', date: '', authors: '', html: '<h2 id="section">Section</h2><a href="?document=first.md#section">Jump</a>', headings: [], related: [], originalUrl: null, pdfUrl: null }) : undefined, '?document=first.md&q=Ada&scope=to_read');
+    const { root } = setup(url => url.pathname.endsWith('api/document') ? json({ path: 'first.md', kind: 'papers', date: '', authors: '', ...renderMarkdown('## Section\n\n[Jump](?document=first.md#section)', { resolveLink: target => target }), title: 'First', related: [], originalUrl: null, pdfUrl: null }) : undefined, '?document=first.md&q=Ada&scope=to_read');
     await vi.waitFor(() => expect(root.querySelector('article')).toBeTruthy());
     click(root, 'article a');
     expect(new URL(location.href).searchParams.get('q')).toBe('Ada');

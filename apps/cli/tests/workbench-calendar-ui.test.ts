@@ -1,6 +1,7 @@
 // @vitest-environment happy-dom
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { mountWorkbench } from "../src/workbench/web/app";
+import { renderMarkdown } from "../src/workbench/markdown";
 
 const daily = { path: "arxiv-daily/daily/2026-10-01.md", kind: "daily", title: "十月研究日报", date: "2026-10-01", authors: "", arxivId: "", size: 20, modifiedAt: "2026-10-01" };
 const paper = { ...daily, path: "arxiv-daily/papers/2609.12345.md", kind: "papers", title: "Inference paper", date: "2026-09-29" };
@@ -49,7 +50,7 @@ function setup(override?: (url: URL, init?: RequestInit) => Response | Promise<R
     if (url.pathname.endsWith("api/documents")) return json({ documents: url.searchParams.get("kind") === "papers" ? [paper] : [daily], total: 1, nextOffset: null, counts: { daily: 1, papers: 1 } });
     if (url.pathname.endsWith("api/document")) {
       const entry = url.searchParams.get("path") === paper.path ? paper : daily;
-      return json({ ...entry, metadata: {}, headings: [], html: `<p>Saved ${entry.title}</p>`, related: [], originalUrl: null, pdfUrl: null });
+      return json({ ...entry, ...renderMarkdown(`Saved ${entry.title}`), title: entry.title, related: [], originalUrl: null, pdfUrl: null });
     }
     throw new Error(`Unexpected request: ${url}`);
   });

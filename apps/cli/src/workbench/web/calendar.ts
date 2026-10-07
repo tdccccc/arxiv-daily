@@ -1,4 +1,5 @@
 import { t } from "./i18n";
+import { h, fragment } from "./dom";
 import type { WorkbenchCalendar, WorkbenchCalendarDay } from "../calendar";
 
 export const calendarStateLabels: Record<WorkbenchCalendarDay["state"], string> = {
@@ -24,12 +25,31 @@ export function mountCalendar(host: HTMLElement, options: CalendarOptions) {
   const mobile = window.matchMedia("(max-width: 760px)");
   let expanded = !mobile.matches;
 
-  host.innerHTML = `<div class="calendar-mobile-heading"><span>${t("按日期阅读")}</span><button class="quiet-button" data-calendar-action="toggle" aria-controls="daily-calendar-body"></button></div>
-    <div class="calendar-body" id="daily-calendar-body"><div class="calendar-navigation"><button class="icon-button" data-calendar-action="previous" aria-label="${t("上个月")}">‹</button><strong class="calendar-month" aria-live="polite">${t("日报日历")}</strong><button class="icon-button" data-calendar-action="next" aria-label="${t("下个月")}">›</button><button class="quiet-button calendar-today" data-calendar-action="today">${t("回到今天")}</button></div>
-    <div class="calendar-error" role="alert" hidden></div><div class="calendar-weekdays" aria-hidden="true"><span>${t("一")}</span><span>${t("二")}</span><span>${t("三")}</span><span>${t("四")}</span><span>${t("五")}</span><span>${t("六")}</span><span>${t("日")}</span></div>
-    <div class="calendar-grid" role="group" aria-label="${t("日报日期")}"><div class="calendar-loading" role="status">${t("正在读取日历…")}</div></div>
-    <div class="calendar-legend" aria-label="${t("日历状态图例")}"><span><i class="calendar-dot has-report"></i>${t("有日报")}</span><span><i class="calendar-dot not-generated"></i>${t("可生成")}</span><span><i class="calendar-dot running"></i>${t("生成中")}</span><span><i class="calendar-dot failed"></i>${t("需处理")}</span><span><i class="calendar-dot no-matches"></i>${t("无匹配")}</span><span><i class="calendar-dot no-updates"></i>${t("当日无更新")}</span><span><i class="calendar-dot awaiting-announcement"></i>${t("等待公告发布")}</span></div>
-    <div class="calendar-summary" aria-live="polite"></div></div>`;
+  const legendDots: Array<[string, string]> = [
+    ["has-report", "有日报"], ["not-generated", "可生成"], ["running", "生成中"], ["failed", "需处理"],
+    ["no-matches", "无匹配"], ["no-updates", "当日无更新"], ["awaiting-announcement", "等待公告发布"],
+  ];
+  host.replaceChildren(
+    h("div", { class: "calendar-mobile-heading" },
+      h("span", null, t("按日期阅读")),
+      h("button", { class: "quiet-button", "data-calendar-action": "toggle", "aria-controls": "daily-calendar-body" }),
+    ),
+    h("div", { class: "calendar-body", id: "daily-calendar-body" },
+      h("div", { class: "calendar-navigation" },
+        h("button", { class: "icon-button", "data-calendar-action": "previous", "aria-label": t("上个月") }, "‹"),
+        h("strong", { class: "calendar-month", "aria-live": "polite" }, t("日报日历")),
+        h("button", { class: "icon-button", "data-calendar-action": "next", "aria-label": t("下个月") }, "›"),
+        h("button", { class: "quiet-button calendar-today", "data-calendar-action": "today" }, t("回到今天")),
+      ),
+      h("div", { class: "calendar-error", role: "alert", hidden: true }),
+      h("div", { class: "calendar-weekdays", "aria-hidden": "true" }, ...["一", "二", "三", "四", "五", "六", "日"].map(day => h("span", null, t(day)))),
+      h("div", { class: "calendar-grid", role: "group", "aria-label": t("日报日期") }, h("div", { class: "calendar-loading", role: "status" }, t("正在读取日历…"))),
+      h("div", { class: "calendar-legend", "aria-label": t("日历状态图例") },
+        ...legendDots.map(([state, label]) => h("span", null, h("i", { class: `calendar-dot ${state}` }), t(label))),
+      ),
+      h("div", { class: "calendar-summary", "aria-live": "polite" }),
+    ),
+  );
   const find = <T extends HTMLElement = HTMLElement>(selector: string) => host.querySelector<T>(selector)!;
 
   function renderExpansion(): void {
@@ -37,6 +57,26 @@ export function mountCalendar(host: HTMLElement, options: CalendarOptions) {
     const toggle = find<HTMLButtonElement>('[data-calendar-action="toggle"]');
     toggle.textContent = expanded ? t("收起日历") : t("展开日历");
     toggle.setAttribute("aria-expanded", String(expanded));
+  }
+
+  function dayButton(day: WorkbenchCalendarDay | null, target: string | undefined): HTMLElement {
+    if (!day) return h("span", { class: "calendar-blank", "aria-hidden": "true" });
+    const showCount = day.state === "has-report" || day.state === "no-matches";
+    const countLabel = showCount ? (day.papers === null ? t("，论文数未知") : t("，{0} 篇论文", day.papers)) : "";
+    const caption = showCount
+      ? h("span", { class: "calendar-day-count" }, day.papers === null ? "—" : t("{0}篇", day.papers))
+      : h("span", { class: "calendar-day-mark", "aria-hidden": "true" }, day.state === "not-generated" ? "+" : day.state === "running" ? "…" : day.state === "failed" || day.state === "report-missing" ? "!" : day.state === "awaiting-announcement" ? "…" : day.state === "skipped" || day.state === "no-updates" ? "–" : "");
+    const isSelected = day.date === selectedDate;
+    const isToday = day.date === data!.today;
+    return h("button", {
+      class: `calendar-day ${day.state}${isSelected ? " is-selected" : ""}${isToday ? " is-today" : ""}`,
+      "data-calendar-date": day.date,
+      tabindex: day.date === target ? 0 : -1,
+      "aria-label": `${day.date} · ${t(calendarStateLabels[day.state])}${countLabel}`,
+      title: `${day.date} · ${t(calendarStateLabels[day.state])}${countLabel}`,
+      "aria-pressed": String(isSelected),
+      ...(isToday ? { "aria-current": "date" } : {}),
+    }, h("span", { class: "calendar-day-number" }, Number(day.date.slice(8))), caption);
   }
 
   function render(): void {
@@ -49,17 +89,21 @@ export function mountCalendar(host: HTMLElement, options: CalendarOptions) {
     find(".calendar-grid").setAttribute("aria-label", t("{0} 日报日期", data.month));
     find<HTMLButtonElement>('[data-calendar-action="previous"]').disabled = data.previousMonth === data.month;
     find<HTMLButtonElement>('[data-calendar-action="next"]').disabled = data.nextMonth === data.month;
-    find(".calendar-grid").innerHTML = data.cells.map(day => {
-      if (!day) return '<span class="calendar-blank" aria-hidden="true"></span>';
-      const showCount = day.state === "has-report" || day.state === "no-matches";
-      const countLabel = showCount ? day.papers === null ? t("，论文数未知") : t("，{0} 篇论文", day.papers) : "";
-      const caption = showCount
-        ? `<span class="calendar-day-count">${day.papers === null ? "—" : t("{0}篇", day.papers)}</span>`
-        : `<span class="calendar-day-mark" aria-hidden="true">${day.state === "not-generated" ? "+" : day.state === "running" ? "…" : day.state === "failed" || day.state === "report-missing" ? "!" : day.state === "awaiting-announcement" ? "…" : day.state === "skipped" || day.state === "no-updates" ? "–" : ""}</span>`;
-      return `<button class="calendar-day ${day.state}${day.date === selectedDate ? " is-selected" : ""}${day.date === data!.today ? " is-today" : ""}" data-calendar-date="${day.date}" tabindex="${day.date === target ? 0 : -1}" aria-label="${day.date} · ${t(calendarStateLabels[day.state])}${countLabel}" title="${day.date} · ${t(calendarStateLabels[day.state])}${countLabel}" aria-pressed="${day.date === selectedDate}" ${day.date === data!.today ? 'aria-current="date"' : ""}><span class="calendar-day-number">${Number(day.date.slice(8))}</span>${caption}</button>`;
-    }).join("");
+    find(".calendar-grid").replaceChildren(...data.cells.map(day => dayButton(day, target)));
     const selected = days.find(day => day.date === selectedDate);
-    find(".calendar-summary").innerHTML = selected ? `<div class="calendar-selected-heading"><time datetime="${selected.date}">${selected.date}</time><span>${t(calendarStateLabels[selected.state])}${selected.papers !== null ? ` · ${t("{0} 篇", selected.papers)}` : ""}</span></div>${selected.canGenerate ? `<button class="quiet-button" data-action="generate-date" data-date="${selected.date}">${escapeHtml(t(selected.actionLabel || "生成日报"))} <span aria-hidden="true">↗</span></button>` : ""}` : `<span class="calendar-hint">${t("选择日期查看日报或运行状态")}</span>`;
+    find(".calendar-summary").replaceChildren(
+      selected
+        ? fragment(
+            h("div", { class: "calendar-selected-heading" },
+              h("time", { datetime: selected.date }, selected.date),
+              h("span", null, `${t(calendarStateLabels[selected.state])}${selected.papers !== null ? ` · ${t("{0} 篇", selected.papers)}` : ""}`),
+            ),
+            selected.canGenerate
+              ? h("button", { class: "quiet-button", "data-action": "generate-date", "data-date": selected.date }, t(selected.actionLabel || "生成日报"), " ", h("span", { "aria-hidden": "true" }, "↗"))
+              : null,
+          )
+        : h("span", { class: "calendar-hint" }, t("选择日期查看日报或运行状态")),
+    );
     if (restoreDate) focusDate(restoreDate);
   }
 
@@ -82,9 +126,12 @@ export function mountCalendar(host: HTMLElement, options: CalendarOptions) {
       return true;
     } catch (error) {
       if (!disposed && current === version) {
-        find(".calendar-error").innerHTML = `<span>${t("日历暂时不可用")}</span><button class="quiet-button" data-calendar-action="retry">${t("重试")}</button>`;
+        find(".calendar-error").replaceChildren(
+          h("span", null, t("日历暂时不可用")),
+          h("button", { class: "quiet-button", "data-calendar-action": "retry" }, t("重试")),
+        );
         find(".calendar-error").hidden = false;
-        if (!data) find(".calendar-grid").innerHTML = "";
+        if (!data) find(".calendar-grid").replaceChildren();
         options.onError(error);
       }
       return false;
@@ -180,5 +227,3 @@ export function mountCalendar(host: HTMLElement, options: CalendarOptions) {
     dispose: () => { disposed = true; version += 1; host.removeEventListener("click", click); host.removeEventListener("keydown", keydown); mobile.removeEventListener?.("change", resize); },
   };
 }
-
-function escapeHtml(value: string): string { return value.replace(/[&<>"']/g, character => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[character]!); }
