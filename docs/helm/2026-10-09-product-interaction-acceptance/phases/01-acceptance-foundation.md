@@ -2,8 +2,8 @@
 
 goal_ref: ../goal.md
 created: 2026-10-09T21:39:29+08:00
-updated: 2026-10-09T14:52:00.000Z
-revision: 3
+updated: 2026-10-09T19:02:12Z
+revision: 6
 
 ## Outcome
 
@@ -39,7 +39,7 @@ revision: 3
 - Green check: 独立 fixture 下构建 CLI，运行工作台真实浏览器场景并检查实际 TOML、Markdown、索引与进程状态。
 - regression checks: 相关 apps/cli Vitest suites；新增 harness Node tests。
 - exception: 新增既有行为的真实 UI 覆盖采用 Green characterization，不篡改产品制造失败；对验收判据做负向对照。
-- [ ] implementation and tests accepted
+- [x] implementation and tests accepted
 
 ### Chunk 3 — Obsidian browser journeys
 
@@ -49,7 +49,7 @@ revision: 3
 - Green check: 自有临时 vault 中启动真实 Obsidian，取得主流程、取消和失败恢复及截图/存储证据。
 - regression checks: scripts/tests/desktop-acceptance-*.test.mjs；相关 Plugin tests。
 - exception: 既有产品行为测试按 Green characterization；模型返回与原生目录选择仅在外部边界控制。
-- [ ] implementation and tests accepted
+- [x] implementation and tests accepted
 
 ### Chunk 4 — bounded model API exploration
 
@@ -58,7 +58,7 @@ revision: 3
 - Red / baseline signal: 本地伪模型服务验证观察/动作循环、非法动作、预算、模型错误、无证据完成声明均不能假绿。
 - Green check: Node contract tests plus actual browser exploration with controlled model; configured real API smoke when configuration is available.
 - regression checks: fixture/report contracts and browser scenario runner.
-- [ ] implementation and tests accepted
+- [x] implementation and tests accepted
 
 ### Chunk 5 — explicit retry after a permanent failure
 
@@ -68,7 +68,25 @@ revision: 3
 - Green check: explicit user retry executes the failed date again and can commit a complete report; ordinary completed-date runs remain idempotent.
 - regression checks: workbench actions/server tests, real browser authentication-failure recovery, existing scheduler and CLI invocation contracts.
 - constraint: change the explicit manual retry path; preserve automatic scheduling's permanent-failure stop semantics.
-- [ ] implementation and tests accepted
+- [x] implementation and tests accepted
+
+### Chunk 6 — preserve reading after a search result click
+
+- change kind: bug fix exposed by real browser focus events
+- strategy: reproduce the input/change sequence and a pending search debounce, then Red-Green-Refactor
+- Red / baseline signal: search, blur and click a paper; the late search timer navigates back to the list after the paper opens.
+- Green check: the paper remains open after the debounce window; returning to the list preserves the current query.
+- regression checks: workbench navigation/reading suites and the real reading, paper-note and restart journeys.
+- [x] implementation and tests accepted
+
+### Chunk 7 — enable the date dialog through the host component
+
+- change kind: bug fix exposed by the real Obsidian ButtonComponent
+- strategy: faithful host mock plus public date-picker click/Enter regression, Red-Green-Refactor
+- Red / baseline signal: a valid date enables the DOM button but the host component remains disabled and ignores click/Enter. A real listener probe confirmed its disabled guard and a targeted setDisabled(false) started the pipeline.
+- Green check: valid input enables both component behavior and visual state, submitting the chosen date exactly once; invalid input stays disabled.
+- regression checks: Plugin date-picker/commands/settings tests, plugin typecheck/build and real Obsidian workflow.
+- [x] implementation and tests accepted
 
 ## Phase verification
 

@@ -2,8 +2,8 @@
 
 status: active
 created: 2026-10-09T21:39:29+08:00
-updated: 2026-10-09T21:39:29+08:00
-revision: 1
+updated: 2026-10-09T19:02:12Z
+revision: 2
 owner: /root
 
 ## Intent
@@ -37,5 +37,5 @@ owner: /root
 
 ## Phases
 
-1. P1 — 两端真实界面回归、隔离夹具和有界模型探索具备可运行实现与局部验证 — status: active
-2. P2 — 完整验收实跑、缺陷回归、功能覆盖清单和一键使用说明完成 — status: pending
+1. P1 — 两端真实界面回归、隔离夹具和有界模型探索具备可运行实现与局部验证 — status: done
+2. P2 — 完整验收实跑、缺陷回归、功能覆盖清单和一键使用说明完成 — status: active
