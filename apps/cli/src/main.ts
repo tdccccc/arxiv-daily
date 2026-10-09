@@ -36,7 +36,7 @@ export interface CliCommandRuntime {
     runForDate(date: string): Promise<PipelineResult>;
   };
   scheduler?: {
-    runForDateNow(date: string): Promise<CliRunResult>;
+    runForDateNow(date: string, options?: { retryFailed?: boolean }): Promise<CliRunResult>;
     tick?: () => Promise<void>;
   };
   manualFetch: {
@@ -285,7 +285,7 @@ export async function runCli(opts: RunCliOptions = {}): Promise<number> {
         if (!date) throw new Error("run requires --today or --date");
 
         const result = runtime.scheduler
-          ? await runtime.scheduler.runForDateNow(date)
+          ? await runtime.scheduler.runForDateNow(date, { retryFailed: true })
           : await runtime.pipeline.runForDate(date);
         if (
           !runtime.scheduler &&

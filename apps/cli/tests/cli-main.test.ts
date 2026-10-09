@@ -230,7 +230,7 @@ describe("CLI main", () => {
       buildRuntime: () => runtime,
     });
     expect(code).toBe(0);
-    expect(runtime.scheduler.runForDateNow).toHaveBeenCalledWith("2026-06-13");
+    expect(runtime.scheduler.runForDateNow).toHaveBeenCalledWith("2026-06-13", expect.objectContaining({ retryFailed: true }));
   });
 
   it("prints scheduler completion commit failures as existing transient errors", async () => {

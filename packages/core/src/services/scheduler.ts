@@ -11,6 +11,8 @@ import type { StateStore } from "./state-store";
 
 export interface SchedulerRunOptions {
   trigger?: RunHistoryTrigger;
+  /** Explicit user retry: failed dates may run again; completed/running dates stay protected. */
+  retryFailed?: boolean;
 }
 
 export interface SchedulerRecentDates {

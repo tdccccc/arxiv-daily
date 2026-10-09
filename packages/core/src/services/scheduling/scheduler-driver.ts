@@ -25,6 +25,7 @@ import type { TimeGate } from "./types";
 
 export interface SchedulerRunOptions {
   trigger?: RunHistoryTrigger;
+  retryFailed?: boolean;
 }
 
 export interface SchedulerRecentDates {
@@ -83,7 +84,7 @@ interface PendingCompletionAttempt {
   result?: SchedulerResult;
 }
 
-type RunMode = "normal" | "scheduled" | "run-all-pending" | "retry" | "force";
+type RunMode = "normal" | "manual-retry" | "scheduled" | "run-all-pending" | "retry" | "force";
 type TryRunResult = SchedulerResult | { kind: "not-eligible" };
 
 const COMPLETION_COMMIT_FAILURE_REASON = "scheduler completion commit failed";
@@ -506,7 +507,7 @@ export class SchedulerDriver {
         trigger,
         now,
         batch,
-        runOpts.clearDateBeforeRun ? "force" : "normal",
+        runOpts.clearDateBeforeRun ? "force" : opts.retryFailed ? "manual-retry" : "normal",
       );
     } finally {
       this.finishCancellationBatch(batch);
@@ -584,7 +585,12 @@ export class SchedulerDriver {
         }
 
         const currentEntry = store.get(date);
-        if (mode === "scheduled") {
+        // Choose from authoritative state while holding the vault lock. A
+        // concurrent completion must never be cleared by a stale retry request.
+        const runMode = mode === "manual-retry"
+          ? currentEntry.status === "failed_transient" || currentEntry.status === "failed_permanent" ? "retry" : "normal"
+          : mode;
+        if (runMode === "scheduled") {
           const decision = checkTickGate(date, store, {
             now,
             timeGate,
@@ -602,14 +608,14 @@ export class SchedulerDriver {
             });
             return { kind: "not-eligible" as const };
           }
-        } else if (mode === "retry") {
+        } else if (runMode === "retry") {
           if (
             currentEntry.status !== "failed_transient" &&
             currentEntry.status !== "failed_permanent"
           ) {
             return { kind: "not-eligible" as const };
           }
-        } else if (mode === "run-all-pending") {
+        } else if (runMode === "run-all-pending") {
           if (store.isDone(date)) return { kind: "not-eligible" as const };
           if (currentEntry.status === "running") {
             await this.safeAsyncEffect(() =>
@@ -622,7 +628,7 @@ export class SchedulerDriver {
             );
             return { kind: "skipped" as const, reason: "already running" };
           }
-        } else if (mode === "normal") {
+        } else if (runMode === "normal") {
           if (store.isDone(date)) {
             await this.safeAsyncEffect(() =>
               this.deps.history.recordSkipped(date, trigger, "already done", now),
@@ -640,7 +646,7 @@ export class SchedulerDriver {
             );
             return { kind: "skipped" as const, reason: "already running" };
           }
-        } else if (mode === "force" && currentEntry.status === "running") {
+        } else if (runMode === "force" && currentEntry.status === "running") {
           await this.safeAsyncEffect(() =>
             this.deps.history.recordSkipped(
               date,
@@ -652,7 +658,7 @@ export class SchedulerDriver {
           return { kind: "skipped" as const, reason: "already running" };
         }
 
-        if (mode === "force" || mode === "retry") {
+        if (runMode === "force" || runMode === "retry") {
           try {
             await store.clearDate(date);
           } catch (error) {
