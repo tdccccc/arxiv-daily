@@ -51,6 +51,8 @@ More: [CLI installation and command reference](apps/cli/README.md).
 
 **DSH** — build and install the extension from source: [extensions/dsh-arxiv-daily/README.md](extensions/dsh-arxiv-daily/README.md).
 
+For contributors: [functional and interaction acceptance](scripts/acceptance/README.md) covers real browser/desktop checks and optional model API exploration.
+
 ## License
 
 MIT — see [LICENSE](LICENSE).
