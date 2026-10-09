@@ -14,10 +14,10 @@ const DATES = ["2026-10-09", "2026-10-08", "2026-10-07", "2026-10-06", "2026-10-
 const xml = value => String(value).replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;");
 
 function recentHtml(empty) {
-  return `<html><body><dl id="articles">${DATES.map(date => {
+  return `<html><body>${DATES.map(date => {
     const label = new Intl.DateTimeFormat("en-GB", { weekday: "short", day: "numeric", month: "short", year: "numeric", timeZone: "UTC" }).format(new Date(`${date}T12:00:00Z`));
-    return `<h3>${label} (showing ${empty ? 0 : PAPERS.length} of ${empty ? 0 : PAPERS.length} entries)</h3>${empty ? "" : PAPERS.map(p => `<dt><a title="Abstract" href="/abs/${p.id}">arXiv:${p.id}</a></dt><dd><div class="list-title">Title: ${xml(p.title)}</div><div class="list-authors"><a>A. Researcher</a></div></dd>`).join("")}`;
-  }).join("")}</dl></body></html>`;
+    return `<dl id="articles"><h3>${label} (showing ${empty ? 0 : PAPERS.length} of ${empty ? 0 : PAPERS.length} entries)</h3>${empty ? "" : PAPERS.map(p => `<dt><a title="Abstract" href="/abs/${p.id}">arXiv:${p.id}</a></dt><dd><div class="list-title">Title: ${xml(p.title)}</div><div class="list-authors"><a>A. Researcher</a></div></dd>`).join("")}</dl>`;
+  }).join("")}</body></html>`;
 }
 
 function atom(ids) {

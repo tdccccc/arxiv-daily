@@ -1,8 +1,13 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { readFile, stat, access } from "node:fs/promises";
+import { readFile, stat, access, mkdtemp, rm } from "node:fs/promises";
 import { join } from "node:path";
+import { tmpdir } from "node:os";
+import { createRequire } from "node:module";
+import { fileURLToPath } from "node:url";
 import { spawn } from "node:child_process";
+import { build } from "esbuild";
+import { DOMParser } from "linkedom";
 import { ACCEPTANCE_DATE, PAPERS, createFixtureEnvironment, startFixtureServer } from "../acceptance/fixtures.mjs";
 
 async function serverFor(t) {
@@ -109,4 +114,18 @@ test("unconfigured fixture leaves first-run configuration absent", async t => {
   t.after(() => fixture.dispose());
   await assert.rejects(access(fixture.configPath), { code: "ENOENT" });
   assert.equal(ACCEPTANCE_DATE, "2026-10-01");
+});
+
+test("the shipping parser reads every fixture announcement date with exactly two papers", async t => {
+  const server = await serverFor(t);
+  const directory = await mkdtemp(join(tmpdir(), "acceptance-parser-contract-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const outfile = join(directory, "parser.cjs");
+  await build({ entryPoints: [fileURLToPath(new URL("../../packages/core/src/pipeline/arxiv-parser.ts", import.meta.url))], outfile, bundle: true, platform: "node", format: "cjs", logLevel: "silent" });
+  const { parseRecent } = createRequire(import.meta.url)(outfile);
+  const listing = await (await proxy(server, "https://arxiv.org/list/cs.AI/recent")).text();
+  const buckets = parseRecent(listing, { parseFromString: html => new DOMParser().parseFromString(html, "text/html") });
+  assert.equal(buckets.find(bucket => bucket.announceDate === ACCEPTANCE_DATE)?.papers.length, 2);
+  assert.ok(buckets.length >= 5);
+  assert.ok(buckets.every(bucket => bucket.papers.length === 2));
 });
