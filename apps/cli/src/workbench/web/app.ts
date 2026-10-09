@@ -402,6 +402,7 @@ function mountWorkbenchContent(root: HTMLElement, options: WorkbenchClientOption
     await loadList(restore);
   }
   function beginReading(captureScroll: boolean): void {
+    window.clearTimeout(searchTimer);
     if (captureScroll) rememberScroll(); leaveLibrary(); readingReady = false; listVersion += 1;
     root.dataset.view = "reading"; root.classList.add("is-reading"); root.classList.remove("show-filters");
     find(".toc-pane").replaceChildren();
@@ -837,7 +838,9 @@ function mountWorkbenchContent(root: HTMLElement, options: WorkbenchClientOption
   function input(event: Event): void {
     const target = event.target;
     if (target instanceof HTMLInputElement && target.type === "search") {
-      query = target.value.trim();
+      const nextQuery = target.value.trim();
+      if (nextQuery === query) return;
+      query = nextQuery;
       listVersion += 1;
       window.clearTimeout(searchTimer);
       offset = 0; documentVersion += 1;
