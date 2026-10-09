@@ -1,7 +1,7 @@
 import fsPromises from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { withAppUsable } from "./app-state.mjs";
+import { waitForAppUsable, withAppUsable } from "./app-state.mjs";
 import { assertVersionUnderTest, deployBuildUnderTest } from "./build-deploy.mjs";
 import { createCdpClient, evaluate, selectVaultTarget } from "./cdp.mjs";
 import { createDiagnostics } from "./diagnostics.mjs";
@@ -128,6 +128,11 @@ export async function runDesktopSession({
         const { version: pluginVersion, trustPromptAccepted, loadedBeforeAttach } =
           await waitForPluginReady({ evaluate: evaluateInRenderer, pluginId });
         assertVersionUnderTest({ expected: version, reported: pluginVersion });
+
+        // A registered plugin does not imply the vault's initial layout has
+        // mounted yet. Wait for the same positive capabilities used by both
+        // walk guards; a permanently unusable host remains blocked.
+        await waitForAppUsable({ evaluate: evaluateInRenderer });
 
         // The scenarios only mean something if a vault window is actually
         // mounted. Bracketing the body checks that on both sides: a host that

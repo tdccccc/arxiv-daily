@@ -120,6 +120,27 @@ export async function assertAppUsable({ evaluate, phase = "before the walk" }) {
   );
 }
 
+/** Plugin registration can precede the first workspace leaf during vault loading. */
+export async function waitForAppUsable({
+  evaluate,
+  timeoutMs = 10000,
+  intervalMs = 100,
+  now = () => Date.now(),
+  sleep = ms => new Promise(resolve => setTimeout(resolve, ms)),
+}) {
+  const deadline = now() + timeoutMs;
+  for (;;) {
+    try {
+      return await assertAppUsable({ evaluate, phase: `before the walk (initial workspace readiness, up to ${timeoutMs}ms)` });
+    } catch (error) {
+      if (!(error instanceof AppErrorStateError)) throw error;
+      const remaining = deadline - now();
+      if (remaining <= 0) throw error;
+      await sleep(Math.min(intervalMs, remaining));
+    }
+  }
+}
+
 /**
  * Run `run` only against a usable application, and let its results out only if
  * the application is still usable afterwards.
