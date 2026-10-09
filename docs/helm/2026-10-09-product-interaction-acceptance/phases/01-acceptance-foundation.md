@@ -2,8 +2,8 @@
 
 goal_ref: ../goal.md
 created: 2026-10-09T21:39:29+08:00
-updated: 2026-10-09T22:20:17+08:00
-revision: 2
+updated: 2026-10-09T14:52:00.000Z
+revision: 3
 
 ## Outcome
 
@@ -29,7 +29,7 @@ revision: 2
 - Red / baseline signal: 新 Node contract tests 对尚不存在的 fixture/报告公共契约失败；建立可导入最小表面后观察正常/取消/未知请求/空结果判定的行为 Red。
 - Green check: node --test scripts/tests/acceptance-fixtures.test.mjs scripts/tests/acceptance-report.test.mjs
 - regression checks: 原有 desktop harness 与 root runner tests；check:boundaries、check:product-units、git diff --check。
-- [ ] implementation and tests accepted
+- [x] implementation and tests accepted
 
 ### Chunk 2 — workbench browser journeys
 
