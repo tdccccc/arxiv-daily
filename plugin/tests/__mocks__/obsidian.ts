@@ -185,6 +185,7 @@ export class DropdownComponent {
 
 export class ButtonComponent {
   readonly buttonEl: HTMLButtonElement;
+  disabled = false;
   private callback?: () => unknown;
 
   constructor(container: HTMLElement) {
@@ -198,6 +199,7 @@ export class ButtonComponent {
   }
 
   setDisabled(value: boolean): this {
+    this.disabled = value;
     this.buttonEl.disabled = value;
     return this;
   }
@@ -210,7 +212,7 @@ export class ButtonComponent {
 
   onClick(callback: () => unknown): this {
     this.callback = callback;
-    this.buttonEl.addEventListener("click", () => { void this.callback?.(); });
+    this.buttonEl.addEventListener("click", () => { if (!this.disabled) void this.callback?.(); });
     return this;
   }
 }
