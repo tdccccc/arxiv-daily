@@ -214,7 +214,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1]
       process.stdout.write("workbench    Real browser: settings, daily run, recovery, reading and persistence\nobsidian     Real Obsidian: settings, run/cancel/retry, reading and PDF navigation\nexploration  Opt-in model API: bounded UI tasks with independent evidence checks\n");
     } else {
       const report = await runAcceptance({ ...options, signal: controller.signal }, { onProgress: message => process.stdout.write(`${message}\n`) });
-      process.stdout.write(`Acceptance ${report.status}: ${JSON.stringify(report.counts)}\nReport: ${join(report.artifactDir, "report.html")}\n`);
+      process.stdout.write(`Acceptance ${report.status}: ${JSON.stringify(report.counts)}; needs review: ${report.reviewCount}\nReport: ${join(report.artifactDir, "report.html")}\n`);
       process.exitCode = controller.signal.aborted ? 130 : report.exitCode;
     }
   } catch (error) {

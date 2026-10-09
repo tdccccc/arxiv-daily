@@ -58,3 +58,16 @@ test("report writes inspectable JSON and escaped HTML without credentials", asyn
   assert.doesNotMatch(html, /<script>alert/);
   assert.match(html, /&lt;script&gt;/);
 });
+
+test("model findings remain visible for review even when the trusted task checks pass", async t => {
+  const dir = await mkdtemp(join(tmpdir(), "arxiv-acceptance-findings-"));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  const report = buildReport({ selectedSuites: ["exploration"], suites: [{ suite: "exploration", status: "passed", scenarios: [{ id: "settings", title: "Settings", status: "passed", assertions: [{ label: "Saved", passed: true }] }], findings: [{ status: "needs-review", taskId: "settings", summary: "Unclear save feedback", evidence: "Repeated click needed <script>" }] }] });
+  assert.equal(report.status, "passed");
+  assert.equal(report.reviewCount, 1);
+  await writeReport(dir, report);
+  const html = await readFile(join(dir, "report.html"), "utf8");
+  assert.match(html, /待复核/);
+  assert.match(html, /Unclear save feedback/);
+  assert.match(html, /Repeated click needed &lt;script&gt;/);
+});
