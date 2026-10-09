@@ -41,3 +41,10 @@
 - change: 接受 P1 所有实现块；已分别提交夹具、统一入口、两端场景、模型探索及三个产品修复。P2 开始处理完整命令、CI、文档和启动就绪稳定性。
 - disposition: 保留所有真实失败与修复证据，不把早期fixture格式/文案/启动时机错误计为产品缺陷。已有产品修复为失败日期手动重试、搜索失焦抢占阅读、日期按钮组件禁用状态。
 - next: 应用有界工作区就绪等待，补CI契约并运行最终默认验收。
+
+## 2026-10-10 — note: integrated acceptance complete
+
+- evidence: 默认 `npm run test:acceptance` 构建后在 run-a5964k 得到工作台12/12与Obsidian8/8、退出0；HTML已在真实浏览器打开，42个证据文件全部存在。启动就绪补充28/28、CI契约2/2、完整release-tools488/488通过。模型API的3/3和工作区4005通过/2可选跳过记录于 verification.md。
+- change: P2 三个块均接受；CI配置与说明已提交。goal 的七条成功标准均有观测证据，状态置 done。
+- disposition: 本轮完成的是已约定主流程的首版自动验收与模型探索；完整文献库索引、邮件和迁移等未新增UI路径在README覆盖表中列明，未伪称已测。远程CI未运行，分支未推送或合并。
+- next: 使用新worktree中的 `npm run test:acceptance`；需要真实模型探索时显式增加 `--explore`。新增用户任务按覆盖清单继续补充固定场景和独立判据。

@@ -2,8 +2,8 @@
 
 goal_ref: ../goal.md
 created: 2026-10-09T19:02:12Z
-updated: 2026-10-09T19:02:12Z
-revision: 1
+updated: 2026-10-09T19:43:07Z
+revision: 2
 
 ## Outcome
 
@@ -28,7 +28,7 @@ revision: 1
 - Red / baseline signal: plugin 已就绪但工作区仍为 Loading vault，立即检查错误地产生 blocked；新增延迟 leaf 的契约先失败。
 - Green check: 等待延迟的既有正向能力；一直缺失时仍 blocked，零 walk；原有 after-walk guard 继续生效。
 - regression checks: desktop app-state tests 与真实默认两端验收。
-- [ ] implementation and tests accepted
+- [x] implementation and tests accepted
 
 ### Chunk 2 — CI runs fixed browser acceptance and retains evidence
 
@@ -37,7 +37,7 @@ revision: 1
 - Red / baseline signal: 当前仓库没有自动运行真实浏览器验收并上传证据的工作流。
 - Green check: YAML 语义检查确认 PR/main/manual 入口、固定 suite、失败传播、始终保存 artifact 与固定 action SHA。
 - regression checks: release-tools suites；默认工作台验收实际通过。
-- [ ] implementation and tests accepted
+- [x] implementation and tests accepted
 
 ### Chunk 3 — verify the complete command and publish usage evidence
 
@@ -46,7 +46,7 @@ revision: 1
 - baseline signal: P1 已观察工作台 12/12、Obsidian 8/8、真实 API 3/3，以及 4005 工作区测试通过（2 个可选语料测试跳过）。
 - Green check: 不使用 skip-build 的默认两端命令通过；报告可打开并链接真实证据；README 命令与 --help 一致。
 - regression checks: 无新增生产改动时复用 P1 全量回归；新增测试基础设施和 CI 跑相应 Node suites、边界与 diff 检查。
-- [ ] implementation and tests accepted
+- [x] implementation and tests accepted
 
 ## Phase verification
 
