@@ -2,8 +2,8 @@
 
 goal_ref: ../goal.md
 created: 2026-10-09T21:39:29+08:00
-updated: 2026-10-09T21:39:29+08:00
-revision: 1
+updated: 2026-10-09T22:20:17+08:00
+revision: 2
 
 ## Outcome
 
@@ -58,6 +58,16 @@ revision: 1
 - Red / baseline signal: 本地伪模型服务验证观察/动作循环、非法动作、预算、模型错误、无证据完成声明均不能假绿。
 - Green check: Node contract tests plus actual browser exploration with controlled model; configured real API smoke when configuration is available.
 - regression checks: fixture/report contracts and browser scenario runner.
+- [ ] implementation and tests accepted
+
+### Chunk 5 — explicit retry after a permanent failure
+
+- change kind: bug fix exposed by a real user journey
+- strategy: reproduce at the workbench HTTP/CLI boundary, then Red-Green-Refactor
+- Red / baseline signal: a date marked failed_permanent is skipped after clicking the workbench retry action even when the model configuration has been corrected.
+- Green check: explicit user retry executes the failed date again and can commit a complete report; ordinary completed-date runs remain idempotent.
+- regression checks: workbench actions/server tests, real browser authentication-failure recovery, existing scheduler and CLI invocation contracts.
+- constraint: change the explicit manual retry path; preserve automatic scheduling's permanent-failure stop semantics.
 - [ ] implementation and tests accepted
 
 ## Phase verification
