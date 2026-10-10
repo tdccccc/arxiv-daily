@@ -1,5 +1,6 @@
-import { App, Modal, Notice, Setting } from "obsidian";
+import { App, Notice, Setting } from "obsidian";
 import type ArxivDailyPlugin from "../main";
+import { ArxivDailyModal } from "./plugin-modal";
 import { todayInTz, formatDate, isCancellationError } from "@arxiv-daily/core";
 import { validateFilterConfig, validateLlmConfig } from "@arxiv-daily/core";
 import { chooseModal } from "./services/modal";
@@ -653,7 +654,7 @@ function stateForMark(mark: PaperMark): {
   return { status: "inbox", priority: "normal" };
 }
 
-class ArxivIdModal extends Modal {
+class ArxivIdModal extends ArxivDailyModal {
   private value = "";
   constructor(
     app: App,
@@ -697,7 +698,7 @@ class ArxivIdModal extends Modal {
   }
 }
 
-class FullTextQueryModal extends Modal {
+class FullTextQueryModal extends ArxivDailyModal {
   private value = "";
   constructor(
     app: App,
@@ -742,7 +743,7 @@ class FullTextQueryModal extends Modal {
   }
 }
 
-export class FullTextSearchResultsModal extends Modal {
+export class FullTextSearchResultsModal extends ArxivDailyModal {
   constructor(
     app: App,
     private readonly matches: readonly LibraryFullTextMatch[],
@@ -765,7 +766,7 @@ export class FullTextSearchResultsModal extends Modal {
   }
 }
 
-class PaperIdModal extends Modal {
+class PaperIdModal extends ArxivDailyModal {
   private value = "";
   constructor(
     app: App,
@@ -812,7 +813,7 @@ class PaperIdModal extends Modal {
   }
 }
 
-class PaperMarkModal extends Modal {
+class PaperMarkModal extends ArxivDailyModal {
   private value = "";
   private mark: PaperMark = "watch";
   constructor(
@@ -865,7 +866,7 @@ class PaperMarkModal extends Modal {
   }
 }
 
-class StateModal extends Modal {
+class StateModal extends ArxivDailyModal {
   constructor(app: App, private plugin: ArxivDailyPlugin) {
     super(app);
   }
@@ -894,7 +895,7 @@ class StateModal extends Modal {
   }
 }
 
-class RunHistoryModal extends Modal {
+class RunHistoryModal extends ArxivDailyModal {
   constructor(app: App, private plugin: ArxivDailyPlugin) {
     super(app);
   }
@@ -946,7 +947,7 @@ class RunHistoryModal extends Modal {
   }
 }
 
-export class DiagnosticsModal extends Modal {
+export class DiagnosticsModal extends ArxivDailyModal {
   constructor(app: App, private plugin: ArxivDailyPlugin) {
     super(app);
   }
@@ -997,7 +998,7 @@ export class DiagnosticsModal extends Modal {
   }
 }
 
-class FullTextRuntimeDiagnosticsModal extends Modal {
+class FullTextRuntimeDiagnosticsModal extends ArxivDailyModal {
   constructor(app: App, private readonly report: string) {
     super(app);
   }

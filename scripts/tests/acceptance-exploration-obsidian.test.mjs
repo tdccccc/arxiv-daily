@@ -140,10 +140,13 @@ test("reading dashboard: paper row star is operable, Open arXiv is restricted, c
   assert.ok(!snapshot.controls.some(c => c.name === "Open quick switcher"), "ribbon chrome must stay invisible even when the dashboard is open");
 });
 
-test("an unmarked plugin modal (e.g. the date picker) is the only in-scope surface when it is the only open modal", () => {
+test("a plugin modal carrying only the shared arxiv-daily-modal marker (e.g. the date picker) is in scope", () => {
+  // Chunk 2: every plugin modal now carries the shared `.arxiv-daily-modal`
+  // marker on modalEl (plugin/src/plugin-modal.ts), so this no longer relies
+  // on being the only open modal.
   const modal = `
     <div class="modal-container">
-      <div class="modal">
+      <div class="modal arxiv-daily-modal">
         <h2>Run arXiv Daily for date</h2>
         <div class="setting-item"><div class="setting-item-info"><div class="setting-item-name">Date</div></div>
           <div class="setting-item-control"><input type="date" value="2026-10-01"></div></div>
@@ -153,7 +156,7 @@ test("an unmarked plugin modal (e.g. the date picker) is the only in-scope surfa
   `;
   const { observe } = buildWindow(modal);
   const snapshot = observe();
-  assert.equal(snapshot.layout.view, "unmarked-modal");
+  assert.equal(snapshot.layout.view, "modal");
   assert.ok(snapshot.controls.some(c => c.tag === "input" && c.type === "date"));
   assert.ok(snapshot.controls.some(c => c.name === "Run"));
 });
@@ -162,7 +165,7 @@ test("a marked plugin modal wins over a simultaneously open settings modal", () 
   const combined = `
     <div class="modal mod-settings"><div class="setting-item"><div class="setting-item-info"><div class="setting-item-name">Settings noise</div></div>
       <div class="setting-item-control"><button type="button">Settings button</button></div></div></div>
-    <div class="modal arxiv-daily-hub-modal"><div class="arxiv-daily-hub-modal__content">
+    <div class="modal arxiv-daily-modal arxiv-daily-hub-modal"><div class="arxiv-daily-hub-modal__content">
       <button type="button" aria-label="Close hub">x</button>
     </div></div>
   `;
@@ -173,7 +176,7 @@ test("a marked plugin modal wins over a simultaneously open settings modal", () 
   assert.ok(!snapshot.controls.some(c => c.name === "Settings button"));
 });
 
-test("known gap: a generic non-plugin modal with no marker is indistinguishable from an unmarked plugin modal", () => {
+test("known gap closed: an unmarked (non-plugin) modal is invisible, with no fallback to the only open modal", () => {
   const nonPluginModal = `
     <div class="modal-container"><div class="modal">
       <button type="button">Some other plugin's button</button>
@@ -181,10 +184,12 @@ test("known gap: a generic non-plugin modal with no marker is indistinguishable 
   `;
   const { observe } = buildWindow(nonPluginModal);
   const snapshot = observe();
-  // Documented limitation (see exploration-obsidian.mjs comments): in the single-plugin
-  // acceptance fixture this is acceptable, but it is not a general-purpose scoping guarantee.
-  assert.equal(snapshot.layout.view, "unmarked-modal");
-  assert.ok(snapshot.controls.some(c => c.name === "Some other plugin's button"));
+  // Chunk 1's "single open non-settings modal" fallback is removed in Chunk 2
+  // now that every plugin modal carries the shared marker: an unmarked modal
+  // is, by construction, not ours, and must not surface any controls.
+  assert.equal(snapshot.layout.view, "none");
+  assert.equal(snapshot.layout.rootMounted, false);
+  assert.deepEqual(snapshot.controls, []);
 });
 
 test("refs are unique per observation and tagged onto the DOM for re-finding", () => {

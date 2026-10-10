@@ -12,6 +12,7 @@ import {
   type SettingDefinitionItem,
 } from "obsidian";
 import type ArxivDailyPlugin from "../../main";
+import { markArxivDailyModal } from "../plugin-modal";
 import {
   buildSettingDefinitions,
   dailyAutoSendDesc,
@@ -3214,6 +3215,7 @@ export class ArxivDailySettingTab extends PluginSettingTab {
   public confirmReplace(message: string, confirmLabel = "Replace"): Promise<boolean> {
     return new Promise((resolve) => {
       const modal = new Modal(this.app);
+      markArxivDailyModal(modal);
       modal.titleEl.setText("Confirm");
       modal.contentEl.createEl("p", { text: message });
       const btns = modal.contentEl.createDiv({

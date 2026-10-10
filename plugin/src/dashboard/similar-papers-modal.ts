@@ -1,4 +1,5 @@
-import { Modal, setIcon, type App } from "obsidian";
+import { setIcon, type App } from "obsidian";
+import { ArxivDailyModal } from "../plugin-modal";
 import type {
   PaperIndexEntry,
   PaperSearchResult,
@@ -36,7 +37,7 @@ export interface SimilarPapersModalOptions extends SimilarPapersModalCallbacks {
   };
 }
 
-export class SimilarPapersModal extends Modal {
+export class SimilarPapersModal extends ArxivDailyModal {
   constructor(app: App, private readonly options: SimilarPapersModalOptions) {
     super(app);
   }

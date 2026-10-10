@@ -1,4 +1,5 @@
-import { App, Modal, Setting, type ButtonComponent } from "obsidian";
+import { App, Setting, type ButtonComponent } from "obsidian";
+import { ArxivDailyModal } from "./plugin-modal";
 
 export type DatePickerNotice = (message: string, timeoutMs?: number) => void;
 
@@ -42,7 +43,7 @@ export function openDatePickerModal(
   new DatePickerModal(app, onSubmit, opts, notice).open();
 }
 
-class DatePickerModal extends Modal {
+class DatePickerModal extends ArxivDailyModal {
   private value = "";
 
   constructor(

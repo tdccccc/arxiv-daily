@@ -19,23 +19,19 @@
  *   "arxiv-daily")` in obsidian-ui.mjs:97). The legacy `<1.13` fallback
  *   (`display()`) additionally adds a `.arxiv-daily-settings` class
  *   (tab.ts:1394), kept as a secondary signal.
- * - Marked plugin modals (modalEl/contentEl class set by our own code):
- *   HubModal `.arxiv-daily-hub-modal` (hub-modal.ts:29), SimilarPapersModal
- *   `.arxiv-daily-similar-modal` (similar-papers-modal.ts:58),
- *   PersonalLibraryInterestProfileModal `.arxiv-daily-interest-review-modal`
- *   (interest-profile-modal.ts:145), library authorization modal
- *   `.arxiv-daily-library-authorization-modal` (library/modal.ts:14,41).
- * - UNMARKED plugin modals (confirmed by reading — no addClass call at all
- *   on modalEl/contentEl): DatePickerModal (date-picker-modal.ts:45-107),
- *   ArxivIdModal/FullTextQueryModal/FullTextSearchResultsModal/PaperIdModal/
- *   PaperMarkModal/StateModal/RunHistoryModal/DiagnosticsModal/
- *   FullTextRuntimeDiagnosticsModal (commands.ts:656-1034). These are
- *   reported here rather than guessed at with a bespoke marker (per the
- *   chunk-1 contract); the chosen fallback — documented as a known gap, not
- *   a general-purpose guarantee — is: treat any single open generic
- *   Obsidian `.modal` that isn't the Settings modal as in-scope, since the
- *   acceptance fixture vault has only this one plugin installed. See the
- *   "known gap" test in acceptance-exploration-obsidian.test.mjs.
+ * - Marked plugin modals (Chunk 2, plugin/src/plugin-modal.ts): every modal
+ *   this plugin opens — `Modal` subclass or a one-off `new Modal(app)` — now
+ *   carries a shared `.arxiv-daily-modal` class on `modalEl`, added by
+ *   `ArxivDailyModal`/`markArxivDailyModal()`. Existing per-modal classes
+ *   (HubModal `.arxiv-daily-hub-modal`, SimilarPapersModal
+ *   `.arxiv-daily-similar-modal` on contentEl, PersonalLibraryInterestProfileModal
+ *   `.arxiv-daily-interest-review-modal`, the library authorization modal's
+ *   `.arxiv-daily-library-authorization-modal`) are kept but no longer needed
+ *   for scoping — the single shared marker is sufficient and is the only
+ *   thing this file looks for. Chunk 1's "single open non-settings modal"
+ *   fallback is removed: an unmarked modal is, by construction, not ours, and
+ *   is now invisible rather than guessed at. See the "known gap closed" test
+ *   in acceptance-exploration-obsidian.test.mjs.
  * - Obsidian's `Menu` (dashboard "More" toolbar menu, view.ts:1874
  *   `showMoreMenu`) renders into a body-level `.menu` element outside any
  *   plugin-scoped root with no plugin-identifying class (confirmed by
@@ -82,19 +78,9 @@ export function obsidianObservation(id, testMode) {
     return sized && style.display !== "none" && style.visibility !== "hidden" && style.opacity !== "0" && !node.closest("[hidden],[inert]");
   };
 
-  const pluginModalMarkers = [".arxiv-daily-hub-modal", ".arxiv-daily-similar-modal", ".arxiv-daily-interest-review-modal", ".arxiv-daily-library-authorization-modal"];
   let surface, view = "none", modalOpen = false;
-  for (const marker of pluginModalMarkers) {
-    const found = document.querySelector(marker);
-    if (found) { surface = found.closest(".modal") || found; view = "modal"; modalOpen = true; break; }
-  }
-  if (!surface) {
-    // Documented gap (see file header): the only distinguishing signal left
-    // for an unmarked plugin modal is "it's the one modal open," which only
-    // holds in a single-plugin fixture vault.
-    const generic = document.querySelector(".modal-container .modal:not(.mod-settings)");
-    if (generic) { surface = generic; view = "unmarked-modal"; modalOpen = true; }
-  }
+  const markedModal = document.querySelector(".arxiv-daily-modal");
+  if (markedModal) { surface = markedModal.closest(".modal") || markedModal; view = "modal"; modalOpen = true; }
   if (!surface) {
     const activeTab = typeof app !== "undefined" ? app?.setting?.activeTab : undefined;
     const settingsOpen = (typeof app !== "undefined" && app?.setting?.isOpen && activeTab?.id === "arxiv-daily") || Boolean(document.querySelector(".arxiv-daily-settings"));

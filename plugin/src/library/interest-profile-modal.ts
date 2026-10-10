@@ -1,4 +1,5 @@
-import { App, Modal } from "obsidian";
+import { App } from "obsidian";
+import { ArxivDailyModal } from "../plugin-modal";
 import {
   PERSONAL_LIBRARY_MAX_DESCRIPTION_LENGTH,
   PERSONAL_LIBRARY_MAX_DISCOVERY_CUES,
@@ -106,7 +107,7 @@ interface TopicDestination {
   error: string | null;
 }
 
-export class PersonalLibraryInterestProfileModal extends Modal {
+export class PersonalLibraryInterestProfileModal extends ArxivDailyModal {
   private tab: ReviewTab = "proposed";
   private pending = false;
   private closed = false;

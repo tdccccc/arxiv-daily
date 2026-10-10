@@ -1,5 +1,21 @@
 /* Test-only stub for the `obsidian` package. Mirrors the runtime surface we use. */
 
+// Real Obsidian extends HTMLElement.prototype with addClass/removeClass/etc.
+// Individual test files used to each patch addClass themselves, only where a
+// given modal happened to call it. `Modal` now always marks `modalEl` with
+// the shared arxiv-daily-modal class (plugin/src/plugin-modal.ts), so every
+// test that constructs any modal needs it; patch it once here instead of
+// relying on each call site to remember. Per-file `proto.addClass ??= ...`
+// patches remain harmless no-ops.
+if (typeof HTMLElement !== "undefined") {
+  const proto = HTMLElement.prototype as HTMLElement & {
+    addClass?: (...classes: string[]) => void;
+  };
+  proto.addClass ??= function (this: HTMLElement, ...classes: string[]) {
+    this.classList.add(...classes);
+  };
+}
+
 export class Notice {
   static calls: Array<{ message: string; timeoutMs?: number }> = [];
 
