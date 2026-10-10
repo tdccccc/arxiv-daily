@@ -13,9 +13,13 @@ const HELP = `Usage: npm run test:acceptance -- [options]
   --explore                      Also run the model API exploration
   --suite exploration            Run only model API exploration
   --model-config PATH            Read only [llm] from this CLI TOML file
-  --max-steps N                  Model decisions, 1-300 (default: 50)
+  --task ID[,ID...]              Run only these exploration goal tasks (repeatable)
+  --persona ID[,ID...]           Run only these exploration persona tasks (repeatable)
+  --max-steps N                  Model decisions, 1-300 (default: 90)
   --max-api-calls N              Model HTTP requests including retries
-  --max-duration-ms N            Exploration time budget (default: 600000)
+  --max-duration-ms N            Exploration time budget (default: 900000)
+  --task-max-steps N             Default per-task decision budget (default: 20 task, 15 persona)
+  --task-max-api-calls N         Default per-task API-call budget (default: 2x its step budget)
   --browser PATH                 Browser executable override
   --headed                       Show the workbench browser
   --skip-build                   Use an existing build (for local debugging)
@@ -29,7 +33,7 @@ Exit status: 0 passed; 1 failed; 2 blocked or incomplete.
 `;
 
 export function parseArgs(argv) {
-  const options = { suites: ["workbench", "obsidian"], build: true, headless: true, maxSteps: 50, maxDurationMs: 600000 };
+  const options = { suites: ["workbench", "obsidian"], build: true, headless: true, maxSteps: 90, maxDurationMs: 900000 };
   let explicit = false, explore = false;
   for (let i = 0; i < argv.length; i++) {
     const [flag, ...rest] = argv[i].split("=");
@@ -58,9 +62,23 @@ export function parseArgs(argv) {
       case "--output": options.output = resolve(take()); break;
       case "--browser": options.executablePath = resolve(take()); break;
       case "--model-config": options.configPath = resolve(take()); break;
+      case "--task": {
+        const ids = take().split(",").map(value => value.trim()).filter(Boolean);
+        if (!ids.length) throw new TypeError("--task needs at least one id");
+        options.taskIds = [...(options.taskIds ?? []), ...ids];
+        break;
+      }
+      case "--persona": {
+        const ids = take().split(",").map(value => value.trim()).filter(Boolean);
+        if (!ids.length) throw new TypeError("--persona needs at least one id");
+        options.personaIds = [...(options.personaIds ?? []), ...ids];
+        break;
+      }
       case "--max-steps": options.maxSteps = number(1, 300); break;
       case "--max-api-calls": options.maxApiCalls = number(1, 1000); break;
       case "--max-duration-ms": options.maxDurationMs = number(1, 3600000); break;
+      case "--task-max-steps": options.taskMaxSteps = number(1, 300); break;
+      case "--task-max-api-calls": options.taskMaxApiCalls = number(1, 1000); break;
       default: throw new TypeError(`Unknown acceptance option: ${flag}`);
     }
     if (rest.length && ["--explore", "--skip-build", "--headed", "--list", "--help", "-h"].includes(flag)) throw new TypeError(`${flag} does not take a value`);
@@ -165,7 +183,7 @@ export async function runAcceptance(options, dependencies = {}) {
       result = await runners[suite]({
         fixture, artifactDir: directory, signal: options.signal,
         executablePath: options.executablePath, headless: options.headless,
-        ...(suite === "exploration" ? { configPath: options.configPath, maxSteps: options.maxSteps, maxDurationMs: options.maxDurationMs, maxApiCalls: options.maxApiCalls } : {}),
+        ...(suite === "exploration" ? { configPath: options.configPath, maxSteps: options.maxSteps, maxDurationMs: options.maxDurationMs, maxApiCalls: options.maxApiCalls, taskIds: options.taskIds, personaIds: options.personaIds, taskMaxSteps: options.taskMaxSteps, taskMaxApiCalls: options.taskMaxApiCalls } : {}),
       });
       if (!result || result.suite !== suite) throw new Error(`Runner returned no matching evidence for ${suite}`);
     } catch (error) {
@@ -211,7 +229,8 @@ if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1]
     const options = parseArgs(process.argv.slice(2));
     if (options.help) process.stdout.write(HELP);
     else if (options.list) {
-      process.stdout.write("workbench    Real browser: settings, daily run, recovery, reading and persistence\nobsidian     Real Obsidian: settings, run/cancel/retry, reading and PDF navigation\nexploration  Opt-in model API: bounded UI tasks with independent evidence checks\n");
+      const { EXPLORATION_TASK_IDS } = await import("./exploration-browser.mjs");
+      process.stdout.write(`workbench    Real browser: settings, daily run, recovery, reading and persistence\nobsidian     Real Obsidian: settings, run/cancel/retry, reading and PDF navigation\nexploration  Opt-in model API: bounded UI tasks with independent evidence checks\n  tasks (--task):       ${EXPLORATION_TASK_IDS.join(", ")}\n  personas (--persona): (none yet)\n`);
     } else {
       const report = await runAcceptance({ ...options, signal: controller.signal }, { onProgress: message => process.stdout.write(`${message}\n`) });
       process.stdout.write(`Acceptance ${report.status}: ${JSON.stringify(report.counts)}; needs review: ${report.reviewCount}\nReport: ${join(report.artifactDir, "report.html")}\n`);

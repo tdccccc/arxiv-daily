@@ -47,6 +47,10 @@ npm run test:acceptance -- --suite exploration --max-steps 40 --max-api-calls 50
 
 # 使用另一份模型配置；该文件可以只有 [llm]
 npm run test:acceptance -- --suite exploration --model-config /path/to/model.toml
+
+# 只运行指定的目标任务或角色（可重复传参，也可用逗号分隔）
+npm run test:acceptance -- --suite exploration --task settings-persistence,generate-and-read
+npm run test:acceptance -- --suite exploration --persona new-user
 ```
 
 模型配置使用工作台已有字段：`base_url`、`api_key`、`model`，以及可选的 `provider`、`thinking_mode`、`reasoning_effort`。支持现有 `LlmClient` 的供应商协议。密钥不需要写进命令行。
@@ -59,7 +63,7 @@ npm run test:acceptance -- --suite exploration --model-config /path/to/model.tom
 
 通过条件由程序检查页面和文件确认。模型说“完成”本身不算通过；模型提出的疑点显示为“待复核”，不自动当作已证实的产品故障。
 
-默认最多 50 次模型决策、100 次模型 HTTP 请求（含客户端重试）、10 分钟。可使用 `--max-steps`、`--max-api-calls`、`--max-duration-ms` 调整。实际调用数及 token 用量写入探索报告。普通固定验收不读取真实模型密钥，也不产生探索模型调用。
+整次运行默认最多 90 次模型决策、180 次模型 HTTP 请求（含客户端重试）、15 分钟；可用 `--max-steps`、`--max-api-calls`、`--max-duration-ms` 调整。每个任务自己还有一份默认预算（目标任务 20 步、自由探索角色 15 步，API 调用上限为步数预算的两倍），超出只阻塞该任务、不影响其余任务；可用任务对象的 `maxSteps`/`maxApiCalls`，或全局 `--task-max-steps`、`--task-max-api-calls` 调整。整次运行的预算耗尽（含模型适配器自身的调用上限）会结束整次运行，未执行的任务记为 `not-run`。实际调用数、输入输出 token 及耗时按任务记录并汇总写入探索报告。普通固定验收不读取真实模型密钥，也不产生探索模型调用。
 
 模型只能使用当前观察中的控件引用进行点击、输入、选择、返回、刷新、滚动及短暂等待。路径、密钥、外部连接、邮件、调度等设置由测试环境控制。探索会保留每一步观察、动作、错误及截图；预算耗尽或无法继续会明确标为未验证。
 

@@ -7,6 +7,9 @@ import { createExplorationRedactor, ExplorationActionError, parseExplorationActi
 const here = path.dirname(fileURLToPath(import.meta.url));
 const cliRequire = createRequire(path.resolve(here, "../../apps/cli/package.json"));
 
+/** Single source of truth for the default workbench goal-task ids, usable without a fixture (e.g. --list). */
+export const EXPLORATION_TASK_IDS = ["settings-persistence", "sidebar-persistence", "generate-and-read"];
+
 /** Browser capability restrictions apply to observed AND live controls. */
 export function classifyControlRestriction(control, allowedUrl) {
   const field = control.field || "";
@@ -218,7 +221,7 @@ export async function createDefaultExplorationTasks(fixture) {
   let collapsedAfterReload = false, collapseReloadStep = 0;
   return [
     {
-      id: "settings-persistence", title: "设置自动保存并刷新复查",
+      id: EXPLORATION_TASK_IDS[0], title: "设置自动保存并刷新复查",
       goal: `打开设置，把每日论文数量上限 maxDailyPapers 改为 ${target}。移开焦点并等待保存完成，关闭设置，刷新页面，再打开设置，确认上限仍为 ${target}。不要修改路径、模型连接或密钥。`,
       async verify({ driver, observation, actions }) {
         const changed = actions.find(action => action.type === "fill" && (action.control?.field || action.control?.name) === "maxDailyPapers" && action.value === String(target));
@@ -233,7 +236,7 @@ export async function createDefaultExplorationTasks(fixture) {
       },
     },
     {
-      id: "sidebar-persistence", title: "侧栏折叠和展开状态持久化",
+      id: EXPLORATION_TASK_IDS[1], title: "侧栏折叠和展开状态持久化",
       goal: "关闭设置（如果仍打开）。收起侧栏，刷新页面确认侧栏仍收起；再展开侧栏，再次刷新，确认侧栏仍展开。等待偏好保存后再刷新。",
       async verify({ driver, observation, actions }) {
         const state = await driver.inspect();
@@ -248,7 +251,7 @@ export async function createDefaultExplorationTasks(fixture) {
       },
     },
     {
-      id: "generate-and-read", title: "生成固定日期日报并打开论文",
+      id: EXPLORATION_TASK_IDS[2], title: "生成固定日期日报并打开论文",
       goal: "通过生成按钮生成 2026-10-01 日报（选择指定日期，不要生成今天）。等待成功，再从列表打开 arXiv 2610.10001 论文，确认阅读内容出现。无需判断论文内容质量。",
       async verify({ driver, observation, actions, startedAt }) {
         const state = await driver.dailyEvidence("2026-10-01");

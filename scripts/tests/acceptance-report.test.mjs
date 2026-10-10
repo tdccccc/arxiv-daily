@@ -98,6 +98,23 @@ test("a failed scenario inside an exploration suite with personas still fails th
   assert.equal(report.exitCode, 1);
 });
 
+test("per-task and run-wide model usage render compactly without breaking redaction", async t => {
+  const dir = await mkdtemp(join(tmpdir(), "arxiv-acceptance-usage-"));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  const report = buildReport({ selectedSuites: ["exploration"], suites: [{ suite: "exploration", status: "passed",
+    scenarios: [{ id: "settings", title: "Settings", status: "passed", assertions: [{ label: "Saved", passed: true }],
+      usage: { modelCalls: 3, apiCalls: 3, inputTokens: 1200, outputTokens: 80, totalTokens: 1280, durationMs: 2100 } }],
+    metrics: { modelCalls: 3, actions: 1, elapsedMs: 2100, usage: { modelCalls: 3, apiCalls: 3, inputTokens: 1200, outputTokens: 80, totalTokens: 1280, durationMs: 2100 } },
+    model: { apiKey: "do-not-publish" } }] });
+  await writeReport(dir, report);
+  const json = await readFile(join(dir, "report.json"), "utf8");
+  const html = await readFile(join(dir, "report.html"), "utf8");
+  assert.match(html, /3 次决策/);
+  assert.match(html, /1200\/80 tokens/);
+  assert.match(JSON.parse(json).suites[0].metrics.usage.apiCalls.toString(), /3/);
+  assert.doesNotMatch(json + html, /do-not-publish/);
+});
+
 test("model findings remain visible for review even when the trusted task checks pass", async t => {
   const dir = await mkdtemp(join(tmpdir(), "arxiv-acceptance-findings-"));
   t.after(() => rm(dir, { recursive: true, force: true }));

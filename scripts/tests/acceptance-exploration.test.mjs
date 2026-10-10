@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { classifyControlRestriction, createDefaultExplorationTasks, createExplorationDriver } from "../acceptance/exploration-browser.mjs";
-import { loadExplorationModel, parseExplorationAction, runExplorationLoop } from "../acceptance/exploration.mjs";
+import { loadExplorationModel, parseExplorationAction, runExplorationLoop, selectExplorationTasks } from "../acceptance/exploration.mjs";
 
 const observation = (version = 1) => ({
   id: `snapshot-${version}`, text: "Settings", url: "/", controls: [
@@ -33,6 +33,21 @@ function task(verify = () => ({ passed: false, checks: [{ label: "saved after re
 
 function persona(overrides = {}) {
   return { id: "new-user", title: "第一次使用的新用户", kind: "persona", goal: "扮演第一次使用的新用户，自由探索当前页面并记录可疑交互", ...overrides };
+}
+
+/** A model shaped like the real HTTP adapter: `.next()` plus cumulative `.metrics()` usage. */
+function usageModel(reply, { apiCallsPerStep = 1, inputTokensPerStep = 0, outputTokensPerStep = 0 } = {}) {
+  const usage = { apiCalls: 0, inputTokens: 0, outputTokens: 0, totalTokens: 0 };
+  return {
+    async next(request) {
+      usage.apiCalls += apiCallsPerStep;
+      usage.inputTokens += inputTokensPerStep;
+      usage.outputTokens += outputTokensPerStep;
+      usage.totalTokens += inputTokensPerStep + outputTokensPerStep;
+      return typeof reply === "function" ? reply(request) : reply;
+    },
+    metrics: () => ({ ...usage }),
+  };
 }
 
 async function temporary(t) {
@@ -102,13 +117,26 @@ test("a throwing reset blocks only that task; the loop tries reset again for the
   assert.equal(attempt, 2);
 });
 
-test("run-wide step budget exhaustion ends the run and leaves later tasks not-run", async t => {
+// Rewritten for chunk 3: a task's own step budget is always clamped to the run's own, so when the
+// run budget is this tiny every task's own cap equals it too. The first task now exhausts its own
+// (non-fatal) cap at exactly the run limit; the run-wide cap itself only becomes the active, fatal
+// blocker once a next task is attempted with no run budget left, which still leaves later tasks not-run.
+test("run-wide step budget exhaustion is fatal and leaves a task after it not-run, even once a per-task cap absorbs the first task", async t => {
   const driver = fixtureDriver();
   const result = await runExplorationLoop({ driver, model: async () => '{"type":"wait","milliseconds":1}',
     tasks: [task(), { ...task(), id: "reading" }, { ...task(), id: "third" }], artifactDir: await temporary(t), maxSteps: 2 });
   assert.equal(result.scenarios[0].status, "blocked");
-  assert.match(result.scenarios[0].error, /step|步数/i);
-  assert.deepEqual(result.scenarios.slice(1).map(value => value.status), ["not-run", "not-run"]);
+  assert.match(result.scenarios[0].error, /task budget exhausted/i);
+  assert.equal(result.scenarios[1].status, "blocked");
+  assert.match(result.scenarios[1].error, /step|步数/i);
+  assert.equal(result.scenarios[2].status, "not-run");
+});
+
+test("a task's own step budget never exceeds the run-wide one even when it asks for more", async t => {
+  const result = await runExplorationLoop({ driver: fixtureDriver(), model: async () => '{"type":"wait","milliseconds":1}',
+    tasks: [{ ...task(), maxSteps: 50 }], artifactDir: await temporary(t), maxSteps: 3 });
+  assert.equal(result.scenarios[0].status, "blocked");
+  assert.equal(result.scenarios[0].usage.modelCalls, 3);
 });
 
 test("parent cancellation ends the run and leaves later tasks not-run", async t => {
@@ -257,6 +285,122 @@ test("a suite made only of personas that all explore is still overall passed", a
     tasks: [persona(), { ...persona(), id: "impatient" }], artifactDir: await temporary(t) });
   assert.equal(result.status, "passed");
   assert.deepEqual(result.scenarios.map(s => s.status), ["explored", "explored"]);
+});
+
+test("selectExplorationTasks picks only the chosen ids, in library order, not the selection order", () => {
+  const goalTasks = [{ id: "a" }, { id: "b" }, { id: "c" }];
+  const personaTasks = [{ id: "x" }, { id: "y" }];
+  const selected = selectExplorationTasks({ goalTasks, personaTasks, taskIds: ["c", "a"], personaIds: ["y"] });
+  assert.deepEqual(selected.map(value => value.id), ["a", "c", "y"]);
+});
+
+test("selectExplorationTasks defaults to every goal task and no personas when nothing is selected", () => {
+  const goalTasks = [{ id: "a" }, { id: "b" }], personaTasks = [{ id: "x" }];
+  assert.deepEqual(selectExplorationTasks({ goalTasks, personaTasks }).map(value => value.id), ["a", "b"]);
+});
+
+test("selectExplorationTasks rejects an unknown id and lists the ids that do exist", () => {
+  const goalTasks = [{ id: "a" }, { id: "b" }];
+  assert.throws(() => selectExplorationTasks({ goalTasks, taskIds: ["zzz"] }), /zzz/);
+  assert.throws(() => selectExplorationTasks({ goalTasks, taskIds: ["zzz"] }), /a, b/);
+  const personaTasks = [{ id: "x" }];
+  assert.throws(() => selectExplorationTasks({ goalTasks, personaTasks, personaIds: ["nope"] }), /nope.*\bx\b/s);
+});
+
+test("selectExplorationTasks selects goal tasks and personas independently", () => {
+  const goalTasks = [{ id: "a" }, { id: "b" }], personaTasks = [{ id: "x" }, { id: "y" }];
+  assert.deepEqual(selectExplorationTasks({ goalTasks, personaTasks, taskIds: ["b"] }).map(value => value.id), ["b"]);
+  assert.deepEqual(selectExplorationTasks({ goalTasks, personaTasks, taskIds: [], personaIds: ["y"] }).map(value => value.id), ["y"]);
+});
+
+test("a goal task that exhausts its own step budget is blocked, not fatal; the next task still runs", async t => {
+  const driver = fixtureDriver();
+  const result = await runExplorationLoop({ driver, model: async () => '{"type":"wait","milliseconds":1}',
+    tasks: [{ ...task(), maxSteps: 3 }, { ...task(({ actions }) => ({ passed: actions.length === 1, checks: [{ label: "ok", passed: actions.length === 1 }] })), id: "reading" }],
+    artifactDir: await temporary(t), maxSteps: 50 });
+  assert.equal(result.scenarios[0].status, "blocked");
+  assert.match(result.scenarios[0].error, /task budget exhausted/i);
+  assert.equal(result.scenarios[0].usage.modelCalls, 3);
+  // The second task gets its own fresh model behaviour (clicks) and can still pass.
+  const second = await runExplorationLoop({ driver: fixtureDriver(), model: async request => JSON.stringify({ type: "click", ref: request.observation.controls[0].ref }),
+    tasks: [task(({ actions }) => ({ passed: actions.length === 1, checks: [{ label: "ok", passed: actions.length === 1 }] }))], artifactDir: await temporary(t), maxSteps: 5 });
+  assert.equal(second.scenarios[0].status, "passed");
+});
+
+test("goal tasks default to a 20-step budget and persona tasks to 15", async t => {
+  const driver = fixtureDriver();
+  const goal = await runExplorationLoop({ driver, model: async () => '{"type":"wait","milliseconds":1}', tasks: [task()], artifactDir: await temporary(t), maxSteps: 100 });
+  assert.equal(goal.scenarios[0].status, "blocked");
+  assert.equal(goal.scenarios[0].usage.modelCalls, 20);
+  const explored = await runExplorationLoop({ driver: fixtureDriver(), model: async () => '{"type":"wait","milliseconds":1}', tasks: [persona()], artifactDir: await temporary(t), maxSteps: 100 });
+  assert.equal(explored.scenarios[0].status, "explored");
+  assert.equal(explored.scenarios[0].usage.modelCalls, 15);
+});
+
+test("--task-max-steps overrides the default per-task step budget for tasks without their own maxSteps", async t => {
+  const result = await runExplorationLoop({ driver: fixtureDriver(), model: async () => '{"type":"wait","milliseconds":1}',
+    tasks: [task()], artifactDir: await temporary(t), maxSteps: 50, taskMaxSteps: 4 });
+  assert.equal(result.scenarios[0].status, "blocked");
+  assert.equal(result.scenarios[0].usage.modelCalls, 4);
+});
+
+test("a goal task that exhausts its own model API-call budget is blocked, not fatal; a later task still passes", async t => {
+  const driver = fixtureDriver();
+  const model = usageModel(request => request.task.id === "settings" ? '{"type":"wait","milliseconds":1}' : JSON.stringify({ type: "click", ref: request.observation.controls[0].ref }), { apiCallsPerStep: 5 });
+  const result = await runExplorationLoop({
+    driver, model,
+    tasks: [{ ...task(), maxApiCalls: 12, maxSteps: 50 },
+      { ...task(({ actions }) => ({ passed: actions.length === 1, checks: [{ label: "ok", passed: actions.length === 1 }] })), id: "reading" }],
+    artifactDir: await temporary(t), maxSteps: 50,
+  });
+  assert.equal(result.scenarios[0].status, "blocked");
+  assert.match(result.scenarios[0].error, /task budget exhausted.*api/i);
+  assert.ok(result.scenarios[0].usage.apiCalls >= 12);
+  assert.equal(result.scenarios[1].status, "passed");
+});
+
+test("run-wide model API-call budget exhaustion (the adapter's own cap) is fatal; later tasks are not-run", async t => {
+  const driver = fixtureDriver();
+  let calls = 0;
+  const model = {
+    async next() {
+      calls += 1;
+      if (calls > 2) { const error = new Error("Exploration model API call budget exhausted (2)"); error.name = "ExplorationBudgetError"; throw error; }
+      return '{"type":"wait","milliseconds":1}';
+    },
+    metrics: () => ({ apiCalls: calls, inputTokens: 0, outputTokens: 0, totalTokens: 0 }),
+  };
+  const result = await runExplorationLoop({ driver, model, tasks: [task(), { ...task(), id: "reading" }, { ...task(), id: "third" }], artifactDir: await temporary(t), maxSteps: 50 });
+  assert.equal(result.scenarios[0].status, "blocked");
+  assert.match(result.scenarios[0].error, /budget exhausted/i);
+  assert.deepEqual(result.scenarios.slice(1).map(value => value.status), ["not-run", "not-run"]);
+});
+
+test("per-scenario usage is recorded and the run totals equal the sum", async t => {
+  const driver = fixtureDriver();
+  const model = usageModel(request => request.task.id === "settings" ? JSON.stringify({ type: "click", ref: request.observation.controls[0].ref }) : '{"type":"done"}',
+    { apiCallsPerStep: 1, inputTokensPerStep: 100, outputTokensPerStep: 10 });
+  const result = await runExplorationLoop({
+    driver, model,
+    tasks: [task(({ actions }) => ({ passed: actions.length === 1, checks: [{ label: "ok", passed: actions.length === 1 }] })), persona()],
+    artifactDir: await temporary(t), maxSteps: 10,
+  });
+  assert.equal(result.scenarios[0].status, "passed");
+  assert.equal(result.scenarios[1].status, "explored");
+  assert.equal(result.scenarios[0].usage.modelCalls, 1);
+  assert.equal(result.scenarios[1].usage.modelCalls, 1);
+  const totals = result.metrics.usage;
+  assert.equal(totals.apiCalls, result.scenarios[0].usage.apiCalls + result.scenarios[1].usage.apiCalls);
+  assert.equal(totals.inputTokens, result.scenarios[0].usage.inputTokens + result.scenarios[1].usage.inputTokens);
+  assert.equal(totals.apiCalls, 2);
+  assert.equal(totals.inputTokens, 200);
+});
+
+test("a task's own remaining step budget is sent to the model alongside the run's", async t => {
+  const requests = [];
+  await runExplorationLoop({ driver: fixtureDriver(), model: async request => { requests.push(request); return '{"type":"wait","milliseconds":1}'; },
+    tasks: [{ ...task(), maxSteps: 3 }], artifactDir: await temporary(t), maxSteps: 50 });
+  assert.deepEqual(requests.map(request => request.remaining.taskSteps), [3, 2, 1]);
 });
 
 test("action validation only accepts current refs and bounded browser operations", () => {

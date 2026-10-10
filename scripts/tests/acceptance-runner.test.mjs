@@ -41,6 +41,16 @@ test("command explicitly selects suites and bounds optional model exploration", 
   assert.throws(() => parseArgs(["--what"]), /Unknown/);
 });
 
+test("--task and --persona accumulate across repeated and comma-separated flags; per-task budget flags parse", () => {
+  const options = parseArgs(["--suite", "exploration", "--task", "a,b", "--task", "c", "--persona", "x", "--task-max-steps", "5", "--task-max-api-calls", "8"]);
+  assert.deepEqual(options.taskIds, ["a", "b", "c"]);
+  assert.deepEqual(options.personaIds, ["x"]);
+  assert.equal(options.taskMaxSteps, 5);
+  assert.equal(options.taskMaxApiCalls, 8);
+  assert.throws(() => parseArgs(["--task", ""]), /--task/);
+  assert.equal(parseArgs([]).taskIds, undefined);
+});
+
 test("each suite receives its own fixture and cleanup runs despite a failed suite", async t => {
   const f = await dependencies(t);
   f.deps.runners.workbench = async () => { f.events.push("fail:workbench"); throw new Error("Product assertion failed"); };
@@ -63,6 +73,20 @@ test("model config stays separate from the product fixture and model only runs w
   const report = await runAcceptance({ ...options, output: f.output }, f.deps);
   assert.equal(report.status, "passed");
   assert.deepEqual(report.selectedSuites, ["workbench", "exploration"]);
+});
+
+test("task/persona selection and per-task budget options reach the exploration runner", async t => {
+  const f = await dependencies(t);
+  f.deps.runners.exploration = async options => {
+    assert.deepEqual(options.taskIds, ["generate-and-read"]);
+    assert.deepEqual(options.personaIds, ["new-user"]);
+    assert.equal(options.taskMaxSteps, 10);
+    assert.equal(options.taskMaxApiCalls, 20);
+    return passed("exploration");
+  };
+  const options = parseArgs(["--suite", "workbench", "--explore", "--task", "generate-and-read", "--persona", "new-user", "--task-max-steps", "10", "--task-max-api-calls", "20"]);
+  const report = await runAcceptance({ ...options, output: f.output }, f.deps);
+  assert.equal(report.status, "passed");
 });
 
 test("build failure prevents product runs and writes a failure report", async t => {

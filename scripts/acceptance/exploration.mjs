@@ -95,6 +95,44 @@ function limit(value, fallback, maximum, label) {
   return result;
 }
 
+/** An optional global default override (e.g. --task-max-steps); undefined means "use the kind's built-in default". */
+function optionalPositiveInt(value, label, maximum) {
+  if (value === undefined) return undefined;
+  if (!Number.isInteger(value) || value < 1 || value > maximum) throw new Error(`${label} must be an integer between 1 and ${maximum}`);
+  return value;
+}
+
+/** Cumulative model usage as of now; a model that is a plain function (tests) reports no usage. */
+function usageSnapshot(model) {
+  const metrics = typeof model?.metrics === "function" ? model.metrics() : undefined;
+  return { apiCalls: metrics?.apiCalls ?? 0, inputTokens: metrics?.inputTokens ?? 0, outputTokens: metrics?.outputTokens ?? 0, totalTokens: metrics?.totalTokens ?? 0 };
+}
+
+function usageDelta(start, end) {
+  return { apiCalls: end.apiCalls - start.apiCalls, inputTokens: end.inputTokens - start.inputTokens, outputTokens: end.outputTokens - start.outputTokens, totalTokens: end.totalTokens - start.totalTokens };
+}
+
+/**
+ * Picks a subset of a task library by id, preserving the library's own order (not the selection order).
+ * Omitting a selection (undefined) keeps the kind's default — every goal task, but no personas (none are
+ * wired into a default run yet). An explicit empty array selects none of that kind. Unknown ids fail before
+ * any browser or model is launched, listing the ids that do exist.
+ */
+export function selectExplorationTasks({ goalTasks = [], personaTasks = [], taskIds, personaIds } = {}) {
+  const pick = (library, ids, label, defaultAll) => {
+    if (ids === undefined) return defaultAll ? library : [];
+    const known = new Map(library.map(item => [item.id, item]));
+    const missing = ids.filter(id => !known.has(id));
+    if (missing.length) {
+      const available = library.map(item => item.id).join(", ") || "(none)";
+      throw new Error(`Unknown ${label} id(s): ${missing.join(", ")}. Available ${label} ids: ${available}`);
+    }
+    const wanted = new Set(ids);
+    return library.filter(item => wanted.has(item.id));
+  };
+  return [...pick(goalTasks, taskIds, "task", true), ...pick(personaTasks, personaIds, "persona", false)];
+}
+
 function cancellationError(signal) {
   const error = new Error(`Exploration cancelled: ${signal?.reason instanceof Error ? signal.reason.message : signal?.reason || "parent requested cancellation"}`);
   error.fatal = true;
@@ -139,15 +177,20 @@ function pendingScenario(task) {
  * tasks carry no verifier and never pass — they end as "explored" once the model sends `done` or once
  * their own per-task step cap is reached, keeping only the findings they raised along the way.
  */
-export async function runExplorationLoop({ driver, model, tasks, artifactDir, maxSteps, maxDurationMs, maxInvalidActions, modelCallTimeoutMs, signal }) {
-  const stepsLimit = limit(maxSteps, 50, 300, "maxSteps");
-  const timeLimit = limit(maxDurationMs, 600000, 3600000, "maxDurationMs");
+export async function runExplorationLoop({ driver, model, tasks, artifactDir, maxSteps, maxDurationMs, maxInvalidActions, modelCallTimeoutMs, taskMaxSteps, taskMaxApiCalls, signal }) {
+  const stepsLimit = limit(maxSteps, 90, 300, "maxSteps");
+  const timeLimit = limit(maxDurationMs, 900000, 3600000, "maxDurationMs");
   const invalidLimit = limit(maxInvalidActions, 3, 10, "maxInvalidActions");
   const callTimeout = limit(modelCallTimeoutMs, 45000, 300000, "modelCallTimeoutMs");
+  // Global fallback defaults for every task's own budget; a task's own maxSteps/maxApiCalls still wins.
+  const taskStepsDefault = optionalPositiveInt(taskMaxSteps, "taskMaxSteps", stepsLimit);
+  const taskApiCallsDefault = optionalPositiveInt(taskMaxApiCalls, "taskMaxApiCalls", 1000);
   if (!Array.isArray(tasks) || tasks.some(task => !/^[a-z0-9-]+$/.test(task.id) || !task.title || !task.goal ||
-    (isPersonaTask(task) ? task.verify !== undefined : typeof task.verify !== "function")) ||
+    (isPersonaTask(task) ? task.verify !== undefined : typeof task.verify !== "function") ||
+    (task.maxSteps !== undefined && (!Number.isInteger(task.maxSteps) || task.maxSteps < 1)) ||
+    (task.maxApiCalls !== undefined && (!Number.isInteger(task.maxApiCalls) || task.maxApiCalls < 1))) ||
     new Set(tasks.map(task => task.id)).size !== tasks.length) {
-    throw new Error("Exploration tasks need unique ids, titles, goals, and a trusted program verifier; persona tasks must omit verify");
+    throw new Error("Exploration tasks need unique ids, titles, goals, and a trusted program verifier; persona tasks must omit verify; optional maxSteps/maxApiCalls must be positive integers");
   }
   const callModel = typeof model === "function" ? model : request => model.next(request);
   const redact = typeof model?.redact === "function" ? model.redact : createExplorationRedactor();
@@ -169,8 +212,12 @@ export async function runExplorationLoop({ driver, model, tasks, artifactDir, ma
     const actions = [], observations = [];
     let invalidActions = 0;
     let runEnded = false;
-    // Until per-task budgets are general (P1 chunk 3), bound a persona's own decisions so it cannot consume the whole run.
-    const personaStepCap = isPersonaTask(task) ? Math.max(1, Math.min(stepsLimit, Number.isInteger(task.maxSteps) ? task.maxSteps : 15)) : undefined;
+    // Every task gets its own step/API-call budget so it cannot consume the whole run: a goal task
+    // defaults to 20 steps (roomy over the ~6-7 steps a default task takes today), a persona to 15
+    // (chunk 2's original cap, kept); either is overridable per task or via the global --task-max-* flags.
+    const taskStepsLimit = Math.max(1, Math.min(stepsLimit, Number.isInteger(task.maxSteps) ? task.maxSteps : taskStepsDefault ?? (isPersonaTask(task) ? 15 : 20)));
+    const taskApiCallsLimit = Math.max(1, Number.isInteger(task.maxApiCalls) ? task.maxApiCalls : taskApiCallsDefault ?? taskStepsLimit * 2);
+    const usageStart = usageSnapshot(model);
     let taskSteps = 0;
     try {
       if (signal?.aborted) throw cancellationError(signal);
@@ -204,20 +251,30 @@ export async function runExplorationLoop({ driver, model, tasks, artifactDir, ma
             break;
           }
         }
-        if (isPersonaTask(task) && taskSteps >= personaStepCap) {
-          scenario.status = "explored";
-          await record({ kind: "persona-explored", taskId: task.id, steps: taskSteps });
+        if (taskSteps >= taskStepsLimit) {
+          if (isPersonaTask(task)) {
+            scenario.status = "explored";
+            await record({ kind: "persona-explored", taskId: task.id, steps: taskSteps });
+          } else {
+            scenario.status = "blocked";
+            scenario.error = `Task budget exhausted (steps, ${taskStepsLimit}); this task is blocked, other tasks continue`;
+            await record({ kind: "task-budget-exhausted", taskId: task.id, reason: "steps", limit: taskStepsLimit });
+          }
           break;
         }
         if (metrics.modelCalls >= stepsLimit) throw budgetExhausted(`Exploration step budget exhausted (${stepsLimit}); unfinished tasks are not verified`);
         metrics.modelCalls += 1;
         taskSteps += 1;
         const event = { step: metrics.modelCalls, taskId: task.id, observation };
+        const apiCallsUsedSoFar = usageSnapshot(model).apiCalls - usageStart.apiCalls;
         const request = {
           task: { id: task.id, title: task.title, goal: task.goal, ...(isPersonaTask(task) ? { kind: "persona" } : {}) }, observation,
           checks: scenario.assertions,
           history: safe(history.slice(-8)),
-          remaining: { steps: stepsLimit - metrics.modelCalls + 1, milliseconds: Math.max(0, deadline - Date.now()) },
+          remaining: {
+            steps: stepsLimit - metrics.modelCalls + 1, milliseconds: Math.max(0, deadline - Date.now()),
+            taskSteps: Math.max(0, taskStepsLimit - taskSteps + 1), taskApiCalls: Math.max(0, taskApiCallsLimit - apiCallsUsedSoFar),
+          },
         };
         let action;
         try {
@@ -257,8 +314,27 @@ export async function runExplorationLoop({ driver, model, tasks, artifactDir, ma
           if (screenshot) { event.screenshot = screenshot; scenario.artifacts.push(screenshot); }
         } catch (error) {
           event.error = error.message;
+          if (error.name === "ExplorationBudgetError") {
+            // The model adapter's own run-wide API-call cap is exhausted; this is a run-wide budget,
+            // not a per-task one, so it ends the whole run like the step/duration budgets do.
+            scenario.status = "blocked";
+            scenario.error = "Exploration model API-call budget exhausted; the run cannot continue";
+            scenario.steps.push(safe({ step: event.step, action: null, error: event.error, observationId: observation.id }));
+            await record(event);
+            throw budgetExhausted(scenario.error);
+          }
           scenario.status = "blocked";
           scenario.error = `Model or evidence collection unavailable: ${error.message}`;
+        }
+        if (scenario.status === "not-run") {
+          const apiCallsUsed = usageSnapshot(model).apiCalls - usageStart.apiCalls;
+          if (apiCallsUsed >= taskApiCallsLimit) {
+            if (isPersonaTask(task)) scenario.status = "explored";
+            else {
+              scenario.status = "blocked";
+              scenario.error = `Task budget exhausted (model API calls, ${taskApiCallsLimit}); this task is blocked, other tasks continue`;
+            }
+          }
         }
         scenario.steps.push(safe({ step: event.step, action: event.action ?? null, ...(event.error ? { error: event.error } : {}), observationId: observation.id }));
         await record(event);
@@ -270,12 +346,22 @@ export async function runExplorationLoop({ driver, model, tasks, artifactDir, ma
       scenario.status = "blocked";
       scenario.error = redact(error.message);
       runEnded = Boolean(error.fatal);
-    } finally { scenario.durationMs = Date.now() - taskStart; }
+    } finally {
+      scenario.durationMs = Date.now() - taskStart;
+      scenario.usage = { modelCalls: taskSteps, durationMs: scenario.durationMs, ...usageDelta(usageStart, usageSnapshot(model)) };
+    }
     if (scenario.error) { scenario.error = redact(scenario.error); errors.push(`${task.id}: ${scenario.error}`); }
     if (runEnded) break;
   }
   metrics.elapsedMs = Date.now() - started;
   for (const scenario of scenarios) scenario.findings = findings.filter(finding => finding.taskId === scenario.id);
+  // Usage is attributed per task as deltas of the model's own cumulative counters, so the run totals
+  // below always equal the sum of each scenario's own usage, including tasks that never ran (0 usage).
+  metrics.usage = scenarios.reduce((total, scenario) => {
+    const usage = scenario.usage ?? { modelCalls: 0, apiCalls: 0, inputTokens: 0, outputTokens: 0, totalTokens: 0, durationMs: 0 };
+    for (const key of Object.keys(total)) total[key] += usage[key] ?? 0;
+    return total;
+  }, { modelCalls: 0, apiCalls: 0, inputTokens: 0, outputTokens: 0, totalTokens: 0, durationMs: 0 });
   // A persona's "explored" is pass-equivalent for the run's own status: it never represents a verified
   // goal, but it also never blocks or fails the run on its own. A run of only explored personas still
   // reports "passed" (exit 0); callers distinguish that case by the absence of any "passed" scenario.
@@ -302,7 +388,7 @@ export async function loadExplorationModel(options = {}) {
   } finally { await rm(directory, { recursive: true, force: true }); }
 }
 
-export async function runExploration({ fixture, artifactDir, configPath, maxSteps, maxDurationMs, tasks, model, executablePath, headless, modelCallTimeoutMs, maxApiCalls, signal } = {}) {
+export async function runExploration({ fixture, artifactDir, configPath, maxSteps, maxDurationMs, tasks, goalTasks, personaTasks, taskIds, personaIds, taskMaxSteps, taskMaxApiCalls, model, executablePath, headless, modelCallTimeoutMs, maxApiCalls, signal } = {}) {
   let session;
   let driver;
   let configured = model;
@@ -310,13 +396,17 @@ export async function runExploration({ fixture, artifactDir, configPath, maxStep
   const directory = artifactDir ?? path.resolve("output/playwright/acceptance/exploration");
   try {
     if (signal?.aborted) throw cancellationError(signal);
-    configured ??= await loadExplorationModel({ configPath, maxApiCalls: maxApiCalls ?? (maxSteps ?? 50) * 2 });
     const { createExplorationDriver, createDefaultExplorationTasks } = await import("./exploration-browser.mjs");
+    // Resolve and validate the task/persona selection before touching a model or a browser, so an
+    // unknown --task/--persona id fails fast instead of launching anything first.
+    const resolvedGoalTasks = goalTasks ?? await createDefaultExplorationTasks(fixture);
+    const resolvedPersonaTasks = personaTasks ?? [];
+    const selected = tasks ?? selectExplorationTasks({ goalTasks: resolvedGoalTasks, personaTasks: resolvedPersonaTasks, taskIds, personaIds });
+    configured ??= await loadExplorationModel({ configPath, maxApiCalls: maxApiCalls ?? (maxSteps ?? 90) * 2 });
     const { startWorkbenchSession } = await import("./workbench-session.mjs");
     session = await startWorkbenchSession({ fixture, artifactDir: directory, executablePath, headless, signal });
     driver = await createExplorationDriver({ ...session, fixture, artifactDir: directory, redact: configured.redact, signal });
-    const selected = tasks ?? await createDefaultExplorationTasks(fixture);
-    result = await runExplorationLoop({ driver, model: configured, tasks: selected, artifactDir: directory, maxSteps, maxDurationMs, modelCallTimeoutMs, signal });
+    result = await runExplorationLoop({ driver, model: configured, tasks: selected, artifactDir: directory, maxSteps, maxDurationMs, modelCallTimeoutMs, taskMaxSteps, taskMaxApiCalls, signal });
     result.artifacts.push(...(session.artifacts || []));
     return result;
   } catch (error) {
