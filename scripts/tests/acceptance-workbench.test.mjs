@@ -176,6 +176,29 @@ test("an aborted suite marks every remaining journey not-run", async t => {
   assert.ok(suite.scenarios.every(scenario => scenario.status === "not-run"));
 });
 
+test("console-error classifier allows the settings-save conflict text only for the scenarios that deliberately provoke it", async () => {
+  const { classifyWorkbenchConsoleErrors } = await import("../acceptance/workbench.mjs");
+  const conflict = "Failed to load resource: the server responded with a status of 409 (Conflict)";
+  for (const scenarioId of ["workbench.cancel-retry", "workbench.settings-conflict"]) {
+    assert.deepEqual(classifyWorkbenchConsoleErrors([conflict], { scenarioId }), { expected: [conflict], unexpected: [] });
+  }
+});
+
+test("console-error classifier does not swallow an unexpected error even inside a scenario with a known allowance", async () => {
+  const { classifyWorkbenchConsoleErrors } = await import("../acceptance/workbench.mjs");
+  const conflict = "Failed to load resource: the server responded with a status of 409 (Conflict)";
+  const unrelated = "TypeError: Cannot read properties of undefined (reading 'foo')";
+  const result = classifyWorkbenchConsoleErrors([conflict, unrelated], { scenarioId: "workbench.settings-conflict" });
+  assert.deepEqual(result, { expected: [conflict], unexpected: [unrelated] });
+});
+
+test("console-error classifier treats the same conflict text as unexpected outside its known scenarios", async () => {
+  const { classifyWorkbenchConsoleErrors } = await import("../acceptance/workbench.mjs");
+  const conflict = "Failed to load resource: the server responded with a status of 409 (Conflict)";
+  assert.deepEqual(classifyWorkbenchConsoleErrors([conflict], { scenarioId: "workbench.reading" }), { expected: [], unexpected: [conflict] });
+  assert.deepEqual(classifyWorkbenchConsoleErrors([conflict]), { expected: [], unexpected: [conflict] });
+});
+
 test("completed daily outcome is acknowledged by its saved-report UI status", async t => {
   const { createServer } = await import("node:http");
   const { waitForWorkbenchRun } = await import("../acceptance/workbench.mjs");

@@ -52,6 +52,21 @@ async function api(session, route) {
   return response.json();
 }
 
+// Chromium logs a console error for any same-origin response that isn't 2xx. Only these two
+// scenarios deliberately provoke a settings-save conflict (409); everywhere else is unexpected.
+const EXPECTED_CONSOLE_ERRORS = {
+  "workbench.cancel-retry": /Failed to load resource: the server responded with a status of 409/,
+  "workbench.settings-conflict": /Failed to load resource: the server responded with a status of 409/,
+};
+
+/** Pure classifier: ties an allowance to the scenario that is known to cause it, never a blanket ignore. */
+export function classifyWorkbenchConsoleErrors(entries, { scenarioId } = {}) {
+  const allowed = EXPECTED_CONSOLE_ERRORS[scenarioId];
+  const expected = [], unexpected = [];
+  for (const entry of entries) (allowed?.test(entry) ? expected : unexpected).push(entry);
+  return { expected, unexpected };
+}
+
 async function closeDialog(page) {
   const dialog = page.locator("dialog[open]");
   if (await dialog.count()) {
@@ -133,6 +148,7 @@ async function ensureDaily(t, fixture, date) {
 export async function runWorkbenchAcceptance({ fixture, artifactDir, signal, onScenario, headless = true, executablePath } = {}) {
   await mkdir(artifactDir, { recursive: true });
   const scenarios = [], sessions = [], artifacts = [], errors = [];
+  const expectedConsoleErrors = [], unexpectedConsoleErrors = [];
   let session, sequence = 0, firstMarkdown = "", starKey = "arxiv:" + PAPERS[0].id;
   const start = async () => {
     try {
@@ -158,6 +174,9 @@ export async function runWorkbenchAcceptance({ fixture, artifactDir, signal, onS
         error: signal?.aborted ? "Acceptance was cancelled" : "Prerequisite did not pass: " + missing.join(", ") };
       scenarios.push(result); onScenario?.(result); return result;
     }
+    // Record each session's console-error length before the action, so any new entries can be
+    // attributed to this scenario specifically (per-scenario allowance, not a global allowlist).
+    const consoleOffsets = new Map(sessions.map(value => [value, value.diagnostics.consoleErrors.length]));
     const result = await runScenario({
       ...spec, artifactDir,
       captureFailure: async path => {
@@ -171,6 +190,9 @@ export async function runWorkbenchAcceptance({ fixture, artifactDir, signal, onS
       await action(t);
       signal?.throwIfAborted();
     });
+    const newConsoleErrors = sessions.flatMap(value => value.diagnostics.consoleErrors.slice(consoleOffsets.get(value) ?? 0));
+    const classified = classifyWorkbenchConsoleErrors(newConsoleErrors, { scenarioId: id });
+    expectedConsoleErrors.push(...classified.expected); unexpectedConsoleErrors.push(...classified.unexpected);
     if (signal?.aborted && result.status !== "passed") result.status = "not-run";
     scenarios.push(result); onScenario?.(result);
     if (result.status === "failed" && session && !signal?.aborted) {
@@ -397,7 +419,10 @@ export async function runWorkbenchAcceptance({ fixture, artifactDir, signal, onS
       await discardSettings(page);
       await openSettings(page);
       t.check(await page.locator('[name="model"]').inputValue() === MODEL, "重新打开读取真实配置而非失败草稿");
-      // Save one actual edit to activate the latest revision in the running server.
+      // Save one actual edit to activate the latest revision in the running server: this also
+      // resyncs the server's cached config revision with the externally-edited file on disk.
+      // workbench.library's settings-backed actions (same running server) and workbench.restart's
+      // persisted-model check both depend on this restore actually completing.
       await editField(page, "model", "fixture-model");
       await until(async () => (await readConfig(fixture)).llm.model === "fixture-model", "new revision becomes active", { signal });
       await editField(page, "model", MODEL);
@@ -407,6 +432,9 @@ export async function runWorkbenchAcceptance({ fixture, artifactDir, signal, onS
     }, ["workbench.settings"]);
 
     await scenario("workbench.library", async t => {
+      // library-connect saves through the same in-process config-revision cache that
+      // workbench.settings-conflict deliberately desyncs and then must resync; if that restore
+      // fails to complete, this save would 409 for an unrelated-looking reason.
       const page = session.page, before = fixture.server.requests.length;
       t.step("连接测试 PDF 目录，不自动接受处理授权或开始索引");
       await openSettings(page);
@@ -425,9 +453,11 @@ export async function runWorkbenchAcceptance({ fixture, artifactDir, signal, onS
       t.check(fixture.server.requests.length === before, "连接与浏览入口没有隐式模型处理");
       await screenshot(t, "library");
       await page.locator('[data-action="history-back"]').click();
-    }, ["workbench.settings"]);
+    }, ["workbench.settings", "workbench.settings-conflict"]);
 
     await scenario("workbench.restart", async t => {
+      // The persisted-model check below relies on workbench.settings-conflict's restore, not just
+      // on the original workbench.settings save (which that scenario deliberately overwrites).
       const page = session.page;
       t.step("修改外观和侧栏，等待偏好保存后停止服务");
       await page.goto(session.url);
@@ -457,11 +487,15 @@ export async function runWorkbenchAcceptance({ fixture, artifactDir, signal, onS
       await closeDialog(session.page);
       t.check((await readConfig(fixture)).workbench_schedule.enabled === false, "重启没有意外开启自动生成");
       await screenshot(t, "restart");
-    }, ["workbench.reading", "workbench.settings"]);
+    }, ["workbench.reading", "workbench.settings", "workbench.settings-conflict"]);
 
     await scenario("workbench.browser-errors", async t => {
       const pageErrors = sessions.flatMap(value => value.diagnostics.pageErrors);
       t.check(pageErrors.length === 0, "实际浏览器未捕获的异常为零", pageErrors);
+      const blockedRequests = sessions.flatMap(value => value.diagnostics.blockedRequests);
+      t.check(blockedRequests.length === 0, "没有请求被跨来源防护拦截，产品没有尝试访问工作台来源以外的地址", blockedRequests);
+      t.check(unexpectedConsoleErrors.length === 0, "没有未归因于已知场景的浏览器控制台错误",
+        { unexpected: unexpectedConsoleErrors, expected: expectedConsoleErrors });
       const unexpected = fixture.server.requests.filter(request => ["unexpected", "fixture-error"].includes(request.kind));
       t.check(unexpected.length === 0, "业务流程没有未知外部请求或无法识别的模型任务", unexpected);
     });
