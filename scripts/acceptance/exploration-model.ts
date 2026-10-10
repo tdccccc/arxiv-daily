@@ -17,6 +17,9 @@ Return exactly ONE JSON object with no Markdown, prose, or code fences. Allowed 
 {"type":"back"} or {"type":"reload"}
 {"type":"wait","milliseconds":500} (1 to 2000)
 {"type":"scroll","direction":"down","pixels":600} (up/down, 1 to 1200; optional current ref)
+{"type":"press","key":"Enter"} (keyboard-only navigation; key is one of Enter, Escape, Tab, Shift+Tab, ArrowUp,
+ArrowDown, ArrowLeft, ArrowRight, Space, Home, End, PageUp, PageDown; it goes to whatever is currently focused,
+never carries a ref, and is refused if focus has drifted outside the explorable area)
 {"type":"finding","summary":"suspected interaction problem","evidence":"visible evidence and reproduction"}
 {"type":"blocked","reason":"why this task cannot continue"}
 {"type":"done","reason":"what was completed"}
@@ -25,6 +28,8 @@ Use only refs from the latest observation. They change on EVERY observation. Nev
 Do not act on disabled, sensitive or restricted controls. Select uses an option VALUE, not its label.
 Fill replaces the field; move focus away or close settings when autosave requires it. Read feedback.
 Browser clicks can scroll a control into view. A dialog makes controls outside it unavailable.
+Some hosts narrow which of back/reload/press are currently usable; when the observation includes a
+capabilities list, only use actions named there (plus wait/finding/blocked/done, always available).
 The checks array contains independent program checks, not judgments you can override. The runner
 automatically finishes a task once they are all satisfied by actual actions. Saying done does NOT pass
 an unfinished task. Incomplete checks may simply mean more actions or a short wait are needed.

@@ -414,6 +414,29 @@ test("action validation only accepts current refs and bounded browser operations
   ]) assert.throws(() => parseExplorationAction(JSON.stringify(command), current));
 });
 
+test("a host-agnostic keyboard press is allowed only from a strict allowlist and never carries a ref", () => {
+  const current = observation();
+  assert.deepEqual(parseExplorationAction('{"type":"press","key":"Enter"}', current), { type: "press", key: "Enter" });
+  assert.deepEqual(parseExplorationAction('{"type":"press","key":"Shift+Tab"}', current), { type: "press", key: "Shift+Tab" });
+  assert.deepEqual(parseExplorationAction('{"type":"press","key":"ArrowDown","reason":"move to the next option"}', current), { type: "press", key: "ArrowDown", reason: "move to the next option" });
+  for (const command of [
+    { type: "press", key: "a" }, { type: "press", key: "Control+C" }, { type: "press", key: "F5" },
+    { type: "press" }, { type: "press", key: "" }, { type: "press", key: "enter" },
+    { type: "press", key: "Enter", ref: current.controls[0].ref },
+  ]) assert.throws(() => parseExplorationAction(JSON.stringify(command), current));
+});
+
+test("press is a browser action routed through driver.execute like click or fill", async t => {
+  const driver = fixtureDriver();
+  const result = await runExplorationLoop({
+    driver, model: async () => '{"type":"press","key":"Tab"}',
+    tasks: [task(({ actions }) => ({ passed: actions.some(action => action.type === "press"), checks: [{ label: "pressed a key", passed: actions.some(action => action.type === "press") }] }))],
+    artifactDir: await temporary(t), maxSteps: 5,
+  });
+  assert.equal(result.scenarios[0].status, "passed");
+  assert.deepEqual(driver.executed.map(action => action.type), ["press"]);
+});
+
 async function localModel(t, respond = (_body, response) => {
   response.writeHead(200, { "content-type": "text/event-stream" });
   response.end(`data: ${JSON.stringify({ choices: [{ delta: { content: '{"type":"done"}' } }], usage: { prompt_tokens: 12, completion_tokens: 4, total_tokens: 16 } })}\n\ndata: [DONE]\n\n`);

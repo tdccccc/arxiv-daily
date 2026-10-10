@@ -8,9 +8,18 @@ const moduleDirectory = path.dirname(fileURLToPath(import.meta.url));
 const actionKeys = {
   click: ["ref"], fill: ["ref", "value"], select: ["ref", "value"],
   back: [], reload: [], wait: ["milliseconds"], scroll: ["ref", "direction", "pixels"],
+  press: ["key"],
   finding: ["summary", "evidence"], done: [], blocked: [],
 };
-const browserActions = new Set(["click", "fill", "select", "back", "reload", "wait", "scroll"]);
+const browserActions = new Set(["click", "fill", "select", "back", "reload", "wait", "scroll", "press"]);
+/**
+ * A host-agnostic keyboard press for the keyboard-only persona (P3): key presses go to whatever
+ * element currently has focus, so this never carries a ref — a host's executor is responsible for
+ * rejecting a press when focus has drifted outside the explorable scope. The allowlist stays small
+ * and free of character-producing keys (so this cannot type arbitrary text) and free of destructive
+ * shortcuts (no Ctrl/Alt combinations, no function keys).
+ */
+export const PRESS_KEYS = new Set(["Enter", "Escape", "Tab", "Shift+Tab", "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", "Space", "Home", "End", "PageUp", "PageDown"]);
 /** Persona tasks explore freely for findings only; they never carry a program verifier. */
 const isPersonaTask = task => task?.kind === "persona";
 
@@ -53,6 +62,7 @@ export function parseExplorationAction(raw, observation) {
   if (value.type === "scroll" && (!["up", "down"].includes(value.direction) || !Number.isInteger(value.pixels) || value.pixels < 1 || value.pixels > 1200)) {
     throw new ExplorationActionError("Scroll needs up/down and 1–1200 pixels");
   }
+  if (value.type === "press" && !PRESS_KEYS.has(value.key)) throw new ExplorationActionError("Press is limited to a small keyboard-navigation allowlist");
   if (value.type === "finding" && (typeof value.summary !== "string" || !value.summary.trim() || value.summary.length > 1000 || typeof value.evidence !== "string" || !value.evidence.trim() || value.evidence.length > 2000)) {
     throw new ExplorationActionError("A finding needs a brief summary and visible evidence");
   }

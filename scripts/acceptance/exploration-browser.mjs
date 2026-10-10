@@ -155,6 +155,7 @@ export async function createExplorationDriver({ page, context, url, fixture, art
         else if (action.type === "reload") { await page.reload({ waitUntil: "domcontentloaded", timeout: 8000 }); await page.locator(".workbench").waitFor({ state: "visible", timeout: 6000 }); }
         else if (action.type === "back") await page.goBack({ waitUntil: "domcontentloaded", timeout: 8000 });
         else if (action.type === "wait") await new Promise(resolve => setTimeout(resolve, action.milliseconds));
+        else if (action.type === "press") await page.keyboard.press(action.key);
         else if (action.type === "scroll") {
           if (target) await target.hover({ timeout: 6000 });
           else { const region = page.locator("dialog[open] .settings-content, .reading-pane").last(); if (await region.isVisible()) await region.hover(); }
