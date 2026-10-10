@@ -1,0 +1,345 @@
+import assert from "node:assert/strict";
+import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
+import test from "node:test";
+import vm from "node:vm";
+import { Window } from "happy-dom";
+import { evaluate as cdpEvaluate } from "../desktop-acceptance/cdp.mjs";
+import { parseArgs } from "../acceptance/run.mjs";
+import { runExploration, runExplorationLoop } from "../acceptance/exploration.mjs";
+import {
+  createDefaultObsidianExplorationTasks,
+  createObsidianExplorationDriver,
+  startObsidianExplorationSession,
+  EXPLORATION_OBSIDIAN_TASK_IDS,
+} from "../acceptance/exploration-obsidian.mjs";
+
+// ---------------------------------------------------------------------------
+// --host arg parsing and threading (run.mjs)
+// ---------------------------------------------------------------------------
+
+test("parseArgs defaults host to workbench when --host is not given", () => {
+  const options = parseArgs(["--suite", "exploration"]);
+  assert.equal(options.host, "workbench");
+});
+
+test("parseArgs threads an explicit --host obsidian through", () => {
+  const options = parseArgs(["--suite", "exploration", "--host", "obsidian"]);
+  assert.equal(options.host, "obsidian");
+});
+
+test("parseArgs rejects an unknown --host before anything else is parsed", () => {
+  assert.throws(() => parseArgs(["--suite", "exploration", "--host", "bogus"]), /Unknown exploration host: bogus/);
+});
+
+test("parseArgs accepts --host=obsidian (equals form), same as every other flag", () => {
+  const options = parseArgs(["--suite", "exploration", "--host=obsidian"]);
+  assert.equal(options.host, "obsidian");
+});
+
+// ---------------------------------------------------------------------------
+// runExploration: unknown host, and host -> driver/session/task-library
+// selection, exercised with fakes (the `dependencies` test seam) so this
+// never launches a real browser or Obsidian.
+// ---------------------------------------------------------------------------
+
+test("an unknown exploration host is rejected before any model, session or driver work happens", async () => {
+  const touched = [];
+  const result = await runExploration({ host: "bogus", fixture: { root: "/x" }, artifactDir: "/tmp/does-not-matter" }, {
+    startObsidianExplorationSession: async () => { touched.push("obsidian-session"); },
+    createObsidianExplorationDriver: async () => { touched.push("obsidian-driver"); },
+    startWorkbenchSession: async () => { touched.push("workbench-session"); },
+    createExplorationDriver: async () => { touched.push("workbench-driver"); },
+  });
+  assert.equal(result.status, "blocked");
+  assert.match(result.errors.join(" "), /Unknown exploration host: bogus/);
+  assert.deepEqual(touched, [], "no session or driver factory may run for an unknown host");
+});
+
+function fakeModel(reply) {
+  return async () => reply;
+}
+
+test("host=obsidian selects the Obsidian session/driver/task library, never the workbench ones", async () => {
+  const seen = [];
+  const fakeTask = { id: "fake-obsidian-task", title: "fake", goal: "fake goal", async verify() { return { passed: true, checks: [{ label: "x", passed: true }] }; } };
+  const fakeDriver = {
+    observe: async () => ({ id: "s1", controls: [], text: "", title: "", layout: { rootMounted: true, view: "dashboard" } }),
+    execute: async () => ({ ok: true }),
+    capture: async () => undefined,
+    reset: async () => { seen.push("reset"); },
+    dispose: async () => { seen.push("dispose"); },
+  };
+  const result = await runExploration({
+    host: "obsidian", fixture: { vaultRoot: "/tmp/x", server: { url: "http://127.0.0.1:1" } },
+    artifactDir: path.join(tmpdir(), "exploration-host-test-obsidian"), tasks: [fakeTask], model: fakeModel('{"type":"wait","milliseconds":1}'),
+  }, {
+    startObsidianExplorationSession: async () => { seen.push("obsidian-session"); return { session: { evaluate: async () => {}, client: {}, diagnostics: { entries: () => [] } }, stop: async () => { seen.push("obsidian-stop"); } }; },
+    createObsidianExplorationDriver: async () => { seen.push("obsidian-driver"); return fakeDriver; },
+    startWorkbenchSession: async () => { seen.push("workbench-session"); return {}; },
+    createExplorationDriver: async () => { seen.push("workbench-driver"); return fakeDriver; },
+  });
+  assert.ok(seen.includes("obsidian-session"));
+  assert.ok(seen.includes("obsidian-driver"));
+  assert.ok(!seen.includes("workbench-session"));
+  assert.ok(!seen.includes("workbench-driver"));
+  assert.equal(result.scenarios[0].id, "fake-obsidian-task");
+});
+
+test("host=workbench (the default) still selects the workbench session/driver, not Obsidian's", async () => {
+  const seen = [];
+  const fakeTask = { id: "fake-workbench-task", title: "fake", goal: "fake goal", async verify() { return { passed: true, checks: [{ label: "x", passed: true }] }; } };
+  const fakeDriver = {
+    observe: async () => ({ id: "s1", controls: [], text: "", title: "", layout: { rootMounted: true } }),
+    execute: async () => ({ ok: true }),
+    capture: async () => undefined,
+  };
+  await runExploration({
+    fixture: {}, artifactDir: path.join(tmpdir(), "exploration-host-test-workbench"), tasks: [fakeTask], goalTasks: [fakeTask], model: fakeModel('{"type":"wait","milliseconds":1}'),
+  }, {
+    startObsidianExplorationSession: async () => { seen.push("obsidian-session"); },
+    createObsidianExplorationDriver: async () => { seen.push("obsidian-driver"); },
+    startWorkbenchSession: async () => { seen.push("workbench-session"); return {}; },
+    createExplorationDriver: async () => { seen.push("workbench-driver"); return fakeDriver; },
+  });
+  assert.ok(seen.includes("workbench-session"));
+  assert.ok(seen.includes("workbench-driver"));
+  assert.ok(!seen.includes("obsidian-session"));
+  assert.ok(!seen.includes("obsidian-driver"));
+});
+
+// ---------------------------------------------------------------------------
+// Real-host fix: task.prepare() gets a longer per-call ceiling than the other
+// per-step host calls, because a real product operation (e.g. the Obsidian
+// star task's daily-report generation, measured at ~12s on a real host) can
+// legitimately exceed the 10s per-step ceiling used for observation/
+// verification/a single action/host reset. This test uses a real ~10.3s
+// sleep (deliberately just over the OLD 10000ms ceiling) rather than a mocked
+// clock, so it is intentionally one of the slower tests in this suite.
+// ---------------------------------------------------------------------------
+
+test("task.prepare() may run longer than 10s (a real product operation can), without hitting the per-step ceiling used for observation/verification/actions/reset", async t => {
+  t.timeout?.(20000);
+  const driver = {
+    observe: async () => ({ id: "s1", controls: [], text: "", title: "", layout: { rootMounted: true } }),
+    execute: async () => ({ ok: true }),
+    capture: async () => undefined,
+  };
+  const prepareTask = {
+    id: "slow-prepare", title: "slow prepare", goal: "goal",
+    async prepare() { await new Promise(resolve => setTimeout(resolve, 10300)); },
+    async verify() { return { passed: true, checks: [{ label: "x", passed: true }] }; },
+  };
+  const result = await runExplorationLoop({
+    driver, model: async () => '{"type":"wait","milliseconds":1}', tasks: [prepareTask],
+    artifactDir: path.join(tmpdir(), "exploration-host-test-slow-prepare"), maxDurationMs: 30000,
+  });
+  assert.equal(result.scenarios[0].status, "blocked", "the fake driver's verify() needs at least one non-wait action; what matters here is that prepare itself was not aborted by a 10s timeout");
+  assert.ok(!/Task preparation timeout/.test(result.scenarios[0].error ?? ""), `prepare must not be aborted at 10s: ${result.scenarios[0].error}`);
+});
+
+// ---------------------------------------------------------------------------
+// startObsidianExplorationSession: missing Obsidian/Xvfb/xauth -> blocked,
+// never launched (the fixed Obsidian suite's own preflight/blocked handling,
+// reused via the `check` seam).
+// ---------------------------------------------------------------------------
+
+test("a failing preflight blocks the Obsidian exploration session and never launches anything", async () => {
+  let launched = false;
+  await assert.rejects(
+    () => startObsidianExplorationSession({
+      fixture: { vaultRoot: "/tmp/vault", server: { url: "http://127.0.0.1:1" } },
+      check: async () => ({ ok: false, blockers: [{ message: "Obsidian was not found at /opt/Obsidian/obsidian", remedy: "install Obsidian" }] }),
+      runSession: async () => { launched = true; },
+    }),
+    error => {
+      assert.equal(error.name, "ObsidianExplorationBlockedError");
+      assert.match(error.message, /Obsidian was not found/);
+      return true;
+    },
+  );
+  assert.equal(launched, false);
+});
+
+test("a preflight that itself throws is reported as blocked, not a crash", async () => {
+  await assert.rejects(
+    () => startObsidianExplorationSession({
+      fixture: { vaultRoot: "/tmp/vault", server: { url: "http://127.0.0.1:1" } },
+      check: async () => { throw new Error("inotify probe failed"); },
+      runSession: async () => { throw new Error("must never be called"); },
+    }),
+    error => {
+      assert.equal(error.name, "ObsidianExplorationBlockedError");
+      assert.match(error.message, /preflight could not complete.*inotify probe failed/s);
+      return true;
+    },
+  );
+});
+
+test("a passing preflight starts the session, hands back the renderer session, and stop() releases runDesktopSession's own body/teardown", async () => {
+  let bodyRan = false, stopped = false;
+  const fakeSessionInfo = { session: { evaluate: async () => {}, client: {} }, port: 1234 };
+  const result = await startObsidianExplorationSession({
+    fixture: { vaultRoot: "/tmp/vault", server: { url: "http://127.0.0.1:1" } },
+    check: async () => ({ ok: true }),
+    runSession: async ({ body }) => {
+      bodyRan = true;
+      await body(fakeSessionInfo);
+      stopped = true;
+      return "teardown-complete";
+    },
+  });
+  assert.equal(result.session, fakeSessionInfo.session);
+  assert.equal(result.port, 1234);
+  assert.equal(bodyRan, true);
+  assert.equal(stopped, false, "runSession's body is still blocking until stop() is called");
+  const teardown = await result.stop();
+  assert.equal(stopped, true);
+  assert.equal(teardown, "teardown-complete");
+});
+
+test("an abort signal releases a held-open Obsidian session so its own teardown still runs", async () => {
+  const controller = new AbortController();
+  let released = false;
+  const result = await startObsidianExplorationSession({
+    fixture: { vaultRoot: "/tmp/vault", server: { url: "http://127.0.0.1:1" } },
+    check: async () => ({ ok: true }),
+    signal: controller.signal,
+    runSession: async ({ body }) => { await body({ session: {} }); released = true; },
+  });
+  assert.equal(released, false);
+  controller.abort(new Error("cancelled"));
+  await new Promise(resolve => setTimeout(resolve, 10));
+  assert.equal(released, true, "aborting released the held body without an explicit stop() call");
+  await result.stop();
+});
+
+// ---------------------------------------------------------------------------
+// createDefaultObsidianExplorationTasks: shape (program verify, no persona
+// default tasks, Chinese goals).
+// ---------------------------------------------------------------------------
+
+test("the default Obsidian goal tasks have ids, titles, Chinese goals and a program verify, matching the exported id list", async () => {
+  const tasks = await createDefaultObsidianExplorationTasks();
+  assert.deepEqual(tasks.map(t => t.id), EXPLORATION_OBSIDIAN_TASK_IDS);
+  for (const t of tasks) {
+    assert.equal(typeof t.title, "string");
+    assert.ok(t.title.length > 0);
+    assert.ok(/[一-鿿]/.test(t.goal), `goal should be in Chinese: ${t.goal}`);
+    assert.equal(typeof t.verify, "function");
+    assert.notEqual(t.kind, "persona");
+  }
+  assert.equal(typeof tasks[1].prepare, "function", "the star task needs prepare() to deterministically generate a daily report");
+});
+
+// ---------------------------------------------------------------------------
+// createObsidianExplorationDriver.reset(): call ordering against a fake CDP
+// session (happy-dom + a recording fake client, same convention as
+// acceptance-exploration-obsidian.test.mjs's buildSession), and failure ->
+// throws when the measured duration exceeds the 30s phase-abort budget.
+// ---------------------------------------------------------------------------
+
+function buildFakeObsidianSession({ modalOpen = false } = {}) {
+  const window = new Window();
+  window.document.body.innerHTML = `
+    ${modalOpen ? '<div class="modal-container"><div class="modal arxiv-daily-modal"><button type="button">Close</button></div></div>' : ""}
+    <div class="view-content arxiv-daily-dashboard">
+      <div class="arxiv-daily-dashboard__tab is-active" role="tab" tabindex="0">All</div>
+    </div>
+  `;
+  const calls = [];
+  const reloadCalls = [];
+  const httpClient = { request: async () => ({}) };
+  const context = {
+    document: window.document,
+    getComputedStyle: (...args) => window.getComputedStyle(...args),
+    innerWidth: 1200, innerHeight: 800,
+    app: {
+      setting: { isOpen: modalOpen, activeTab: undefined, open() { this.isOpen = true; }, close() { calls.push("settings.close"); this.isOpen = false; }, openTabById() {} },
+      // disablePlugin/enablePlugin mock a full plugin reload the way the fixed suite's own
+      // reloadPlugin() (obsidian-ui.mjs) drives it — the real fix for the settings-desync bug found on
+      // the real host (see exploration-obsidian.mjs's reset() comment): a bare loadSettingsAndState()
+      // call desyncs SettingsChangeService's captured settings reference from the live plugin.settings.
+      plugins: {
+        plugins: { "arxiv-daily": { getHttpClient: () => httpClient } },
+        disablePlugin: async () => { reloadCalls.push("disable"); },
+        enablePlugin: async () => { reloadCalls.push("enable"); },
+      },
+      commands: { executeCommandById: () => true },
+    },
+  };
+  const client = {
+    calls,
+    async send(method, params = {}) {
+      if (method === "Runtime.evaluate") {
+        let value;
+        try { value = vm.runInNewContext(params.expression, context); }
+        catch (error) { return { result: {}, exceptionDetails: { text: "Uncaught", exception: { description: error.message } } }; }
+        return { result: { value } };
+      }
+      calls.push({ method, params });
+      if (method === "Input.dispatchMouseEvent" && params.type === "mousePressed") window.document.elementFromPoint(params.x, params.y)?.focus?.();
+      return {};
+    },
+  };
+  const evaluate = expression => cdpEvaluate(client, expression);
+  return { window, calls, reloadCalls, session: { client, evaluate, diagnostics: { entries: () => [] } } };
+}
+
+async function withTempFixture(run) {
+  const root = await mkdtemp(path.join(tmpdir(), "exploration-obsidian-driver-test-"));
+  const vaultRoot = path.join(root, "vault");
+  await mkdir(path.join(vaultRoot, ".obsidian", "plugins", "arxiv-daily"), { recursive: true });
+  const artifactDir = path.join(root, "artifacts");
+  await mkdir(artifactDir, { recursive: true });
+  const fixture = { vaultRoot, server: { url: "http://127.0.0.1:1" } };
+  try { return await run({ fixture, artifactDir }); }
+  finally { await rm(root, { recursive: true, force: true }); }
+}
+
+test("reset() closes any plugin modal, closes settings, rewrites data.json, fully reloads the plugin, and opens the dashboard, in that order", async () => {
+  await withTempFixture(async ({ fixture, artifactDir }) => {
+    const { calls, reloadCalls, session } = buildFakeObsidianSession({ modalOpen: true });
+    const driver = await createObsidianExplorationDriver({ session, fixture, artifactDir });
+    const before = calls.length;
+    const { durationMs } = await driver.reset();
+    assert.ok(Number.isFinite(durationMs) && durationMs >= 0);
+    const after = calls.slice(before);
+    // Escape (keyDown/keyUp) to close the plugin modal happens first, before any settings/data.json work.
+    const firstKeyIndex = after.findIndex(c => c.method === "Input.dispatchKeyEvent");
+    assert.ok(firstKeyIndex === 0, "the modal-closing Escape is the first thing reset() does");
+    assert.equal(after[firstKeyIndex].params.key, "Escape");
+    // A full disable/enable reload (not a bare settings re-read) — the real-host fix.
+    assert.deepEqual(reloadCalls, ["disable", "enable"], "reset reloads the whole plugin, once, in order");
+    const written = JSON.parse(await (await import("node:fs/promises")).readFile(path.join(fixture.vaultRoot, ".obsidian/plugins/arxiv-daily/data.json"), "utf8"));
+    assert.equal(written.settings.output.maxDailyPapers, 20, "data.json was rewritten back to the fixture baseline");
+  });
+});
+
+test("reset() throws when the measured duration exceeds the 30s phase-abort budget", async () => {
+  await withTempFixture(async ({ fixture, artifactDir }) => {
+    const { session } = buildFakeObsidianSession();
+    const driver = await createObsidianExplorationDriver({ session, fixture, artifactDir });
+    const realNow = Date.now;
+    let calls = 0;
+    Date.now = () => { calls += 1; return calls === 1 ? realNow() : realNow() + 40000; };
+    try {
+      await assert.rejects(() => driver.reset(), /30s|phase-abort/);
+    } finally { Date.now = realNow; }
+  });
+});
+
+test("observe() rejects a stale observation id at execute() without sending any input", async () => {
+  await withTempFixture(async ({ fixture, artifactDir }) => {
+    const { calls, session } = buildFakeObsidianSession();
+    const driver = await createObsidianExplorationDriver({ session, fixture, artifactDir });
+    const stale = await driver.observe();
+    await driver.observe(); // advances the driver's own "latest" observation
+    const before = calls.length;
+    const result = await driver.execute({ type: "click", ref: stale.controls[0]?.ref ?? "s1-1" }, stale);
+    assert.equal(result.ok, false);
+    assert.match(result.error, /[Ss]tale/);
+    assert.equal(calls.length, before, "no CDP input call was sent for a stale observation");
+  });
+});

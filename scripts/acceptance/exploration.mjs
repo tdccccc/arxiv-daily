@@ -236,7 +236,12 @@ export async function runExplorationLoop({ driver, model, tasks, artifactDir, ma
         try { await withDeadline(childSignal => driver.reset({ signal: childSignal }), Math.min(10000, deadline - Date.now()), "Host reset", signal); }
         catch (error) { throw error.fatal ? error : new Error(`Host reset failed: ${error.message}`); }
       }
-      if (typeof task.prepare === "function") await withDeadline(childSignal => task.prepare({ driver, signal: childSignal }), Math.min(10000, deadline - Date.now()), "Task preparation", signal);
+      // Task preparation gets a longer per-call ceiling than the other host calls below (observation,
+      // verification, a single browser/CDP action, host reset): those are per-step and meant to catch a
+      // hang quickly, but preparation may run a real product operation once per task — e.g. the Obsidian
+      // star task generating a daily report through the plugin's own command, measured on a real host at
+      // ~12s even with the fixture's zero request delay. It still obeys the run-wide duration budget.
+      if (typeof task.prepare === "function") await withDeadline(childSignal => task.prepare({ driver, signal: childSignal }), Math.min(60000, deadline - Date.now()), "Task preparation", signal);
       while (true) {
         if (signal?.aborted) throw cancellationError(signal);
         if (Date.now() >= deadline) throw budgetExhausted("Exploration duration budget exhausted; unfinished tasks are not verified");
@@ -398,7 +403,15 @@ export async function loadExplorationModel(options = {}) {
   } finally { await rm(directory, { recursive: true, force: true }); }
 }
 
-export async function runExploration({ fixture, artifactDir, configPath, maxSteps, maxDurationMs, tasks, goalTasks, personaTasks, taskIds, personaIds, taskMaxSteps, taskMaxApiCalls, model, executablePath, headless, modelCallTimeoutMs, maxApiCalls, signal } = {}) {
+const EXPLORATION_HOSTS = new Set(["workbench", "obsidian"]);
+
+/**
+ * `dependencies` is a test seam only (mirrors `runAcceptance(options, dependencies)` in run.mjs): ordinary
+ * callers (run.mjs, real exploration) never pass it, and every host's real module is still the default.
+ * It lets host → driver/session/task-library selection be red-green tested with fakes, without launching a
+ * real browser or Obsidian for every wiring assertion.
+ */
+export async function runExploration({ fixture, artifactDir, configPath, maxSteps, maxDurationMs, tasks, goalTasks, personaTasks, taskIds, personaIds, taskMaxSteps, taskMaxApiCalls, model, executablePath, headless, modelCallTimeoutMs, maxApiCalls, host = "workbench", signal } = {}, dependencies = {}) {
   let session;
   let driver;
   let configured = model;
@@ -406,16 +419,36 @@ export async function runExploration({ fixture, artifactDir, configPath, maxStep
   const directory = artifactDir ?? path.resolve("output/playwright/acceptance/exploration");
   try {
     if (signal?.aborted) throw cancellationError(signal);
-    const { createExplorationDriver, createDefaultExplorationTasks } = await import("./exploration-browser.mjs");
-    // Resolve and validate the task/persona selection before touching a model or a browser, so an
+    // Unknown host fails before any import, model, browser, or Obsidian launch — same fail-fast shape as
+    // an unknown --task/--persona id below.
+    if (!EXPLORATION_HOSTS.has(host)) throw new Error(`Unknown exploration host: ${host}. Supported hosts: ${[...EXPLORATION_HOSTS].join(", ")}`);
+    const obsidian = host === "obsidian";
+    let createDriver, startSession, resolvedGoalTasks;
+    if (obsidian) {
+      const mod = await import("./exploration-obsidian.mjs");
+      createDriver = dependencies.createObsidianExplorationDriver ?? mod.createObsidianExplorationDriver;
+      startSession = dependencies.startObsidianExplorationSession ?? mod.startObsidianExplorationSession;
+      const createTasks = dependencies.createDefaultObsidianExplorationTasks ?? mod.createDefaultObsidianExplorationTasks;
+      resolvedGoalTasks = goalTasks ?? await createTasks();
+    } else {
+      const mod = await import("./exploration-browser.mjs");
+      createDriver = dependencies.createExplorationDriver ?? mod.createExplorationDriver;
+      startSession = dependencies.startWorkbenchSession ?? (await import("./workbench-session.mjs")).startWorkbenchSession;
+      const createTasks = dependencies.createDefaultExplorationTasks ?? mod.createDefaultExplorationTasks;
+      resolvedGoalTasks = goalTasks ?? await createTasks(fixture);
+    }
+    // Resolve and validate the task/persona selection before touching a model, a browser, or Obsidian, so an
     // unknown --task/--persona id fails fast instead of launching anything first.
-    const resolvedGoalTasks = goalTasks ?? await createDefaultExplorationTasks(fixture);
     const resolvedPersonaTasks = personaTasks ?? [];
     const selected = tasks ?? selectExplorationTasks({ goalTasks: resolvedGoalTasks, personaTasks: resolvedPersonaTasks, taskIds, personaIds });
     configured ??= await loadExplorationModel({ configPath, maxApiCalls: maxApiCalls ?? (maxSteps ?? 90) * 2 });
-    const { startWorkbenchSession } = await import("./workbench-session.mjs");
-    session = await startWorkbenchSession({ fixture, artifactDir: directory, executablePath, headless, signal });
-    driver = await createExplorationDriver({ ...session, fixture, artifactDir: directory, redact: configured.redact, signal });
+    if (obsidian) {
+      session = await startSession({ fixture, artifactDir: directory, signal });
+      driver = await createDriver({ session: session.session, fixture, artifactDir: directory, redact: configured.redact, signal });
+    } else {
+      session = await startSession({ fixture, artifactDir: directory, executablePath, headless, signal });
+      driver = await createDriver({ ...session, fixture, artifactDir: directory, redact: configured.redact, signal });
+    }
     result = await runExplorationLoop({ driver, model: configured, tasks: selected, artifactDir: directory, maxSteps, maxDurationMs, modelCallTimeoutMs, taskMaxSteps, taskMaxApiCalls, signal });
     result.artifacts.push(...(session.artifacts || []));
     return result;

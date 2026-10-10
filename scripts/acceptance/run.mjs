@@ -12,6 +12,7 @@ const HELP = `Usage: npm run test:acceptance -- [options]
   --suite workbench|obsidian|all   Choose fixed UI suites (default: all)
   --explore                      Also run the model API exploration
   --suite exploration            Run only model API exploration
+  --host workbench|obsidian      Exploration target product (default: workbench)
   --model-config PATH            Read only [llm] from this CLI TOML file
   --task ID[,ID...]              Run only these exploration goal tasks (repeatable)
   --persona ID[,ID...]           Run only these exploration persona tasks (repeatable)
@@ -32,8 +33,10 @@ Exploration uses the existing workbench model config only when selected.
 Exit status: 0 passed; 1 failed; 2 blocked or incomplete.
 `;
 
+const EXPLORATION_HOSTS = ["workbench", "obsidian"];
+
 export function parseArgs(argv) {
-  const options = { suites: ["workbench", "obsidian"], build: true, headless: true, maxSteps: 90, maxDurationMs: 900000 };
+  const options = { suites: ["workbench", "obsidian"], build: true, headless: true, maxSteps: 90, maxDurationMs: 900000, host: "workbench" };
   let explicit = false, explore = false;
   for (let i = 0; i < argv.length; i++) {
     const [flag, ...rest] = argv[i].split("=");
@@ -55,6 +58,12 @@ export function parseArgs(argv) {
         break;
       }
       case "--explore": explore = true; break;
+      case "--host": {
+        const value = take();
+        if (!EXPLORATION_HOSTS.includes(value)) throw new TypeError(`Unknown exploration host: ${value}. Supported hosts: ${EXPLORATION_HOSTS.join(", ")}`);
+        options.host = value;
+        break;
+      }
       case "--skip-build": options.build = false; break;
       case "--headed": options.headless = false; break;
       case "--list": options.list = true; break;
@@ -183,7 +192,7 @@ export async function runAcceptance(options, dependencies = {}) {
       result = await runners[suite]({
         fixture, artifactDir: directory, signal: options.signal,
         executablePath: options.executablePath, headless: options.headless,
-        ...(suite === "exploration" ? { configPath: options.configPath, maxSteps: options.maxSteps, maxDurationMs: options.maxDurationMs, maxApiCalls: options.maxApiCalls, taskIds: options.taskIds, personaIds: options.personaIds, taskMaxSteps: options.taskMaxSteps, taskMaxApiCalls: options.taskMaxApiCalls } : {}),
+        ...(suite === "exploration" ? { host: options.host, configPath: options.configPath, maxSteps: options.maxSteps, maxDurationMs: options.maxDurationMs, maxApiCalls: options.maxApiCalls, taskIds: options.taskIds, personaIds: options.personaIds, taskMaxSteps: options.taskMaxSteps, taskMaxApiCalls: options.taskMaxApiCalls } : {}),
       });
       if (!result || result.suite !== suite) throw new Error(`Runner returned no matching evidence for ${suite}`);
     } catch (error) {
@@ -230,7 +239,8 @@ if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1]
     if (options.help) process.stdout.write(HELP);
     else if (options.list) {
       const { EXPLORATION_TASK_IDS } = await import("./exploration-browser.mjs");
-      process.stdout.write(`workbench    Real browser: settings, daily run, recovery, reading and persistence\nobsidian     Real Obsidian: settings, run/cancel/retry, reading and PDF navigation\nexploration  Opt-in model API: bounded UI tasks with independent evidence checks\n  tasks (--task):       ${EXPLORATION_TASK_IDS.join(", ")}\n  personas (--persona): (none yet)\n`);
+      const { EXPLORATION_OBSIDIAN_TASK_IDS } = await import("./exploration-obsidian.mjs");
+      process.stdout.write(`workbench    Real browser: settings, daily run, recovery, reading and persistence\nobsidian     Real Obsidian: settings, run/cancel/retry, reading and PDF navigation\nexploration  Opt-in model API: bounded UI tasks with independent evidence checks\n  hosts (--host):                workbench (default), obsidian\n  workbench tasks (--task):      ${EXPLORATION_TASK_IDS.join(", ")}\n  obsidian tasks (--task):       ${EXPLORATION_OBSIDIAN_TASK_IDS.join(", ")}\n  personas (--persona):          (none yet)\n`);
     } else {
       const report = await runAcceptance({ ...options, signal: controller.signal }, { onProgress: message => process.stdout.write(`${message}\n`) });
       process.stdout.write(`Acceptance ${report.status}: ${JSON.stringify(report.counts)}; needs review: ${report.reviewCount}\nReport: ${join(report.artifactDir, "report.html")}\n`);

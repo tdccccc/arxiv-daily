@@ -77,8 +77,17 @@
  *   `Input.*` call is sent.
  */
 
+import fs from "node:fs/promises";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+import { blockersFromError } from "../desktop-acceptance/app-state.mjs";
+import { preflight } from "../desktop-acceptance/preflight.mjs";
+import { runDesktopSession } from "../desktop-acceptance/session.mjs";
+import { installSettingsFixture } from "../desktop-acceptance/settings-fixture.mjs";
 import { ExplorationActionError, PRESS_KEYS } from "./exploration.mjs";
-import { waitForStableTarget } from "./obsidian-ui.mjs";
+import { ACCEPTANCE_DATE, PAPERS } from "./fixtures.mjs";
+import { classifyObsidianDiagnostics, createObsidianSettings } from "./obsidian.mjs";
+import { createObsidianDriver, PLUGIN, poll, pollJsonFile, waitForStableTarget } from "./obsidian-ui.mjs";
 
 /**
  * The in-page observation. Self-contained (no closures over outer
@@ -469,4 +478,294 @@ export function createObsidianActionExecutor({ client, evaluate, redact = value 
   }
 
   return { execute };
+}
+
+/**
+ * Chunk 4 — host wiring, reset, and first Obsidian tasks. Mirrors
+ * exploration-browser.mjs's `createExplorationDriver`/`createDefaultExplorationTasks`,
+ * but over a real, isolated Obsidian instead of Playwright. Session startup is
+ * not duplicated: `startObsidianExplorationSession` reuses the exact launch/
+ * isolation/preflight/trust/build-deploy stack the fixed `obsidian` suite uses
+ * (`runDesktopSession`, `preflight`, `installSettingsFixture`,
+ * `createObsidianSettings`), and the driver itself builds one
+ * `createObsidianDriver` (obsidian-ui.mjs) internally to get command/runDate/
+ * jsonFile/exists/idle/screenshot for free — the same helpers
+ * obsidian-scenarios.mjs uses — rather than re-implementing them.
+ */
+
+const here = path.dirname(fileURLToPath(import.meta.url));
+const repoRoot = path.resolve(here, "../..");
+
+export class ObsidianExplorationBlockedError extends Error {
+  constructor(message, cause) {
+    super(message, cause ? { cause } : undefined);
+    this.name = "ObsidianExplorationBlockedError";
+  }
+}
+
+const SETTINGS_FILE = ".obsidian/plugins/arxiv-daily/data.json";
+const INDEX_FILE = "arxiv-daily/.index/papers.json";
+const dailyReportFile = date => `arxiv-daily/daily/${date}.md`;
+const entryFor = (index, arxivId) => Object.values(index?.papers ?? {}).find(entry => entry.arxivId === arxivId);
+
+/**
+ * Adapts `runDesktopSession`'s single bracketing `body` callback (launch →
+ * run `body` → teardown, all in one call) into the start-now/stop-later shape
+ * `runExploration` already uses for the workbench (`startWorkbenchSession`
+ * returns `{ ..., stop }`), without duplicating any launch/isolation/trust/
+ * diagnostics logic: `body` resolves the session to the caller and then
+ * blocks on an internal promise until `stop()` releases it, at which point
+ * `runDesktopSession`'s own teardown (CDP close, process-group reclaim,
+ * vault-state restore, sandbox removal) runs exactly as it does for the fixed
+ * suite. A failure before `body` is ever reached (preflight, trust dialog,
+ * version mismatch, app not usable) rejects the "session ready" promise
+ * instead, same as a direct `runDesktopSession` call would throw.
+ */
+export async function startObsidianExplorationSession({
+  fixture, artifactDir, signal,
+  obsidianPath = process.env.OBSIDIAN_BINARY ?? "/opt/Obsidian/obsidian",
+  virtualDisplay = true,
+  runSession = runDesktopSession,
+  check = preflight,
+} = {}) {
+  signal?.throwIfAborted();
+  if (!fixture?.vaultRoot || !fixture?.server?.url) throw new Error("Obsidian exploration needs an owned fixture with a vault and fixture server");
+  const sourceDir = path.join(repoRoot, "plugin");
+  let environment;
+  try { environment = await check({ vaultPath: fixture.vaultRoot, obsidianPath, sourceDir, virtualDisplay }); }
+  catch (error) { throw new ObsidianExplorationBlockedError(`Obsidian preflight could not complete: ${error.message}`, error); }
+  if (!environment.ok) throw new ObsidianExplorationBlockedError(environment.blockers.map(({ message, remedy }) => `${message}; ${remedy}`).join("\n"));
+  if (artifactDir) await fs.mkdir(artifactDir, { recursive: true });
+
+  let resolveReady, rejectReady, settled = false;
+  const ready = new Promise((resolve, reject) => { resolveReady = resolve; rejectReady = reject; });
+  let releaseBody;
+  const bodyReleased = new Promise(resolve => { releaseBody = resolve; });
+
+  const overall = runSession({
+    vaultPath: fixture.vaultRoot, pluginId: "arxiv-daily", sourceDir, obsidianPath, virtualDisplay,
+    beforeLaunch: ({ vaultPath, pluginId, fs: storage }) => installSettingsFixture({
+      vaultPath, pluginId, fs: storage, data: createObsidianSettings({ endpoint: `${fixture.server.url}/v1` }),
+    }),
+    body: async sessionInfo => {
+      settled = true;
+      resolveReady(sessionInfo);
+      await bodyReleased;
+    },
+  });
+  overall.catch(error => { if (!settled) { settled = true; rejectReady(error); } });
+
+  const onAbort = () => releaseBody();
+  signal?.addEventListener("abort", onAbort, { once: true });
+
+  let sessionInfo;
+  try { sessionInfo = await ready; }
+  catch (error) {
+    signal?.removeEventListener("abort", onAbort);
+    const blockers = blockersFromError(error);
+    throw blockers ? new ObsidianExplorationBlockedError(blockers.map(({ message }) => message).join("\n"), error) : error;
+  }
+
+  return {
+    ...sessionInfo,
+    async stop() {
+      signal?.removeEventListener("abort", onAbort);
+      releaseBody();
+      return overall;
+    },
+  };
+}
+
+/**
+ * The Obsidian counterpart of `exploration-browser.mjs`'s
+ * `createExplorationDriver`. `session` is the inner CDP session object
+ * (`{ evaluate, client, diagnostics, ... }`, as produced by
+ * `startObsidianExplorationSession(...).session`), matching the contract's
+ * `createObsidianExplorationDriver({ session, fixture, artifactDir, redact,
+ * signal })` shape exactly.
+ */
+export async function createObsidianExplorationDriver({ session, fixture, artifactDir, redact = value => String(value ?? ""), signal } = {}) {
+  if (!session?.evaluate || !session?.client) throw new Error("Obsidian exploration driver needs a CDP session");
+  if (!fixture?.vaultRoot || !fixture?.server?.url) throw new Error("Obsidian exploration driver needs an owned fixture");
+  await fs.mkdir(artifactDir, { recursive: true, mode: 0o700 });
+  // One real createObsidianDriver (obsidian-ui.mjs) gives command/runDate/jsonFile/exists/idle/screenshot/
+  // openDashboard/closeSettings for free, installs the fixture HTTP proxy, and is the exact same code path the
+  // fixed `obsidian` suite exercises — no parallel implementation of any of that here.
+  const helper = await createObsidianDriver({ session, fixture, artifactDir });
+  const executor = createObsidianActionExecutor({ client: session.client, evaluate: session.evaluate, redact });
+  let version = 0, latest, diagnosticsSeen = 0;
+
+  async function observe() {
+    signal?.throwIfAborted();
+    const id = `s${++version}`;
+    const snapshot = await helper.read(obsidianObservationExpression(id, false));
+    for (const control of snapshot.controls) {
+      const restriction = classifyControlRestriction(control);
+      if (restriction) { control.restricted = restriction; if (control.sensitive) control.value = ""; }
+    }
+    // Reuses obsidian-scenarios's own unexpected-console-error/exception classification (no "expected
+    // authorization failure" carve-out applies generically here, so every qualifying entry is unexpected),
+    // scoped to only the diagnostics entries collected since the previous observation.
+    const entries = session.diagnostics.entries();
+    const fresh = entries.slice(diagnosticsSeen);
+    diagnosticsSeen = entries.length;
+    const { unexpected } = classifyObsidianDiagnostics(fresh);
+    snapshot.errors = unexpected.map(entry => redact(entry.text ?? JSON.stringify(entry)));
+    latest = snapshot;
+    return snapshot;
+  }
+
+  async function execute(action, observation, options = {}) {
+    signal?.throwIfAborted();
+    if (latest?.id !== observation.id) return { ok: false, error: "Stale observation; capture a new page state" };
+    return executor.execute(action, observation, options);
+  }
+
+  async function capture(name) {
+    if (!/^[a-z0-9-]+$/.test(name)) throw new Error("Invalid exploration artifact name");
+    await helper.screenshots.capture(name, { selector: ".workspace" });
+    return path.join(artifactDir, `${name}.png`);
+  }
+
+  /**
+   * Deterministic start for every task (contract step 3): close any plugin modal (real Escape, reusing the
+   * Chunk-3 `back` action so there is exactly one place that knows how to do this), close Obsidian's own
+   * settings window, restore the plugin's settings store to the fixture baseline, and reload it the cheapest
+   * reliable way found by reading plugin/main.ts: `loadSettingsAndState()` re-reads `data.json` and replaces
+   * `this.settings`/run-state/library-connection in memory without the cost of a full disablePlugin/
+   * enablePlugin cycle (which also tears down and re-registers the scheduler, views, ribbon and commands).
+   * TypeScript `private` is erased at build time (esbuild minifies this build but never mangles property
+   * names here — no `mangleProps` is configured), so the method stays callable from the renderer the same way
+   * obsidian-ui.mjs's own `reloadPlugin()` already reaches into plugin internals. Vault content written by
+   * earlier tasks (daily reports, star marks) is deliberately left alone: resetting it on every task would
+   * cost a real Obsidian re-scan of the vault and is not needed for the two tasks in this chunk, each of which
+   * reads real, independent state rather than assuming a pristine vault (see `createDefaultObsidianExplorationTasks`).
+   * Finally the Reading Dashboard is opened so every task starts observing the same view.
+   */
+  async function reset({ signal: resetSignal } = {}) {
+    const start = Date.now();
+    resetSignal?.throwIfAborted();
+    await executor.execute({ type: "back" }, null, { signal: resetSignal }).catch(() => {});
+    await helper.closeSettings();
+    resetSignal?.throwIfAborted();
+    const settingsPath = path.join(fixture.vaultRoot, SETTINGS_FILE);
+    await fs.mkdir(path.dirname(settingsPath), { recursive: true });
+    await fs.writeFile(settingsPath, JSON.stringify(createObsidianSettings({ endpoint: `${fixture.server.url}/v1` }), null, 2));
+    // Real-host finding: `loadSettingsAndState()` alone (re-reading data.json without a full plugin
+    // reload) is NOT reliable — it replaces `plugin.settings` with a new object, but
+    // `SettingsChangeService` (constructed once in `onload()`) keeps its own `deps.settings` reference
+    // captured at construction time. A later settings-tab edit then persists correctly to disk (the
+    // candidate it builds and saves is fresh) but "commits" onto the now-detached old settings object,
+    // so the live object the settings tab reads back from (`tab.plugin.settings`) never reflects the
+    // edit: confirmed on a real host by reading `app.plugins.plugins["arxiv-daily"].settings.output.
+    // maxDailyPapers` immediately after a successful fill — it stayed at the reset baseline. The fixed
+    // suite's own `reloadPlugin()` (disablePlugin/enablePlugin, obsidian-ui.mjs) runs the full onload()
+    // again and reconstructs `SettingsChangeService` against the correct object, so it is used here
+    // instead, at the cost the phase doc anticipated (slower than a bare settings re-read, see below).
+    await helper.reloadPlugin();
+    resetSignal?.throwIfAborted();
+    await helper.openDashboard();
+    const durationMs = Date.now() - start;
+    if (durationMs > 30000) throw new Error(`Obsidian reset took ${durationMs}ms, exceeding the 30s per-task phase-abort budget`);
+    return { durationMs };
+  }
+
+  async function dispose() {}
+
+  return {
+    observe, execute, capture, reset, dispose,
+    // Task-specific extras, exactly like exploration-browser.mjs's inspect()/dailyEvidence(): real vault
+    // state (or, for the two below, a program-only UI round trip) a verifier reads/drives directly, never
+    // through the model's own action schema.
+    jsonFile: helper.jsonFile, exists: helper.exists, file: helper.file, read: helper.read,
+    async closeThenReopenSettings() { await helper.closeSettings(); await helper.openSettings(); },
+    async ensureDailyReport(date) {
+      if (await helper.exists(dailyReportFile(date))) return;
+      await helper.runDate(date);
+      await helper.idle();
+    },
+    async ensurePaperUnstarred(arxivId) {
+      await helper.openDashboard();
+      await helper.click('.arxiv-daily-dashboard__tab[data-tab="all"]');
+      await helper.wait('document.querySelectorAll(".arxiv-daily-dashboard__table tbody tr").length', value => value > 0, "dashboard paper rows");
+      const starred = await helper.read(`document.querySelector('.arxiv-daily-dashboard__star[data-arxiv-id="${arxivId}"]')?.getAttribute("aria-pressed") === "true"`);
+      if (!starred) return;
+      await helper.click(`.arxiv-daily-dashboard__star[data-arxiv-id="${arxivId}"]`);
+      await pollJsonFile(() => helper.jsonFile(INDEX_FILE), value => entryFor(value, arxivId)?.priority !== "high", "unstarred priority on disk");
+    },
+  };
+}
+
+/** Single source of truth for the default Obsidian goal-task ids, usable without a fixture (e.g. --list). */
+export const EXPLORATION_OBSIDIAN_TASK_IDS = ["daily-paper-limit", "star-paper-from-report"];
+
+const checkResult = (label, passed, actual) => ({ label, passed: Boolean(passed), ...(actual === undefined ? {} : { actual }) });
+const taskResult = checks => ({ passed: checks.every(value => value.passed), checks });
+
+/**
+ * The first two Obsidian goal tasks (contract step 4). Each verifies real, independent state: the plugin's
+ * own settings store on disk (`data.json`) and its paper index (`papers.json`) — never the model's own
+ * claim of success. `fixture` is only used to know the baseline settings/paper fixtures already installed by
+ * `startObsidianExplorationSession`; no file is read here before the session exists (unlike the workbench's
+ * `createDefaultExplorationTasks`, `data.json` does not exist until Obsidian is launched).
+ */
+export function createDefaultObsidianExplorationTasks() {
+  const target = 7;
+  const paperId = PAPERS[0].id;
+  // Memoized across repeated verify() calls within one task run: closing and reopening Obsidian's own
+  // settings window is a real, visible side effect, so it must happen at most once per task, not once per
+  // loop step while other checks are still pending.
+  let reopenCheck;
+  return [
+    {
+      id: EXPLORATION_OBSIDIAN_TASK_IDS[0], title: "修改每日论文数量上限",
+      goal: `打开插件设置页，把 Daily paper limit 改为 ${target}。移开焦点，等待保存完成即可，不需要关闭设置；不要修改路径、模型连接、密钥或邮件相关设置。`,
+      async verify({ driver, observation, actions }) {
+        const filled = actions.some(action => action.type === "fill" && action.control?.name === "Daily paper limit" && action.value === String(target));
+        if (!filled) return taskResult([checkResult(`通过设置页将 Daily paper limit 改为 ${target}`, false)]);
+        const onDisk = await pollJsonFile(() => driver.jsonFile(SETTINGS_FILE), value => value?.settings?.output?.maxDailyPapers === target, "daily paper limit on disk", { timeoutMs: 5000 }).catch(() => null);
+        const persisted = onDisk?.settings?.output?.maxDailyPapers === target;
+        if (!persisted) {
+          return taskResult([checkResult(`通过设置页将 Daily paper limit 改为 ${target}`, true), checkResult("隔离设置文件保存了新上限", false)]);
+        }
+        // Only the test program closes and reopens settings (the model has no exposed control for Obsidian's
+        // own settings chrome — the plugin's observed surface is scoped to its own tab container), and only
+        // once persistence is already confirmed, so an in-progress model action is never interrupted by this.
+        // Reading the re-rendered value is polled, not read once: a real host briefly shows the previous
+        // render while the declarative settings page re-paints after re-opening.
+        reopenCheck ??= (async () => {
+          await driver.closeThenReopenSettings();
+          const value = await poll(
+            () => driver.read(`Array.from(document.querySelectorAll("input")).find(el => el.getAttribute("aria-label") === "Daily paper limit")?.value`),
+            value => value === String(target), "re-rendered daily paper limit", { timeoutMs: 3000 },
+          ).catch(() => undefined);
+          return value;
+        })();
+        const reopened = await reopenCheck;
+        return taskResult([
+          checkResult(`通过设置页将 Daily paper limit 改为 ${target}`, true),
+          checkResult("隔离设置文件保存了新上限", persisted, onDisk.settings.output.maxDailyPapers),
+          checkResult("重新打开设置后界面仍显示新上限", reopened === String(target), reopened),
+        ]);
+      },
+    },
+    {
+      id: EXPLORATION_OBSIDIAN_TASK_IDS[1], title: "在阅读面板收藏一篇论文",
+      goal: `打开阅读面板（Reading Dashboard）的 All 列表，找到 arXiv ${paperId} 对应行，点击它的 Star paper 按钮将其标记为收藏。`,
+      async prepare({ driver }) {
+        await driver.ensureDailyReport(ACCEPTANCE_DATE);
+        await driver.ensurePaperUnstarred(paperId);
+      },
+      async verify({ driver, actions }) {
+        const starred = actions.some(action => action.type === "click" && action.control?.paperKey === paperId && /star paper/i.test(action.control?.name || ""));
+        if (!starred) return taskResult([checkResult(`点击 arXiv ${paperId} 的 Star paper 收藏按钮`, false)]);
+        const onDisk = await pollJsonFile(() => driver.jsonFile(INDEX_FILE), value => entryFor(value, paperId)?.priority === "high", "starred priority on disk", { timeoutMs: 5000 }).catch(() => null);
+        const marked = entryFor(onDisk, paperId)?.priority === "high";
+        return taskResult([
+          checkResult(`点击 arXiv ${paperId} 的 Star paper 收藏按钮`, true),
+          checkResult("插件的收藏标记已写入论文索引", marked, onDisk ? entryFor(onDisk, paperId)?.priority : undefined),
+        ]);
+      },
+    },
+  ];
 }
