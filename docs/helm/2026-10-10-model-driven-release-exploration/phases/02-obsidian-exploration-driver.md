@@ -2,8 +2,8 @@
 
 goal_ref: ../goal.md
 created: 2026-10-11T01:40:00+08:00
-updated: 2026-10-11T09:30:00+08:00
-revision: 2
+updated: 2026-10-11T10:30:00+08:00
+revision: 3
 
 ## Outcome
 
@@ -38,7 +38,7 @@ revision: 2
 - Red / baseline signal: 插件测试断言所有插件弹窗（DatePickerModal、commands.ts 中 9 个弹窗、已有类名的 4 个弹窗）打开后 modalEl 带统一标记类（如 `arxiv-daily-modal`）；观察测试断言无标记的非插件弹窗不再可见、兜底规则移除。当前无标记而失败。
 - Green check: plugin 相关 vitest；node --test scripts/tests/acceptance-exploration-obsidian.test.mjs
 - regression checks: plugin 全量测试、typecheck、build；npm run test:acceptance:tools
-- [ ] implementation and tests accepted
+- [x] implementation and tests accepted (7457134) — 共 13 个子类 + 7 个直接创建的弹窗加标记；源码守卫测试防止新弹窗遗漏。
 
 ### Chunk 3 — CDP action execution with live re-validation
 
