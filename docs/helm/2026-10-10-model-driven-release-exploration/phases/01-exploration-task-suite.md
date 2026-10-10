@@ -2,8 +2,8 @@
 
 goal_ref: ../goal.md
 created: 2026-10-10T22:27:32+08:00
-updated: 2026-10-11T00:30:00+08:00
-revision: 3
+updated: 2026-10-11T01:40:00+08:00
+revision: 4
 
 ## Outcome
 
@@ -47,7 +47,7 @@ revision: 3
 - Red / baseline signal: 新测试：`--task`/`--persona` 只运行所选 id、未知 id 报错；单任务超出步数/调用预算时该任务 blocked 而后续任务继续，整次预算（含模型适配器内的 API 调用上限，目前耗尽后每个后续任务各自 blocked）耗尽时其余任务记 not-run；报告逐任务记录模型调用、token 与耗时。当前无这些选项与计数而失败。
 - Green check: node --test scripts/tests/acceptance-exploration.test.mjs scripts/tests/acceptance-runner.test.mjs scripts/tests/acceptance-report.test.mjs
 - regression checks: npm run test:acceptance:tools；npm run test:acceptance -- --help 显示新选项
-- [ ] implementation and tests accepted
+- [x] implementation and tests accepted (7ba57f8) — Red 在 e3d6a43 的临时 worktree 中观察（缺少选择导出、运行参数与用量渲染）；真实适配器的预算错误按名称传递已实测。
 
 ## Phase verification
 
