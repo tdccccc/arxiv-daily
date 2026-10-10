@@ -2,8 +2,8 @@
 
 goal_ref: ../goal.md
 created: 2026-10-10T22:27:32+08:00
-updated: 2026-10-10T22:27:32+08:00
-revision: 1
+updated: 2026-10-10T23:00:00+08:00
+revision: 2
 
 ## Outcome
 
@@ -29,7 +29,7 @@ revision: 1
 - Red / baseline signal: 在 scripts/tests/acceptance-exploration.test.mjs 新增“失败/blocked 任务之后其余任务仍执行”“每个任务开始前调用复位且复位失败使该任务 blocked、不连累其他任务”测试，当前因 exploration.mjs:227 的 `break` 失败；原“stops remaining tasks”测试按新契约改写并记录原因。
 - Green check: node --test scripts/tests/acceptance-exploration.test.mjs
 - regression checks: npm run test:acceptance:tools；npx eslint 改动文件
-- [ ] implementation and tests accepted
+- [x] implementation and tests accepted (256baaa)
 
 ### Chunk 2 — free-exploration persona tasks
 
@@ -44,7 +44,7 @@ revision: 1
 
 - change kind: behavior change (test infrastructure)
 - strategy: strict Red-Green-Refactor
-- Red / baseline signal: 新测试：`--task`/`--persona` 只运行所选 id、未知 id 报错；单任务超出步数/调用预算时该任务 blocked 而后续任务继续，整次预算耗尽时其余任务记 not-run；报告逐任务记录模型调用、token 与耗时。当前无这些选项与计数而失败。
+- Red / baseline signal: 新测试：`--task`/`--persona` 只运行所选 id、未知 id 报错；单任务超出步数/调用预算时该任务 blocked 而后续任务继续，整次预算（含模型适配器内的 API 调用上限，目前耗尽后每个后续任务各自 blocked）耗尽时其余任务记 not-run；报告逐任务记录模型调用、token 与耗时。当前无这些选项与计数而失败。
 - Green check: node --test scripts/tests/acceptance-exploration.test.mjs scripts/tests/acceptance-runner.test.mjs scripts/tests/acceptance-report.test.mjs
 - regression checks: npm run test:acceptance:tools；npm run test:acceptance -- --help 显示新选项
 - [ ] implementation and tests accepted
