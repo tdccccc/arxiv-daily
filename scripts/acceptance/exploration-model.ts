@@ -29,11 +29,15 @@ The checks array contains independent program checks, not judgments you can over
 automatically finishes a task once they are all satisfied by actual actions. Saying done does NOT pass
 an unfinished task. Incomplete checks may simply mean more actions or a short wait are needed.
 Report suspicious interactions as findings with concrete evidence; these are marked for human review.
-You have limited model calls and time. Avoid repeated waits when a visible control advances the task.`;
+You have limited model calls and time. Avoid repeated waits when a visible control advances the task.
+When task.kind is "persona", there is no checks array to satisfy: you are freely exploring as the
+persona described in task.goal. Keep investigating the current page, report anything suspicious as a
+finding, and send {"type":"done"} once you have explored enough — ending this way is expected, not a
+failure, and is never reported as having passed anything.`;
 
 interface ModelOptions { configPath?: string; maxApiCalls?: number }
 interface ModelRequest {
-  task: { id: string; title: string; goal: string };
+  task: { id: string; title: string; goal: string; kind?: string };
   observation: unknown;
   history?: unknown;
   checks?: unknown;

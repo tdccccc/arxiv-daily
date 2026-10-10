@@ -31,6 +31,10 @@ function task(verify = () => ({ passed: false, checks: [{ label: "saved after re
   return { id: "settings", title: "Save settings", goal: "Save, reload and inspect", verify };
 }
 
+function persona(overrides = {}) {
+  return { id: "new-user", title: "第一次使用的新用户", kind: "persona", goal: "扮演第一次使用的新用户，自由探索当前页面并记录可疑交互", ...overrides };
+}
+
 async function temporary(t) {
   const root = await mkdtemp(path.join(tmpdir(), "acceptance-exploration-test-"));
   t.after(() => rm(root, { recursive: true, force: true }));
@@ -193,6 +197,66 @@ test("findings keep model suspicions separate from verified failures and preserv
   const records = (await readFile(path.join(artifactDir, "exploration-events.jsonl"), "utf8")).trim().split("\n").map(JSON.parse);
   assert.equal(records[0].observation.id, "snapshot-1");
   assert.equal(records[0].action.type, "finding");
+});
+
+test("a persona task without a verifier ends on done as explored, never passed, and keeps findings", async t => {
+  const driver = fixtureDriver();
+  let calls = 0;
+  const result = await runExplorationLoop({ driver, model: async () => {
+    calls += 1;
+    return calls === 1 ? '{"type":"finding","summary":"Button label is unclear","evidence":"Settings"}' : '{"type":"done","reason":"explored enough"}';
+  }, tasks: [persona()], artifactDir: await temporary(t), maxSteps: 10 });
+  assert.equal(result.scenarios[0].status, "explored");
+  assert.notEqual(result.scenarios[0].status, "passed");
+  assert.equal(result.findings.length, 1);
+  assert.equal(result.scenarios[0].findings.length, 1);
+});
+
+test("a goal task without a verifier is still rejected at entry", async t => {
+  await assert.rejects(runExplorationLoop({ driver: fixtureDriver(), model: async () => '{"type":"done"}',
+    tasks: [{ id: "no-verify", title: "x", goal: "y" }], artifactDir: await temporary(t) }), /verif/i);
+});
+
+test("a persona task that supplies verify is rejected as an ambiguous shape", async t => {
+  await assert.rejects(runExplorationLoop({ driver: fixtureDriver(), model: async () => '{"type":"done"}',
+    tasks: [{ ...persona(), verify: () => ({ passed: true, checks: [] }) }], artifactDir: await temporary(t) }), /verif|persona/i);
+});
+
+test("a persona task that never stops is ended as explored at its own step cap, and the next task still runs", async t => {
+  const driver = fixtureDriver();
+  const result = await runExplorationLoop({ driver, model: async request => request.task.kind === "persona"
+    ? '{"type":"wait","milliseconds":1}'
+    : JSON.stringify({ type: "click", ref: request.observation.controls[0].ref }),
+    tasks: [{ ...persona(), maxSteps: 2 }, task(({ actions }) => ({ passed: actions.length === 1, checks: [{ label: "ok", passed: actions.length === 1 }] }))],
+    artifactDir: await temporary(t), maxSteps: 50 });
+  assert.equal(result.scenarios[0].status, "explored");
+  assert.equal(result.scenarios[1].status, "passed");
+});
+
+test("a persona task that observes a product error is still failed, not explored", async t => {
+  const driver = fixtureDriver();
+  driver.observe = async () => ({ ...observation(), errors: ["Uncaught rendering error"] });
+  const result = await runExplorationLoop({ driver, model: async () => '{"type":"done"}', tasks: [persona()], artifactDir: await temporary(t) });
+  assert.equal(result.scenarios[0].status, "failed");
+  assert.match(result.scenarios[0].error, /rendering/);
+});
+
+test("a suite with a passed goal task and an explored persona is overall passed", async t => {
+  const driver = fixtureDriver();
+  const result = await runExplorationLoop({ driver, model: async request => request.task.kind === "persona"
+    ? '{"type":"done"}'
+    : JSON.stringify({ type: "click", ref: request.observation.controls[0].ref }),
+    tasks: [task(({ actions }) => ({ passed: actions.length === 1, checks: [{ label: "ok", passed: actions.length === 1 }] })), persona()],
+    artifactDir: await temporary(t), maxSteps: 10 });
+  assert.equal(result.status, "passed");
+  assert.deepEqual(result.scenarios.map(s => s.status), ["passed", "explored"]);
+});
+
+test("a suite made only of personas that all explore is still overall passed", async t => {
+  const result = await runExplorationLoop({ driver: fixtureDriver(), model: async () => '{"type":"done"}',
+    tasks: [persona(), { ...persona(), id: "impatient" }], artifactDir: await temporary(t) });
+  assert.equal(result.status, "passed");
+  assert.deepEqual(result.scenarios.map(s => s.status), ["explored", "explored"]);
 });
 
 test("action validation only accepts current refs and bounded browser operations", () => {

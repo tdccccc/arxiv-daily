@@ -11,6 +11,8 @@ const actionKeys = {
   finding: ["summary", "evidence"], done: [], blocked: [],
 };
 const browserActions = new Set(["click", "fill", "select", "back", "reload", "wait", "scroll"]);
+/** Persona tasks explore freely for findings only; they never carry a program verifier. */
+const isPersonaTask = task => task?.kind === "persona";
 
 export class ExplorationActionError extends Error {
   constructor(message) { super(message); this.name = "ExplorationActionError"; }
@@ -56,6 +58,16 @@ export function parseExplorationAction(raw, observation) {
   }
   if (value.type === "blocked" && !value.reason?.trim()) throw new ExplorationActionError("Blocked needs a reason");
   return value;
+}
+
+/** Example persona-task factory for a later task library (not wired into any default suite yet). */
+export function createPersonaExplorationTask({ id, title, persona, maxSteps } = {}) {
+  if (!id || !title || !persona) throw new Error("A persona task needs id, title, and a persona description");
+  return {
+    id, title, kind: "persona",
+    goal: `扮演「${persona}」，在当前页面自由探索。遇到可疑交互用 finding 记录证据；探索充分后可用 done 结束，不代表通过。`,
+    ...(maxSteps === undefined ? {} : { maxSteps }),
+  };
 }
 
 export function createExplorationRedactor(secrets = []) {
@@ -122,14 +134,20 @@ function pendingScenario(task) {
   return { id: task.id, title: task.title, status: "not-run", durationMs: 0, steps: [], assertions: [], artifacts: [] };
 }
 
-/** A model chooses actions; only trusted task verifiers can establish a pass. */
+/**
+ * A model chooses actions; only trusted task verifiers can establish a pass. Persona (`kind: "persona"`)
+ * tasks carry no verifier and never pass — they end as "explored" once the model sends `done` or once
+ * their own per-task step cap is reached, keeping only the findings they raised along the way.
+ */
 export async function runExplorationLoop({ driver, model, tasks, artifactDir, maxSteps, maxDurationMs, maxInvalidActions, modelCallTimeoutMs, signal }) {
   const stepsLimit = limit(maxSteps, 50, 300, "maxSteps");
   const timeLimit = limit(maxDurationMs, 600000, 3600000, "maxDurationMs");
   const invalidLimit = limit(maxInvalidActions, 3, 10, "maxInvalidActions");
   const callTimeout = limit(modelCallTimeoutMs, 45000, 300000, "modelCallTimeoutMs");
-  if (!Array.isArray(tasks) || tasks.some(task => !/^[a-z0-9-]+$/.test(task.id) || !task.title || !task.goal || typeof task.verify !== "function") || new Set(tasks.map(task => task.id)).size !== tasks.length) {
-    throw new Error("Exploration tasks need unique ids, titles, goals, and trusted program verifiers");
+  if (!Array.isArray(tasks) || tasks.some(task => !/^[a-z0-9-]+$/.test(task.id) || !task.title || !task.goal ||
+    (isPersonaTask(task) ? task.verify !== undefined : typeof task.verify !== "function")) ||
+    new Set(tasks.map(task => task.id)).size !== tasks.length) {
+    throw new Error("Exploration tasks need unique ids, titles, goals, and a trusted program verifier; persona tasks must omit verify");
   }
   const callModel = typeof model === "function" ? model : request => model.next(request);
   const redact = typeof model?.redact === "function" ? model.redact : createExplorationRedactor();
@@ -151,6 +169,9 @@ export async function runExplorationLoop({ driver, model, tasks, artifactDir, ma
     const actions = [], observations = [];
     let invalidActions = 0;
     let runEnded = false;
+    // Until per-task budgets are general (P1 chunk 3), bound a persona's own decisions so it cannot consume the whole run.
+    const personaStepCap = isPersonaTask(task) ? Math.max(1, Math.min(stepsLimit, Number.isInteger(task.maxSteps) ? task.maxSteps : 15)) : undefined;
+    let taskSteps = 0;
     try {
       if (signal?.aborted) throw cancellationError(signal);
       if (Date.now() >= deadline) throw budgetExhausted("Exploration duration budget exhausted; unfinished tasks are not verified");
@@ -170,22 +191,30 @@ export async function runExplorationLoop({ driver, model, tasks, artifactDir, ma
           await record({ kind: "product-error", taskId: task.id, observation });
           break;
         }
-        const verification = await withDeadline(childSignal => task.verify({ driver, observation, observations, actions, startedAt: taskStart, signal: childSignal }), Math.min(10000, deadline - Date.now()), "Task verification", signal);
-        scenario.assertions = safe((verification?.checks ?? []).map(check => ({ label: String(check.label), passed: check.passed === true, ...(check.actual === undefined ? {} : { actual: check.actual }) })));
-        const verified = verification?.passed === true && scenario.assertions.length > 0 && scenario.assertions.every(check => check.passed) && actions.some(action => action.type !== "wait");
-        if (verified || verification?.failed === true) {
-          scenario.status = verified ? "passed" : "failed";
-          if (!verified) scenario.error = verification.error || "Program verification observed a product failure";
-          const screenshot = await driver.capture?.(`${task.id}-result`);
-          if (screenshot) scenario.artifacts.push(screenshot);
-          await record({ kind: "verification", taskId: task.id, status: scenario.status, observation, assertions: scenario.assertions, screenshot });
+        if (typeof task.verify === "function") {
+          const verification = await withDeadline(childSignal => task.verify({ driver, observation, observations, actions, startedAt: taskStart, signal: childSignal }), Math.min(10000, deadline - Date.now()), "Task verification", signal);
+          scenario.assertions = safe((verification?.checks ?? []).map(check => ({ label: String(check.label), passed: check.passed === true, ...(check.actual === undefined ? {} : { actual: check.actual }) })));
+          const verified = verification?.passed === true && scenario.assertions.length > 0 && scenario.assertions.every(check => check.passed) && actions.some(action => action.type !== "wait");
+          if (verified || verification?.failed === true) {
+            scenario.status = verified ? "passed" : "failed";
+            if (!verified) scenario.error = verification.error || "Program verification observed a product failure";
+            const screenshot = await driver.capture?.(`${task.id}-result`);
+            if (screenshot) scenario.artifacts.push(screenshot);
+            await record({ kind: "verification", taskId: task.id, status: scenario.status, observation, assertions: scenario.assertions, screenshot });
+            break;
+          }
+        }
+        if (isPersonaTask(task) && taskSteps >= personaStepCap) {
+          scenario.status = "explored";
+          await record({ kind: "persona-explored", taskId: task.id, steps: taskSteps });
           break;
         }
         if (metrics.modelCalls >= stepsLimit) throw budgetExhausted(`Exploration step budget exhausted (${stepsLimit}); unfinished tasks are not verified`);
         metrics.modelCalls += 1;
+        taskSteps += 1;
         const event = { step: metrics.modelCalls, taskId: task.id, observation };
         const request = {
-          task: { id: task.id, title: task.title, goal: task.goal }, observation,
+          task: { id: task.id, title: task.title, goal: task.goal, ...(isPersonaTask(task) ? { kind: "persona" } : {}) }, observation,
           checks: scenario.assertions,
           history: safe(history.slice(-8)),
           remaining: { steps: stepsLimit - metrics.modelCalls + 1, milliseconds: Math.max(0, deadline - Date.now()) },
@@ -214,8 +243,11 @@ export async function runExplorationLoop({ driver, model, tasks, artifactDir, ma
               findings.push(safe({ taskId: task.id, step: event.step, status: "needs-review", summary: action.summary, evidence: action.evidence, observationId: observation.id }));
               invalidActions = 0;
             } else if (action.type === "done") {
-              scenario.status = "blocked";
-              scenario.error = "Model declared done without satisfying all program evidence checks (判据)";
+              if (isPersonaTask(task)) scenario.status = "explored";
+              else {
+                scenario.status = "blocked";
+                scenario.error = "Model declared done without satisfying all program evidence checks (判据)";
+              }
             } else if (action.type === "blocked") {
               scenario.status = "blocked";
               scenario.error = `Model could not continue: ${action.reason}`;
@@ -244,7 +276,10 @@ export async function runExplorationLoop({ driver, model, tasks, artifactDir, ma
   }
   metrics.elapsedMs = Date.now() - started;
   for (const scenario of scenarios) scenario.findings = findings.filter(finding => finding.taskId === scenario.id);
-  const result = safe({ suite: "exploration", status: scenarios.some(scenario => scenario.status === "failed") ? "failed" : scenarios.some(scenario => scenario.status === "blocked") ? "blocked" : scenarios.length && scenarios.every(scenario => scenario.status === "passed") ? "passed" : "not-run",
+  // A persona's "explored" is pass-equivalent for the run's own status: it never represents a verified
+  // goal, but it also never blocks or fails the run on its own. A run of only explored personas still
+  // reports "passed" (exit 0); callers distinguish that case by the absence of any "passed" scenario.
+  const result = safe({ suite: "exploration", status: scenarios.some(scenario => scenario.status === "failed") ? "failed" : scenarios.some(scenario => scenario.status === "blocked") ? "blocked" : scenarios.length && scenarios.every(scenario => scenario.status === "passed" || scenario.status === "explored") ? "passed" : "not-run",
     scenarios, findings, artifacts, errors, metrics,
     coverage: { completed: scenarios.filter(scenario => scenario.status === "passed").map(scenario => scenario.id), incomplete: scenarios.filter(scenario => scenario.status !== "passed").map(scenario => scenario.id) },
     ...(model?.describe ? { model: model.describe } : {}),
