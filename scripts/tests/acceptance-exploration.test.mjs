@@ -37,14 +37,82 @@ async function temporary(t) {
   return root;
 }
 
-test("an unsupported done claim is blocked and remaining tasks are not run", async t => {
+test("an unsupported done claim is blocked but later tasks still run (rewritten: this used to assert the whole run stopped after the first non-passed task; the new contract runs every task regardless, subject only to run-wide budgets)", async t => {
   const driver = fixtureDriver();
   const result = await runExplorationLoop({ driver, model: async () => '{"type":"done","reason":"Everything works"}',
     tasks: [task(), { ...task(), id: "reading" }], artifactDir: await temporary(t), maxSteps: 5 });
   assert.equal(result.status, "blocked");
-  assert.deepEqual(result.scenarios.map(value => value.status), ["blocked", "not-run"]);
+  assert.deepEqual(result.scenarios.map(value => value.status), ["blocked", "blocked"]);
   assert.match(result.scenarios[0].error, /evidence|判据/i);
+  assert.match(result.scenarios[1].error, /evidence|判据/i);
   assert.equal(driver.executed.length, 0);
+});
+
+test("a failed task does not stop a later passing task", async t => {
+  const driver = fixtureDriver();
+  // The first observe() call reports a product error so task "settings" fails immediately
+  // without ever calling the model; subsequent observe() calls are clean for task "reading".
+  let observeCalls = 0;
+  driver.observe = async () => { observeCalls += 1; return observeCalls === 1 ? { ...observation(observeCalls), errors: ["Uncaught rendering error"] } : observation(observeCalls); };
+  const result = await runExplorationLoop({ driver, model: async request => JSON.stringify({ type: "click", ref: request.observation.controls[0].ref }),
+    tasks: [task(), { ...task(({ actions }) => ({ passed: actions.length === 1, checks: [{ label: "observed saved state", passed: actions.length === 1 }] })), id: "reading" }],
+    artifactDir: await temporary(t), maxSteps: 5 });
+  assert.deepEqual(result.scenarios.map(value => value.status), ["failed", "passed"]);
+  assert.match(result.scenarios[0].error, /rendering/);
+  assert.equal(result.scenarios[1].assertions[0].passed, true);
+});
+
+test("a blocked task (invalid actions exhausted) does not stop a later passing task", async t => {
+  const driver = fixtureDriver();
+  let calls = 0;
+  const result = await runExplorationLoop({ driver, model: async request => {
+    calls += 1;
+    return calls <= 3 ? "not json" : JSON.stringify({ type: "click", ref: request.observation.controls[0].ref });
+  }, tasks: [task(), { ...task(({ actions }) => ({ passed: actions.length === 1, checks: [{ label: "observed saved state", passed: actions.length === 1 }] })), id: "reading" }],
+    artifactDir: await temporary(t), maxSteps: 10, maxInvalidActions: 3 });
+  assert.deepEqual(result.scenarios.map(value => value.status), ["blocked", "passed"]);
+  assert.equal(driver.executed.length, 1);
+});
+
+test("the host is reset before every task, including the first", async t => {
+  const driver = fixtureDriver();
+  driver.reset = async () => { driver.resets = (driver.resets ?? 0) + 1; };
+  const result = await runExplorationLoop({ driver, model: async request => JSON.stringify({ type: "click", ref: request.observation.controls[0].ref }),
+    tasks: [task(({ actions }) => ({ passed: actions.length === 1, checks: [{ label: "ok", passed: actions.length === 1 }] })),
+      { ...task(({ actions }) => ({ passed: actions.length === 1, checks: [{ label: "ok", passed: actions.length === 1 }] })), id: "reading" }],
+    artifactDir: await temporary(t), maxSteps: 5 });
+  assert.deepEqual(result.scenarios.map(value => value.status), ["passed", "passed"]);
+  assert.equal(driver.resets, 2);
+});
+
+test("a throwing reset blocks only that task; the loop tries reset again for the next task", async t => {
+  const driver = fixtureDriver();
+  let attempt = 0;
+  driver.reset = async () => { attempt += 1; if (attempt === 1) throw new Error("dialog would not close"); };
+  const result = await runExplorationLoop({ driver, model: async request => JSON.stringify({ type: "click", ref: request.observation.controls[0].ref }),
+    tasks: [task(({ actions }) => ({ passed: actions.length === 1, checks: [{ label: "ok", passed: actions.length === 1 }] })),
+      { ...task(({ actions }) => ({ passed: actions.length === 1, checks: [{ label: "ok", passed: actions.length === 1 }] })), id: "reading" }],
+    artifactDir: await temporary(t), maxSteps: 5 });
+  assert.deepEqual(result.scenarios.map(value => value.status), ["blocked", "passed"]);
+  assert.match(result.scenarios[0].error, /dialog would not close/);
+  assert.equal(attempt, 2);
+});
+
+test("run-wide step budget exhaustion ends the run and leaves later tasks not-run", async t => {
+  const driver = fixtureDriver();
+  const result = await runExplorationLoop({ driver, model: async () => '{"type":"wait","milliseconds":1}',
+    tasks: [task(), { ...task(), id: "reading" }, { ...task(), id: "third" }], artifactDir: await temporary(t), maxSteps: 2 });
+  assert.equal(result.scenarios[0].status, "blocked");
+  assert.match(result.scenarios[0].error, /step|步数/i);
+  assert.deepEqual(result.scenarios.slice(1).map(value => value.status), ["not-run", "not-run"]);
+});
+
+test("parent cancellation ends the run and leaves later tasks not-run", async t => {
+  const controller = new AbortController(); controller.abort("owner cancelled");
+  const result = await runExplorationLoop({ driver: fixtureDriver(), model: async () => '{"type":"done"}',
+    tasks: [task(), { ...task(), id: "reading" }], artifactDir: await temporary(t), signal: controller.signal });
+  assert.equal(result.scenarios[0].status, "blocked");
+  assert.equal(result.scenarios[1].status, "not-run");
 });
 
 test("only program checks after an actual action can pass a task", async t => {

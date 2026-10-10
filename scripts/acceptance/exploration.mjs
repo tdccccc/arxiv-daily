@@ -84,7 +84,16 @@ function limit(value, fallback, maximum, label) {
 }
 
 function cancellationError(signal) {
-  return new Error(`Exploration cancelled: ${signal?.reason instanceof Error ? signal.reason.message : signal?.reason || "parent requested cancellation"}`);
+  const error = new Error(`Exploration cancelled: ${signal?.reason instanceof Error ? signal.reason.message : signal?.reason || "parent requested cancellation"}`);
+  error.fatal = true;
+  return error;
+}
+
+/** Run-wide budgets end the whole run; per-task trouble (model, reset, invalid actions) never does. */
+function budgetExhausted(message) {
+  const error = new Error(message);
+  error.fatal = true;
+  return error;
 }
 
 async function withDeadline(operation, milliseconds, label, parentSignal) {
@@ -141,12 +150,18 @@ export async function runExplorationLoop({ driver, model, tasks, artifactDir, ma
     const scenario = scenarios[index], taskStart = Date.now();
     const actions = [], observations = [];
     let invalidActions = 0;
+    let runEnded = false;
     try {
       if (signal?.aborted) throw cancellationError(signal);
+      if (Date.now() >= deadline) throw budgetExhausted("Exploration duration budget exhausted; unfinished tasks are not verified");
+      if (typeof driver.reset === "function") {
+        try { await withDeadline(childSignal => driver.reset({ signal: childSignal }), Math.min(10000, deadline - Date.now()), "Host reset", signal); }
+        catch (error) { throw error.fatal ? error : new Error(`Host reset failed: ${error.message}`); }
+      }
       if (typeof task.prepare === "function") await withDeadline(childSignal => task.prepare({ driver, signal: childSignal }), Math.min(10000, deadline - Date.now()), "Task preparation", signal);
       while (true) {
         if (signal?.aborted) throw cancellationError(signal);
-        if (Date.now() >= deadline) throw new Error("Exploration duration budget exhausted; unfinished tasks are not verified");
+        if (Date.now() >= deadline) throw budgetExhausted("Exploration duration budget exhausted; unfinished tasks are not verified");
         const observation = safe(await withDeadline(() => driver.observe(), Math.min(10000, deadline - Date.now()), "UI observation", signal));
         observations.push(observation);
         if (observation.errors?.length) {
@@ -166,7 +181,7 @@ export async function runExplorationLoop({ driver, model, tasks, artifactDir, ma
           await record({ kind: "verification", taskId: task.id, status: scenario.status, observation, assertions: scenario.assertions, screenshot });
           break;
         }
-        if (metrics.modelCalls >= stepsLimit) throw new Error(`Exploration step budget exhausted (${stepsLimit}); unfinished tasks are not verified`);
+        if (metrics.modelCalls >= stepsLimit) throw budgetExhausted(`Exploration step budget exhausted (${stepsLimit}); unfinished tasks are not verified`);
         metrics.modelCalls += 1;
         const event = { step: metrics.modelCalls, taskId: task.id, observation };
         const request = {
@@ -222,9 +237,10 @@ export async function runExplorationLoop({ driver, model, tasks, artifactDir, ma
     } catch (error) {
       scenario.status = "blocked";
       scenario.error = redact(error.message);
+      runEnded = Boolean(error.fatal);
     } finally { scenario.durationMs = Date.now() - taskStart; }
     if (scenario.error) { scenario.error = redact(scenario.error); errors.push(`${task.id}: ${scenario.error}`); }
-    if (scenario.status !== "passed") break;
+    if (runEnded) break;
   }
   metrics.elapsedMs = Date.now() - started;
   for (const scenario of scenarios) scenario.findings = findings.filter(finding => finding.taskId === scenario.id);

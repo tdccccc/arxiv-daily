@@ -161,6 +161,19 @@ export async function createExplorationDriver({ page, context, url, fixture, art
         return { ok: true };
       } finally { options.signal?.removeEventListener("abort", onAbort); }
     },
+    async reset({ signal: resetSignal } = {}) {
+      assertScope();
+      resetSignal?.throwIfAborted();
+      await page.goto(url, { waitUntil: "domcontentloaded", timeout: 15000 });
+      const dialog = page.locator("dialog[open]");
+      if (await dialog.count()) {
+        await dialog.locator('[data-action="close-dialog"]').first().click({ timeout: 3000 }).catch(() => {});
+        await dialog.waitFor({ state: "hidden", timeout: 6000 }).catch(() => {});
+      }
+      await page.locator(".workbench").waitFor({ state: "visible", timeout: 12000 });
+      resetSignal?.throwIfAborted();
+      assertScope();
+    },
     async capture(name) {
       assertScope();
       if (!/^[a-z0-9-]+$/.test(name)) throw new Error("Invalid exploration artifact name");
