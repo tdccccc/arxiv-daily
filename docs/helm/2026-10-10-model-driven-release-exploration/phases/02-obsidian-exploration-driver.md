@@ -2,8 +2,8 @@
 
 goal_ref: ../goal.md
 created: 2026-10-11T01:40:00+08:00
-updated: 2026-10-11T01:40:00+08:00
-revision: 1
+updated: 2026-10-11T09:30:00+08:00
+revision: 2
 
 ## Outcome
 
@@ -29,9 +29,18 @@ revision: 1
 - Red / baseline signal: 新测试 scripts/tests/acceptance-exploration-obsidian.test.mjs 在 happy-dom 构造的 Obsidian 样式 DOM 上断言：只收集本插件根内的可交互控件（不含 ribbon、文件栏、状态栏、其他插件、Obsidian 自身设置页）；密钥字段 sensitive；发测试邮件、清除运行状态、调度开关、选择资料目录（系统对话框）、外部链接被标 restricted；observation 形状与 workbench 一致（refs、rect、inViewport、layout）。当前模块不存在而失败。
 - Green check: node --test scripts/tests/acceptance-exploration-obsidian.test.mjs
 - regression checks: npm run test:acceptance:tools
+- [x] implementation and tests accepted (f3b3563) — 设置页按 `app.setting.activeTab.id === "arxiv-daily"` 限定（真实宿主待 Chunk 4 验证）；10 个插件弹窗无标记，临时以“唯一打开的非设置弹窗”兜底；Obsidian `Menu`（阅读面板“更多”）对模型不可见，留给 P3 决定。
+
+### Chunk 2 — stable marker on every plugin modal
+
+- change kind: behavior-preserving product change (DOM marker only) + test infrastructure
+- strategy: strict Red-Green-Refactor
+- Red / baseline signal: 插件测试断言所有插件弹窗（DatePickerModal、commands.ts 中 9 个弹窗、已有类名的 4 个弹窗）打开后 modalEl 带统一标记类（如 `arxiv-daily-modal`）；观察测试断言无标记的非插件弹窗不再可见、兜底规则移除。当前无标记而失败。
+- Green check: plugin 相关 vitest；node --test scripts/tests/acceptance-exploration-obsidian.test.mjs
+- regression checks: plugin 全量测试、typecheck、build；npm run test:acceptance:tools
 - [ ] implementation and tests accepted
 
-### Chunk 2 — CDP action execution with live re-validation
+### Chunk 3 — CDP action execution with live re-validation
 
 - change kind: behavior change (test infrastructure)
 - strategy: strict Red-Green-Refactor（CDP 客户端用可记录调用的假客户端单测）
@@ -40,7 +49,7 @@ revision: 1
 - regression checks: npm run test:acceptance:tools
 - [ ] implementation and tests accepted
 
-### Chunk 3 — host wiring, reset, and first Obsidian tasks
+### Chunk 4 — host wiring, reset, and first Obsidian tasks
 
 - change kind: behavior change (test infrastructure)
 - strategy: Red-Green for selection/wiring contracts (fake session); real Obsidian run as compensating verification for launch/reset
