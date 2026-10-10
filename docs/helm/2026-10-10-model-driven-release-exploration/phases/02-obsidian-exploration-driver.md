@@ -2,8 +2,8 @@
 
 goal_ref: ../goal.md
 created: 2026-10-11T01:40:00+08:00
-updated: 2026-10-11T10:30:00+08:00
-revision: 3
+updated: 2026-10-11T12:00:00+08:00
+revision: 4
 
 ## Outcome
 
@@ -47,7 +47,7 @@ revision: 3
 - Red / baseline signal: 新测试断言 click 走稳定命中后的真实鼠标事件、fill 先聚焦再插入文本并触发 input/change、select、scroll（鼠标滚轮）、wait；执行前按当前 DOM 重新校验 ref 未失效且未变为 restricted/sensitive/disabled，否则拒绝且不发送任何输入事件；back/reload 在 Obsidian 下的映射或拒绝有明确行为。当前不存在而失败。
 - Green check: node --test scripts/tests/acceptance-exploration-obsidian.test.mjs
 - regression checks: npm run test:acceptance:tools
-- [ ] implementation and tests accepted
+- [x] implementation and tests accepted (0aa73fc) — 执行器测试与实现同写，未取得先行 Red；以变异检查补偿：去掉实时复核、限制检查或遮挡检查均使测试失败。新增宿主无关的 press 动作。
 
 ### Chunk 4 — host wiring, reset, and first Obsidian tasks
 
