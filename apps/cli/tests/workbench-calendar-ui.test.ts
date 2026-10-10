@@ -11,7 +11,7 @@ const states = {
   "2026-10-01": { state: "has-report", reportPath: daily.path, reportTitle: daily.title, papers: 3, message: "日报已保存。", canGenerate: false, actionLabel: null },
   "2026-10-02": { state: "no-matches", papers: 0, message: "已完成筛选，没有符合主题的论文。", canGenerate: false, actionLabel: null },
   "2026-10-03": { state: "failed", message: "网络请求失败，可以重试。", canGenerate: true, actionLabel: "重试生成" },
-  "2026-10-04": { state: "failed", message: "配置无效；修复后请在终端处理。", canGenerate: false, actionLabel: null },
+  "2026-10-04": { state: "failed", message: "配置无效；修复后可以重试。", canGenerate: true, actionLabel: "重试生成" },
   "2026-10-05": { state: "report-missing", message: "已完成，但日报文件已移动或删除。", canGenerate: false, actionLabel: null },
 };
 
@@ -95,9 +95,9 @@ describe("daily calendar in the reading workbench", () => {
     expect(posted(fetcher)).toHaveLength(0);
   });
 
-  it("inspects no-match, permanent failure, missing and future days without offering generation or retaining the previous report", async () => {
+  it("inspects no-match, missing and future days without offering generation or retaining the previous report", async () => {
     const { root, fetcher } = setup(); await ready(root);
-    for (const [date, text] of [["2026-10-02", "没有符合主题的论文"], ["2026-10-04", "配置无效"], ["2026-10-05", "已移动或删除"], ["2026-10-16", "尚未到该日期"]]) {
+    for (const [date, text] of [["2026-10-02", "没有符合主题的论文"], ["2026-10-05", "已移动或删除"], ["2026-10-16", "尚未到该日期"]]) {
       day(root, date).click();
       await vi.waitFor(() => expect(root.querySelector(".reading-pane")?.textContent).toContain(text));
       expect(root.querySelector("article")).toBeNull();
@@ -108,17 +108,17 @@ describe("daily calendar in the reading workbench", () => {
     expect(posted(fetcher)).toHaveLength(0);
   });
 
-  it("prefills the selected failed date and only generates on explicit form submission", async () => {
-    const run = { id: "retry", kind: "daily", date: "2026-10-03", label: "生成 2026-10-03 日报", status: "running", output: "", exitCode: null, startedAt: "2026-10-15", finishedAt: null };
+  it.each([["2026-10-03", "网络请求失败"], ["2026-10-04", "配置无效"]])("prefills failed date %s and only generates on explicit form submission", async (date, message) => {
+    const run = { id: "retry", kind: "daily", date, label: `生成 ${date} 日报`, status: "running", output: "", exitCode: null, startedAt: "2026-10-15", finishedAt: null };
     const { root, fetcher } = setup((url, init) => url.pathname.endsWith("api/runs") && init?.method === "POST" ? json({ run }, 202) : undefined);
-    await ready(root); day(root, "2026-10-03").click();
-    await vi.waitFor(() => expect(root.querySelector(".reading-pane")?.textContent).toContain("网络请求失败"));
+    await ready(root); day(root, date).click();
+    await vi.waitFor(() => expect(root.querySelector(".reading-pane")?.textContent).toContain(message));
     root.querySelector<HTMLButtonElement>(".reading-pane [data-action='generate-date']")!.click();
-    expect(root.querySelector<HTMLInputElement>("#run-date")?.value).toBe("2026-10-03");
+    expect(root.querySelector<HTMLInputElement>("#run-date")?.value).toBe(date);
     expect(posted(fetcher)).toHaveLength(0);
     root.querySelector<HTMLFormElement>(".generation-form")!.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
     await vi.waitFor(() => expect(posted(fetcher)).toHaveLength(1));
-    expect(JSON.parse(String(posted(fetcher)[0][1]?.body))).toEqual({ kind: "daily", date: "2026-10-03" });
+    expect(JSON.parse(String(posted(fetcher)[0][1]?.body))).toEqual({ kind: "daily", date });
   });
 
   it("ignores a slow older month response and returns to configured today", async () => {

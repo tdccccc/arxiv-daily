@@ -97,7 +97,7 @@ function resolveDay(date: string, today: string, report: DocumentEntry | undefin
     return { ...base, state: "skipped", message: WEEKEND_REPORT_MESSAGE };
   }
   if (state?.status === "failed_transient") return { ...base, state: "failed", canGenerate: true, actionLabel: "重试生成", message: state.error || "生成暂时失败，可以重试。" };
-  if (state?.status === "failed_permanent") return { ...base, state: "failed", message: state.error || "生成已停止，当前流程不会再次生成此日期。" };
+  if (state?.status === "failed_permanent") return { ...base, state: "failed", canGenerate: true, actionLabel: "重试生成", message: state.error || "生成已停止，修正设置后可以手动重试。" };
   if (state?.status === "skipped") return { ...base, state: "skipped", message: state.error || "该日期已被现有流程跳过。" };
   return { ...base, state: "not-generated", canGenerate: true, actionLabel: "生成日报", message: state?.error || "尚未生成日报；开始生成后，由现有流程检查该日期。" };
 }

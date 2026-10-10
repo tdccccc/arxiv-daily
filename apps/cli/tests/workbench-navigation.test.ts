@@ -10,7 +10,7 @@ const list = (papers = [paper], extra = {}) => ({ papers, total: papers.length, 
 const json = (value: unknown, code = 200) => new Response(JSON.stringify(value), { status: code, headers: { "Content-Type": "application/json" } });
 const disposers: Array<() => void> = [];
 afterEach(() => { disposers.splice(0).forEach(dispose => dispose()); document.body.innerHTML = ""; vi.restoreAllMocks(); });
-function setup(override?: (url: URL, init?: RequestInit) => Response | Promise<Response> | undefined, route = "") {
+function setup(override?: (url: URL, init?: RequestInit) => Response | Promise<Response> | undefined, route = "", searchDelayMs = 0) {
   history.replaceState({}, "", `/paper-test/${route}`);
   const root = document.createElement("div"); document.body.append(root);
   const fetcher = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -26,7 +26,7 @@ function setup(override?: (url: URL, init?: RequestInit) => Response | Promise<R
     if (url.pathname.endsWith("api/document")) return json({ path: url.searchParams.get("path"), kind: "daily", date: day.date, arxivId: "", authors: "", ...renderMarkdown("## 完整 Markdown 内容"), title: "完整研究日报", related: [], originalUrl: null, pdfUrl: null });
     throw new Error(`Unexpected request: ${url}`);
   });
-  disposers.push(mountWorkbench(root, { fetch: fetcher, searchDelayMs: 0, pollIntervalMs: 10 }));
+  disposers.push(mountWorkbench(root, { fetch: fetcher, searchDelayMs, pollIntervalMs: 10 }));
   return { root, fetcher };
 }
 const click = (root: HTMLElement, selector: string) => root.querySelector<HTMLButtonElement>(selector)!.click();
@@ -34,6 +34,36 @@ const ready = async (root: HTMLElement) => vi.waitFor(() => expect(root.querySel
 const change = (root: HTMLElement, selector: string, value: string) => { const input = root.querySelector<HTMLInputElement | HTMLSelectElement>(selector)!; input.value = value; input.dispatchEvent(new Event(input.tagName === "SELECT" ? "change" : "input", { bubbles: true })); };
 
 describe("bounded reading navigation", () => {
+  it("keeps the paper open when a searched input emits change on blur before a result click", async () => {
+    const { root, fetcher } = setup(undefined, "", 30);
+    await ready(root);
+    const search = root.querySelector<HTMLInputElement>('input[type="search"]')!;
+    search.value = paper.arxivId;
+    search.dispatchEvent(new Event("input", { bubbles: true }));
+    await vi.waitFor(() => expect(fetcher.mock.calls.some(([url]) => String(url).includes(`q=${paper.arxivId}`))).toBe(true));
+    await ready(root);
+    search.dispatchEvent(new Event("change", { bubbles: true }));
+    click(root, ".reading-pane [data-paper]");
+    await vi.waitFor(() => expect(root.querySelector(".paper-overview")).toBeTruthy());
+    await new Promise(resolve => setTimeout(resolve, 70));
+    expect(root.dataset.view).toBe("reading");
+    expect(root.querySelector(".paper-overview")?.textContent).toContain(paper.title);
+    click(root, '[data-action="back"]');
+    await ready(root);
+    expect(root.querySelector<HTMLInputElement>('input[type="search"]')!.value).toBe(paper.arxivId);
+  });
+
+  it("cancels a pending search when the user opens a paper before the debounce expires", async () => {
+    const { root } = setup(undefined, "", 50);
+    await ready(root);
+    change(root, 'input[type="search"]', paper.arxivId);
+    click(root, ".reading-pane [data-paper]");
+    await vi.waitFor(() => expect(root.querySelector(".paper-overview")).toBeTruthy());
+    await new Promise(resolve => setTimeout(resolve, 90));
+    expect(root.dataset.view).toBe("reading");
+    expect(new URL(location.href).searchParams.get("q")).toBe(paper.arxivId);
+  });
+
   it("restores list, paper, linked documents and scroll; discards forward branch", async () => {
     const { root } = setup(); await ready(root);
     const back = () => root.querySelector<HTMLButtonElement>('[data-action="history-back"]');

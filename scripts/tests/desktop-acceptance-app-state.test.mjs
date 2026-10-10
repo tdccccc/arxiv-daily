@@ -5,6 +5,7 @@ import {
   AppErrorStateError,
   blockersFromError,
   judgeAppUsability,
+  waitForAppUsable,
   withAppUsable,
 } from "../desktop-acceptance/app-state.mjs";
 
@@ -87,6 +88,59 @@ function renderer(states) {
   const queue = [...states];
   return async () => JSON.stringify(queue.length > 1 ? queue.shift() : queue[0]);
 }
+
+function readinessClock() {
+  let elapsed = 0;
+  const delays = [];
+  return { now: () => elapsed, sleep: async ms => { delays.push(ms); elapsed += ms; }, delays };
+}
+
+test("initial readiness waits for workspace leaves after the plugin has loaded", async () => {
+  const clock = readinessClock();
+  const loading = { ...usable, leaves: 0, text: "Loading vault..." };
+  const ready = { ...usable, text: "Any text, including an old error notice" };
+  const result = await waitForAppUsable({ evaluate: renderer([loading, loading, ready]), timeoutMs: 100, intervalMs: 20, ...clock });
+  assert.equal(result.leaves, 3);
+  assert.deepEqual(clock.delays, [20, 20]);
+});
+
+test("persistently missing positive capabilities remain blocked with no walked assertions", async () => {
+  const clock = readinessClock();
+  const assertions = [];
+  const evaluate = renderer([{ ...usable, leaves: 0, text: "Welcome, ready" }]);
+  const error = await (async () => {
+    await waitForAppUsable({ evaluate, timeoutMs: 50, intervalMs: 20, ...clock });
+    return withAppUsable({ evaluate, run: async () => { assertions.push("must not run"); } });
+  })().catch(error => error);
+  assert.ok(error instanceof AppErrorStateError);
+  assert.match(error.message, /workspace leaf/);
+  assert.deepEqual(clock.delays, [20, 20, 10]);
+  assert.deepEqual(assertions, []);
+});
+
+test("initial readiness keeps the post-walk failure guard intact", async () => {
+  const clock = readinessClock();
+  const evaluate = renderer([{ ...usable, leaves: 0 }, usable, usable, watchQuotaErrorPage]);
+  let walked = false;
+  const published = [];
+  const error = await (async () => {
+    await waitForAppUsable({ evaluate, timeoutMs: 50, intervalMs: 20, ...clock });
+    published.push(await withAppUsable({ evaluate, run: async () => { walked = true; return ["pass"]; } }));
+  })().catch(error => error);
+  assert.equal(walked, true);
+  assert.ok(error instanceof AppErrorStateError);
+  assert.match(error.message, /after the walk/);
+  assert.deepEqual(published, []);
+});
+
+test("a usable workspace proceeds immediately and unrelated evaluation errors are not swallowed", async () => {
+  const clock = readinessClock();
+  await waitForAppUsable({ evaluate: renderer([usable]), ...clock });
+  assert.deepEqual(clock.delays, []);
+  const failure = new Error("CDP evaluation is broken");
+  await assert.rejects(waitForAppUsable({ evaluate: async () => { throw failure; }, ...clock }), error => error === failure);
+  assert.deepEqual(clock.delays, []);
+});
 
 test("an application already in an error state stops the walk before a single assertion is produced", async () => {
   let ran = false;

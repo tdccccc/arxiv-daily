@@ -1,4 +1,4 @@
-import { App, Modal, Setting } from "obsidian";
+import { App, Modal, Setting, type ButtonComponent } from "obsidian";
 
 export type DatePickerNotice = (message: string, timeoutMs?: number) => void;
 
@@ -59,6 +59,7 @@ class DatePickerModal extends Modal {
     contentEl.createEl("h2", { text: this.opts.title ?? "Run arXiv Daily for date" });
     let inputEl: HTMLInputElement | null = null;
     let submitButton: HTMLButtonElement | null = null;
+    let submitControl: ButtonComponent | null = null;
     const dateSetting = new Setting(contentEl)
       .setName("Date")
       .setDesc(this.opts.desc ?? "Choose a real calendar date within the supported arXiv window.")
@@ -77,10 +78,11 @@ class DatePickerModal extends Modal {
     const refreshValidation = () => {
       const valid = isValidCalendarDate(this.value);
       errorEl.textContent = this.value && !valid ? "Enter a valid calendar date." : "";
-      if (submitButton) submitButton.disabled = !valid;
+      submitControl?.setDisabled(!valid);
       inputEl?.setAttribute("aria-invalid", String(Boolean(this.value) && !valid));
     };
     new Setting(contentEl).addButton((b) => {
+      submitControl = b;
       submitButton = b.buttonEl;
       b
         .setButtonText(this.opts.buttonText ?? "Run")

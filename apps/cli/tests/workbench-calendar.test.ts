@@ -91,7 +91,7 @@ it("combines real reports and full historical run state without modifying record
   expect(day("2025-01-04")).toMatchObject({ state: "report-missing", papers: 3, canGenerate: false });
   expect(day("2025-01-05")).toMatchObject({ state: "running", canGenerate: false });
   expect(day("2025-01-06")).toMatchObject({ state: "failed", canGenerate: true, actionLabel: "重试生成" });
-  expect(day("2025-01-07")).toMatchObject({ state: "failed", canGenerate: false, message: "retry limit reached" });
+  expect(day("2025-01-07")).toMatchObject({ state: "failed", canGenerate: true, actionLabel: "重试生成", message: "retry limit reached" });
   expect(day("2025-01-08")).toMatchObject({ state: "skipped", canGenerate: false, message: "upstream recorded skip reason" });
   expect(day("2025-01-09")).toMatchObject({ state: "not-generated", canGenerate: true, actionLabel: "生成日报" });
   expect(day("2025-01-10")).toMatchObject({ state: "not-generated", canGenerate: true, papers: null });
