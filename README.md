@@ -4,6 +4,8 @@ Follow research directions, filter new arXiv papers, and keep daily reports and 
 
 [Getting Started](docs/getting-started.md) · [中文说明](docs/README.zh-CN.md) · [新手教程](docs/getting-started.zh-CN.md)
 
+![arxiv daily: follow research directions and keep it all in local Markdown. Get it in Obsidian under Community plugins by searching for arXiv Daily.](docs/assets/readme-hero.png)
+
 **arXiv Daily** is a personal research companion built around the **Obsidian plugin**, with a standalone browser workbench and a DeepSeek Harness (DSH) extension that work without Obsidian.
 
 ## Features
