@@ -2,8 +2,8 @@
 
 goal_ref: ../goal.md
 created: 2026-10-10T22:27:32+08:00
-updated: 2026-10-10T23:00:00+08:00
-revision: 2
+updated: 2026-10-11T00:30:00+08:00
+revision: 3
 
 ## Outcome
 
@@ -38,7 +38,7 @@ revision: 2
 - Red / baseline signal: 新测试：无 verify 的角色任务被接受；在 done 或预算耗尽时以独立终态结束，仅携带 findings；永远不计为 passed；目标任务缺 verify 仍被拒绝；报告/退出码把该终态与 passed、failed、blocked、not-run 区分。当前因 exploration.mjs:122 拒绝无 verify 任务而失败。
 - Green check: node --test scripts/tests/acceptance-exploration.test.mjs scripts/tests/acceptance-report.test.mjs
 - regression checks: npm run test:acceptance:tools
-- [ ] implementation and tests accepted
+- [x] implementation and tests accepted (286b30f) — 设计：`explored` 仅为场景级状态；套件中全部为 passed 或 explored 时套件 passed（退出码 0）；纯角色运行在 HTML 中注明未验证目标任务。P4 文档需写明此语义。
 
 ### Chunk 3 — task selection, per-task budgets, usage reporting
 
