@@ -34,9 +34,32 @@
  *   in acceptance-exploration-obsidian.test.mjs.
  * - Obsidian's `Menu` (dashboard "More" toolbar menu, view.ts:1874
  *   `showMoreMenu`) renders into a body-level `.menu` element outside any
- *   plugin-scoped root with no plugin-identifying class (confirmed by
- *   reading view.ts:1874-2040) — out of scope/invisible in Chunk 1 rather
- *   than guessed at.
+ *   plugin-scoped root with no plugin-identifying class in Obsidian's public
+ *   API (confirmed by reading view.ts:1874-2040 and node_modules/obsidian/
+ *   obsidian.d.ts). P3 Chunk 1 adds a tiny product marker instead of leaving
+ *   it out of scope: `showMoreMenu` now calls `markArxivDailyMenu(menu)`
+ *   (plugin/src/plugin-menu.ts) right after `new Menu()`, adding a shared
+ *   `.arxiv-daily-menu` class to the menu's own `dom` — a property not in
+ *   `obsidian.d.ts` but confirmed, by extracting and reading (never
+ *   modifying) the installed Obsidian's own `resources/obsidian.asar`, to be
+ *   set in the `Menu` constructor itself (so it exists immediately, before
+ *   the menu is even shown) and to be the exact element later appended to
+ *   `document.body`. This mirrors the existing `.arxiv-daily-modal` marker
+ *   and was chosen over harness-side "last plugin click" provenance tracking
+ *   because it is unambiguous by construction: an unmarked `.menu`
+ *   (Obsidian's own context menus, other plugins' menus) is simply never
+ *   matched, with no separate "ambiguous menu" case to get wrong. Each menu
+ *   item is a plain `<div class="menu-item tappable">` with no
+ *   `role`/`tabindex` (also confirmed via the asar read), so `CONTROL_
+ *   SELECTOR` below adds `.menu-item`, scoped to this one surface by
+ *   `resolveSurface()`; `MenuItem.setDisabled(true)` toggles an `is-disabled`
+ *   class on the item's own dom rather than a native `disabled` property,
+ *   handled in `describeControl`. See `classifyControlRestriction` for which
+ *   of the menu's items are restricted (the scheduler toggle, "Clear run
+ *   state…", and the four external-link items) versus merely disabled (the
+ *   "Scheduler: Enabled/Disabled" status item) versus left open ("Run for
+ *   date…", "Force run for date…", "Retry failed dates", "Cancel active
+ *   tasks", "Run pending", "Show logs & history").
  *
  * Chunk 3 (CDP action execution with live re-validation) adds
  * `createObsidianActionExecutor`. Decisions, each justified where used below:
@@ -63,8 +86,12 @@
  *   is rejected without sending anything when `document.activeElement` is
  *   outside the current plugin surface, then sent as a real
  *   `Input.dispatchKeyEvent` keyDown/keyUp pair.
- * - back presses Escape only when a plugin modal (`.arxiv-daily-modal`) is
- *   open, closing the top one; otherwise it is rejected. reload is always
+ * - back presses Escape only when a plugin modal (`.arxiv-daily-modal`) or
+ *   the plugin's own menu (`.arxiv-daily-menu`, P3 Chunk 1) is open, closing
+ *   whichever is open — Obsidian's own `Menu` registers Escape on its
+ *   keyboard Scope to close itself, the same mechanism a modal's Escape
+ *   handling uses (confirmed via the asar read above), so one real Escape
+ *   suffices either way; otherwise back is rejected. reload is always
  *   rejected: Obsidian has no per-page reload, and resetting state between
  *   tasks is the driver's job (Chunk 4), not an exploration action's.
  * - Live re-validation (every ref-bearing action) re-runs the same in-page
@@ -85,9 +112,8 @@ import { preflight } from "../desktop-acceptance/preflight.mjs";
 import { runDesktopSession } from "../desktop-acceptance/session.mjs";
 import { installSettingsFixture } from "../desktop-acceptance/settings-fixture.mjs";
 import { ExplorationActionError, PRESS_KEYS } from "./exploration.mjs";
-import { ACCEPTANCE_DATE, PAPERS } from "./fixtures.mjs";
 import { classifyObsidianDiagnostics, createObsidianSettings } from "./obsidian.mjs";
-import { createObsidianDriver, PLUGIN, poll, pollJsonFile, waitForStableTarget } from "./obsidian-ui.mjs";
+import { createObsidianDriver, PLUGIN, pollJsonFile, waitForStableTarget } from "./obsidian-ui.mjs";
 
 /**
  * The in-page observation. Self-contained (no closures over outer
@@ -135,11 +161,29 @@ function controlVisible(node, testMode) {
   return sized && style.display !== "none" && style.visibility !== "hidden" && style.opacity !== "0" && !node.closest("[hidden],[inert]");
 }
 
-/** Resolves the one surface (modal/settings/dashboard) the model may see, in priority order. */
+/**
+ * Resolves the one surface (menu/modal/settings/dashboard) the model may
+ * see, in priority order. The dashboard "More" toolbar menu (an Obsidian
+ * `Menu`, view.ts:1874 `showMoreMenu`) is a body-level `.menu` with no
+ * plugin-identifying class of its own in Obsidian's public API — the
+ * plugin now marks its root with `.arxiv-daily-menu` right after
+ * construction (plugin/src/plugin-menu.ts, mirroring `.arxiv-daily-modal`
+ * for modals), so an unmarked `.menu` (Obsidian's own context menus, other
+ * plugins' menus) is, by construction, never ambiguous with ours: it is
+ * simply not found by this selector and stays fully invisible, the same
+ * "no fallback" policy Chunk 2 already applies to unmarked modals. Checked
+ * before modals/settings/dashboard because it is the most recent overlay
+ * when open (opened from a toolbar button on the dashboard, never nested
+ * inside a modal in this plugin).
+ */
 function resolveSurface() {
-  let surface, view = "none", modalOpen = false;
-  const markedModal = document.querySelector(".arxiv-daily-modal");
-  if (markedModal) { surface = markedModal.closest(".modal") || markedModal; view = "modal"; modalOpen = true; }
+  let surface, view = "none", modalOpen = false, menuOpen = false;
+  const markedMenu = document.querySelector(".arxiv-daily-menu");
+  if (markedMenu) { surface = markedMenu; view = "menu"; menuOpen = true; }
+  if (!surface) {
+    const markedModal = document.querySelector(".arxiv-daily-modal");
+    if (markedModal) { surface = markedModal.closest(".modal") || markedModal; view = "modal"; modalOpen = true; }
+  }
   if (!surface) {
     const activeTab = typeof app !== "undefined" ? app?.setting?.activeTab : undefined;
     const settingsOpen = (typeof app !== "undefined" && app?.setting?.isOpen && activeTab?.id === "arxiv-daily") || Boolean(document.querySelector(".arxiv-daily-settings"));
@@ -152,7 +196,7 @@ function resolveSurface() {
     const dashboard = document.querySelector(".arxiv-daily-dashboard");
     if (dashboard) { surface = dashboard; view = "dashboard"; }
   }
-  return { surface, view, modalOpen };
+  return { surface, view, modalOpen, menuOpen };
 }
 
 /** Builds the observed/live control shape for one node; `ref` is already known (generated or re-found by attribute). */
@@ -165,7 +209,10 @@ function describeControl(node, ref) {
   return {
     ref, tag: node.tagName.toLowerCase(), type: node.getAttribute("type") || "", role: node.getAttribute("role") || "",
     name, field,
-    disabled: node.disabled === true || node.getAttribute("aria-disabled") === "true", readOnly: node.readOnly === true,
+    // Obsidian's own menu items are plain, non-focusable `<div class="menu-item">`s: `MenuItem.
+    // setDisabled(true)` (resources/obsidian.asar, read-only inspection) toggles an `is-disabled`
+    // class on the item's own dom rather than a native `disabled` property or `aria-disabled`.
+    disabled: node.disabled === true || node.getAttribute("aria-disabled") === "true" || node.classList.contains("is-disabled"), readOnly: node.readOnly === true,
     ...(sensitive ? { sensitive: true } : {}),
     ...(typeof node.value === "string" ? { value: sensitive ? "" : node.value.slice(0, 1000) } : {}),
     ...(typeof node.checked === "boolean" ? { checked: node.checked } : {}),
@@ -179,10 +226,14 @@ function describeControl(node, ref) {
   };
 }
 
-const CONTROL_SELECTOR = 'button,summary,a[href],input:not([type="hidden"]),textarea,select,[role="button"],[role="tab"],[role="checkbox"],[role="combobox"],[tabindex]';
+// `.menu-item` is added for the dashboard's "More" menu (resources/obsidian.asar, read-only
+// inspection confirms Obsidian's own MenuItem never sets role/tabindex on it, unlike every other
+// interactive element this selector already covers) — scoped to the single `.arxiv-daily-menu`
+// surface by resolveSurface(), so it never matches anything outside an open plugin menu.
+const CONTROL_SELECTOR = 'button,summary,a[href],input:not([type="hidden"]),textarea,select,[role="button"],[role="tab"],[role="checkbox"],[role="combobox"],[tabindex],.menu-item';
 
 export function obsidianObservation(id, testMode) {
-  const { surface, view, modalOpen } = resolveSurface();
+  const { surface, view, modalOpen, menuOpen } = resolveSurface();
   const controls = [];
   if (surface) {
     for (const node of surface.querySelectorAll(CONTROL_SELECTOR)) {
@@ -202,11 +253,11 @@ export function obsidianObservation(id, testMode) {
     text: (surface ? surface.innerText ?? surface.textContent ?? "" : "").slice(0, 16000),
     controls,
     // Chunk 3: which browser-shaped actions this host currently allows, so the model does not have
-    // to guess at back/reload support that differs by host and by whether a modal is open. `reload`
-    // is never listed — Obsidian has no per-page reload, and resetting state between tasks is the
-    // driver's job, not an action a model can request.
-    capabilities: ["click", "fill", "select", "scroll", "wait", "press", ...(modalOpen ? ["back"] : [])],
-    layout: { rootMounted: Boolean(surface), view, dialogOpen: modalOpen, viewport: { width: innerWidth, height: innerHeight }, notices },
+    // to guess at back/reload support that differs by host and by whether a modal or the plugin's
+    // own menu is open. `reload` is never listed — Obsidian has no per-page reload, and resetting
+    // state between tasks is the driver's job, not an action a model can request.
+    capabilities: ["click", "fill", "select", "scroll", "wait", "press", ...((modalOpen || menuOpen) ? ["back"] : [])],
+    layout: { rootMounted: Boolean(surface), view, dialogOpen: modalOpen || menuOpen, viewport: { width: innerWidth, height: innerHeight }, notices },
   };
 }
 
@@ -316,10 +367,19 @@ export function classifyControlRestriction(control, allowedUrl) {
   if (control.type === "file") return "file selection is outside the Obsidian capability";
   if (/choose folder|change folder|select folder/i.test(name)) return "folder selection opens a native OS dialog";
   if (/folder|directory|\bpath\b/i.test(name)) return "filesystem locations must remain owned by the fixture";
-  if (/^arxiv-daily-run-window-/.test(field) || /^enable\s*·/i.test(name) || /check every \(minutes\)/i.test(name)) return "scheduling settings are fixed by the fixture";
+  // The dashboard "More" menu's scheduler items (view.ts:1879-1895): the disabled status item
+  // ("Scheduler: Enabled/Disabled") is caught by the `disabled` check in createObsidianActionExecutor
+  // instead (menu items use an is-disabled CLASS — see describeControl — not restriction-by-name); the
+  // toggle itself ("Enable scheduler"/"Disable scheduler") is restricted here, same policy as the
+  // settings tab's own schedule toggle just above.
+  if (/^arxiv-daily-run-window-/.test(field) || /^enable\s*·/i.test(name) || /check every \(minutes\)/i.test(name) || /^(enable|disable) scheduler$/i.test(name)) return "scheduling settings are fixed by the fixture";
   if (/^api base url$|^better pdf parser$|embedding|sidecar/i.test(name)) return "external service and embedding/parser settings are fixed by the fixture";
   if (/send test|how to send|your email|send verification email|from email|from name|daily auto-send|resend api key|verification code/i.test(name)) return "email delivery is excluded from exploration";
-  if (/^(open arxiv|open bug report|report a bug|open feature request|request a feature|open docs|documentation|open repository|repository)$/i.test(name)) return "link leaves the plugin for an external destination";
+  // "Clear run state…" (the More menu's command-backed item, commands.ts's clear-run-state): clearing
+  // run state is explicitly out of scope for exploration (goal.md), independent of the generic
+  // dangerous-command handling the harness already applies elsewhere.
+  if (/^clear run state/i.test(name)) return "run state cannot be cleared from exploration";
+  if (/^(open arxiv|open bug report|report a bug|open feature request|request a feature|open docs|open documentation|documentation|open repository|repository)$/i.test(name)) return "link leaves the plugin for an external destination";
   if (control.href) {
     // No product code currently renders a real `<a href>` for external nav
     // (confirmed by reading view.ts/tab.ts — all external opens are onClick
@@ -462,8 +522,11 @@ export function createObsidianActionExecutor({ client, evaluate, redact = value 
         if (!scoped) throw new ExplorationActionError("The focused element is outside the plugin's scope; the key press was not sent");
         await dispatchKey(action.key);
       } else if (action.type === "back") {
-        const modalOpen = await read(`Boolean(document.querySelector(".arxiv-daily-modal"))`);
-        if (!modalOpen) throw new ExplorationActionError("No plugin modal is open to go back from");
+        // Obsidian's own Menu registers Escape on its keyboard Scope to close itself
+        // (resources/obsidian.asar, read-only inspection), the same mechanism a plugin modal's own
+        // Escape handling uses, so a single real Escape closes whichever is open.
+        const canGoBack = await read(`Boolean(document.querySelector(".arxiv-daily-modal, .arxiv-daily-menu"))`);
+        if (!canGoBack) throw new ExplorationActionError("No plugin modal is open to go back from");
         await dispatchKey("Escape");
       } else if (action.type === "reload") {
         throw new ExplorationActionError("Reload is not supported inside Obsidian; the driver resets state between tasks instead");
@@ -503,10 +566,13 @@ export class ObsidianExplorationBlockedError extends Error {
   }
 }
 
-const SETTINGS_FILE = ".obsidian/plugins/arxiv-daily/data.json";
-const INDEX_FILE = "arxiv-daily/.index/papers.json";
+// Exported so exploration-tasks/obsidian.mjs's goal-task verify() can read the same on-disk paths and
+// lookup this driver's reset()/ensureDailyReport()/ensurePaperUnstarred() already use, without a second
+// copy of these paths drifting out of sync.
+export const SETTINGS_FILE = ".obsidian/plugins/arxiv-daily/data.json";
+export const INDEX_FILE = "arxiv-daily/.index/papers.json";
 const dailyReportFile = date => `arxiv-daily/daily/${date}.md`;
-const entryFor = (index, arxivId) => Object.values(index?.papers ?? {}).find(entry => entry.arxivId === arxivId);
+export const entryFor = (index, arxivId) => Object.values(index?.papers ?? {}).find(entry => entry.arxivId === arxivId);
 
 /**
  * Adapts `runDesktopSession`'s single bracketing `body` callback (launch →
@@ -639,7 +705,7 @@ export async function createObsidianExplorationDriver({ session, fixture, artifa
    * obsidian-ui.mjs's own `reloadPlugin()` already reaches into plugin internals. Vault content written by
    * earlier tasks (daily reports, star marks) is deliberately left alone: resetting it on every task would
    * cost a real Obsidian re-scan of the vault and is not needed for the two tasks in this chunk, each of which
-   * reads real, independent state rather than assuming a pristine vault (see `createDefaultObsidianExplorationTasks`).
+   * reads real, independent state rather than assuming a pristine vault (see exploration-tasks/obsidian.mjs's `goalTasks`).
    * Finally the Reading Dashboard is opened so every task starts observing the same view.
    */
   async function reset({ signal: resetSignal } = {}) {
@@ -696,76 +762,3 @@ export async function createObsidianExplorationDriver({ session, fixture, artifa
   };
 }
 
-/** Single source of truth for the default Obsidian goal-task ids, usable without a fixture (e.g. --list). */
-export const EXPLORATION_OBSIDIAN_TASK_IDS = ["daily-paper-limit", "star-paper-from-report"];
-
-const checkResult = (label, passed, actual) => ({ label, passed: Boolean(passed), ...(actual === undefined ? {} : { actual }) });
-const taskResult = checks => ({ passed: checks.every(value => value.passed), checks });
-
-/**
- * The first two Obsidian goal tasks (contract step 4). Each verifies real, independent state: the plugin's
- * own settings store on disk (`data.json`) and its paper index (`papers.json`) — never the model's own
- * claim of success. `fixture` is only used to know the baseline settings/paper fixtures already installed by
- * `startObsidianExplorationSession`; no file is read here before the session exists (unlike the workbench's
- * `createDefaultExplorationTasks`, `data.json` does not exist until Obsidian is launched).
- */
-export function createDefaultObsidianExplorationTasks() {
-  const target = 7;
-  const paperId = PAPERS[0].id;
-  // Memoized across repeated verify() calls within one task run: closing and reopening Obsidian's own
-  // settings window is a real, visible side effect, so it must happen at most once per task, not once per
-  // loop step while other checks are still pending.
-  let reopenCheck;
-  return [
-    {
-      id: EXPLORATION_OBSIDIAN_TASK_IDS[0], title: "修改每日论文数量上限",
-      goal: `打开插件设置页，把 Daily paper limit 改为 ${target}。移开焦点，等待保存完成即可，不需要关闭设置；不要修改路径、模型连接、密钥或邮件相关设置。`,
-      async verify({ driver, observation, actions }) {
-        const filled = actions.some(action => action.type === "fill" && action.control?.name === "Daily paper limit" && action.value === String(target));
-        if (!filled) return taskResult([checkResult(`通过设置页将 Daily paper limit 改为 ${target}`, false)]);
-        const onDisk = await pollJsonFile(() => driver.jsonFile(SETTINGS_FILE), value => value?.settings?.output?.maxDailyPapers === target, "daily paper limit on disk", { timeoutMs: 5000 }).catch(() => null);
-        const persisted = onDisk?.settings?.output?.maxDailyPapers === target;
-        if (!persisted) {
-          return taskResult([checkResult(`通过设置页将 Daily paper limit 改为 ${target}`, true), checkResult("隔离设置文件保存了新上限", false)]);
-        }
-        // Only the test program closes and reopens settings (the model has no exposed control for Obsidian's
-        // own settings chrome — the plugin's observed surface is scoped to its own tab container), and only
-        // once persistence is already confirmed, so an in-progress model action is never interrupted by this.
-        // Reading the re-rendered value is polled, not read once: a real host briefly shows the previous
-        // render while the declarative settings page re-paints after re-opening.
-        reopenCheck ??= (async () => {
-          await driver.closeThenReopenSettings();
-          const value = await poll(
-            () => driver.read(`Array.from(document.querySelectorAll("input")).find(el => el.getAttribute("aria-label") === "Daily paper limit")?.value`),
-            value => value === String(target), "re-rendered daily paper limit", { timeoutMs: 3000 },
-          ).catch(() => undefined);
-          return value;
-        })();
-        const reopened = await reopenCheck;
-        return taskResult([
-          checkResult(`通过设置页将 Daily paper limit 改为 ${target}`, true),
-          checkResult("隔离设置文件保存了新上限", persisted, onDisk.settings.output.maxDailyPapers),
-          checkResult("重新打开设置后界面仍显示新上限", reopened === String(target), reopened),
-        ]);
-      },
-    },
-    {
-      id: EXPLORATION_OBSIDIAN_TASK_IDS[1], title: "在阅读面板收藏一篇论文",
-      goal: `打开阅读面板（Reading Dashboard）的 All 列表，找到 arXiv ${paperId} 对应行，点击它的 Star paper 按钮将其标记为收藏。`,
-      async prepare({ driver }) {
-        await driver.ensureDailyReport(ACCEPTANCE_DATE);
-        await driver.ensurePaperUnstarred(paperId);
-      },
-      async verify({ driver, actions }) {
-        const starred = actions.some(action => action.type === "click" && action.control?.paperKey === paperId && /star paper/i.test(action.control?.name || ""));
-        if (!starred) return taskResult([checkResult(`点击 arXiv ${paperId} 的 Star paper 收藏按钮`, false)]);
-        const onDisk = await pollJsonFile(() => driver.jsonFile(INDEX_FILE), value => entryFor(value, paperId)?.priority === "high", "starred priority on disk", { timeoutMs: 5000 }).catch(() => null);
-        const marked = entryFor(onDisk, paperId)?.priority === "high";
-        return taskResult([
-          checkResult(`点击 arXiv ${paperId} 的 Star paper 收藏按钮`, true),
-          checkResult("插件的收藏标记已写入论文索引", marked, onDisk ? entryFor(onDisk, paperId)?.priority : undefined),
-        ]);
-      },
-    },
-  ];
-}

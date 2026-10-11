@@ -4,7 +4,8 @@ import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { classifyControlRestriction, createDefaultExplorationTasks, createExplorationDriver } from "../acceptance/exploration-browser.mjs";
+import { classifyControlRestriction, createExplorationDriver } from "../acceptance/exploration-browser.mjs";
+import { goalTasks as createDefaultExplorationTasks } from "../acceptance/exploration-tasks/workbench.mjs";
 import { loadExplorationModel, parseExplorationAction, runExplorationLoop, selectExplorationTasks } from "../acceptance/exploration.mjs";
 
 const observation = (version = 1) => ({

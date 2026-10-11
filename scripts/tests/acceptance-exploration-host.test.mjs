@@ -6,14 +6,14 @@ import test from "node:test";
 import vm from "node:vm";
 import { Window } from "happy-dom";
 import { evaluate as cdpEvaluate } from "../desktop-acceptance/cdp.mjs";
-import { parseArgs } from "../acceptance/run.mjs";
+import { describeAcceptanceSuites, parseArgs } from "../acceptance/run.mjs";
 import { runExploration, runExplorationLoop } from "../acceptance/exploration.mjs";
 import {
-  createDefaultObsidianExplorationTasks,
   createObsidianExplorationDriver,
   startObsidianExplorationSession,
-  EXPLORATION_OBSIDIAN_TASK_IDS,
 } from "../acceptance/exploration-obsidian.mjs";
+import * as obsidianTaskLibrary from "../acceptance/exploration-tasks/obsidian.mjs";
+import * as workbenchTaskLibrary from "../acceptance/exploration-tasks/workbench.mjs";
 
 // ---------------------------------------------------------------------------
 // --host arg parsing and threading (run.mjs)
@@ -216,13 +216,18 @@ test("an abort signal releases a held-open Obsidian session so its own teardown 
 });
 
 // ---------------------------------------------------------------------------
-// createDefaultObsidianExplorationTasks: shape (program verify, no persona
-// default tasks, Chinese goals).
+// exploration-tasks/obsidian.mjs: shape (program verify, no persona
+// default tasks, Chinese goals), moved out of exploration-obsidian.mjs so
+// the per-host driver (observation/execution) and per-host task library
+// (what to do, how to tell it passed) live in separate, independently
+// growable files (P3 Chunk 1 of the task-library phase).
 // ---------------------------------------------------------------------------
 
 test("the default Obsidian goal tasks have ids, titles, Chinese goals and a program verify, matching the exported id list", async () => {
-  const tasks = await createDefaultObsidianExplorationTasks();
-  assert.deepEqual(tasks.map(t => t.id), EXPLORATION_OBSIDIAN_TASK_IDS);
+  const tasks = await obsidianTaskLibrary.goalTasks();
+  assert.deepEqual(tasks.map(t => t.id), obsidianTaskLibrary.GOAL_TASK_IDS);
+  // Ids are unchanged by the move (phase contract: "keeping existing task ids/behavior unchanged").
+  assert.deepEqual(obsidianTaskLibrary.GOAL_TASK_IDS, ["daily-paper-limit", "star-paper-from-report"]);
   for (const t of tasks) {
     assert.equal(typeof t.title, "string");
     assert.ok(t.title.length > 0);
@@ -231,6 +236,59 @@ test("the default Obsidian goal tasks have ids, titles, Chinese goals and a prog
     assert.notEqual(t.kind, "persona");
   }
   assert.equal(typeof tasks[1].prepare, "function", "the star task needs prepare() to deterministically generate a daily report");
+});
+
+// ---------------------------------------------------------------------------
+// Task-library structure (P3 Chunk 1): scripts/acceptance/exploration-tasks/
+// {obsidian,workbench}.mjs each export GOAL_TASK_IDS, PERSONA_TASK_IDS,
+// goalTasks(fixture|ctx), and personaTasks() — the single place chunks 2-5
+// add tasks/personas to, and the single place `--list` and task selection
+// read ids from.
+// ---------------------------------------------------------------------------
+
+test("both host task-library modules export the documented shape", () => {
+  for (const [name, lib] of [["obsidian", obsidianTaskLibrary], ["workbench", workbenchTaskLibrary]]) {
+    assert.ok(Array.isArray(lib.GOAL_TASK_IDS) && lib.GOAL_TASK_IDS.length > 0, `${name}: GOAL_TASK_IDS must be a non-empty array`);
+    assert.ok(Array.isArray(lib.PERSONA_TASK_IDS), `${name}: PERSONA_TASK_IDS must be an array (empty is fine: none yet)`);
+    assert.equal(typeof lib.goalTasks, "function", `${name}: goalTasks must be exported`);
+    assert.equal(typeof lib.personaTasks, "function", `${name}: personaTasks must be exported`);
+  }
+});
+
+test("ids are unique across goal tasks and personas combined, per host", async () => {
+  for (const lib of [obsidianTaskLibrary, workbenchTaskLibrary]) {
+    const ids = [...lib.GOAL_TASK_IDS, ...lib.PERSONA_TASK_IDS];
+    assert.equal(new Set(ids).size, ids.length, `duplicate ids within one host's task library: ${ids.join(", ")}`);
+  }
+});
+
+test("the workbench goal task ids are unchanged by the move and match goalTasks()'s actual ids", async () => {
+  assert.deepEqual(workbenchTaskLibrary.GOAL_TASK_IDS, ["settings-persistence", "sidebar-persistence", "generate-and-read"]);
+  const root = await mkdtemp(path.join(tmpdir(), "exploration-task-library-workbench-"));
+  try {
+    const vaultRoot = path.join(root, "vault");
+    const configPath = path.join(root, "config.toml");
+    await mkdir(vaultRoot);
+    await writeFile(configPath, `vault_root = ${JSON.stringify(vaultRoot)}\n[output]\nmax_daily_papers = 2\n`);
+    const tasks = await workbenchTaskLibrary.goalTasks({ root, vaultRoot, configPath });
+    assert.deepEqual(tasks.map(t => t.id), workbenchTaskLibrary.GOAL_TASK_IDS);
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test("neither host has any personas yet, but personaTasks() returns a usable (empty) array, not undefined", () => {
+  assert.deepEqual(obsidianTaskLibrary.personaTasks(), []);
+  assert.deepEqual(workbenchTaskLibrary.personaTasks(), []);
+  assert.deepEqual(obsidianTaskLibrary.PERSONA_TASK_IDS, []);
+  assert.deepEqual(workbenchTaskLibrary.PERSONA_TASK_IDS, []);
+});
+
+test("--list (describeAcceptanceSuites) lists both hosts' goal task ids and personas", async () => {
+  const output = await describeAcceptanceSuites();
+  assert.match(output, /obsidian/);
+  assert.match(output, /workbench/);
+  for (const id of obsidianTaskLibrary.GOAL_TASK_IDS) assert.ok(output.includes(id), `--list must mention Obsidian task id ${id}`);
+  for (const id of workbenchTaskLibrary.GOAL_TASK_IDS) assert.ok(output.includes(id), `--list must mention workbench task id ${id}`);
+  assert.match(output, /none yet/, "no personas exist yet for either host");
 });
 
 // ---------------------------------------------------------------------------

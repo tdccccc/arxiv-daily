@@ -543,3 +543,123 @@ test("reload is rejected outright as unsupported in Obsidian, with zero Input.* 
   assert.match(result.error, /not supported|reset/i);
   assert.equal(calls.length, 0);
 });
+
+/**
+ * Chunk 1 of P3 (task-library) — plugin "More" menu access. The real
+ * Obsidian `Menu`/`MenuItem` (resources/obsidian.asar, read-only inspection)
+ * render as a body-level `<div class="menu">` containing plain
+ * `<div class="menu-item tappable">`s (NO `role`/`tabindex`, so the shared
+ * `CONTROL_SELECTOR` needs `.menu-item` added) with a `.menu-item-title`
+ * child carrying the label text. `setDisabled(true)` toggles an
+ * `is-disabled` class on the item's own dom, not a native `disabled`
+ * property. The plugin now marks its own menu's root with
+ * `.arxiv-daily-menu` (plugin/src/plugin-menu.ts, mirroring the
+ * `.arxiv-daily-modal` marker), mirrored here as the fixture.
+ */
+function moreMenuFixture() {
+  return `
+    <div class="menu arxiv-daily-menu">
+      <div class="menu-item tappable is-disabled"><div class="menu-item-icon"></div><div class="menu-item-title">Scheduler: Enabled</div></div>
+      <div class="menu-item tappable"><div class="menu-item-icon"></div><div class="menu-item-title">Disable scheduler</div></div>
+      <div class="menu-separator"></div>
+      <div class="menu-item tappable"><div class="menu-item-icon"></div><div class="menu-item-title">Run for date…</div></div>
+      <div class="menu-item tappable"><div class="menu-item-icon"></div><div class="menu-item-title">Force run for date…</div></div>
+      <div class="menu-item tappable"><div class="menu-item-icon"></div><div class="menu-item-title">Retry failed dates</div></div>
+      <div class="menu-item tappable"><div class="menu-item-icon"></div><div class="menu-item-title">Cancel active tasks</div></div>
+      <div class="menu-separator"></div>
+      <div class="menu-item tappable"><div class="menu-item-icon"></div><div class="menu-item-title">Run pending</div></div>
+      <div class="menu-separator"></div>
+      <div class="menu-item tappable"><div class="menu-item-icon"></div><div class="menu-item-title">Show logs & history</div></div>
+      <div class="menu-item tappable"><div class="menu-item-icon"></div><div class="menu-item-title">Clear run state…</div></div>
+      <div class="menu-separator"></div>
+      <div class="menu-item tappable"><div class="menu-item-icon"></div><div class="menu-item-title">Report a bug</div></div>
+      <div class="menu-item tappable"><div class="menu-item-icon"></div><div class="menu-item-title">Request a feature</div></div>
+      <div class="menu-item tappable"><div class="menu-item-icon"></div><div class="menu-item-title">Open documentation</div></div>
+      <div class="menu-item tappable"><div class="menu-item-icon"></div><div class="menu-item-title">Open repository</div></div>
+    </div>
+  `;
+}
+
+test("the plugin's own marked 'More' menu is observable: safe items are plain, the scheduler toggle and status are restricted/disabled", () => {
+  const { observe } = buildWindow(moreMenuFixture());
+  const snapshot = observe();
+  assert.equal(snapshot.layout.view, "menu");
+  const byName = name => snapshot.controls.find(c => c.name === name);
+  // Safe items: observable, unrestricted, enabled.
+  for (const name of ["Run for date…", "Force run for date…", "Retry failed dates", "Cancel active tasks", "Run pending", "Show logs & history"]) {
+    const control = byName(name);
+    assert.ok(control, `${name} must be observed`);
+    assert.equal(classifyControlRestriction(control), undefined, `${name} must not be restricted`);
+    assert.equal(control.disabled, false, `${name} must not be disabled`);
+  }
+  // The disabled status item: present but non-interactive, and NOT matched by the scheduler-toggle restriction rule (it is disabled, not restricted-by-name).
+  const status = byName("Scheduler: Enabled");
+  assert.ok(status, "the disabled status item must still be observed (so the model can read it), just not interactive");
+  assert.equal(status.disabled, true, "menu items use an is-disabled CLASS, not a native disabled property — describeControl must check for it");
+  // The scheduler toggle itself: restricted regardless of enabled/disabled label text.
+  const toggle = byName("Disable scheduler");
+  assert.match(classifyControlRestriction(toggle), /scheduling/i);
+  // Clear run state: restricted (goal.md: clearing run state must stay outside exploration).
+  const clearRunState = byName("Clear run state…");
+  assert.ok(clearRunState, "Clear run state… must be observed (so the model can see and avoid it), not silently hidden");
+  assert.ok(classifyControlRestriction(clearRunState), "Clear run state… must be restricted");
+  // External links: restricted. "Open documentation" is a regression-prone exact-label regex (not "open docs"/"documentation" alone).
+  for (const name of ["Report a bug", "Request a feature", "Open documentation", "Open repository"]) {
+    assert.equal(classifyControlRestriction(byName(name)), "link leaves the plugin for an external destination", `${name} must be classified as an external link`);
+  }
+});
+
+test("capabilities advertise back when the plugin's own menu is open (so Escape can close it), and dialogOpen is true", () => {
+  const { observe } = buildWindow(moreMenuFixture());
+  const snapshot = observe();
+  assert.ok(snapshot.capabilities.includes("back"), "back must be available while the plugin menu is open");
+  assert.ok(!snapshot.capabilities.includes("reload"));
+});
+
+test("an unmarked .menu (Obsidian's own context menu, or another plugin's) is entirely invisible, with no fallback", () => {
+  const foreignMenu = `
+    <div class="menu">
+      <div class="menu-item tappable"><div class="menu-item-title">Open in new tab</div></div>
+    </div>
+  `;
+  const { observe } = buildWindow(foreignMenu);
+  const snapshot = observe();
+  assert.equal(snapshot.layout.view, "none");
+  assert.deepEqual(snapshot.controls, []);
+});
+
+test("ambiguous menus are rejected by construction: when our marked menu and an unmarked foreign .menu are both open, only the marked one is observed", () => {
+  const combined = `
+    <div class="menu"><div class="menu-item tappable"><div class="menu-item-title">Foreign action</div></div></div>
+    ${moreMenuFixture()}
+  `;
+  const { observe } = buildWindow(combined);
+  const snapshot = observe();
+  assert.equal(snapshot.layout.view, "menu");
+  assert.ok(!snapshot.controls.some(c => c.name === "Foreign action"), "the unmarked menu must never leak controls, even alongside our own open menu");
+  assert.ok(snapshot.controls.some(c => c.name === "Run for date…"), "our marked menu's own items must still be observed");
+});
+
+test("back presses Escape when only the plugin's own menu is open (no modal)", async () => {
+  const { calls, observe, execute } = buildSession(moreMenuFixture());
+  const snapshot = observe();
+  const result = await execute({ type: "back" }, snapshot);
+  assert.equal(result.ok, true);
+  assert.deepEqual(calls.map(c => c.params.type), ["keyDown", "keyUp"]);
+  assert.equal(calls[0].params.key, "Escape");
+});
+
+test("clicking the scheduler-toggle menu item is rejected with zero Input.* calls, and clicking the disabled status item is rejected as disabled", async () => {
+  const { calls, observe, execute } = buildSession(moreMenuFixture());
+  const snapshot = observe();
+  const toggleRef = snapshot.controls.find(c => c.name === "Disable scheduler").ref;
+  const toggleResult = await execute({ type: "click", ref: toggleRef }, snapshot);
+  assert.equal(toggleResult.ok, false);
+  assert.match(toggleResult.error, /restricted|scheduling/i);
+  assert.equal(calls.length, 0);
+  const statusRef = snapshot.controls.find(c => c.name === "Scheduler: Enabled").ref;
+  const statusResult = await execute({ type: "click", ref: statusRef }, snapshot);
+  assert.equal(statusResult.ok, false);
+  assert.match(statusResult.error, /disabled/i);
+  assert.equal(calls.length, 0);
+});

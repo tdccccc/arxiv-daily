@@ -7,9 +7,6 @@ import { createExplorationRedactor, ExplorationActionError, parseExplorationActi
 const here = path.dirname(fileURLToPath(import.meta.url));
 const cliRequire = createRequire(path.resolve(here, "../../apps/cli/package.json"));
 
-/** Single source of truth for the default workbench goal-task ids, usable without a fixture (e.g. --list). */
-export const EXPLORATION_TASK_IDS = ["settings-persistence", "sidebar-persistence", "generate-and-read"];
-
 /** Browser capability restrictions apply to observed AND live controls. */
 export function classifyControlRestriction(control, allowedUrl) {
   const field = control.field || "";
@@ -34,13 +31,16 @@ function contained(root, file) {
   return relative !== "" && !relative.startsWith(`..${path.sep}`) && relative !== ".." && !path.isAbsolute(relative);
 }
 
-async function assertFixture(fixture) {
+// Exported so exploration-tasks/workbench.mjs's `goalTasks(fixture)` can read the same fixture-contained
+// settings this driver's own observe()/inspect() rely on, without a second copy of these checks drifting
+// out of sync.
+export async function assertFixture(fixture) {
   if (!fixture?.root || !fixture.vaultRoot || !fixture.configPath) throw new Error("Exploration needs an owned temporary fixture");
   const root = await realpath(fixture.root);
   for (const file of [fixture.vaultRoot, fixture.configPath]) if (!contained(root, await realpath(file))) throw new Error("Exploration fixture paths must remain under its owned temporary root");
 }
 
-async function settings(fixture) {
+export async function settings(fixture) {
   const { parse } = cliRequire("smol-toml");
   const config = parse(await readFile(fixture.configPath, "utf8"));
   if (path.resolve(config.vault_root) !== path.resolve(fixture.vaultRoot)) throw new Error("Fixture vault location changed outside the exploration contract");
@@ -210,65 +210,4 @@ export async function createExplorationDriver({ page, context, url, fixture, art
     },
     async dispose() { page.off("pageerror", onError); context.off("page", onPage); await context.unroute("**/*", guard); },
   };
-}
-
-const check = (label, passed, actual) => ({ label, passed: Boolean(passed), ...(actual === undefined ? {} : { actual }) });
-const result = checks => ({ passed: checks.every(value => value.passed), checks });
-
-export async function createDefaultExplorationTasks(fixture) {
-  await assertFixture(fixture);
-  const initial = await settings(fixture);
-  const target = initial.output?.max_daily_papers === 13 ? 14 : 13;
-  let collapsedAfterReload = false, collapseReloadStep = 0;
-  return [
-    {
-      id: EXPLORATION_TASK_IDS[0], title: "设置自动保存并刷新复查",
-      goal: `打开设置，把每日论文数量上限 maxDailyPapers 改为 ${target}。移开焦点并等待保存完成，关闭设置，刷新页面，再打开设置，确认上限仍为 ${target}。不要修改路径、模型连接或密钥。`,
-      async verify({ driver, observation, actions }) {
-        const changed = actions.find(action => action.type === "fill" && (action.control?.field || action.control?.name) === "maxDailyPapers" && action.value === String(target));
-        const refreshed = changed && actions.some(action => action.type === "reload" && action.step > changed.step);
-        const state = await driver.inspect();
-        return result([
-          check("通过界面修改每日论文数量上限", changed),
-          check("修改后刷新了页面", refreshed),
-          check("隔离配置文件保存了新上限", state.maxDailyPapers === target, state.maxDailyPapers),
-          check("刷新后重新打开设置仍显示新上限", refreshed && observation.controls.some(control => control.field === "maxDailyPapers" && control.value === String(target))),
-        ]);
-      },
-    },
-    {
-      id: EXPLORATION_TASK_IDS[1], title: "侧栏折叠和展开状态持久化",
-      goal: "关闭设置（如果仍打开）。收起侧栏，刷新页面确认侧栏仍收起；再展开侧栏，再次刷新，确认侧栏仍展开。等待偏好保存后再刷新。",
-      async verify({ driver, observation, actions }) {
-        const state = await driver.inspect();
-        const last = actions.findLast(action => action.type === "reload");
-        const lastToggle = actions.findLast(action => action.type === "click" && action.control?.purpose === "sidebar-toggle");
-        const clicked = actions.some(action => action.type === "click" && action.control?.purpose === "sidebar-toggle");
-        if (clicked && last && lastToggle && last.step > lastToggle.step && state.preferences.sidebarCollapsed === true && observation.layout.sidebarCollapsed) {
-          collapsedAfterReload = true; collapseReloadStep = last.step;
-        }
-        const expandedAfterReload = collapsedAfterReload && last && lastToggle && last.step > lastToggle.step && last.step > collapseReloadStep && state.preferences.sidebarCollapsed === false && !observation.layout.sidebarCollapsed;
-        return result([check("通过界面切换侧栏", clicked), check("刷新后持久化收起状态与页面一致", collapsedAfterReload), check("再展开并刷新后持久化状态与页面一致", expandedAfterReload)]);
-      },
-    },
-    {
-      id: EXPLORATION_TASK_IDS[2], title: "生成固定日期日报并打开论文",
-      goal: "通过生成按钮生成 2026-10-01 日报（选择指定日期，不要生成今天）。等待成功，再从列表打开 arXiv 2610.10001 论文，确认阅读内容出现。无需判断论文内容质量。",
-      async verify({ driver, observation, actions, startedAt }) {
-        const state = await driver.dailyEvidence("2026-10-01");
-        const generated = actions.some(action => action.type === "click" && action.control?.dataAction === "generate");
-        const run = state.run;
-        const checks = [
-          check("通过生成入口启动任务", generated),
-          check("本任务的指定日期运行已完成", run?.status === "completed" && run.date === "2026-10-01" && Date.parse(run.startedAt) >= startedAt, run ? { date: run.date, status: run.status } : null),
-          check("真实日报文件包含夹具论文", state.report),
-          check("论文阅读视图已打开", observation.layout.view === "reading" && observation.text.includes("2610.10001")),
-        ];
-        if (run?.date === "2026-10-01" && Date.parse(run.startedAt) >= startedAt && (run.status === "failed" || (run.status === "completed" && !state.report))) {
-          return { passed: false, failed: true, checks, error: run.status === "failed" ? "The requested fixture generation reported failure" : "Generation reported completion without the expected report file" };
-        }
-        return result(checks);
-      },
-    },
-  ];
 }

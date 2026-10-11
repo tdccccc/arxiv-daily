@@ -230,6 +230,19 @@ export async function runAcceptance(options, dependencies = {}) {
   return persist();
 }
 
+/**
+ * `--list`'s own text, as a pure(ish) async function so a test can assert on it without spawning the
+ * CLI. Task/persona ids come from each host's own task-library module (scripts/acceptance/
+ * exploration-tasks/{obsidian,workbench}.mjs) — the single place chunks 2-5 add tasks/personas to — so
+ * this listing never drifts out of sync with what `selectExplorationTasks` actually offers.
+ */
+export async function describeAcceptanceSuites() {
+  const workbenchTasks = await import("./exploration-tasks/workbench.mjs");
+  const obsidianTasks = await import("./exploration-tasks/obsidian.mjs");
+  const personaLine = (host, ids) => `${host} ${ids.length ? ids.join(", ") : "(none yet)"}`;
+  return `workbench    Real browser: settings, daily run, recovery, reading and persistence\nobsidian     Real Obsidian: settings, run/cancel/retry, reading and PDF navigation\nexploration  Opt-in model API: bounded UI tasks with independent evidence checks\n  hosts (--host):                workbench (default), obsidian\n  workbench tasks (--task):      ${workbenchTasks.GOAL_TASK_IDS.join(", ")}\n  obsidian tasks (--task):       ${obsidianTasks.GOAL_TASK_IDS.join(", ")}\n  personas (--persona):          ${personaLine("workbench", workbenchTasks.PERSONA_TASK_IDS)}; ${personaLine("obsidian", obsidianTasks.PERSONA_TASK_IDS)}\n`;
+}
+
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
   const controller = new AbortController();
   const interrupt = () => controller.abort(new Error("Acceptance interrupted; unfinished scenarios are not verified"));
@@ -238,9 +251,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1]
     const options = parseArgs(process.argv.slice(2));
     if (options.help) process.stdout.write(HELP);
     else if (options.list) {
-      const { EXPLORATION_TASK_IDS } = await import("./exploration-browser.mjs");
-      const { EXPLORATION_OBSIDIAN_TASK_IDS } = await import("./exploration-obsidian.mjs");
-      process.stdout.write(`workbench    Real browser: settings, daily run, recovery, reading and persistence\nobsidian     Real Obsidian: settings, run/cancel/retry, reading and PDF navigation\nexploration  Opt-in model API: bounded UI tasks with independent evidence checks\n  hosts (--host):                workbench (default), obsidian\n  workbench tasks (--task):      ${EXPLORATION_TASK_IDS.join(", ")}\n  obsidian tasks (--task):       ${EXPLORATION_OBSIDIAN_TASK_IDS.join(", ")}\n  personas (--persona):          (none yet)\n`);
+      process.stdout.write(await describeAcceptanceSuites());
     } else {
       const report = await runAcceptance({ ...options, signal: controller.signal }, { onProgress: message => process.stdout.write(`${message}\n`) });
       process.stdout.write(`Acceptance ${report.status}: ${JSON.stringify(report.counts)}; needs review: ${report.reviewCount}\nReport: ${join(report.artifactDir, "report.html")}\n`);

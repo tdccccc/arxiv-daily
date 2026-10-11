@@ -423,23 +423,28 @@ export async function runExploration({ fixture, artifactDir, configPath, maxStep
     // an unknown --task/--persona id below.
     if (!EXPLORATION_HOSTS.has(host)) throw new Error(`Unknown exploration host: ${host}. Supported hosts: ${[...EXPLORATION_HOSTS].join(", ")}`);
     const obsidian = host === "obsidian";
-    let createDriver, startSession, resolvedGoalTasks;
+    let createDriver, startSession, resolvedGoalTasks, resolvedPersonaTasks;
+    // Task library (what to do, how a program tells it passed) lives per-host in exploration-tasks/
+    // {obsidian,workbench}.mjs, separate from the driver (how the host is observed and driven) — see
+    // those files' own header comments. `dependencies.taskLibrary` is the test seam (mirrors every other
+    // `dependencies.*` override here), letting a fake library be injected without touching either real file.
     if (obsidian) {
       const mod = await import("./exploration-obsidian.mjs");
       createDriver = dependencies.createObsidianExplorationDriver ?? mod.createObsidianExplorationDriver;
       startSession = dependencies.startObsidianExplorationSession ?? mod.startObsidianExplorationSession;
-      const createTasks = dependencies.createDefaultObsidianExplorationTasks ?? mod.createDefaultObsidianExplorationTasks;
-      resolvedGoalTasks = goalTasks ?? await createTasks();
+      const taskLibrary = dependencies.taskLibrary ?? await import("./exploration-tasks/obsidian.mjs");
+      resolvedGoalTasks = goalTasks ?? await taskLibrary.goalTasks();
+      resolvedPersonaTasks = personaTasks ?? await taskLibrary.personaTasks();
     } else {
       const mod = await import("./exploration-browser.mjs");
       createDriver = dependencies.createExplorationDriver ?? mod.createExplorationDriver;
       startSession = dependencies.startWorkbenchSession ?? (await import("./workbench-session.mjs")).startWorkbenchSession;
-      const createTasks = dependencies.createDefaultExplorationTasks ?? mod.createDefaultExplorationTasks;
-      resolvedGoalTasks = goalTasks ?? await createTasks(fixture);
+      const taskLibrary = dependencies.taskLibrary ?? await import("./exploration-tasks/workbench.mjs");
+      resolvedGoalTasks = goalTasks ?? await taskLibrary.goalTasks(fixture);
+      resolvedPersonaTasks = personaTasks ?? await taskLibrary.personaTasks();
     }
     // Resolve and validate the task/persona selection before touching a model, a browser, or Obsidian, so an
     // unknown --task/--persona id fails fast instead of launching anything first.
-    const resolvedPersonaTasks = personaTasks ?? [];
     const selected = tasks ?? selectExplorationTasks({ goalTasks: resolvedGoalTasks, personaTasks: resolvedPersonaTasks, taskIds, personaIds });
     configured ??= await loadExplorationModel({ configPath, maxApiCalls: maxApiCalls ?? (maxSteps ?? 90) * 2 });
     if (obsidian) {
