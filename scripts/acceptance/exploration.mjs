@@ -178,6 +178,39 @@ async function withDeadline(operation, milliseconds, label, parentSignal) {
   } finally { clearTimeout(timer); parentSignal?.removeEventListener("abort", onAbort); }
 }
 
+/**
+ * P3 Chunk 7: the error shape an in-scope navigation (a link click, a reload, a product redirect) leaves
+ * behind when it destroys the page/renderer's execution context mid-observe or mid-capture — Playwright's
+ * own wording for this ("Execution context was destroyed, most likely because of a navigation") and the
+ * nearby CDP phrasings a destroyed context can surface as. Out-of-scope navigation (leaving the workbench
+ * origin/path, a popup) is caught earlier by each driver's own scope guard with a distinct, unmatched
+ * message (e.g. exploration-browser.mjs's assertScope(): "Browser left the isolated workbench scope") and
+ * is deliberately NOT matched here, so it keeps blocking immediately with no retry, exactly as before.
+ */
+function isTransientNavigationError(error) {
+  return /execution context was destroyed|context was destroyed|cannot find context with specified id|target closed/i.test(error?.message || "");
+}
+
+/**
+ * Retries `operation` (a driver's observe()/capture() call) across a transient, in-scope
+ * navigation-destroyed context: waits briefly and tries again until it succeeds, a non-transient error
+ * is thrown (rethrown immediately, no retry), or `signal` aborts — `signal` is the per-call deadline's
+ * own AbortSignal (from withDeadline below), so the wait is bounded by that same per-call timeout instead
+ * of retrying forever. `attempts` on the returned value lets the caller record a recovery event only when
+ * more than one attempt was needed, so the common, no-navigation case stays silent.
+ */
+async function withNavigationRecovery(operation, { signal, intervalMs = 150 } = {}) {
+  let attempts = 0;
+  while (true) {
+    attempts += 1;
+    try { return { value: await operation(), attempts }; }
+    catch (error) {
+      if (!isTransientNavigationError(error) || signal?.aborted) throw error;
+      await new Promise(resolve => setTimeout(resolve, intervalMs));
+    }
+  }
+}
+
 function pendingScenario(task) {
   return { id: task.id, title: task.title, status: "not-run", durationMs: 0, steps: [], assertions: [], artifacts: [] };
 }
@@ -245,7 +278,17 @@ export async function runExplorationLoop({ driver, model, tasks, artifactDir, ma
       while (true) {
         if (signal?.aborted) throw cancellationError(signal);
         if (Date.now() >= deadline) throw budgetExhausted("Exploration duration budget exhausted; unfinished tasks are not verified");
-        const observation = safe(await withDeadline(() => driver.observe(), Math.min(10000, deadline - Date.now()), "UI observation", signal));
+        // P3 Chunk 7: an in-scope navigation (a link click, a reload) that destroys the execution
+        // context mid-observe must not immediately block the whole task — withNavigationRecovery waits
+        // (bounded by this same per-call deadline) and retries; an out-of-scope navigation still throws
+        // its own distinct, unmatched error (e.g. assertScope()'s "left the isolated ... scope") on the
+        // first attempt with no retry, so that guard keeps blocking exactly as before.
+        const observationOutcome = await withDeadline(
+          childSignal => withNavigationRecovery(() => driver.observe(), { signal: childSignal }),
+          Math.min(10000, deadline - Date.now()), "UI observation", signal,
+        );
+        if (observationOutcome.attempts > 1) await record({ kind: "navigation-recovered", taskId: task.id, context: "observe", attempts: observationOutcome.attempts - 1 });
+        const observation = safe(observationOutcome.value);
         observations.push(observation);
         if (observation.errors?.length) {
           scenario.status = "failed";
@@ -260,9 +303,22 @@ export async function runExplorationLoop({ driver, model, tasks, artifactDir, ma
           if (verified || verification?.failed === true) {
             scenario.status = verified ? "passed" : "failed";
             if (!verified) scenario.error = verification.error || "Program verification observed a product failure";
-            const screenshot = await driver.capture?.(`${task.id}-result`);
+            let screenshot, resultCaptureAttempts = 1;
+            if (typeof driver.capture === "function") {
+              try {
+                const captureOutcome = await withDeadline(
+                  childSignal => withNavigationRecovery(() => driver.capture(`${task.id}-result`), { signal: childSignal }),
+                  Math.min(3000, deadline - Date.now()), "Result screenshot capture", signal, // shorter than the other per-call ceilings: pure evidence, never worth a long wait
+                );
+                screenshot = captureOutcome.value; resultCaptureAttempts = captureOutcome.attempts;
+              } catch (error) {
+                // A verdict already decided by the program verifier is never overturned by a missing
+                // screenshot; the failure is still recorded as step evidence (see the record() below).
+                await record({ kind: "capture-unavailable", taskId: task.id, context: "verification-result", error: error.message });
+              }
+            }
             if (screenshot) scenario.artifacts.push(screenshot);
-            await record({ kind: "verification", taskId: task.id, status: scenario.status, observation, assertions: scenario.assertions, screenshot });
+            await record({ kind: "verification", taskId: task.id, status: scenario.status, observation, assertions: scenario.assertions, screenshot, ...(resultCaptureAttempts > 1 ? { navigationRecovered: resultCaptureAttempts - 1 } : {}) });
             break;
           }
         }
@@ -325,15 +381,32 @@ export async function runExplorationLoop({ driver, model, tasks, artifactDir, ma
               scenario.error = `Model could not continue: ${action.reason}`;
             }
           }
-          const screenshot = await driver.capture?.(`${task.id}-step-${event.step}`);
-          if (screenshot) {
-            event.screenshot = screenshot; scenario.artifacts.push(screenshot);
-            // P3 Chunk 5: a finding raised this same step gets this step's own screenshot attached (never
-            // a later or earlier one — capture() always runs once per step, right after whichever action
-            // this step took), so report.mjs's "待复核" section can link straight to the evidence instead
-            // of just the step number.
-            const lastFinding = findings.at(-1);
-            if (lastFinding && lastFinding.taskId === task.id && lastFinding.step === event.step && lastFinding.screenshot === undefined) lastFinding.screenshot = screenshot;
+          // P3 Chunk 7: a step's own screenshot is evidence only — it never overturns an action (or a
+          // model-declared finding/done/blocked) that this step already recorded into "blocked" just
+          // because the capture itself failed. An in-scope navigation that destroyed the execution
+          // context mid-capture (e.g. the action just taken was a click that navigated, or `press`
+          // landed on a link) is retried, bounded by this call's own deadline, via the same
+          // withNavigationRecovery used for observe(); a capture that is still unavailable afterwards
+          // (transient-but-exhausted, or any other capture error) is recorded on the event and the step
+          // simply has no screenshot — the outer catch below never sees it.
+          if (typeof driver.capture === "function") {
+            try {
+              const captureOutcome = await withDeadline(
+                childSignal => withNavigationRecovery(() => driver.capture(`${task.id}-step-${event.step}`), { signal: childSignal }),
+                Math.min(3000, deadline - Date.now()), "Step screenshot capture", signal, // shorter than the other per-call ceilings: pure evidence, never worth a long wait
+              );
+              if (captureOutcome.attempts > 1) event.navigationRecovered = captureOutcome.attempts - 1;
+              const screenshot = captureOutcome.value;
+              if (screenshot) {
+                event.screenshot = screenshot; scenario.artifacts.push(screenshot);
+                // P3 Chunk 5: a finding raised this same step gets this step's own screenshot attached (never
+                // a later or earlier one — capture() always runs once per step, right after whichever action
+                // this step took), so report.mjs's "待复核" section can link straight to the evidence instead
+                // of just the step number.
+                const lastFinding = findings.at(-1);
+                if (lastFinding && lastFinding.taskId === task.id && lastFinding.step === event.step && lastFinding.screenshot === undefined) lastFinding.screenshot = screenshot;
+              }
+            } catch (error) { event.captureError = error.message; }
           }
         } catch (error) {
           event.error = error.message;
@@ -359,7 +432,9 @@ export async function runExplorationLoop({ driver, model, tasks, artifactDir, ma
             }
           }
         }
-        scenario.steps.push(safe({ step: event.step, action: event.action ?? null, ...(event.error ? { error: event.error } : {}), observationId: observation.id }));
+        scenario.steps.push(safe({ step: event.step, action: event.action ?? null, ...(event.error ? { error: event.error } : {}),
+          ...(event.navigationRecovered ? { navigationRecovered: event.navigationRecovered } : {}), ...(event.captureError ? { captureError: event.captureError } : {}),
+          observationId: observation.id }));
         await record(event);
         history.push(safe({ step: event.step, taskId: task.id, action: event.action, result: event.error ? { error: event.error } : event.result }));
         if (scenario.status !== "not-run") break;

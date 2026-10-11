@@ -754,6 +754,20 @@ test("daily-paper-limit: verify fails (and never reloads the plugin) while the o
   assert.equal(reloadCalls, 0, "a plugin reload is only worth paying for once persistence on disk is already confirmed");
 });
 
+// P3 Chunk 7 negative-evidence audit: star-paper-from-report had no dedicated "verify fails on the
+// untouched state" unit test anywhere in the suite before this — added here, same convention as every
+// other Obsidian goal task's own untouched-state test above/below.
+test("star-paper-from-report: verify fails on the untouched state (no star click yet), never touching the driver", async () => {
+  const task = (await obsidianTaskLibrary.goalTasks()).find(t => t.id === "star-paper-from-report");
+  assert.ok(task, "star-paper-from-report must exist in the Obsidian goal task library");
+  let driverTouched = false;
+  const driver = new Proxy({}, { get() { driverTouched = true; throw new Error("verify must not need the driver before a star click is observed"); } });
+  const result = await task.verify({ driver, actions: [] });
+  assert.equal(result.passed, false);
+  assert.equal(result.checks[0].passed, false);
+  assert.equal(driverTouched, false);
+});
+
 // ---------------------------------------------------------------------------
 // P3 Chunk 3: the four new Obsidian run goal tasks (run-for-date,
 // cancel-then-rerun, auth-failure-retry, completed-date-idempotent). A fake

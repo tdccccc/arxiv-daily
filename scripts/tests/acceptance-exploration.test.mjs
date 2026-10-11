@@ -257,6 +257,74 @@ test("a finding keeps no screenshot field at all when the driver never captures 
   assert.equal(result.findings[0].screenshot, undefined);
 });
 
+// P3 Chunk 7: hardening navigation during exploration. An allowed action (e.g. a click or a keyboard
+// Enter) can cause an in-scope navigation/reload that destroys the page's execution context right as
+// the harness's own observe()/capture() calls race it — a real driver's wording for this is Playwright's
+// "Execution context was destroyed, most likely because of a navigation" (see chunk5's finding #2: Enter
+// on a navigating link -> capture() throws this -> the whole task used to go "blocked"). These tests use
+// fake drivers that throw that exact message to drive the fix without a real browser.
+const CONTEXT_DESTROYED = new Error("Execution context was destroyed, most likely because of a navigation");
+
+test("P3 Chunk 7: a transient context-destroyed observe() failure recovers and the task still passes", async t => {
+  const driver = fixtureDriver();
+  let observeCalls = 0;
+  const realObserve = driver.observe;
+  driver.observe = async () => { observeCalls += 1; if (observeCalls === 2) throw CONTEXT_DESTROYED; return realObserve(); };
+  const result = await runExplorationLoop({ driver, model: async request => JSON.stringify({ type: "click", ref: request.observation.controls[0].ref }),
+    tasks: [task(({ actions }) => ({ passed: actions.length === 1, checks: [{ label: "ok", passed: actions.length === 1 }] }))],
+    artifactDir: await temporary(t), maxSteps: 5 });
+  assert.equal(result.scenarios[0].status, "passed");
+  assert.ok(observeCalls > 2, "observe() must have been retried, not just failed once");
+});
+
+test("P3 Chunk 7: a transient context-destroyed capture() failure after a successful action does not block the task (chunk5 finding #2 repro)", async t => {
+  const artifactDir = await temporary(t);
+  let captureCalls = 0;
+  const driver = {
+    observe: (() => { let version = 0; return async () => observation(++version); })(),
+    execute: async action => ({ ok: true, action }),
+    capture: async name => { captureCalls += 1; if (captureCalls === 1) throw CONTEXT_DESTROYED; return `/artifacts/${name}.png`; },
+  };
+  const result = await runExplorationLoop({ driver, model: async request => JSON.stringify({ type: "click", ref: request.observation.controls[0].ref }),
+    tasks: [task(({ actions }) => ({ passed: actions.length === 1, checks: [{ label: "ok", passed: actions.length === 1 }] }))],
+    artifactDir, maxSteps: 5 });
+  assert.equal(result.scenarios[0].status, "passed");
+  assert.ok(captureCalls > 1, "capture() must have been retried after the context-destroyed failure");
+});
+
+test("P3 Chunk 7: a persistently context-destroyed observe() still blocks after the bounded wait, with a clear reason", async t => {
+  const driver = fixtureDriver();
+  driver.observe = async () => { throw CONTEXT_DESTROYED; };
+  const result = await runExplorationLoop({ driver, model: async () => '{"type":"wait","milliseconds":1}', tasks: [task()],
+    artifactDir: await temporary(t), maxDurationMs: 400 });
+  assert.equal(result.scenarios[0].status, "blocked");
+  assert.match(result.scenarios[0].error, /execution context was destroyed|timeout/i);
+});
+
+test("P3 Chunk 7: a persistently context-destroyed capture() never blocks the task; it is recorded as step evidence instead", async t => {
+  const driver = fixtureDriver();
+  driver.capture = async () => { throw CONTEXT_DESTROYED; };
+  const result = await runExplorationLoop({ driver, model: async request => JSON.stringify({ type: "click", ref: request.observation.controls[0].ref }),
+    tasks: [task(({ actions }) => ({ passed: actions.length === 1, checks: [{ label: "ok", passed: actions.length === 1 }] }))],
+    artifactDir: await temporary(t), maxDurationMs: 4000, maxSteps: 5 });
+  assert.equal(result.scenarios[0].status, "passed");
+  // The bounded wait's own timeout (once it outraces the last retry) is what the task actually sees, so
+  // the recorded reason may read either as the original context-destroyed message or as that bounded
+  // wait's own "... capture timeout after Nms" wording — both are a clear reason, never a silent blocked.
+  assert.ok(result.scenarios[0].steps.some(step => typeof step.captureError === "string" && /execution context was destroyed|capture timeout/i.test(step.captureError)));
+});
+
+test("P3 Chunk 7: an out-of-scope navigation error is a distinct guard, not retried, and still blocks immediately", async t => {
+  const driver = fixtureDriver();
+  let observeCalls = 0;
+  driver.observe = async () => { observeCalls += 1; throw new Error("Browser left the isolated workbench scope"); };
+  const result = await runExplorationLoop({ driver, model: async () => '{"type":"wait","milliseconds":1}', tasks: [task()],
+    artifactDir: await temporary(t), maxDurationMs: 5000 });
+  assert.equal(result.scenarios[0].status, "blocked");
+  assert.match(result.scenarios[0].error, /left the isolated workbench scope/i);
+  assert.equal(observeCalls, 1, "an out-of-scope error must not be retried");
+});
+
 test("a persona task without a verifier ends on done as explored, never passed, and keeps findings", async t => {
   const driver = fixtureDriver();
   let calls = 0;
@@ -650,6 +718,37 @@ async function writeWorkbenchPaperIndex(fixture, papers) {
   await mkdir(path.dirname(file), { recursive: true });
   await writeFile(file, JSON.stringify({ papers }));
 }
+
+// P3 Chunk 7 negative-evidence audit: settings-persistence, sidebar-persistence and generate-and-read
+// (the original 3 workbench goal tasks, P1) had no dedicated "verify fails on the untouched state" unit
+// test anywhere in the suite before this — added here, same convention as every reading-journey task's
+// own untouched-state test below.
+test('settings-persistence: verify fails on the untouched state (no fill, no reload)', async t => {
+  const fixture = await makeWorkbenchFixture(t);
+  const task = (await createDefaultExplorationTasks(fixture)).find(x => x.id === 'settings-persistence');
+  const driver = { inspect: async () => ({ maxDailyPapers: 2, preferences: {} }) };
+  const result = await task.verify({ driver, observation: { controls: [] }, actions: [] });
+  assert.equal(result.passed, false);
+  assert.equal(result.checks[0].passed, false, 'must not pass without an observed fill of maxDailyPapers');
+});
+
+test('sidebar-persistence: verify fails on the untouched state (no toggle, no reload)', async t => {
+  const fixture = await makeWorkbenchFixture(t);
+  const task = (await createDefaultExplorationTasks(fixture)).find(x => x.id === 'sidebar-persistence');
+  const driver = { inspect: async () => ({ preferences: { sidebarCollapsed: false } }) };
+  const result = await task.verify({ driver, observation: { layout: {} }, actions: [] });
+  assert.equal(result.passed, false);
+  assert.equal(result.checks[0].passed, false, 'must not pass without an observed sidebar-toggle click');
+});
+
+test('generate-and-read: verify fails on the fully untouched state (no action at all)', async t => {
+  const fixture = await makeWorkbenchFixture(t);
+  const task = (await createDefaultExplorationTasks(fixture)).find(x => x.id === 'generate-and-read');
+  const driver = { dailyEvidence: async () => ({ report: false, run: null }) };
+  const result = await task.verify({ driver, observation: { layout: { view: 'list' }, text: '' }, actions: [], startedAt: Date.now() });
+  assert.equal(result.passed, false);
+  assert.equal(result.checks[0].passed, false, 'must not pass without an observed click on the generate entry point');
+});
 
 test('star-filter-restore: verify fails on the untouched state (no star click yet)', async t => {
   const fixture = await makeWorkbenchFixture(t);
