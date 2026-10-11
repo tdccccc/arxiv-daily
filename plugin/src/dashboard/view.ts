@@ -32,6 +32,7 @@ import { daysBefore, formatDate, isWeekendDate, todayInTz } from "@arxiv-daily/c
 import { getSetupStatus, logSetupStatus } from "../onboarding";
 import { chooseModal } from "../services/modal";
 import { openDatePickerModal } from "../date-picker-modal";
+import { markArxivDailyMenu } from "../plugin-menu";
 import {
   SimilarPapersModal,
   type SimilarPapersModalOptions,
@@ -1873,6 +1874,7 @@ class ArxivDailyDashboardView extends ItemView {
 
   private showMoreMenu(evt: MouseEvent): void {
     const menu = new Menu();
+    markArxivDailyMenu(menu);
     const enabled = this.plugin.settings.schedule.enabled;
     const activeRuns = this.plugin.operations.snapshot();
 

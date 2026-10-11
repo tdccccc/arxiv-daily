@@ -346,14 +346,33 @@ export class Modal {
   onClose(): void {}
 }
 
+// Real Obsidian's MenuItem/Menu (resources/obsidian.asar, read-only
+// inspection) set `dom` in their own constructors — before any item is
+// added or the menu is shown — and `setDisabled` toggles an `is-disabled`
+// class on `dom` rather than a native `disabled` property (menu items are
+// plain non-interactive `<div>`s, not `<button>`s). Mirrored here so
+// `markArxivDailyMenu` (plugin/src/plugin-menu.ts) and anything scoped to
+// `.menu-item`'s disabled state has something faithful to assert against.
 export class MenuItem {
-  setTitle(_t: string) { return this; }
+  dom: HTMLElement = (globalThis as any).document?.createElement?.("div") ?? ({} as any);
+  titleEl: HTMLElement = (globalThis as any).document?.createElement?.("div") ?? ({} as any);
+  disabled = false;
+  constructor() {
+    this.dom.classList?.add("menu-item", "tappable");
+    this.dom.appendChild?.(this.titleEl);
+  }
+  setTitle(t: string) { this.titleEl.textContent = t; return this; }
   setIcon(_icon: string | null) { return this; }
-  setDisabled(_d: boolean) { return this; }
+  setDisabled(d: boolean) { this.disabled = d; this.dom.classList?.toggle("is-disabled", d); return this; }
   onClick(_cb: (evt: MouseEvent | KeyboardEvent) => any) { return this; }
 }
 
 export class Menu {
+  /** The body-level `.menu` root; set in the constructor, like the real Menu. */
+  dom: HTMLElement = (globalThis as any).document?.createElement?.("div") ?? ({} as any);
+  constructor() {
+    this.dom.classList?.add("menu");
+  }
   addItem(cb: (item: MenuItem) => any): this {
     cb(new MenuItem());
     return this;
