@@ -1934,6 +1934,14 @@ class ArxivDailyDashboardView extends ItemView {
     );
 
     menu.addSeparator();
+    this.addCommandMenuItem(
+      menu,
+      "Set paper mark…",
+      "bookmark",
+      "set-paper-status",
+    );
+
+    menu.addSeparator();
     menu.addItem((item) =>
       item
         .setTitle("Show logs & history")
