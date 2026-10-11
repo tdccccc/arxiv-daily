@@ -2,8 +2,8 @@
 
 goal_ref: ../goal.md
 created: 2026-10-11T16:00:00+08:00
-updated: 2026-10-12T19:00:00+08:00
-revision: 7
+updated: 2026-10-12T22:00:00+08:00
+revision: 8
 
 ## Outcome
 
@@ -83,7 +83,7 @@ revision: 7
 - Red / baseline signal: 单测：动作导致页面导航或执行上下文销毁时，截图/观察失败不应把整个任务判为 blocked，而应等待页面恢复后继续（越界导航仍按现有规则拦截并记录）。当前判 blocked 而失败。
 - Green check: 单测通过；阶段验收见下。
 - regression checks: npm run test:acceptance:tools；固定 workbench 与 Obsidian 验收
-- [ ] implementation and tests accepted
+- [x] implementation and tests accepted — 阶段验收：workbench 6/6 + 角色 3/3 explored（两次，冲突任务聚焦时直接放弃）；Obsidian 14/14 + 角色 3/3 explored（同一会话两轮）；20 个目标任务均有“未操作不通过”测试。导航恢复仅单测覆盖，真实模型运行时观察。
 
 ## Phase verification
 
