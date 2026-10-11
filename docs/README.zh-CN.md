@@ -4,6 +4,8 @@
 
 [新手教程](getting-started.zh-CN.md) · [English README](../README.md) · [Getting Started](getting-started.md)
 
+![arxiv daily：跟踪研究方向，全部保存在本地 Markdown。在 Obsidian 社区插件中搜索 arXiv Daily 即可安装。](assets/readme-hero.png)
+
 **arXiv Daily** 是以 **Obsidian 插件**为主要入口的个人研究助手；独立浏览器工作台和 DeepSeek Harness（DSH）扩展同样无需 Obsidian 即可使用。
 
 ## 功能
