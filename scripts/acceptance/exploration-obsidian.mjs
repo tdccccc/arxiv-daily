@@ -744,7 +744,23 @@ export async function createObsidianExplorationDriver({ session, fixture, artifa
     // state (or, for the two below, a program-only UI round trip) a verifier reads/drives directly, never
     // through the model's own action schema.
     jsonFile: helper.jsonFile, exists: helper.exists, file: helper.file, read: helper.read,
+    openDashboard: helper.openDashboard, reloadPlugin: helper.reloadPlugin,
     async closeThenReopenSettings() { await helper.closeSettings(); await helper.openSettings(); },
+    // P3 Chunk 2: proof that a setting survives a full plugin reload, not only re-opening the settings
+    // tab inside the same loaded instance (the two are different claims — see reset()'s own comment above
+    // about SettingsChangeService staying bound to a detached settings object across a bare re-read).
+    async reloadThenReopenSettings() { await helper.reloadPlugin(); await helper.openSettings(); },
+    // P3 Chunk 2: a task's deterministic `prepare()` writes directly to data.json (never through the
+    // model) and then reloads the plugin so the write actually takes effect in the running instance —
+    // the same reload reset() already relies on, reused here instead of a second implementation of it.
+    // Leaves no plugin surface open afterward (reloadPlugin tears down and re-registers the dashboard
+    // view); callers that need a starting surface call openDashboard()/openSettings() themselves next.
+    async applySettingsPatch(mutate) {
+      const current = await helper.jsonFile(SETTINGS_FILE);
+      mutate(current);
+      await fs.writeFile(path.join(fixture.vaultRoot, SETTINGS_FILE), JSON.stringify(current, null, 2));
+      await helper.reloadPlugin();
+    },
     async ensureDailyReport(date) {
       if (await helper.exists(dailyReportFile(date))) return;
       await helper.runDate(date);

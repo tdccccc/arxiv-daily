@@ -10,6 +10,7 @@ import { describeAcceptanceSuites, parseArgs } from "../acceptance/run.mjs";
 import { runExploration, runExplorationLoop } from "../acceptance/exploration.mjs";
 import {
   createObsidianExplorationDriver,
+  SETTINGS_FILE,
   startObsidianExplorationSession,
 } from "../acceptance/exploration-obsidian.mjs";
 import * as obsidianTaskLibrary from "../acceptance/exploration-tasks/obsidian.mjs";
@@ -226,8 +227,12 @@ test("an abort signal releases a held-open Obsidian session so its own teardown 
 test("the default Obsidian goal tasks have ids, titles, Chinese goals and a program verify, matching the exported id list", async () => {
   const tasks = await obsidianTaskLibrary.goalTasks();
   assert.deepEqual(tasks.map(t => t.id), obsidianTaskLibrary.GOAL_TASK_IDS);
-  // Ids are unchanged by the move (phase contract: "keeping existing task ids/behavior unchanged").
-  assert.deepEqual(obsidianTaskLibrary.GOAL_TASK_IDS, ["daily-paper-limit", "star-paper-from-report"]);
+  // Ids are unchanged by the move (phase contract: "keeping existing task ids/behavior unchanged"); P3
+  // Chunk 2 appends topic/direction/category tasks after the original two, keeping their ids stable.
+  assert.deepEqual(obsidianTaskLibrary.GOAL_TASK_IDS, [
+    "daily-paper-limit", "star-paper-from-report",
+    "add-topic-direction", "remove-topic-direction", "add-arxiv-category",
+  ]);
   for (const t of tasks) {
     assert.equal(typeof t.title, "string");
     assert.ok(t.title.length > 0);
@@ -298,13 +303,14 @@ test("--list (describeAcceptanceSuites) lists both hosts' goal task ids and pers
 // throws when the measured duration exceeds the 30s phase-abort budget.
 // ---------------------------------------------------------------------------
 
-function buildFakeObsidianSession({ modalOpen = false } = {}) {
+function buildFakeObsidianSession({ modalOpen = false, settingsMarker = false } = {}) {
   const window = new Window();
   window.document.body.innerHTML = `
     ${modalOpen ? '<div class="modal-container"><div class="modal arxiv-daily-modal"><button type="button">Close</button></div></div>' : ""}
     <div class="view-content arxiv-daily-dashboard">
       <div class="arxiv-daily-dashboard__tab is-active" role="tab" tabindex="0">All</div>
     </div>
+    ${settingsMarker ? '<input class="arxiv-daily-settings__model-input" />' : ""}
   `;
   const calls = [];
   const reloadCalls = [];
@@ -314,7 +320,7 @@ function buildFakeObsidianSession({ modalOpen = false } = {}) {
     getComputedStyle: (...args) => window.getComputedStyle(...args),
     innerWidth: 1200, innerHeight: 800,
     app: {
-      setting: { isOpen: modalOpen, activeTab: undefined, open() { this.isOpen = true; }, close() { calls.push("settings.close"); this.isOpen = false; }, openTabById() {} },
+      setting: { isOpen: modalOpen, activeTab: undefined, open() { calls.push("settings.open"); this.isOpen = true; }, close() { calls.push("settings.close"); this.isOpen = false; }, openTabById() { calls.push("settings.openTabById"); } },
       // disablePlugin/enablePlugin mock a full plugin reload the way the fixed suite's own
       // reloadPlugin() (obsidian-ui.mjs) drives it — the real fix for the settings-desync bug found on
       // the real host (see exploration-obsidian.mjs's reset() comment): a bare loadSettingsAndState()
@@ -400,4 +406,203 @@ test("observe() rejects a stale observation id at execute() without sending any 
     assert.match(result.error, /[Ss]tale/);
     assert.equal(calls.length, before, "no CDP input call was sent for a stale observation");
   });
+});
+
+// ---------------------------------------------------------------------------
+// P3 Chunk 2: driver additions the new Obsidian goal tasks rely on —
+// applySettingsPatch(mutate) (a task's prepare() seeding data.json directly,
+// never through the model) and reloadThenReopenSettings() (proof a saved
+// setting survives a full plugin reload, not only re-opening the settings
+// tab). Exercised against the same fake CDP session/fixture convention as
+// reset() above, not a fake driver, since these are real driver behavior.
+// ---------------------------------------------------------------------------
+
+test("driver.applySettingsPatch writes the mutated settings to data.json and fully reloads the plugin", async () => {
+  await withTempFixture(async ({ fixture, artifactDir }) => {
+    const { reloadCalls, session } = buildFakeObsidianSession();
+    const driver = await createObsidianExplorationDriver({ session, fixture, artifactDir });
+    const dataPath = path.join(fixture.vaultRoot, SETTINGS_FILE);
+    await mkdir(path.dirname(dataPath), { recursive: true });
+    await writeFile(dataPath, JSON.stringify({ settings: { output: { maxDailyPapers: 20 } } }));
+    await driver.applySettingsPatch(current => { current.settings.output.maxDailyPapers = 42; });
+    const written = JSON.parse(await (await import("node:fs/promises")).readFile(dataPath, "utf8"));
+    assert.equal(written.settings.output.maxDailyPapers, 42, "the mutation must be persisted to data.json");
+    assert.deepEqual(reloadCalls, ["disable", "enable"], "applySettingsPatch must fully reload the plugin, once, so the write actually takes effect");
+  });
+});
+
+test("driver.reloadThenReopenSettings reloads the plugin before (re)opening settings, not after", async () => {
+  await withTempFixture(async ({ fixture, artifactDir }) => {
+    const { calls, reloadCalls, session } = buildFakeObsidianSession({ settingsMarker: true });
+    const driver = await createObsidianExplorationDriver({ session, fixture, artifactDir });
+    const before = calls.length;
+    await driver.reloadThenReopenSettings();
+    const after = calls.slice(before);
+    assert.deepEqual(reloadCalls, ["disable", "enable"]);
+    const openIndex = after.findIndex(c => c === "settings.open");
+    assert.ok(openIndex >= 0, "settings must be (re)opened");
+    // reloadPlugin() itself closes settings first (helper.reloadPlugin), then reloadThenReopenSettings
+    // opens them again — the open must come after the close the reload performed.
+    const closeIndex = after.findIndex(c => c === "settings.close");
+    assert.ok(closeIndex >= 0 && openIndex > closeIndex, "settings must close (as part of the reload) before it is reopened");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// P3 Chunk 2: the four new/extended Obsidian goal tasks' verify() functions,
+// exercised against a fake driver exposing only jsonFile/applySettingsPatch/
+// closeThenReopenSettings/reloadThenReopenSettings/read — never a real CDP
+// session — per the phase's "prefer unit tests with a fake driver exposing
+// jsonFile/read results" acceptance bar. Each task is checked both on the
+// untouched fixture baseline (verify must NOT pass — the negative evidence
+// the phase requires) and once the real, independent on-disk/UI state
+// reflects the completed goal (verify must pass).
+// ---------------------------------------------------------------------------
+
+/** A fake driver whose jsonFile/read/applySettingsPatch all read and write the same in-memory "disk". */
+function createFakeSettingsDriver(initialSettings) {
+  let disk = structuredClone(initialSettings);
+  return {
+    async jsonFile(relative) {
+      assert.equal(relative, SETTINGS_FILE, `task verify() must read the real settings file, not ${relative}`);
+      return structuredClone(disk);
+    },
+    async applySettingsPatch(mutate) { mutate(disk); },
+    async closeThenReopenSettings() {},
+    async reloadThenReopenSettings() {},
+    async openDashboard() {},
+    async read(expression) {
+      const topic = disk.settings.arxiv.topics.find(item => item.id === obsidianTaskLibrary.FIXTURE_TOPIC_ID);
+      if (expression.includes("topic-direction-input")) return (topic?.directions ?? []).map(direction => direction.text);
+      if (expression.includes(obsidianTaskLibrary.TARGET_CATEGORY_ID)) return disk.settings.arxiv.categories ?? [];
+      if (expression.includes("Daily paper limit")) return String(disk.settings.output.maxDailyPapers);
+      throw new Error(`Unhandled fake read() expression: ${expression}`);
+    },
+  };
+}
+
+function fixtureSettingsBaseline() {
+  return {
+    settings: {
+      output: { maxDailyPapers: 20 },
+      arxiv: {
+        categories: ["cs.AI"],
+        topics: [{
+          id: obsidianTaskLibrary.FIXTURE_TOPIC_ID, name: obsidianTaskLibrary.FIXTURE_TOPIC_NAME, tag: "research", detail: false,
+          directions: [{ id: "acceptance-reliable", text: obsidianTaskLibrary.FIXTURE_DIRECTION_TEXT, origin: "manual" }],
+        }],
+      },
+    },
+  };
+}
+
+test("add-topic-direction: verify fails on the untouched fixture and passes once the new direction is saved and visible after reopening", async () => {
+  const task = (await obsidianTaskLibrary.goalTasks()).find(t => t.id === "add-topic-direction");
+  assert.ok(task, "add-topic-direction must exist in the Obsidian goal task library");
+  const driver = createFakeSettingsDriver(fixtureSettingsBaseline());
+  const untouched = await task.verify({ driver, observation: { controls: [] }, actions: [] });
+  assert.equal(untouched.passed, false, "verify must not pass before the model has added anything");
+
+  await driver.applySettingsPatch(current => {
+    current.settings.arxiv.topics[0].directions.push({ id: "new", text: obsidianTaskLibrary.NEW_DIRECTION_TEXT, origin: "manual" });
+  });
+  const done = await task.verify({ driver, observation: { controls: [] }, actions: [] });
+  assert.equal(done.passed, true, `verify should pass once the new direction is saved and visible: ${JSON.stringify(done)}`);
+});
+
+test("add-topic-direction: verify still fails if the existing direction was overwritten instead of a new one being added", async () => {
+  const task = (await obsidianTaskLibrary.goalTasks()).find(t => t.id === "add-topic-direction");
+  const driver = createFakeSettingsDriver(fixtureSettingsBaseline());
+  await driver.applySettingsPatch(current => {
+    current.settings.arxiv.topics[0].directions[0].text = obsidianTaskLibrary.NEW_DIRECTION_TEXT;
+  });
+  const result = await task.verify({ driver, observation: { controls: [] }, actions: [] });
+  assert.equal(result.passed, false, "replacing the original direction instead of adding a new one must not pass");
+});
+
+test("remove-topic-direction: prepare() deterministically seeds a second direction (not via the model); verify fails until it is removed and the original is kept", async () => {
+  const task = (await obsidianTaskLibrary.goalTasks()).find(t => t.id === "remove-topic-direction");
+  assert.ok(task, "remove-topic-direction must exist in the Obsidian goal task library");
+  assert.equal(typeof task.prepare, "function");
+  const driver = createFakeSettingsDriver(fixtureSettingsBaseline());
+
+  await task.prepare({ driver });
+  const afterPrepare = await driver.jsonFile(SETTINGS_FILE);
+  const topicAfterPrepare = afterPrepare.settings.arxiv.topics.find(item => item.id === obsidianTaskLibrary.FIXTURE_TOPIC_ID);
+  assert.equal(topicAfterPrepare.directions.length, 2, "prepare must seed exactly one extra direction");
+  assert.ok(topicAfterPrepare.directions.some(direction => direction.text === obsidianTaskLibrary.SEEDED_DIRECTION_TEXT));
+  assert.ok(topicAfterPrepare.directions.some(direction => direction.text === obsidianTaskLibrary.FIXTURE_DIRECTION_TEXT));
+
+  const beforeRemoval = await task.verify({ driver, observation: { controls: [] }, actions: [] });
+  assert.equal(beforeRemoval.passed, false, "verify must not pass while the seeded direction is still present (prepare alone must not satisfy the task)");
+
+  await driver.applySettingsPatch(current => {
+    const topic = current.settings.arxiv.topics.find(item => item.id === obsidianTaskLibrary.FIXTURE_TOPIC_ID);
+    topic.directions = topic.directions.filter(direction => direction.text !== obsidianTaskLibrary.SEEDED_DIRECTION_TEXT);
+  });
+  const afterRemoval = await task.verify({ driver, observation: { controls: [] }, actions: [] });
+  assert.equal(afterRemoval.passed, true, `verify should pass once only the seeded direction is removed: ${JSON.stringify(afterRemoval)}`);
+});
+
+test("remove-topic-direction: verify fails if the original direction was removed instead of the seeded one", async () => {
+  const task = (await obsidianTaskLibrary.goalTasks()).find(t => t.id === "remove-topic-direction");
+  const driver = createFakeSettingsDriver(fixtureSettingsBaseline());
+  await task.prepare({ driver });
+  await driver.applySettingsPatch(current => {
+    const topic = current.settings.arxiv.topics.find(item => item.id === obsidianTaskLibrary.FIXTURE_TOPIC_ID);
+    topic.directions = topic.directions.filter(direction => direction.text !== obsidianTaskLibrary.FIXTURE_DIRECTION_TEXT);
+  });
+  const result = await task.verify({ driver, observation: { controls: [] }, actions: [] });
+  assert.equal(result.passed, false, "removing the wrong direction must not pass");
+});
+
+test("add-arxiv-category: verify fails on the untouched fixture and passes once the target category is added and cs.AI is kept", async () => {
+  const task = (await obsidianTaskLibrary.goalTasks()).find(t => t.id === "add-arxiv-category");
+  assert.ok(task, "add-arxiv-category must exist in the Obsidian goal task library");
+  const driver = createFakeSettingsDriver(fixtureSettingsBaseline());
+  const untouched = await task.verify({ driver, observation: { controls: [] }, actions: [] });
+  assert.equal(untouched.passed, false, "verify must not pass before the model has added the category");
+
+  await driver.applySettingsPatch(current => { current.settings.arxiv.categories.push(obsidianTaskLibrary.TARGET_CATEGORY_ID); });
+  const done = await task.verify({ driver, observation: { controls: [] }, actions: [] });
+  assert.equal(done.passed, true, `verify should pass once the target category is present alongside cs.AI: ${JSON.stringify(done)}`);
+});
+
+test("add-arxiv-category: verify fails if cs.AI was replaced rather than kept alongside the new category", async () => {
+  const task = (await obsidianTaskLibrary.goalTasks()).find(t => t.id === "add-arxiv-category");
+  const driver = createFakeSettingsDriver(fixtureSettingsBaseline());
+  await driver.applySettingsPatch(current => { current.settings.arxiv.categories = [obsidianTaskLibrary.TARGET_CATEGORY_ID]; });
+  const result = await task.verify({ driver, observation: { controls: [] }, actions: [] });
+  assert.equal(result.passed, false, "losing the original category must not pass, even though the target category is present");
+});
+
+test("daily-paper-limit: verify's new reload proof actually reloads the plugin once persistence is confirmed, and only once per task run", async () => {
+  const task = (await obsidianTaskLibrary.goalTasks()).find(t => t.id === "daily-paper-limit");
+  const settings = fixtureSettingsBaseline();
+  settings.settings.output.maxDailyPapers = 7;
+  let reloadCalls = 0;
+  const driver = createFakeSettingsDriver(settings);
+  driver.reloadThenReopenSettings = async () => { reloadCalls += 1; };
+  const actions = [{ type: "fill", control: { name: "Daily paper limit" }, value: "7" }];
+
+  const result = await task.verify({ driver, observation: {}, actions });
+  assert.equal(result.passed, true, JSON.stringify(result));
+  assert.equal(reloadCalls, 1, "verify must reload the plugin to prove the setting survives a reload, not only a settings reopen");
+  assert.ok(result.checks.some(check => /重载/.test(check.label)), "a check must specifically name the full-plugin-reload proof");
+
+  await task.verify({ driver, observation: {}, actions }); // verify is polled repeatedly by the real loop
+  assert.equal(reloadCalls, 1, "the expensive reload must happen at most once per task run (memoized)");
+});
+
+test("daily-paper-limit: verify fails (and never reloads the plugin) while the on-disk value does not match the target yet", async () => {
+  const task = (await obsidianTaskLibrary.goalTasks()).find(t => t.id === "daily-paper-limit");
+  const settings = fixtureSettingsBaseline(); // maxDailyPapers stays at the fixture default (20)
+  let reloadCalls = 0;
+  const driver = createFakeSettingsDriver(settings);
+  driver.reloadThenReopenSettings = async () => { reloadCalls += 1; };
+  const actions = [{ type: "fill", control: { name: "Daily paper limit" }, value: "7" }];
+
+  const result = await task.verify({ driver, observation: {}, actions });
+  assert.equal(result.passed, false);
+  assert.equal(reloadCalls, 0, "a plugin reload is only worth paying for once persistence on disk is already confirmed");
 });
