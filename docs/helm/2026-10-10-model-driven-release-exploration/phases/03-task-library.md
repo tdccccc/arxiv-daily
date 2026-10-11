@@ -2,8 +2,8 @@
 
 goal_ref: ../goal.md
 created: 2026-10-11T16:00:00+08:00
-updated: 2026-10-11T16:00:00+08:00
-revision: 1
+updated: 2026-10-11T18:30:00+08:00
+revision: 2
 
 ## Outcome
 
@@ -29,7 +29,7 @@ revision: 1
 - Red / baseline signal: 观察测试断言：由本插件“更多”按钮打开的菜单项可见，调度开关项 restricted，非本插件菜单不可见；任务库按宿主分模块、id 唯一，`--list` 列出两端任务与角色。当前菜单不可见而失败。
 - Green check: node --test scripts/tests/acceptance-exploration-obsidian.test.mjs scripts/tests/acceptance-exploration-host.test.mjs
 - regression checks: npm run test:acceptance:tools；真实 Obsidian 中受控模型打开“更多”菜单并点击“按日期运行…”出现日期框
-- [ ] implementation and tests accepted
+- [x] implementation and tests accepted (8767e5c, d8c0271) — 产品给“更多”菜单加 `arxiv-daily-menu` 标记；调度开关、清除运行状态、外部帮助链接受限；任务库移至 scripts/acceptance/exploration-tasks/。
 
 ### Chunk 2 — Obsidian settings and topic tasks
 
