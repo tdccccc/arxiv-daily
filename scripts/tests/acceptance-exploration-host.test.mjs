@@ -13,6 +13,7 @@ import {
   dailyReportFile,
   HISTORY_FILE,
   INDEX_FILE,
+  paperNoteFile,
   SETTINGS_FILE,
   STATE_FILE,
   startObsidianExplorationSession,
@@ -233,12 +234,14 @@ test("the default Obsidian goal tasks have ids, titles, Chinese goals and a prog
   const tasks = await obsidianTaskLibrary.goalTasks();
   assert.deepEqual(tasks.map(t => t.id), obsidianTaskLibrary.GOAL_TASK_IDS);
   // Ids are unchanged by the move (phase contract: "keeping existing task ids/behavior unchanged"); P3
-  // Chunk 2 appends topic/direction/category tasks after the original two, and P3 Chunk 3 appends the
-  // four run tasks after those, keeping every earlier id stable.
+  // Chunk 2 appends topic/direction/category tasks after the original two, P3 Chunk 3 appends the
+  // four run tasks after those, and P3 Chunk 4 appends the five reading tasks, keeping every earlier id
+  // stable.
   assert.deepEqual(obsidianTaskLibrary.GOAL_TASK_IDS, [
     "daily-paper-limit", "star-paper-from-report",
     "add-topic-direction", "remove-topic-direction", "add-arxiv-category",
     "run-for-date", "cancel-then-rerun", "auth-failure-retry", "completed-date-idempotent",
+    "dashboard-tabs-paging", "mark-to-read", "create-paper-note", "summarize-by-id", "open-today-report",
   ]);
   for (const t of tasks) {
     assert.equal(typeof t.title, "string");
@@ -895,4 +898,268 @@ test("completed-date-idempotent: verify fails on the untouched state, fails on a
   skippedDriver.disk.historyLines.push({ date, event: "skipped", resultKind: "skipped", reason: "already done" });
   const skipped = await task.verify({ driver: skippedDriver, actions: [fillDate(date)] });
   assert.equal(skipped.passed, true, `verify should pass once a genuine "already done" skip is recorded and nothing else changed: ${JSON.stringify(skipped)}`);
+});
+
+// ---------------------------------------------------------------------------
+// P3 Chunk 4: the five new Obsidian reading goal tasks (dashboard-tabs-paging,
+// mark-to-read, create-paper-note, summarize-by-id, open-today-report). A
+// fake driver stands in for the real CDP session/vault, exposing exactly the
+// surface these tasks' prepare()/verify() use (jsonFile/file/read/
+// applyIndexPatch/removeVaultFile/writeVaultFile/ensureDailyReport/
+// openDashboard) — never a real Obsidian/CDP session. Each task is checked
+// on the untouched state (must not pass), on at least one plausible wrong
+// outcome (must not pass), and on the fully correct state (must pass).
+// ---------------------------------------------------------------------------
+
+function createFakeReadingDriver({ index = {}, notes = {}, reports = {}, dom = {} } = {}) {
+  const disk = {
+    index: structuredClone({ papers: {}, ...index }),
+    notes: structuredClone(notes),
+    reports: structuredClone(reports),
+    dom: { activeTab: "false", pageLabel: "", tableText: "", activeFile: null, ...dom },
+  };
+  const calls = { applyIndexPatch: 0, removeVaultFile: [], writeVaultFile: [], ensureDailyReport: [], reloadPlugin: 0 };
+  const notFound = () => { const error = new Error("not found"); error.code = "ENOENT"; throw error; };
+  return {
+    disk, calls,
+    async jsonFile(relative) {
+      if (relative === INDEX_FILE) return structuredClone(disk.index);
+      throw new Error(`Unhandled fake jsonFile: ${relative}`);
+    },
+    async file(relative) {
+      if (relative in disk.notes) return disk.notes[relative];
+      const date = Object.keys(disk.reports).find(d => relative === dailyReportFile(d));
+      if (date) return disk.reports[date];
+      return notFound();
+    },
+    async read(expression) {
+      if (expression.includes('data-tab="all"')) return disk.dom.activeTab;
+      if (expression.includes("pagination-label")) return disk.dom.pageLabel;
+      if (expression.includes("__table")) return disk.dom.tableText;
+      if (expression.includes("getActiveFile")) return disk.dom.activeFile;
+      throw new Error(`Unhandled fake read: ${expression}`);
+    },
+    async openDashboard() {},
+    async reloadPlugin() { calls.reloadPlugin += 1; },
+    async ensureDailyReport(date) { calls.ensureDailyReport.push(date); disk.reports[date] ??= reportMarkdown(date); },
+    async applyIndexPatch(mutate) { calls.applyIndexPatch += 1; mutate(disk.index); },
+    async removeVaultFile(relative) { calls.removeVaultFile.push(relative); delete disk.notes[relative]; },
+    async writeVaultFile(relative, content) { calls.writeVaultFile.push(relative); disk.notes[relative] = content; },
+  };
+}
+
+function fillNamed(name, value) { return { type: "fill", control: { name }, value }; }
+
+function detailNoteMarkdown(arxivId) {
+  const sections = ["研究问题", "方法设计", "核心结果", "主要结论", "关键图表", "适用边界"];
+  return `# Paper ${arxivId}\n\n- **arXiv**: https://arxiv.org/abs/${arxivId}\n\n${sections.map(s => `## ${s}\n\nFixture body for ${arxivId}.\n`).join("\n")}`;
+}
+
+test("dashboard-tabs-paging: verify fails on the untouched state, fails without reaching page 2, and passes once All/page-2 state is confirmed on the live DOM", async () => {
+  const task = (await obsidianTaskLibrary.goalTasks()).find(t => t.id === "dashboard-tabs-paging");
+  assert.ok(task, "dashboard-tabs-paging must exist in the Obsidian goal task library");
+  const first = obsidianTaskLibrary.PAGINATION_FIRST_PAPER_ID;
+  const last = obsidianTaskLibrary.PAGINATION_LAST_PAPER_ID;
+
+  const untouched = await task.verify({ driver: createFakeReadingDriver({}), actions: [] });
+  assert.equal(untouched.passed, false, "verify must not pass before the model switches tabs");
+
+  const noNext = await task.verify({ driver: createFakeReadingDriver({}), actions: [clickNamed("All32")] });
+  assert.equal(noNext.passed, false, "verify must not pass without a Next page click (a plausible wrong outcome: staying on page 1)");
+
+  const stalePageDriver = createFakeReadingDriver({ dom: { activeTab: "true", pageLabel: "Page 1 / 2", tableText: `${first} ${last}` } });
+  const stalePage = await task.verify({ driver: stalePageDriver, actions: [clickNamed("All32"), clickNamed("Next page")] });
+  assert.equal(stalePage.passed, false, "verify must not pass when the live DOM still reports page 1 regardless of the recorded click (a plausible wrong outcome: the click had no effect)");
+
+  // Isolated from the pageLabel/activeTab checks above: tab and page indicator both already correct, but
+  // the visible table still shows the page-1-only paper (and lacks the page-2-only one) — this must fail
+  // on its own, not only in combination with a wrong tab/page.
+  const wrongPapersDriver = createFakeReadingDriver({ dom: { activeTab: "true", pageLabel: "Page 2 / 2", tableText: first } });
+  const wrongPapers = await task.verify({ driver: wrongPapersDriver, actions: [clickNamed("All32"), clickNamed("Next page")] });
+  assert.equal(wrongPapers.passed, false, "verify must not pass when the tab/page indicator are correct but the table still shows the first page's paper instead of the second page's (a plausible wrong outcome: the page indicator advanced without the rows actually changing)");
+
+  const doneDriver = createFakeReadingDriver({ dom: { activeTab: "true", pageLabel: "Page 2 / 2", tableText: last } });
+  const done = await task.verify({ driver: doneDriver, actions: [clickNamed("All32"), clickNamed("Next page")] });
+  assert.equal(done.passed, true, `verify should pass once the live DOM shows the All tab active, page 2, and the page-2-only paper: ${JSON.stringify(done)}`);
+});
+
+test("dashboard-tabs-paging: prepare() writes a real daily-report Markdown file (with an arxiv.org/abs link per synthetic paper) plus one real Paper note per synthetic id, then reloads the plugin so the vault scan picks them up", async () => {
+  const task = (await obsidianTaskLibrary.goalTasks()).find(t => t.id === "dashboard-tabs-paging");
+  const driver = createFakeReadingDriver({});
+  await task.prepare({ driver });
+  assert.equal(driver.calls.reloadPlugin, 1, "a direct papers.json write alone does not survive a reload (confirmed on a real host); the fix must reload after writing real files");
+  const reportPath = dailyReportFile(obsidianTaskLibrary.PAGINATION_REPORT_DATE);
+  const reportContent = driver.disk.notes[reportPath];
+  assert.ok(reportContent, "prepare() must write a real daily-report file the vault scan can discover");
+  assert.match(reportContent, new RegExp(`arxiv\\.org/abs/${obsidianTaskLibrary.PAGINATION_FIRST_PAPER_ID}`));
+  assert.match(reportContent, new RegExp(`arxiv\\.org/abs/${obsidianTaskLibrary.PAGINATION_LAST_PAPER_ID}`));
+  assert.equal((reportContent.match(/arxiv\.org\/abs\//g) || []).length, obsidianTaskLibrary.PAGINATION_PAPER_COUNT, "the report must link every synthetic paper, matching history-sync.ts's extractArxivIds pattern");
+  assert.ok(driver.disk.notes[paperNoteFile(obsidianTaskLibrary.PAGINATION_FIRST_PAPER_ID)], "each synthetic paper also gets a real Paper note, so its row never ambiguously shows 'Summarize by arXiv ID'");
+  assert.ok(driver.disk.notes[paperNoteFile(obsidianTaskLibrary.PAGINATION_LAST_PAPER_ID)]);
+});
+
+test("mark-to-read: verify fails on the untouched state, fails when the submit happened but the on-disk status never changed, and passes once the target paper's status is to_read", async () => {
+  const task = (await obsidianTaskLibrary.goalTasks()).find(t => t.id === "mark-to-read");
+  assert.ok(task, "mark-to-read must exist in the Obsidian goal task library");
+  const id = obsidianTaskLibrary.MARK_TO_READ_ID;
+
+  const untouchedIndex = { papers: { p0: { arxivId: id, status: "inbox" } } };
+  const untouched = await task.verify({ driver: createFakeReadingDriver({ index: untouchedIndex }), actions: [] });
+  assert.equal(untouched.passed, false, "verify must not pass before the model fills the Paper ID field");
+
+  const noDiskChangeDriver = createFakeReadingDriver({ index: { papers: { p0: { arxivId: id, status: "inbox" } } } });
+  const noDiskChange = await task.verify({ driver: noDiskChangeDriver, actions: [fillNamed("Paper ID or URL", id), clickNamed("Set mark")] });
+  assert.equal(noDiskChange.passed, false, "verify must not pass when the fill/click happened but the on-disk status never actually changed (a plausible wrong outcome: the submit failed silently)");
+
+  const doneDriver = createFakeReadingDriver({ index: { papers: { p0: { arxivId: id, status: "to_read" } } } });
+  const done = await task.verify({ driver: doneDriver, actions: [fillNamed("Paper ID or URL", id), clickNamed("Set mark")] });
+  assert.equal(done.passed, true, `verify should pass once the target paper's status is to_read on disk: ${JSON.stringify(done)}`);
+});
+
+test("mark-to-read: prepare() ensures the daily report exists so the target paper is indexed", async () => {
+  const task = (await obsidianTaskLibrary.goalTasks()).find(t => t.id === "mark-to-read");
+  const driver = createFakeReadingDriver({});
+  await task.prepare({ driver });
+  assert.deepEqual(driver.calls.ensureDailyReport, [ACCEPTANCE_DATE]);
+});
+
+test("create-paper-note: verify fails on the untouched state, fails when the click happened but no note file was ever written, and passes once the note/index/active-file all agree", async () => {
+  const task = (await obsidianTaskLibrary.goalTasks()).find(t => t.id === "create-paper-note");
+  assert.ok(task, "create-paper-note must exist in the Obsidian goal task library");
+  const id = obsidianTaskLibrary.CREATE_PAPER_NOTE_ID;
+  const notePath = paperNoteFile(id);
+
+  const untouched = await task.verify({ driver: createFakeReadingDriver({}), actions: [] });
+  assert.equal(untouched.passed, false, "verify must not pass before the model clicks the row action");
+
+  const noFileDriver = createFakeReadingDriver({ index: { papers: { p0: { arxivId: id, detail: false, paperPath: null } } } });
+  const noFile = await task.verify({ driver: noFileDriver, actions: [clickNamed("Summarize by arXiv ID")] });
+  assert.equal(noFile.passed, false, "verify must not pass when the click happened but no note file was ever written (a plausible wrong outcome: the summarize call failed)");
+
+  // Isolated from the index check below: the note file exists with the right structure, but the index
+  // entry was never updated — must fail on its own.
+  const indexNotUpdatedDriver = createFakeReadingDriver({
+    index: { papers: { p0: { arxivId: id, detail: false, paperPath: null } } },
+    notes: { [notePath]: detailNoteMarkdown(id) },
+    dom: { activeFile: notePath },
+  });
+  const indexNotUpdated = await task.verify({ driver: indexNotUpdatedDriver, actions: [clickNamed("Summarize by arXiv ID")] });
+  assert.equal(indexNotUpdated.passed, false, "verify must not pass when the note file was written but the paper index was never updated to point at it (a plausible wrong outcome: the write succeeded but the index commit failed)");
+
+  // Isolated from the structure check above: the index already claims a note exists, but the file itself
+  // was never actually written — must fail on its own.
+  const contentMissingDriver = createFakeReadingDriver({
+    index: { papers: { p0: { arxivId: id, detail: true, paperPath: notePath } } },
+    dom: { activeFile: notePath },
+  });
+  const contentMissing = await task.verify({ driver: contentMissingDriver, actions: [clickNamed("Summarize by arXiv ID")] });
+  assert.equal(contentMissing.passed, false, "verify must not pass when the index claims a note exists but the file was never actually written (a plausible wrong outcome: the index was updated without the write succeeding)");
+
+  const doneDriver = createFakeReadingDriver({
+    index: { papers: { p0: { arxivId: id, detail: true, paperPath: notePath } } },
+    notes: { [notePath]: detailNoteMarkdown(id) },
+    dom: { activeFile: notePath },
+  });
+  const done = await task.verify({ driver: doneDriver, actions: [clickNamed("Summarize by arXiv ID")] });
+  assert.equal(done.passed, true, `verify should pass once the note file, index entry and active file all agree: ${JSON.stringify(done)}`);
+});
+
+test("create-paper-note: prepare() clears the target's own note and seeds the fixture's other paper with one, so exactly one row can show the action", async () => {
+  const task = (await obsidianTaskLibrary.goalTasks()).find(t => t.id === "create-paper-note");
+  const targetId = obsidianTaskLibrary.CREATE_PAPER_NOTE_ID;
+  const otherId = obsidianTaskLibrary.CREATE_PAPER_NOTE_OTHER_ID;
+  const driver = createFakeReadingDriver({
+    notes: { [paperNoteFile(targetId)]: "stale note" },
+    index: {
+      papers: {
+        p0: { arxivId: targetId, detail: true, paperPath: paperNoteFile(targetId) },
+        p1: { arxivId: otherId, detail: false, paperPath: null },
+      },
+    },
+  });
+  await task.prepare({ driver });
+  assert.deepEqual(driver.calls.removeVaultFile, [paperNoteFile(targetId)]);
+  assert.ok(driver.calls.writeVaultFile.includes(paperNoteFile(otherId)));
+  const targetEntry = Object.values(driver.disk.index.papers).find(e => e.arxivId === targetId);
+  const otherEntry = Object.values(driver.disk.index.papers).find(e => e.arxivId === otherId);
+  assert.equal(targetEntry.detail, false);
+  assert.equal(targetEntry.paperPath, null);
+  assert.equal(otherEntry.detail, true);
+  assert.equal(otherEntry.paperPath, paperNoteFile(otherId));
+});
+
+test("summarize-by-id: verify fails on the untouched state, fails without a Summarize click, fails when submitted but no note file was ever written, and passes once the note/index agree", async () => {
+  const task = (await obsidianTaskLibrary.goalTasks()).find(t => t.id === "summarize-by-id");
+  assert.ok(task, "summarize-by-id must exist in the Obsidian goal task library");
+  const id = obsidianTaskLibrary.SUMMARIZE_BY_ID_TARGET;
+  const notePath = paperNoteFile(id);
+
+  const untouched = await task.verify({ driver: createFakeReadingDriver({}), actions: [] });
+  assert.equal(untouched.passed, false, "verify must not pass before the model fills the Paper ID field");
+
+  const noSubmit = await task.verify({ driver: createFakeReadingDriver({}), actions: [fillNamed("Paper ID or URL", id)] });
+  assert.equal(noSubmit.passed, false, "verify must not pass without clicking Summarize (a plausible wrong outcome: filled but never submitted)");
+
+  const noFileDriver = createFakeReadingDriver({});
+  const noFile = await task.verify({ driver: noFileDriver, actions: [fillNamed("Paper ID or URL", id), clickNamed("Summarize")] });
+  assert.equal(noFile.passed, false, "verify must not pass when submit happened but no note file was ever written (a plausible wrong outcome: the fetch failed)");
+
+  // Isolated from the index check below: the note file exists with the right structure, but the index
+  // entry was never updated — must fail on its own.
+  const indexNotUpdated = await task.verify({
+    driver: createFakeReadingDriver({ notes: { [notePath]: detailNoteMarkdown(id) } }),
+    actions: [fillNamed("Paper ID or URL", id), clickNamed("Summarize")],
+  });
+  assert.equal(indexNotUpdated.passed, false, "verify must not pass when the note file was written but the paper index was never updated (a plausible wrong outcome: the write succeeded but the index commit failed)");
+
+  // Isolated from the structure check above: the index already claims a note exists, but the file itself
+  // was never actually written — must fail on its own.
+  const contentMissing = await task.verify({
+    driver: createFakeReadingDriver({ index: { papers: { p0: { arxivId: id, detail: true, paperPath: notePath } } } } ),
+    actions: [fillNamed("Paper ID or URL", id), clickNamed("Summarize")],
+  });
+  assert.equal(contentMissing.passed, false, "verify must not pass when the index claims a note exists but the file was never actually written (a plausible wrong outcome: the index was updated without the write succeeding)");
+
+  const doneDriver = createFakeReadingDriver({
+    index: { papers: { p0: { arxivId: id, detail: true, paperPath: notePath } } },
+    notes: { [notePath]: detailNoteMarkdown(id) },
+  });
+  const done = await task.verify({ driver: doneDriver, actions: [fillNamed("Paper ID or URL", id), clickNamed("Summarize")] });
+  assert.equal(done.passed, true, `verify should pass once the note file and index entry agree: ${JSON.stringify(done)}`);
+});
+
+test("summarize-by-id: prepare() clears any stale note/index entry for the target id", async () => {
+  const task = (await obsidianTaskLibrary.goalTasks()).find(t => t.id === "summarize-by-id");
+  const id = obsidianTaskLibrary.SUMMARIZE_BY_ID_TARGET;
+  const driver = createFakeReadingDriver({
+    notes: { [paperNoteFile(id)]: "stale" },
+    index: { papers: { [`arxiv:${id}`]: { arxivId: id, detail: true, paperPath: paperNoteFile(id) } } },
+  });
+  await task.prepare({ driver });
+  assert.deepEqual(driver.calls.removeVaultFile, [paperNoteFile(id)]);
+  assert.equal(driver.disk.index.papers[`arxiv:${id}`], undefined);
+});
+
+test("open-today-report: verify fails on the untouched state, fails when a different note ends up active, and passes once ACCEPTANCE_DATE's report is the active file", async () => {
+  const task = (await obsidianTaskLibrary.goalTasks()).find(t => t.id === "open-today-report");
+  assert.ok(task, "open-today-report must exist in the Obsidian goal task library");
+  const label = `${ACCEPTANCE_DATE}: open daily report, 2 indexed papers`;
+
+  const untouched = await task.verify({ driver: createFakeReadingDriver({}), actions: [] });
+  assert.equal(untouched.passed, false, "verify must not pass before the model clicks the calendar cell");
+
+  const wrongFileDriver = createFakeReadingDriver({ dom: { activeFile: "arxiv-daily/daily/2026-10-02.md" } });
+  const wrongFile = await task.verify({ driver: wrongFileDriver, actions: [clickNamed(label)] });
+  assert.equal(wrongFile.passed, false, "verify must not pass when a different date's report ended up active (a plausible wrong outcome: the wrong calendar cell)");
+
+  const doneDriver = createFakeReadingDriver({ dom: { activeFile: dailyReportFile(ACCEPTANCE_DATE) } });
+  const done = await task.verify({ driver: doneDriver, actions: [clickNamed(label)] });
+  assert.equal(done.passed, true, `verify should pass once the active file is ACCEPTANCE_DATE's report: ${JSON.stringify(done)}`);
+});
+
+test("open-today-report: prepare() ensures the ACCEPTANCE_DATE report exists", async () => {
+  const task = (await obsidianTaskLibrary.goalTasks()).find(t => t.id === "open-today-report");
+  const driver = createFakeReadingDriver({});
+  await task.prepare({ driver });
+  assert.deepEqual(driver.calls.ensureDailyReport, [ACCEPTANCE_DATE]);
 });

@@ -10,7 +10,7 @@
  * never the model's own claim of success — matching every other goal task in this project.
  */
 import { ACCEPTANCE_DATE, PAPERS } from "../fixtures.mjs";
-import { dailyReportFile, entryFor, HISTORY_FILE, INDEX_FILE, SETTINGS_FILE, STATE_FILE } from "../exploration-obsidian.mjs";
+import { dailyReportFile, entryFor, HISTORY_FILE, INDEX_FILE, paperNoteFile, SETTINGS_FILE, STATE_FILE } from "../exploration-obsidian.mjs";
 import { poll, pollJsonFile } from "../obsidian-ui.mjs";
 import { checkResult, taskResult } from "./checks.mjs";
 
@@ -19,6 +19,8 @@ export const GOAL_TASK_IDS = [
   "daily-paper-limit", "star-paper-from-report",
   "add-topic-direction", "remove-topic-direction", "add-arxiv-category",
   "run-for-date", "cancel-then-rerun", "auth-failure-retry", "completed-date-idempotent",
+  // P3 Chunk 4: reading tasks.
+  "dashboard-tabs-paging", "mark-to-read", "create-paper-note", "summarize-by-id", "open-today-report",
 ];
 
 /** No Obsidian personas yet (P3 Chunk 5); kept as an explicit empty array, not undefined, so `--list` and selection stay uniform across hosts. */
@@ -53,6 +55,78 @@ export const TARGET_CATEGORY_LABEL = "Machine Learning";
 export const RUN_FOR_DATE_DATE = "2026-10-02";
 export const CANCEL_THEN_RERUN_DATE = "2026-10-05";
 export const AUTH_FAILURE_RETRY_DATE = "2026-10-06";
+
+// ─── P3 Chunk 4: Obsidian reading tasks ──────────────────────────────────────
+// Shared by dashboard-tabs-paging (the fixture's other papers) and create-paper-note (the "other" fixture
+// paper's pre-seeded note): a minimal but real Paper note file — frontmatter identity (`arxiv_id`) plus six
+// H2 sections — matching what plugin/src/dashboard/detail-refs.ts's `isExpectedGeneratedDetailSummary`
+// (packages/core's `classifyPaperNote`/`looksLikeDetailSummary`) actually requires to recognize a file as a
+// real detail summary: an H1, and at least 3 of its known H2 headings (not merely an index flag — see the
+// dashboard-tabs-paging comment below for why writing directly to papers.json was not sufficient).
+const DETAIL_NOTE_SECTIONS = ["研究问题", "方法设计", "核心结果", "主要结论", "关键图表", "适用边界"];
+const detailNoteMarkdown = (id, title) => `---\ntitle: "${title}"\nauthors: "A. Researcher"\narxiv_id: "${id}"\nprimary_topic: Pagination\ntags: []\n---\n\n# ${title}\n\n${DETAIL_NOTE_SECTIONS.map(section => `## ${section}\n\nSeeded fixture placeholder content for ${id}, long enough to be recognized as a real detail summary body rather than an empty stub, describing the same controlled research measurement in each section.\n`).join("\n")}`;
+
+// dashboard-tabs-paging: the fixture only ever serves 2 unique papers (fixtures.mjs's PAPERS), far short
+// of the "All" tab's default page size (20, plugin/src/dashboard/constants.ts PAGE_SIZE_OPTIONS — not
+// settings-persisted, so there is no settings patch that could lower it). A first attempt seeded
+// PAGINATION_PAPER_COUNT synthetic papers.json entries directly; a real-host run showed this does NOT
+// work — the Dashboard rebuilds its paper list from scratch on every load by scanning real vault Markdown
+// (packages/core/src/dashboard/history-sync.ts's `syncDashboardHistory`: `collectDailyCandidates` parses
+// daily-report files, `collectPaperCandidates` parses papersDir Paper notes), and prunes any index entry
+// that isn't backed by one of those — a synthetic entry pointing at nothing real simply vanishes on the
+// next reload. prepare() instead writes one real daily-report-shaped Markdown file (the format
+// `packages/core/src/pipeline/daily-summary-rendering.ts`'s `renderPaperHeader` actually produces: an `##`
+// topic heading matching the fixture's own topic name, then one `###` paper heading per synthetic id with
+// an `- **arXiv**: [id](https://arxiv.org/abs/id)` line, which is exactly what `extractArxivIds`'s first
+// pattern matches) plus one real Paper note per synthetic id (`detailNoteMarkdown`, so every synthetic row
+// already shows "Open detail summary" rather than "Summarize by arXiv ID" — keeping create-paper-note's own
+// precondition, that exactly one row shows that action, true regardless of task order). Both are picked up
+// by the normal vault scan after a plugin reload, the same path a real generated report/paper note takes.
+// Titles are zero-padded ("01".."30") because every synthetic paper shares one report date, so the default
+// sort (priority tie, then published desc, then **title ascending**) falls through to lexicographic title
+// order — unpadded "10" would sort before "2". The fixture's own 2 real papers (published in 2026, later
+// than the synthetic "2024-01-15" report date) always sort before all synthetic rows, so the last synthetic
+// paper is still guaranteed past the first 20 rows regardless of how many real papers already exist.
+export const PAGINATION_PAPER_COUNT = 30;
+export const PAGINATION_REPORT_DATE = "2024-01-15";
+const paginationPaperId = i => `9901.${String(i).padStart(5, "0")}`;
+const paginationPaperTitle = i => `Synthetic pagination paper ${String(i).padStart(2, "0")}`;
+export const PAGINATION_FIRST_PAPER_ID = paginationPaperId(1);
+export const PAGINATION_LAST_PAPER_ID = paginationPaperId(PAGINATION_PAPER_COUNT);
+
+// mark-to-read: the only mark the plugin's PaperStatus model offers that reads as "to read" is "to_read"
+// (plugin/src/commands.ts PAPER_MARKS — "Watch" sets status "to_read"/priority "normal"); the one UI path
+// to it (the "Set paper mark…" command's PaperMarkModal) was not wired into any dashboard control before
+// this chunk — see the product change in plugin/src/dashboard/view.ts's showMoreMenu (new "Set paper
+// mark…" item reusing the existing addCommandMenuItem helper and the command's own already-`.arxiv-daily-
+// modal`-marked modal). Uses PAPERS[1], not PAPERS[0] (star-paper-from-report's paper), to stay independent
+// of that task's own priority toggling. `status`/`priority` are user marks, preserved as-is by the vault
+// scan above (unlike `detail`/`paperPath`, they are not recomputed from file presence — confirmed by
+// reading packages/core/src/services/paper-index.ts's `upsertEntry`), so no reset is needed between passes.
+export const MARK_TO_READ_ID = PAPERS[1].id;
+
+// create-paper-note: the dashboard's per-row "Summarize by arXiv ID" action (sparkles icon, shown only
+// when the row has no existing detail summary) already drives manualFetch.fetchAndSummarize for a named
+// paper with no product change needed. But that action button carries no per-paper identifying DOM
+// attribute (unlike the star toggle's `data-arxiv-id`) — every row with no detail summary shows the exact
+// same label — so prepare() must leave exactly one such row in the table: CREATE_PAPER_NOTE_ID's own note
+// is cleared, and the fixture's other paper is given a pre-seeded detail summary (so its row shows "Open
+// detail summary" instead), independently of whatever order this task runs in across repeated passes.
+export const CREATE_PAPER_NOTE_ID = PAPERS[0].id;
+export const CREATE_PAPER_NOTE_OTHER_ID = PAPERS[1].id;
+
+// summarize-by-id: a fresh id the fixture serves generically (fixtures.mjs's atom()/paperHtml() fall back
+// to a synthetic title/abstract/content for any arXiv-shaped id outside PAPERS), deliberately not one of
+// the two fixture papers already in the dashboard — the point of this task is the toolbar's "by ID" entry
+// for a paper the model has not otherwise seen, as opposed to create-paper-note's already-listed row.
+export const SUMMARIZE_BY_ID_TARGET = "2610.20001";
+
+// open-today-report: ACCEPTANCE_DATE's report (already deterministically established by
+// star-paper-from-report/completed-date-idempotent's own prepare(), and re-asserted independently here)
+// rather than the wall-clock "today" — the fixture's "recent" arXiv listing only ever serves fixtures.mjs's
+// own hardcoded DATES, so a run for the real current date would list zero papers. The calendar defaults to
+// the latest report's month, which is the same October-2026 month as the real host's current month, so no
+// month navigation is needed to reach ACCEPTANCE_DATE's cell.
 
 /** Parses the real run-history.jsonl (append-only, never truncated by clearDateState) into records. */
 async function readHistory(driver) {
@@ -495,6 +569,169 @@ export function goalTasks() {
           checkResult("日报文件逐字保持不变", unchanged),
           checkResult("没有发起新的模型请求", noNewRequests, driver.fixture.server.requests.slice(idempotentBaseline.requestCount).filter(request => request.model)),
           checkResult("论文索引没有产生重复条目", noDuplicates),
+        ]);
+      },
+    },
+    // ─── P3 Chunk 4: reading tasks ──────────────────────────────────────────
+    {
+      id: "dashboard-tabs-paging", title: "切换到 All 标签并翻到第二页",
+      goal: "打开阅读面板，点击 All 标签，然后点击分页区域的 Next page 按钮，翻到第 2 页。",
+      // Writes one real daily-report-shaped Markdown file plus one real Paper note per synthetic id (never
+      // through the model), so the normal vault scan (not a direct papers.json write — see this file's own
+      // comment above for why that does not survive a reload) indexes enough papers that the existing
+      // default page size (20) alone produces a second page.
+      async prepare({ driver }) {
+        const lines = [
+          "---", `date: ${PAGINATION_REPORT_DATE}`, "tags: [arxiv, daily]", "---", "",
+          `# arXiv cs.AI Daily Digest ${PAGINATION_REPORT_DATE}`,
+          `${PAGINATION_PAPER_COUNT} relevant papers, including ${PAGINATION_PAPER_COUNT} with separate paper notes.`,
+          "", `## ${FIXTURE_TOPIC_NAME}`,
+        ];
+        for (let i = 1; i <= PAGINATION_PAPER_COUNT; i++) {
+          const id = paginationPaperId(i);
+          lines.push("", `### ${paginationPaperTitle(i)}`, "", `- **Authors**: A. Researcher`, `- **arXiv**: [${id}](https://arxiv.org/abs/${id})`);
+          await driver.writeVaultFile(paperNoteFile(id), detailNoteMarkdown(id, paginationPaperTitle(i)));
+        }
+        await driver.writeVaultFile(dailyReportFile(PAGINATION_REPORT_DATE), lines.join("\n") + "\n");
+        await driver.reloadPlugin();
+        await driver.openDashboard();
+      },
+      async verify({ driver, actions }) {
+        // Default active tab is "starred" and any tab click resets to page 0 (view.ts), so reaching "All,
+        // page 2" is only possible through a real tab click followed by a real Next-page click — never a
+        // default.
+        const switchedToAll = actions.some(action => action.type === "click" && /^all\d*$/i.test((action.control?.name || "").trim()));
+        if (!switchedToAll) return taskResult([checkResult("点击 All 标签", false)]);
+        const clickedNext = actions.some(action => action.type === "click" && /^next page$/i.test((action.control?.name || "").trim()));
+        if (!clickedNext) return taskResult([checkResult("点击 All 标签", true), checkResult("点击 Next page 翻到第 2 页", false)]);
+        const activeTab = await poll(
+          () => driver.read('document.querySelector(\'.arxiv-daily-dashboard__tab[data-tab="all"]\')?.getAttribute("aria-pressed")'),
+          value => value === "true", "All 标签当前处于激活状态", { timeoutMs: 5000 },
+        ).catch(() => undefined);
+        const pageLabel = await poll(
+          () => driver.read('document.querySelector(".arxiv-daily-dashboard__pagination-label")?.textContent ?? ""'),
+          value => /^Page 2 \//.test(value || ""), "分页指示当前显示第 2 页", { timeoutMs: 5000 },
+        ).catch(() => "");
+        const tableText = await driver.read('document.querySelector(".arxiv-daily-dashboard__table")?.textContent ?? ""').catch(() => "");
+        const onPageTwo = Boolean(tableText) && tableText.includes(PAGINATION_LAST_PAPER_ID) && !tableText.includes(PAGINATION_FIRST_PAPER_ID);
+        return taskResult([
+          checkResult("点击 All 标签", true),
+          checkResult("点击 Next page 翻到第 2 页", true),
+          checkResult("All 标签当前处于激活状态", activeTab === "true", activeTab),
+          checkResult("分页指示当前显示第 2 页", /^Page 2 \//.test(pageLabel || ""), pageLabel),
+          checkResult("当前页显示只在第二页出现的论文，且不显示第一页独有的论文", onPageTwo, tableText.slice(0, 200)),
+        ]);
+      },
+    },
+    {
+      id: "mark-to-read", title: "将论文标记为待读",
+      goal: `点击仪表盘工具栏的“More arXiv Daily actions”按钮打开菜单，点击其中的“Set paper mark…”，在弹出的对话框里把 Paper ID or URL 填为 ${MARK_TO_READ_ID}，Mark 保持默认的 Watch，点击 Set mark 提交。`,
+      async prepare({ driver }) {
+        await driver.ensureDailyReport(ACCEPTANCE_DATE);
+        await driver.openDashboard();
+      },
+      async verify({ driver, actions }) {
+        const filled = actions.some(action => action.type === "fill" && /paper id or url/i.test(action.control?.name || "") && action.value === MARK_TO_READ_ID);
+        if (!filled) return taskResult([checkResult(`在 Set paper mark 对话框中填写 ${MARK_TO_READ_ID}`, false)]);
+        const submitted = actions.some(action => action.type === "click" && /^set mark$/i.test((action.control?.name || "").trim()));
+        if (!submitted) {
+          return taskResult([checkResult(`在 Set paper mark 对话框中填写 ${MARK_TO_READ_ID}`, true), checkResult("点击 Set mark 提交", false)]);
+        }
+        const onDisk = await pollJsonFile(() => driver.jsonFile(INDEX_FILE), value => entryFor(value, MARK_TO_READ_ID)?.status === "to_read", "to_read status on disk", { timeoutMs: 5000 }).catch(() => null);
+        const entry = entryFor(onDisk, MARK_TO_READ_ID);
+        const marked = entry?.status === "to_read";
+        return taskResult([
+          checkResult(`在 Set paper mark 对话框中填写 ${MARK_TO_READ_ID}`, true),
+          checkResult("点击 Set mark 提交", true),
+          checkResult("论文索引中该论文状态变为 to_read（待读）", marked, entry?.status),
+        ]);
+      },
+    },
+    {
+      id: "create-paper-note", title: "为指定论文生成论文总结",
+      goal: `打开阅读面板，切换到 All 标签，找到 arXiv ${CREATE_PAPER_NOTE_ID} 对应行，点击该行的“Summarize by arXiv ID”按钮，为这篇论文生成一份论文总结（Paper note）。`,
+      // Clears the target's own note and seeds the fixture's other paper with one, so exactly one row in
+      // the table shows "Summarize by arXiv ID" (see CREATE_PAPER_NOTE_ID's own comment above for why this
+      // is necessary — the action buttons carry no per-paper DOM attribute to disambiguate by).
+      async prepare({ driver }) {
+        await driver.ensureDailyReport(ACCEPTANCE_DATE);
+        await driver.removeVaultFile(paperNoteFile(CREATE_PAPER_NOTE_ID));
+        const otherPaper = PAPERS.find(paper => paper.id === CREATE_PAPER_NOTE_OTHER_ID);
+        await driver.writeVaultFile(paperNoteFile(CREATE_PAPER_NOTE_OTHER_ID), detailNoteMarkdown(CREATE_PAPER_NOTE_OTHER_ID, otherPaper.title));
+        await driver.applyIndexPatch(current => {
+          const target = entryFor(current, CREATE_PAPER_NOTE_ID);
+          if (target) { target.detail = false; target.paperPath = null; }
+          const other = entryFor(current, CREATE_PAPER_NOTE_OTHER_ID);
+          if (other) { other.detail = true; other.paperPath = paperNoteFile(CREATE_PAPER_NOTE_OTHER_ID); }
+        });
+        await driver.openDashboard();
+      },
+      async verify({ driver, actions }) {
+        const clicked = actions.some(action => action.type === "click" && /^summarize by arxiv id$/i.test((action.control?.name || "").trim()));
+        if (!clicked) return taskResult([checkResult(`点击 arXiv ${CREATE_PAPER_NOTE_ID} 行的 Summarize by arXiv ID 按钮`, false)]);
+        const notePath = paperNoteFile(CREATE_PAPER_NOTE_ID);
+        const content = await poll(() => driver.file(notePath).catch(() => null), value => value !== null, "论文总结文件已写出", { timeoutMs: 5000 }).catch(() => null);
+        const sections = ["研究问题", "方法设计", "核心结果", "主要结论", "关键图表", "适用边界"];
+        const hasStructure = Boolean(content) && sections.every(section => content.includes(section)) && content.includes(CREATE_PAPER_NOTE_ID);
+        const index = await driver.jsonFile(INDEX_FILE).catch(() => null);
+        const entry = entryFor(index, CREATE_PAPER_NOTE_ID);
+        const indexed = entry?.detail === true && typeof entry.paperPath === "string" && entry.paperPath.endsWith(`${CREATE_PAPER_NOTE_ID}.md`);
+        const activeFile = await poll(() => driver.read("app.workspace.getActiveFile()?.path ?? null"), value => value === notePath, "新生成的论文总结在 Obsidian 中被打开", { timeoutMs: 5000 }).catch(() => undefined);
+        return taskResult([
+          checkResult(`点击 arXiv ${CREATE_PAPER_NOTE_ID} 行的 Summarize by arXiv ID 按钮`, true),
+          checkResult("论文总结文件写出固定夹具的结构化章节", hasStructure, content?.slice(0, 200)),
+          checkResult("论文索引记录了该论文的总结路径", indexed, entry),
+          checkResult("该论文总结在 Obsidian 中被打开", activeFile === notePath, activeFile),
+        ]);
+      },
+    },
+    {
+      id: "summarize-by-id", title: "按 arXiv 编号生成论文总结",
+      goal: `点击阅读面板工具栏的“Summarize by ID”按钮，在弹出的对话框里把 Paper ID or URL 填为 ${SUMMARIZE_BY_ID_TARGET}，点击 Summarize 提交，等待生成完成。`,
+      async prepare({ driver }) {
+        await driver.removeVaultFile(paperNoteFile(SUMMARIZE_BY_ID_TARGET));
+        await driver.applyIndexPatch(current => { delete current.papers[`arxiv:${SUMMARIZE_BY_ID_TARGET}`]; });
+        await driver.openDashboard();
+      },
+      async verify({ driver, actions }) {
+        const filled = actions.some(action => action.type === "fill" && /paper id or url/i.test(action.control?.name || "") && action.value === SUMMARIZE_BY_ID_TARGET);
+        if (!filled) return taskResult([checkResult(`在 Summarize by ID 对话框中填写 ${SUMMARIZE_BY_ID_TARGET}`, false)]);
+        const submitted = actions.some(action => action.type === "click" && /^summarize$/i.test((action.control?.name || "").trim()));
+        if (!submitted) {
+          return taskResult([checkResult(`在 Summarize by ID 对话框中填写 ${SUMMARIZE_BY_ID_TARGET}`, true), checkResult("点击 Summarize 提交", false)]);
+        }
+        const notePath = paperNoteFile(SUMMARIZE_BY_ID_TARGET);
+        const content = await poll(() => driver.file(notePath).catch(() => null), value => value !== null, "按编号生成的论文总结文件已写出", { timeoutMs: 5000 }).catch(() => null);
+        const sections = ["研究问题", "方法设计", "核心结果", "主要结论", "关键图表", "适用边界"];
+        const hasStructure = Boolean(content) && sections.every(section => content.includes(section)) && content.includes(SUMMARIZE_BY_ID_TARGET);
+        const index = await driver.jsonFile(INDEX_FILE).catch(() => null);
+        const entry = entryFor(index, SUMMARIZE_BY_ID_TARGET);
+        const indexed = entry?.detail === true && typeof entry.paperPath === "string" && entry.paperPath.endsWith(`${SUMMARIZE_BY_ID_TARGET}.md`);
+        return taskResult([
+          checkResult(`在 Summarize by ID 对话框中填写 ${SUMMARIZE_BY_ID_TARGET}`, true),
+          checkResult("点击 Summarize 提交", true),
+          checkResult("按编号生成的论文总结文件写出固定夹具的结构化章节", hasStructure, content?.slice(0, 200)),
+          checkResult("论文索引新增了该论文条目并记录总结路径", indexed, entry),
+        ]);
+      },
+    },
+    {
+      id: "open-today-report", title: "从日历打开日报",
+      goal: `打开阅读面板，在 Daily reports 日历中找到 ${ACCEPTANCE_DATE} 对应的日期格（已生成日报，带有论文数角标），点击它打开当天的日报。`,
+      async prepare({ driver }) {
+        await driver.ensureDailyReport(ACCEPTANCE_DATE);
+        await driver.openDashboard();
+      },
+      // Opening a vault note leaves the plugin's own surface (resolveSurface() reports view:"none"
+      // afterward); verify reads app.workspace state directly, as readingAndReload (obsidian-scenarios.mjs)
+      // already does for the same signal, and the model need not act again once the file is open.
+      async verify({ driver, actions }) {
+        const clicked = actions.some(action => action.type === "click" && new RegExp(`^${ACCEPTANCE_DATE}:`).test((action.control?.name || "").trim()));
+        if (!clicked) return taskResult([checkResult(`点击 ${ACCEPTANCE_DATE} 对应的日历日期格`, false)]);
+        const activeFile = await poll(() => driver.read("app.workspace.getActiveFile()?.path ?? null"), value => value === dailyReportFile(ACCEPTANCE_DATE), "工作区打开了该日期的日报", { timeoutMs: 5000 }).catch(() => undefined);
+        return taskResult([
+          checkResult(`点击 ${ACCEPTANCE_DATE} 对应的日历日期格`, true),
+          checkResult("打开的笔记正是该日期的日报文件", activeFile === dailyReportFile(ACCEPTANCE_DATE), activeFile),
         ]);
       },
     },

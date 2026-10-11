@@ -600,6 +600,10 @@ export const INDEX_FILE = "arxiv-daily/.index/papers.json";
 export const STATE_FILE = "arxiv-daily/.index/run-state.json";
 export const HISTORY_FILE = "arxiv-daily/.index/run-history.jsonl";
 export const dailyReportFile = date => `arxiv-daily/daily/${date}.md`;
+// P3 Chunk 4: the vault-relative path manualFetch.fetchAndSummarize/ensurePaperNote write a Paper note to
+// (papersDir + "/" + arxivId + ".md" — see packages/core/src/services/manual-fetch.ts and
+// scripts/acceptance/obsidian.mjs's createObsidianSettings, output.papersDir === "arxiv-daily/papers").
+export const paperNoteFile = arxivId => `arxiv-daily/papers/${arxivId}.md`;
 export const entryFor = (index, arxivId) => Object.values(index?.papers ?? {}).find(entry => entry.arxivId === arxivId);
 
 /**
@@ -844,6 +848,34 @@ export async function createObsidianExplorationDriver({ session, fixture, artifa
       mutate(current);
       await fs.writeFile(path.join(fixture.vaultRoot, SETTINGS_FILE), JSON.stringify(current, null, 2));
       await helper.reloadPlugin();
+    },
+    // P3 Chunk 4: the index counterpart of applySettingsPatch — a task's deterministic `prepare()` seeds or
+    // resets paper-index entries directly (status/priority/detail/paperPath/…), never through the model's
+    // own actions, then reloads the plugin so the running instance actually reflects the write (same
+    // reload reset() and applySettingsPatch already rely on). Leaves no plugin surface open afterward;
+    // callers reopen a surface themselves next.
+    async applyIndexPatch(mutate) {
+      const current = await helper.jsonFile(INDEX_FILE).catch(() => ({ schemaVersion: 5, updatedAt: new Date().toISOString(), papers: {} }));
+      current.papers ??= {};
+      mutate(current);
+      await fs.mkdir(path.dirname(path.join(fixture.vaultRoot, INDEX_FILE)), { recursive: true });
+      await fs.writeFile(path.join(fixture.vaultRoot, INDEX_FILE), JSON.stringify(current, null, 2));
+      await helper.reloadPlugin();
+    },
+    // P3 Chunk 4: generic vault file write/remove, used by tasks that seed or clear a Paper note file
+    // directly (never through the model) to make a precondition deterministic — e.g. create-paper-note's
+    // prepare() clears the target's own note and seeds the fixture's other paper with one so exactly one
+    // dashboard row shows the "Summarize by arXiv ID" action the task asks the model to click (row action
+    // buttons carry no per-paper identifying attribute, unlike the star toggle — see obsidian.mjs's
+    // CREATE_PAPER_NOTE_ID comment). Neither call reloads the plugin by itself; callers that also need an
+    // index patch call applyIndexPatch afterward, so one prepare() pays for at most one reload.
+    async writeVaultFile(relativePath, content) {
+      const target = path.join(fixture.vaultRoot, relativePath);
+      await fs.mkdir(path.dirname(target), { recursive: true });
+      await fs.writeFile(target, content);
+    },
+    async removeVaultFile(relativePath) {
+      await fs.rm(path.join(fixture.vaultRoot, relativePath), { force: true });
     },
     async ensureDailyReport(date) {
       if (await helper.exists(dailyReportFile(date))) return;
