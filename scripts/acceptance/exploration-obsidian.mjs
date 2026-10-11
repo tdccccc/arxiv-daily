@@ -487,8 +487,31 @@ export function createObsidianActionExecutor({ client, evaluate, redact = value 
         await evaluate(`(() => { document.querySelector(${JSON.stringify(refSelector(action.ref))})?.scrollIntoView({ block: "center" }); return true; })()`);
         const target = await targetCenter(action.ref, "Obsidian fill target stable and hit-testable");
         await dispatchClick(target.x, target.y);
-        await dispatchSelectAll();
-        await client.send("Input.insertText", { text: action.value });
+        // P3 Chunk 3 real-host finding: the "Run for date…"/"Force run for date…" dialog's native
+        // `<input type="date">` does not accept `Input.insertText` on this Obsidian/Electron build —
+        // Chromium's date control is internally segmented (separate month/day/year sub-fields with
+        // their own caret), and a real click + Ctrl+A + insertText sequence left the field's `.value`
+        // unchanged (confirmed on a real host: it stayed ""). There is no single real keystroke
+        // sequence that maps onto a YYYY-MM-DD value the way a user actually types it, so this one
+        // field type is filled the same way the existing test-only `fill()` helper (obsidian-ui.mjs,
+        // used by the fixed suite's own `runDate()`) already does — set `.value` directly and dispatch
+        // input/change — the same "not reliably drivable with real input in Electron" exception the
+        // `select` action above already documents for native `<select>` dropdowns.
+        const isDateField = await read(`document.querySelector(${JSON.stringify(refSelector(action.ref))})?.type === "date"`);
+        if (isDateField) {
+          await evaluate(`(() => {
+            const node = document.querySelector(${JSON.stringify(refSelector(action.ref))});
+            if (!node) return false;
+            node.value = ${JSON.stringify(action.value)};
+            const EventCtor = node.ownerDocument.defaultView.Event;
+            node.dispatchEvent(new EventCtor("input", { bubbles: true }));
+            node.dispatchEvent(new EventCtor("change", { bubbles: true }));
+            return true;
+          })()`);
+        } else {
+          await dispatchSelectAll();
+          await client.send("Input.insertText", { text: action.value });
+        }
         const after = await read(`document.querySelector(${JSON.stringify(refSelector(action.ref))})?.value`);
         if (after !== action.value) throw new ExplorationActionError("Fill did not take effect; the field still shows a different value");
         await dispatchKey("Tab");
@@ -571,7 +594,12 @@ export class ObsidianExplorationBlockedError extends Error {
 // copy of these paths drifting out of sync.
 export const SETTINGS_FILE = ".obsidian/plugins/arxiv-daily/data.json";
 export const INDEX_FILE = "arxiv-daily/.index/papers.json";
-const dailyReportFile = date => `arxiv-daily/daily/${date}.md`;
+// P3 Chunk 3: the run-state and run-history files the new run tasks (run-for-date, cancel-then-rerun,
+// auth-failure-retry, completed-date-idempotent) read, matching obsidian-scenarios.mjs's own STATE/HISTORY
+// constants exactly (same on-disk paths the fixed suite already exercises).
+export const STATE_FILE = "arxiv-daily/.index/run-state.json";
+export const HISTORY_FILE = "arxiv-daily/.index/run-history.jsonl";
+export const dailyReportFile = date => `arxiv-daily/daily/${date}.md`;
 export const entryFor = (index, arxivId) => Object.values(index?.papers ?? {}).find(entry => entry.arxivId === arxivId);
 
 /**
@@ -660,6 +688,17 @@ export async function createObsidianExplorationDriver({ session, fixture, artifa
   const helper = await createObsidianDriver({ session, fixture, artifactDir });
   const executor = createObsidianActionExecutor({ client: session.client, evaluate: session.evaluate, redact });
   let version = 0, latest, diagnosticsSeen = 0;
+  // P3 Chunk 3: the auth-failure-retry goal task deliberately drives the product into the fixed suite's
+  // own "controlled authentication failure" path (paper-filter.ts's `logger.error("paper-filter: LLM
+  // call failed", e)` on a 401), which without a carve-out would otherwise be classified as an
+  // *unexpected* console error by classifyObsidianDiagnostics and fail the task the instant it is
+  // observed — before verify() even runs (exploration.mjs's loop checks `observation.errors` before
+  // calling verify()). `expectAuthorizationFailure()` lets that one task's `prepare()` opt in to the
+  // fixed suite's existing `authorizationFailureExpected` carve-out (obsidian.mjs's
+  // classifyObsidianDiagnostics) for its own run only; `reset()` clears the flag back to false before
+  // every task (including the next run of the same task across a second full pass), so every other task
+  // keeps the strict "no unexpected errors" bar unchanged.
+  let authFailureExpected = false;
 
   async function observe() {
     signal?.throwIfAborted();
@@ -669,13 +708,15 @@ export async function createObsidianExplorationDriver({ session, fixture, artifa
       const restriction = classifyControlRestriction(control);
       if (restriction) { control.restricted = restriction; if (control.sensitive) control.value = ""; }
     }
-    // Reuses obsidian-scenarios's own unexpected-console-error/exception classification (no "expected
-    // authorization failure" carve-out applies generically here, so every qualifying entry is unexpected),
+    // Reuses obsidian-scenarios's own unexpected-console-error/exception classification; the generic
+    // carve-out only applies when a task has opted in via expectAuthorizationFailure() (see above),
     // scoped to only the diagnostics entries collected since the previous observation.
     const entries = session.diagnostics.entries();
     const fresh = entries.slice(diagnosticsSeen);
     diagnosticsSeen = entries.length;
-    const { unexpected } = classifyObsidianDiagnostics(fresh);
+    const { unexpected } = classifyObsidianDiagnostics(fresh, authFailureExpected
+      ? { authorizationFailureExpected: true, fixtureRequests: fixture.server.requests }
+      : undefined);
     snapshot.errors = unexpected.map(entry => redact(entry.text ?? JSON.stringify(entry)));
     latest = snapshot;
     return snapshot;
@@ -711,6 +752,7 @@ export async function createObsidianExplorationDriver({ session, fixture, artifa
   async function reset({ signal: resetSignal } = {}) {
     const start = Date.now();
     resetSignal?.throwIfAborted();
+    authFailureExpected = false; // P3 Chunk 3: never carries over into the next task.
     await executor.execute({ type: "back" }, null, { signal: resetSignal }).catch(() => {});
     await helper.closeSettings();
     resetSignal?.throwIfAborted();
@@ -743,8 +785,50 @@ export async function createObsidianExplorationDriver({ session, fixture, artifa
     // Task-specific extras, exactly like exploration-browser.mjs's inspect()/dailyEvidence(): real vault
     // state (or, for the two below, a program-only UI round trip) a verifier reads/drives directly, never
     // through the model's own action schema.
-    jsonFile: helper.jsonFile, exists: helper.exists, file: helper.file, read: helper.read,
+    jsonFile: helper.jsonFile, exists: helper.exists, file: helper.file, read: helper.read, idle: helper.idle,
     openDashboard: helper.openDashboard, reloadPlugin: helper.reloadPlugin,
+    // P3 Chunk 3: the run tasks' verify() toggles the fixture's own LLM mode directly (hold/release,
+    // unauthorized/normal) as a program-only side effect, exactly like the fixed suite's obsidian-
+    // scenarios.mjs (`d.fixture.server.setMode(...)`) — never something the model itself can reach.
+    fixture,
+    // P3 Chunk 3: opts the current task's observe() into the fixed suite's existing "expected
+    // authentication failure" carve-out (see observe()'s own comment above); only auth-failure-retry's
+    // prepare() calls this, and reset() clears it before every task.
+    expectAuthorizationFailure() { authFailureExpected = true; },
+    // P3 Chunk 3: a task's prepare() calls this (never the model) to deterministically start a date fresh
+    // — undoing whatever an earlier pass of the *same* task left behind (run-state entry, daily report
+    // file, and that date's entries in the paper index's dailyReports) — so re-running the whole task
+    // library a second time in one session still starts each of these run tasks from "not yet generated"
+    // rather than silently reusing the first pass's completed state. Paper-index entries are trimmed
+    // (the date's report path removed from `dailyReports`), not deleted outright, because the same
+    // PAPERS fixture appears under multiple dates (other tasks' reports) and a shared index entry must
+    // survive. Finishes with the same full-plugin-reload applySettingsPatch/reset() already rely on, so
+    // the in-memory run state/paper index agree with what was just written; leaves no plugin surface
+    // open afterward (same caveat as applySettingsPatch), so callers reopen a surface themselves next.
+    async clearDateState(date) {
+      await fs.rm(path.join(fixture.vaultRoot, dailyReportFile(date)), { force: true });
+      const statePath = path.join(fixture.vaultRoot, STATE_FILE);
+      try {
+        const state = JSON.parse(await fs.readFile(statePath, "utf8"));
+        if (state.runState && date in state.runState) {
+          delete state.runState[date];
+          await fs.writeFile(statePath, JSON.stringify(state, null, 2));
+        }
+      } catch (error) { if (error.code !== "ENOENT") throw error; }
+      const indexPath = path.join(fixture.vaultRoot, INDEX_FILE);
+      try {
+        const index = JSON.parse(await fs.readFile(indexPath, "utf8"));
+        let changed = false;
+        for (const entry of Object.values(index.papers ?? {})) {
+          if (!Array.isArray(entry.dailyReports)) continue;
+          const before = entry.dailyReports.length;
+          entry.dailyReports = entry.dailyReports.filter(reportPath => !reportPath.endsWith(`${date}.md`));
+          if (entry.dailyReports.length !== before) changed = true;
+        }
+        if (changed) await fs.writeFile(indexPath, JSON.stringify(index, null, 2));
+      } catch (error) { if (error.code !== "ENOENT") throw error; }
+      await helper.reloadPlugin();
+    },
     async closeThenReopenSettings() { await helper.closeSettings(); await helper.openSettings(); },
     // P3 Chunk 2: proof that a setting survives a full plugin reload, not only re-opening the settings
     // tab inside the same loaded instance (the two are different claims — see reset()'s own comment above

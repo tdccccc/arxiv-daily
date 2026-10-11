@@ -415,6 +415,57 @@ test("fill focuses by a real click, selects existing content, inserts text, veri
   assert.equal(last.params.key, "Tab");
 });
 
+/**
+ * P3 Chunk 3 real-host finding: the "Run for date…"/"Force run for date…" dialog's native
+ * `<input type="date">` does not accept `Input.insertText` on this Obsidian/Electron build (confirmed
+ * on a real host — the field's `.value` stayed "" after a real click + Ctrl+A + insertText sequence),
+ * unlike every text/number/textarea field the test directly above exercises. `fill` now special-cases
+ * `type === "date"` to set `.value` directly and dispatch input/change, the same "not reliably drivable
+ * with real input in Electron" exception the `select` action below already documents for native
+ * `<select>` dropdowns — but only for date fields; non-date fields must keep using the real-insertText
+ * path (confirmed by the test directly above, and recontrasted explicitly below).
+ */
+test("fill on a native date input sets the value via the DOM path (dispatching input/change) instead of Input.insertText, and still commits with Tab", async () => {
+  const { window, calls, observe, execute } = buildSession('<div class="arxiv-daily-dashboard"><input type="date" value=""></div>');
+  const snapshot = observe();
+  const ref = snapshot.controls.find(c => c.tag === "input" && c.type === "date").ref;
+  stubTarget(window, ref, { x: 0, y: 0, width: 140, height: 30 });
+  const node = window.document.querySelector(`[data-acceptance-ref="${ref}"]`);
+  const fired = [];
+  node.addEventListener("input", () => fired.push("input"));
+  node.addEventListener("change", () => fired.push("change"));
+  const result = await execute({ type: "fill", ref, value: "2026-10-02" }, snapshot);
+  assert.equal(result.ok, true);
+  assert.equal(node.value, "2026-10-02");
+  assert.deepEqual(fired, ["input", "change"], "the DOM-set path must still dispatch real input/change events, like every other fill");
+  const methods = calls.map(c => c.method);
+  assert.deepEqual(methods.slice(0, 3), ["Input.dispatchMouseEvent", "Input.dispatchMouseEvent", "Input.dispatchMouseEvent"], "the real click to focus the field still happens");
+  assert.ok(!methods.includes("Input.insertText"), "a date field must never go through the real-keystroke insertText path");
+  const keyEvents = calls.filter(c => c.method === "Input.dispatchKeyEvent");
+  assert.ok(!keyEvents.some(c => c.params.key === "a" && c.params.modifiers === 2), "Ctrl+A select-all is only needed for the real-insertText path, not the DOM-set path");
+  assert.equal(keyEvents.at(-1)?.params.key, "Tab", "still commits with a trailing Tab like every other fill");
+});
+
+test("fill on a date field still goes through live re-validation first: a disabled date field is rejected with zero Input.* calls, never reaching the DOM-set path", async () => {
+  const { calls, observe, execute } = buildSession('<div class="arxiv-daily-dashboard"><input type="date" value="" disabled></div>');
+  const snapshot = observe();
+  const ref = snapshot.controls.find(c => c.tag === "input" && c.type === "date").ref;
+  const result = await execute({ type: "fill", ref, value: "2026-10-02" }, snapshot);
+  assert.equal(result.ok, false);
+  assert.match(result.error, /disabled/i);
+  assert.equal(calls.length, 0, "a disabled date field must be rejected before any CDP call, including the DOM-set evaluate() for the date branch");
+});
+
+test("fill on a non-date text field is unaffected by the date special-case: it still uses the real Input.insertText path", async () => {
+  const { window, calls, observe, execute } = buildSession('<div class="arxiv-daily-dashboard"><input type="text" value=""></div>');
+  const snapshot = observe();
+  const ref = snapshot.controls.find(c => c.tag === "input" && c.type === "text").ref;
+  stubTarget(window, ref, { x: 0, y: 0, width: 200, height: 30 });
+  const result = await execute({ type: "fill", ref, value: "hello" }, snapshot);
+  assert.equal(result.ok, true);
+  assert.ok(calls.some(c => c.method === "Input.insertText"), "a plain text field must still be filled via real insertText, not the date DOM-set path");
+});
+
 test("select sets the value in-page and dispatches input/change without any Input.* call", async () => {
   const { window, calls, observe, execute } = buildSession('<div class="arxiv-daily-dashboard"><select><option value="a">A</option><option value="b">B</option></select></div>');
   const snapshot = observe();

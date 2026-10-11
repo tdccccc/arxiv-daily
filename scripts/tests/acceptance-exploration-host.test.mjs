@@ -10,9 +10,14 @@ import { describeAcceptanceSuites, parseArgs } from "../acceptance/run.mjs";
 import { runExploration, runExplorationLoop } from "../acceptance/exploration.mjs";
 import {
   createObsidianExplorationDriver,
+  dailyReportFile,
+  HISTORY_FILE,
+  INDEX_FILE,
   SETTINGS_FILE,
+  STATE_FILE,
   startObsidianExplorationSession,
 } from "../acceptance/exploration-obsidian.mjs";
+import { ACCEPTANCE_DATE, PAPERS } from "../acceptance/fixtures.mjs";
 import * as obsidianTaskLibrary from "../acceptance/exploration-tasks/obsidian.mjs";
 import * as workbenchTaskLibrary from "../acceptance/exploration-tasks/workbench.mjs";
 
@@ -228,10 +233,12 @@ test("the default Obsidian goal tasks have ids, titles, Chinese goals and a prog
   const tasks = await obsidianTaskLibrary.goalTasks();
   assert.deepEqual(tasks.map(t => t.id), obsidianTaskLibrary.GOAL_TASK_IDS);
   // Ids are unchanged by the move (phase contract: "keeping existing task ids/behavior unchanged"); P3
-  // Chunk 2 appends topic/direction/category tasks after the original two, keeping their ids stable.
+  // Chunk 2 appends topic/direction/category tasks after the original two, and P3 Chunk 3 appends the
+  // four run tasks after those, keeping every earlier id stable.
   assert.deepEqual(obsidianTaskLibrary.GOAL_TASK_IDS, [
     "daily-paper-limit", "star-paper-from-report",
     "add-topic-direction", "remove-topic-direction", "add-arxiv-category",
+    "run-for-date", "cancel-then-rerun", "auth-failure-retry", "completed-date-idempotent",
   ]);
   for (const t of tasks) {
     assert.equal(typeof t.title, "string");
@@ -303,7 +310,7 @@ test("--list (describeAcceptanceSuites) lists both hosts' goal task ids and pers
 // throws when the measured duration exceeds the 30s phase-abort budget.
 // ---------------------------------------------------------------------------
 
-function buildFakeObsidianSession({ modalOpen = false, settingsMarker = false } = {}) {
+function buildFakeObsidianSession({ modalOpen = false, settingsMarker = false, diagnosticsEntries = [] } = {}) {
   const window = new Window();
   window.document.body.innerHTML = `
     ${modalOpen ? '<div class="modal-container"><div class="modal arxiv-daily-modal"><button type="button">Close</button></div></div>' : ""}
@@ -348,7 +355,11 @@ function buildFakeObsidianSession({ modalOpen = false, settingsMarker = false } 
     },
   };
   const evaluate = expression => cdpEvaluate(client, expression);
-  return { window, calls, reloadCalls, session: { client, evaluate, diagnostics: { entries: () => [] } } };
+  // `diagnosticsEntries` is the same mutable array the caller pushed into (not a copy): observe() calls
+  // `session.diagnostics.entries()` fresh every time and slices off what it already consumed
+  // (`diagnosticsSeen`), so a test can push new entries between two observe() calls, exactly like a real
+  // CDP session accumulating console/pageerror entries over time.
+  return { window, calls, reloadCalls, diagnosticsEntries, session: { client, evaluate, diagnostics: { entries: () => diagnosticsEntries } } };
 }
 
 async function withTempFixture(run) {
@@ -405,6 +416,65 @@ test("observe() rejects a stale observation id at execute() without sending any 
     assert.equal(result.ok, false);
     assert.match(result.error, /[Ss]tale/);
     assert.equal(calls.length, before, "no CDP input call was sent for a stale observation");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// P3 Chunk 3: driver.expectAuthorizationFailure()'s allowance must be narrow
+// — only the task that requested it, only authorization-failure diagnostics
+// (never a blanket "ignore every console error" switch), and not carried
+// over once reset() moves to the next task. Exercised against observe()
+// itself (not just classifyObsidianDiagnostics in isolation), since the bug
+// this guards against is observe() wiring the carve-out in at all.
+// ---------------------------------------------------------------------------
+
+const CONTROLLED_401_TEXT = "paper-filter: LLM call failed: Controlled acceptance authentication failure";
+
+test("expectAuthorizationFailure(): the controlled 401 console error is suppressed, but an unrelated console error in the very same task still surfaces", async () => {
+  await withTempFixture(async ({ fixture, artifactDir }) => {
+    fixture.server.requests = [{ method: "POST", kind: "model", status: 401 }];
+    const diagnosticsEntries = [];
+    const { session } = buildFakeObsidianSession({ diagnosticsEntries });
+    const driver = await createObsidianExplorationDriver({ session, fixture, artifactDir });
+    driver.expectAuthorizationFailure();
+    diagnosticsEntries.push(
+      { source: "console", level: "error", text: CONTROLLED_401_TEXT },
+      { source: "console", level: "error", text: "Something else broke" },
+    );
+    const snapshot = await driver.observe();
+    assert.ok(!snapshot.errors.some(text => text.includes(CONTROLLED_401_TEXT)), "the controlled authentication failure must be allowed, not surfaced as a product error");
+    assert.ok(snapshot.errors.some(text => text.includes("Something else broke")), "an unrelated console error in the same task must still be treated as unexpected");
+  });
+});
+
+test("expectAuthorizationFailure(): without the fixture actually having returned a 401, the same console text is not suppressed", async () => {
+  await withTempFixture(async ({ fixture, artifactDir }) => {
+    fixture.server.requests = []; // no 401 was ever actually returned
+    const diagnosticsEntries = [];
+    const { session } = buildFakeObsidianSession({ diagnosticsEntries });
+    const driver = await createObsidianExplorationDriver({ session, fixture, artifactDir });
+    driver.expectAuthorizationFailure();
+    diagnosticsEntries.push({ source: "console", level: "error", text: CONTROLLED_401_TEXT });
+    const snapshot = await driver.observe();
+    assert.ok(snapshot.errors.some(text => text.includes(CONTROLLED_401_TEXT)), "opting in alone must not suppress the error without a matching real 401 fixture response");
+  });
+});
+
+test("expectAuthorizationFailure(): the allowance does not carry over once reset() moves on to the next task", async () => {
+  await withTempFixture(async ({ fixture, artifactDir }) => {
+    fixture.server.requests = [{ method: "POST", kind: "model", status: 401 }];
+    const diagnosticsEntries = [];
+    const { session } = buildFakeObsidianSession({ diagnosticsEntries });
+    const driver = await createObsidianExplorationDriver({ session, fixture, artifactDir });
+    driver.expectAuthorizationFailure();
+    diagnosticsEntries.push({ source: "console", level: "error", text: CONTROLLED_401_TEXT });
+    const during = await driver.observe();
+    assert.ok(!during.errors.some(text => text.includes(CONTROLLED_401_TEXT)), "allowed while the task that requested it is still active");
+
+    await driver.reset(); // simulates moving on to the next task
+    diagnosticsEntries.push({ source: "console", level: "error", text: CONTROLLED_401_TEXT });
+    const after = await driver.observe();
+    assert.ok(after.errors.some(text => text.includes(CONTROLLED_401_TEXT)), "reset() must clear the allowance: the next task did not opt in, so the same text is unexpected again");
   });
 });
 
@@ -605,4 +675,224 @@ test("daily-paper-limit: verify fails (and never reloads the plugin) while the o
   const result = await task.verify({ driver, observation: {}, actions });
   assert.equal(result.passed, false);
   assert.equal(reloadCalls, 0, "a plugin reload is only worth paying for once persistence on disk is already confirmed");
+});
+
+// ---------------------------------------------------------------------------
+// P3 Chunk 3: the four new Obsidian run goal tasks (run-for-date,
+// cancel-then-rerun, auth-failure-retry, completed-date-idempotent). A fake
+// driver stands in for the real CDP session, exposing exactly the surface
+// these tasks' prepare()/verify() use (jsonFile/file/fixture.server/
+// clearDateState/expectAuthorizationFailure/openDashboard/idle/
+// ensureDailyReport) — never a real Obsidian/CDP session, per the phase's
+// "prefer a fake driver" acceptance bar. Each task is checked on the
+// untouched state (must not pass), on at least one plausible wrong outcome
+// (must not pass), and on the fully correct state (must pass).
+// ---------------------------------------------------------------------------
+
+function createFakeRunDriver({ state = {}, index = {}, historyLines = [], reports = {} } = {}) {
+  const disk = { state: structuredClone({ runState: {}, ...state }), index: structuredClone({ papers: {}, ...index }), historyLines: structuredClone(historyLines), reports: structuredClone(reports) };
+  const requests = [];
+  const calls = { setMode: [], releaseHeld: 0, clearDateState: [], expectAuthorizationFailure: 0 };
+  const notFound = () => { const error = new Error("not found"); error.code = "ENOENT"; throw error; };
+  return {
+    disk, requests, calls,
+    async jsonFile(relative) {
+      if (relative === STATE_FILE) return structuredClone(disk.state);
+      if (relative === INDEX_FILE) return structuredClone(disk.index);
+      throw new Error(`Unhandled fake jsonFile: ${relative}`);
+    },
+    async file(relative) {
+      if (relative === HISTORY_FILE) return disk.historyLines.length ? `${disk.historyLines.map(line => JSON.stringify(line)).join("\n")}\n` : "";
+      const date = Object.keys(disk.reports).find(d => relative === dailyReportFile(d));
+      return date ? disk.reports[date] : notFound();
+    },
+    fixture: { server: {
+      requests,
+      setMode(mode) { calls.setMode.push(mode); },
+      releaseHeld() { calls.releaseHeld += 1; },
+    } },
+    async clearDateState(date) {
+      calls.clearDateState.push(date);
+      delete disk.state.runState[date];
+      delete disk.reports[date];
+      for (const entry of Object.values(disk.index.papers)) {
+        if (Array.isArray(entry.dailyReports)) entry.dailyReports = entry.dailyReports.filter(p => !p.endsWith(`${date}.md`));
+      }
+    },
+    expectAuthorizationFailure() { calls.expectAuthorizationFailure += 1; },
+    async openDashboard() {},
+    async idle() {},
+    async ensureDailyReport(date) { if (!disk.reports[date]) disk.reports[date] = `# daily ${date}\n`; },
+  };
+}
+
+function fillDate(value) { return { type: "fill", control: { name: "Date" }, value }; }
+function clickNamed(name) { return { type: "click", control: { name } }; }
+
+function indexWithReports(date) {
+  return { papers: Object.fromEntries(PAPERS.map((paper, i) => [`p${i}`, { arxivId: paper.id, dailyReports: [dailyReportFile(date)] }])) };
+}
+
+function reportMarkdown(date) {
+  return `# arXiv Daily ${date}\n\n${PAPERS.map(paper => `## ${paper.title}\n\narXiv:${paper.id}\n`).join("\n")}`;
+}
+
+test("run-for-date: verify fails on the untouched state, fails while the run has not reached completed, and passes once run-state/report/index all agree", async () => {
+  const task = (await obsidianTaskLibrary.goalTasks()).find(t => t.id === "run-for-date");
+  assert.ok(task, "run-for-date must exist in the Obsidian goal task library");
+  const date = obsidianTaskLibrary.RUN_FOR_DATE_DATE;
+
+  const untouchedDriver = createFakeRunDriver({});
+  const untouched = await task.verify({ driver: untouchedDriver, actions: [] });
+  assert.equal(untouched.passed, false, "verify must not pass before the model submits anything");
+
+  const stuckDriver = createFakeRunDriver({ state: { runState: { [date]: { status: "failed_permanent" } } } });
+  const stuck = await task.verify({ driver: stuckDriver, actions: [fillDate(date)] });
+  assert.equal(stuck.passed, false, "verify must not pass while the run has not completed (a plausible wrong outcome: a failed run)");
+
+  const doneDriver = createFakeRunDriver({
+    state: { runState: { [date]: { status: "completed" } } },
+    index: indexWithReports(date),
+    reports: { [date]: reportMarkdown(date) },
+  });
+  const done = await task.verify({ driver: doneDriver, actions: [fillDate(date)] });
+  assert.equal(done.passed, true, `verify should pass once the date is completed with a real report and index: ${JSON.stringify(done)}`);
+});
+
+test("cancel-then-rerun: verify requires an actual Cancel click (not just a fill), a recorded cancellation, and a later successful rerun; releasing the held fixture request is gated on the model's own cancel click", async () => {
+  const task = (await obsidianTaskLibrary.goalTasks()).find(t => t.id === "cancel-then-rerun");
+  assert.ok(task, "cancel-then-rerun must exist in the Obsidian goal task library");
+  const date = obsidianTaskLibrary.CANCEL_THEN_RERUN_DATE;
+
+  const untouchedDriver = createFakeRunDriver({});
+  const untouched = await task.verify({ driver: untouchedDriver, actions: [] });
+  assert.equal(untouched.passed, false, "verify must not pass before the model submits anything");
+
+  const noCancelDriver = createFakeRunDriver({});
+  const noCancel = await task.verify({ driver: noCancelDriver, actions: [fillDate(date)] });
+  assert.equal(noCancel.passed, false, "verify must not pass without a Cancel active tasks click (a plausible wrong outcome: just waiting for the run to finish)");
+  assert.equal(noCancelDriver.calls.releaseHeld, 0, "the held fixture request must not be released before the model's own cancel click");
+
+  const fullDriver = createFakeRunDriver({
+    state: { runState: { [date]: { status: "completed" } } },
+    index: indexWithReports(date),
+    historyLines: [{ date, resultKind: "cancelled" }],
+  });
+  const actions = [fillDate(date), clickNamed("Cancel active tasks"), fillDate(date)];
+  const done = await task.verify({ driver: fullDriver, actions });
+  assert.equal(done.passed, true, `verify should pass once cancellation is recorded and the rerun completed without duplicates: ${JSON.stringify(done)}`);
+  assert.equal(fullDriver.calls.releaseHeld, 1, "the held request is released exactly once, after the model's cancel click");
+  assert.deepEqual(fullDriver.calls.setMode, [{ llm: "normal" }], "the fixture is restored to normal exactly once");
+
+  const duplicateDriver = createFakeRunDriver({
+    state: { runState: { [date]: { status: "completed" } } },
+    index: { papers: { p0: { arxivId: PAPERS[0].id, dailyReports: [dailyReportFile(date), dailyReportFile(date)] } } },
+    historyLines: [{ date, resultKind: "cancelled" }],
+  });
+  const duplicate = await task.verify({ driver: duplicateDriver, actions });
+  assert.equal(duplicate.passed, false, "a duplicated paper-index report entry must not pass, even though the date completed");
+});
+
+test("cancel-then-rerun: verify re-polled twice does not release the held request a second time", async () => {
+  const task = (await obsidianTaskLibrary.goalTasks()).find(t => t.id === "cancel-then-rerun");
+  const date = obsidianTaskLibrary.CANCEL_THEN_RERUN_DATE;
+  const driver = createFakeRunDriver({
+    state: { runState: { [date]: { status: "completed" } } },
+    index: indexWithReports(date),
+    historyLines: [{ date, resultKind: "cancelled" }],
+  });
+  const actions = [fillDate(date), clickNamed("Cancel active tasks"), fillDate(date)];
+  await task.verify({ driver, actions });
+  await task.verify({ driver, actions });
+  assert.equal(driver.calls.releaseHeld, 1, "releasing the held request must be memoized across repeated verify() polls");
+});
+
+test("auth-failure-retry: verify cannot pass without the model reviewing the Run History tab; the fixture is only restored to normal once that review happened", async () => {
+  const task = (await obsidianTaskLibrary.goalTasks()).find(t => t.id === "auth-failure-retry");
+  assert.ok(task, "auth-failure-retry must exist in the Obsidian goal task library");
+  const date = obsidianTaskLibrary.AUTH_FAILURE_RETRY_DATE;
+
+  const untouchedDriver = createFakeRunDriver({});
+  const untouched = await task.verify({ driver: untouchedDriver, actions: [] });
+  assert.equal(untouched.passed, false, "verify must not pass before the model submits anything");
+
+  const noFailureDriver = createFakeRunDriver({});
+  const noFailure = await task.verify({ driver: noFailureDriver, actions: [fillDate(date)] });
+  assert.equal(noFailure.passed, false, "verify must not pass until the authentication failure is actually recorded on disk");
+
+  const failedDriver = createFakeRunDriver({ state: { runState: { [date]: { status: "failed_permanent" } } } });
+  const noReview = await task.verify({ driver: failedDriver, actions: [fillDate(date)] });
+  assert.equal(noReview.passed, false, "verify must not pass without the model reviewing the Run History tab (a plausible wrong outcome: retrying blindly)");
+  assert.equal(failedDriver.calls.setMode.filter(mode => mode.llm === "normal").length, 0, "the fixture must stay unauthorized until the model actually reviews the failure");
+
+  const reviewedNoForceDriver = createFakeRunDriver({ state: { runState: { [date]: { status: "failed_permanent" } } } });
+  const reviewedNoForce = await task.verify({ driver: reviewedNoForceDriver, actions: [fillDate(date), clickNamed("Run History")] });
+  assert.equal(reviewedNoForce.passed, false, "verify must not pass before Force run for date is actually used to retry");
+  assert.equal(reviewedNoForceDriver.calls.setMode.filter(mode => mode.llm === "normal").length, 1, "reviewing the failure restores the fixture exactly once, enabling (but not substituting for) the retry");
+
+  // The full happy path is exercised across two verify() calls, matching how the real exploration loop
+  // actually observes it: the first call sees the failure while it is still the current run-state (and
+  // must memoize that fact — see production code's `authFailureSeen`), and only the second call, after
+  // the model's force-retry, sees the current run-state having moved on to "completed" (overwriting
+  // "failed_permanent"). A single-call test with state already "completed" from the start would not
+  // actually exercise that memoization, and would pass for the wrong reason.
+  // Fresh task instance (fresh memoization closures): the scenarios above already exercised and
+  // consumed the shared "fixture restored" memoization on their own `task`, so the full happy path gets
+  // its own task/closures here, exactly as a real single task run would start from scratch.
+  const freshTask = (await obsidianTaskLibrary.goalTasks()).find(t => t.id === "auth-failure-retry");
+  const doneDriver = createFakeRunDriver({ state: { runState: { [date]: { status: "failed_permanent" } } } });
+  const firstActions = [fillDate(date), clickNamed("Run History")];
+  const mid = await freshTask.verify({ driver: doneDriver, actions: firstActions });
+  assert.equal(mid.passed, false, "not yet passed: Force run has not happened");
+  assert.deepEqual(doneDriver.calls.setMode, [{ llm: "normal" }], "reviewing the failure restored the fixture");
+
+  doneDriver.disk.state.runState[date] = { status: "completed" };
+  doneDriver.disk.historyLines.push({ date, event: "completed", trigger: "force" });
+  doneDriver.disk.reports[date] = reportMarkdown(date);
+  const actions = [...firstActions, clickNamed("Force run for date…"), fillDate(date)];
+  const done = await freshTask.verify({ driver: doneDriver, actions });
+  assert.equal(done.passed, true, `verify should pass once the model reviewed the failure and force-retried to completion: ${JSON.stringify(done)}`);
+});
+
+test("auth-failure-retry: prepare() clears the date, switches the fixture to unauthorized, and opts the driver into the authorization-failure diagnostics carve-out", async () => {
+  const task = (await obsidianTaskLibrary.goalTasks()).find(t => t.id === "auth-failure-retry");
+  const date = obsidianTaskLibrary.AUTH_FAILURE_RETRY_DATE;
+  const driver = createFakeRunDriver({ state: { runState: { [date]: { status: "completed" } } }, reports: { [date]: "stale" } });
+  await task.prepare({ driver });
+  assert.deepEqual(driver.calls.clearDateState, [date]);
+  assert.deepEqual(driver.calls.setMode, [{ llm: "unauthorized" }]);
+  assert.equal(driver.calls.expectAuthorizationFailure, 1);
+  assert.equal(driver.disk.state.runState[date], undefined, "clearDateState must actually clear the stale completed state");
+});
+
+test("completed-date-idempotent: verify fails on the untouched state, fails on a force-run-shaped outcome (new request, changed content, no skip record), fails on a duplicated index entry, and passes on a true skip", async () => {
+  const task = (await obsidianTaskLibrary.goalTasks()).find(t => t.id === "completed-date-idempotent");
+  assert.ok(task, "completed-date-idempotent must exist in the Obsidian goal task library");
+  const date = ACCEPTANCE_DATE;
+  const originalContent = reportMarkdown(date);
+
+  const driver = createFakeRunDriver({ reports: { [date]: originalContent } });
+  await task.prepare({ driver });
+
+  const untouched = await task.verify({ driver, actions: [] });
+  assert.equal(untouched.passed, false, "verify must not pass before the model submits anything");
+
+  const forceRunShaped = createFakeRunDriver({ reports: { [date]: originalContent } });
+  await task.prepare({ driver: forceRunShaped });
+  forceRunShaped.disk.reports[date] = `${originalContent}\nregenerated`;
+  forceRunShaped.requests.push({ model: "fixture-model-2" });
+  const forceOutcome = await task.verify({ driver: forceRunShaped, actions: [fillDate(date)] });
+  assert.equal(forceOutcome.passed, false, "verify must not pass when the outcome looks like a force run (content changed, a new model request) instead of a skip");
+
+  const duplicateDriver = createFakeRunDriver({ reports: { [date]: originalContent }, index: { papers: { p0: { arxivId: PAPERS[0].id, dailyReports: [dailyReportFile(date), dailyReportFile(date)] } } } });
+  await task.prepare({ driver: duplicateDriver });
+  duplicateDriver.disk.historyLines.push({ date, event: "skipped", resultKind: "skipped", reason: "already done" });
+  const duplicateOutcome = await task.verify({ driver: duplicateDriver, actions: [fillDate(date)] });
+  assert.equal(duplicateOutcome.passed, false, "verify must not pass when the paper index has a duplicated report entry for the date, even with a skip recorded");
+
+  const skippedDriver = createFakeRunDriver({ reports: { [date]: originalContent }, index: indexWithReports(date) });
+  await task.prepare({ driver: skippedDriver });
+  skippedDriver.disk.historyLines.push({ date, event: "skipped", resultKind: "skipped", reason: "already done" });
+  const skipped = await task.verify({ driver: skippedDriver, actions: [fillDate(date)] });
+  assert.equal(skipped.passed, true, `verify should pass once a genuine "already done" skip is recorded and nothing else changed: ${JSON.stringify(skipped)}`);
 });
