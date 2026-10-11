@@ -2,8 +2,8 @@
 
 goal_ref: ../goal.md
 created: 2026-10-11T16:00:00+08:00
-updated: 2026-10-11T21:00:00+08:00
-revision: 3
+updated: 2026-10-12T00:30:00+08:00
+revision: 4
 
 ## Outcome
 
@@ -47,7 +47,7 @@ revision: 3
 - Red / baseline signal: 同 Chunk 2
 - Green check: 受控模型完成：按日期生成日报（经菜单或日期框）、运行中取消后重跑、认证失败后在设置中修正再重试（夹具切换 401）、对已完成日期再次运行不重复生成；以运行状态文件、日报文件与索引判定。
 - regression checks: npm run test:acceptance:tools；固定 Obsidian 验收
-- [ ] implementation and tests accepted
+- [x] implementation and tests accepted — 认证失败任务：模型无法修改密钥，须先在运行历史中找到失败记录，程序才恢复夹具（模拟用户已修正）；日期字段经 DOM 填写。真实宿主受控运行两次 9/9 通过。
 
 ### Chunk 4 — Obsidian reading tasks
 
