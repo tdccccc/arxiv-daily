@@ -2,8 +2,8 @@
 
 goal_ref: ../goal.md
 created: 2026-10-11T01:40:00+08:00
-updated: 2026-10-11T12:00:00+08:00
-revision: 4
+updated: 2026-10-11T16:00:00+08:00
+revision: 5
 
 ## Outcome
 
@@ -56,7 +56,7 @@ revision: 4
 - Red / baseline signal: 新测试：`--host obsidian` 解析与传递；宿主选择决定驱动和任务库；Obsidian 默认任务需程序 verify（读 data.json / Vault 文件）；缺少 Obsidian/Xvfb 时整套 blocked 而非 passed。当前无宿主选项而失败。
 - Green check: node --test 相关测试；受控脚本模型在真实 Obsidian 跑 1–2 个任务（如修改每日论文上限并验证 data.json、打开阅读面板收藏一篇论文并验证标记）均 passed，复位后第二个任务从确定起点开始。
 - regression checks: npm run test:acceptance:tools；npm run test:acceptance -- --suite obsidian 仍全部通过
-- [ ] implementation and tests accepted
+- [x] implementation and tests accepted (cf4d8e7) — 复位为完整重载插件（约 0.2 s）；仅重读设置会使设置服务持有旧对象（产品只在启动时读取，不是产品缺陷）；任务准备上限放宽到 60 s。受控模型两任务通过且受限控件被拒；真实模型两任务通过（3 次调用、17,440 token、23 s）。
 
 ## Phase verification
 
