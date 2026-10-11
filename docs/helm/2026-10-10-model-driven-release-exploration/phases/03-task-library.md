@@ -2,8 +2,8 @@
 
 goal_ref: ../goal.md
 created: 2026-10-11T16:00:00+08:00
-updated: 2026-10-12T03:00:00+08:00
-revision: 5
+updated: 2026-10-12T10:00:00+08:00
+revision: 6
 
 ## Outcome
 
@@ -64,6 +64,24 @@ revision: 5
 - strategy: 同 Chunk 2（角色无 verify：受控模型证明以 explored 结束、疑点可见）
 - Red / baseline signal: 选择尚不存在的任务/角色 id 报错；新 workbench 任务 verify 对初始状态不通过。
 - Green check: workbench 新增 2–3 个任务（如收藏后切换筛选并恢复阅读、单篇详细总结、设置冲突后放弃重开）受控通过；两端角色（首次使用的新用户、没耐心快速乱点的用户、只用键盘的用户）受控运行以 explored 结束；`--list` 列出全部。
+- regression checks: npm run test:acceptance:tools；固定 workbench 与 Obsidian 验收
+- [x] implementation and tests accepted (aeed50e) — workbench 6 个目标任务；三个角色两端共用；`--release` 选入全部角色。发现 workbench 放弃关闭与失焦自动保存竞争的产品缺陷，任务目标暂以“先 Tab 再等待”绕过，由 Chunk 6 修复并移除绕过。
+
+### Chunk 6 — fix the workbench discard-close race and drop the workaround
+
+- change kind: bug fix (product, apps/cli workbench settings) + test infrastructure
+- strategy: strict Red-Green-Refactor
+- Red / baseline signal: apps/cli 测试复现：模型字段仍聚焦时点击“放弃未保存修改并关闭”，失焦触发的自动保存失败回调在确认界面替换后访问已移除的按钮而抛出未处理异常，确认界面不出现。修复前失败。
+- Green check: 该测试通过；external-config-conflict 目标去掉“先 Tab 再等待”的说明后，受控模型在真实浏览器中直接点击放弃仍通过。
+- regression checks: apps/cli 全量测试、typecheck、lint；npm run test:acceptance:tools；固定 workbench 验收
+- [ ] implementation and tests accepted
+
+### Chunk 7 — harden navigation during exploration and run the full libraries
+
+- change kind: behavior change (test infrastructure)
+- strategy: strict Red-Green-Refactor（假驱动单测）+ 真实宿主阶段验收
+- Red / baseline signal: 单测：动作导致页面导航或执行上下文销毁时，截图/观察失败不应把整个任务判为 blocked，而应等待页面恢复后继续（越界导航仍按现有规则拦截并记录）。当前判 blocked 而失败。
+- Green check: 单测通过；阶段验收见下。
 - regression checks: npm run test:acceptance:tools；固定 workbench 与 Obsidian 验收
 - [ ] implementation and tests accepted
 
