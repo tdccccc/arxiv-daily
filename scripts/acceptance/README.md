@@ -50,8 +50,16 @@ npm run test:acceptance -- --suite exploration --model-config /path/to/model.tom
 
 # 只运行指定的目标任务或角色（可重复传参，也可用逗号分隔）
 npm run test:acceptance -- --suite exploration --task settings-persistence,generate-and-read
-npm run test:acceptance -- --suite exploration --persona new-user
+npm run test:acceptance -- --suite exploration --persona keyboard-only
+
+# 切换到 Obsidian 宿主
+npm run test:acceptance -- --suite exploration --host obsidian
+
+# 发版用途：目标任务之外，连同全部角色一起跑
+npm run test:acceptance -- --suite exploration --release
 ```
+
+用户角色（`--persona`）只产出“待复核”疑点，没有独立判定，默认不随目标任务一起运行；两端共享同一组角色 id：`first-time-user`（第一次使用的新用户）、`impatient-clicker`（没耐心快速乱点的用户）、`keyboard-only`（只用键盘操作的用户）。`--release` 在不显式传 `--persona` 时，等价于连同以上全部角色一起选中。
 
 模型配置使用工作台已有字段：`base_url`、`api_key`、`model`，以及可选的 `provider`、`thinking_mode`、`reasoning_effort`。支持现有 `LlmClient` 的供应商协议。密钥不需要写进命令行。
 

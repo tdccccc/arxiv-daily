@@ -51,6 +51,12 @@ test("--task and --persona accumulate across repeated and comma-separated flags;
   assert.equal(parseArgs([]).taskIds, undefined);
 });
 
+test("--release is a value-less flag, off by default", () => {
+  assert.equal(parseArgs([]).release, undefined);
+  assert.equal(parseArgs(["--suite", "exploration", "--release"]).release, true);
+  assert.throws(() => parseArgs(["--release=workbench"]), /--release/);
+});
+
 test("each suite receives its own fixture and cleanup runs despite a failed suite", async t => {
   const f = await dependencies(t);
   f.deps.runners.workbench = async () => { f.events.push("fail:workbench"); throw new Error("Product assertion failed"); };
@@ -82,9 +88,10 @@ test("task/persona selection and per-task budget options reach the exploration r
     assert.deepEqual(options.personaIds, ["new-user"]);
     assert.equal(options.taskMaxSteps, 10);
     assert.equal(options.taskMaxApiCalls, 20);
+    assert.equal(options.release, true);
     return passed("exploration");
   };
-  const options = parseArgs(["--suite", "workbench", "--explore", "--task", "generate-and-read", "--persona", "new-user", "--task-max-steps", "10", "--task-max-api-calls", "20"]);
+  const options = parseArgs(["--suite", "workbench", "--explore", "--task", "generate-and-read", "--persona", "new-user", "--task-max-steps", "10", "--task-max-api-calls", "20", "--release"]);
   const report = await runAcceptance({ ...options, output: f.output }, f.deps);
   assert.equal(report.status, "passed");
 });

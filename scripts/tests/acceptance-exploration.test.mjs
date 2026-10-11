@@ -7,6 +7,7 @@ import test from "node:test";
 import { classifyControlRestriction, createExplorationDriver } from "../acceptance/exploration-browser.mjs";
 import { goalTasks as createDefaultExplorationTasks } from "../acceptance/exploration-tasks/workbench.mjs";
 import { loadExplorationModel, parseExplorationAction, runExplorationLoop, selectExplorationTasks } from "../acceptance/exploration.mjs";
+import { ACCEPTANCE_DATE, PAPERS } from "../acceptance/fixtures.mjs";
 
 const observation = (version = 1) => ({
   id: `snapshot-${version}`, text: "Settings", url: "/", controls: [
@@ -226,6 +227,34 @@ test("findings keep model suspicions separate from verified failures and preserv
   const records = (await readFile(path.join(artifactDir, "exploration-events.jsonl"), "utf8")).trim().split("\n").map(JSON.parse);
   assert.equal(records[0].observation.id, "snapshot-1");
   assert.equal(records[0].action.type, "finding");
+});
+
+test("P3 Chunk 5: a finding carries the same step's own screenshot, not a later or earlier step's", async t => {
+  const artifactDir = await temporary(t);
+  let version = 0, calls = 0;
+  const driver = {
+    observe: async () => observation(++version),
+    execute: async action => ({ ok: true, action }),
+    capture: async name => `/artifacts/${name}.png`,
+  };
+  const result = await runExplorationLoop({ driver, model: async request => {
+    calls += 1;
+    return calls === 1 ? '{"type":"finding","summary":"Odd state","evidence":"Settings"}'
+      : JSON.stringify({ type: "click", ref: request.observation.controls[0].ref });
+  }, tasks: [task(({ actions }) => ({ passed: actions.length === 1, checks: [{ label: "Saved state", passed: actions.length === 1 }] }))], artifactDir });
+  assert.equal(result.findings[0].step, 1);
+  assert.equal(result.findings[0].screenshot, "/artifacts/settings-step-1.png");
+  assert.ok(result.scenarios[0].artifacts.includes("/artifacts/settings-step-1.png"));
+});
+
+test("a finding keeps no screenshot field at all when the driver never captures one", async t => {
+  const artifactDir = await temporary(t);
+  let calls = 0;
+  const result = await runExplorationLoop({ driver: fixtureDriver(), model: async () => {
+    calls += 1;
+    return calls === 1 ? '{"type":"finding","summary":"Odd state","evidence":"Settings"}' : '{"type":"done"}';
+  }, tasks: [persona()], artifactDir, maxSteps: 10 });
+  assert.equal(result.findings[0].screenshot, undefined);
 });
 
 test("a persona task without a verifier ends on done as explored, never passed, and keeps findings", async t => {
@@ -597,4 +626,181 @@ test('completion evidence reads the report after observing the completed run', a
   const evidence = await driver.dailyEvidence('2026-10-01');
   assert.equal(evidence.run.status, 'completed');
   assert.equal(evidence.report, true, 'completed must be paired with a fresh file observation');
+});
+
+// ---------------------------------------------------------------------------
+// P3 Chunk 5: workbench reading-journey and settings-conflict goal tasks.
+// Same convention as the tests above: a real temporary fixture directory
+// (vaultRoot + configPath on disk), task.verify()/task.prepare() called
+// directly with hand-built observations/actions/fake driver methods — never a
+// real browser or model here (that is the real-host evidence in the chunk
+// report, not this file).
+// ---------------------------------------------------------------------------
+
+async function makeWorkbenchFixture(t) {
+  const root = await mkdtemp(path.join(tmpdir(), 'exploration-chunk5-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const fixture = { root, vaultRoot: path.join(root, 'vault'), configPath: path.join(root, 'config.toml') };
+  await mkdir(fixture.vaultRoot);
+  await writeFile(fixture.configPath, `vault_root = ${JSON.stringify(fixture.vaultRoot)}\n[llm]\nmodel = "fixture-model"\n[output]\ndaily_dir = "arxiv-daily/daily"\npapers_dir = "arxiv-daily/papers"\nmax_daily_papers = 2\n`);
+  return fixture;
+}
+async function writeWorkbenchPaperIndex(fixture, papers) {
+  const file = path.join(fixture.vaultRoot, 'arxiv-daily/.index/papers.json');
+  await mkdir(path.dirname(file), { recursive: true });
+  await writeFile(file, JSON.stringify({ papers }));
+}
+
+test('star-filter-restore: verify fails on the untouched state (no star click yet)', async t => {
+  const fixture = await makeWorkbenchFixture(t);
+  const task = (await createDefaultExplorationTasks(fixture)).find(x => x.id === 'star-filter-restore');
+  const result = await task.verify({ observation: { controls: [] }, actions: [] });
+  assert.equal(result.passed, false);
+  assert.equal(result.checks[0].passed, false);
+});
+
+test('star-filter-restore: verify fails after the star click alone, before the "收藏" scope filter is used', async t => {
+  const fixture = await makeWorkbenchFixture(t);
+  const task = (await createDefaultExplorationTasks(fixture)).find(x => x.id === 'star-filter-restore');
+  const actions = [{ type: 'click', control: { name: `收藏 · ${PAPERS[1].title}` } }];
+  const result = await task.verify({ observation: { controls: [] }, actions });
+  assert.equal(result.passed, false);
+  assert.equal(result.checks[0].passed, true);
+  assert.equal(result.checks[1].passed, false);
+});
+
+test('star-filter-restore: verify passes once star, filter, open and back are all observed, in order, and the disk/UI state agree', async t => {
+  const fixture = await makeWorkbenchFixture(t);
+  const task = (await createDefaultExplorationTasks(fixture)).find(x => x.id === 'star-filter-restore');
+  const paper = PAPERS[1], other = PAPERS[0];
+  const starKey = `arxiv:${paper.id}`, otherKey = `arxiv:${other.id}`;
+  const actions = [
+    { type: 'click', control: { name: `收藏 · ${paper.title}` } },
+    { type: 'click', control: { name: '收藏12' } },
+    { type: 'click', control: { paperKey: starKey, name: paper.title } },
+    { type: 'click', control: { name: '← 返回列表' } },
+  ];
+  await writeWorkbenchPaperIndex(fixture, { [starKey]: { priority: 'high' } });
+  const result = await task.verify({ observation: { controls: [{ paperKey: starKey }] }, actions });
+  assert.equal(result.passed, true, JSON.stringify(result));
+  // Mutation: the other (unstarred) paper still showing means the filter never really restored.
+  const stillShowingOther = await task.verify({ observation: { controls: [{ paperKey: starKey }, { paperKey: otherKey }] }, actions });
+  assert.equal(stillShowingOther.passed, false);
+  // Mutation: the on-disk mark was never actually "high".
+  await writeWorkbenchPaperIndex(fixture, { [starKey]: { priority: 'normal' } });
+  const notMarked = await task.verify({ observation: { controls: [{ paperKey: starKey }] }, actions });
+  assert.equal(notMarked.passed, false);
+});
+
+test('star-filter-restore: prepare() ensures the daily report exists and resets the target paper to unstarred', async t => {
+  const fixture = await makeWorkbenchFixture(t);
+  const task = (await createDefaultExplorationTasks(fixture)).find(x => x.id === 'star-filter-restore');
+  const calls = [];
+  await task.prepare({ driver: { ensureDailyReport: async date => calls.push(['ensureDailyReport', date]), ensurePaperUnstarred: async key => calls.push(['ensurePaperUnstarred', key]) } });
+  assert.deepEqual(calls, [['ensureDailyReport', ACCEPTANCE_DATE], ['ensurePaperUnstarred', `arxiv:${PAPERS[1].id}`]]);
+});
+
+test('generate-paper-note: verify fails on the untouched state, and still fails after all three clicks while the note file does not exist yet', async t => {
+  const fixture = await makeWorkbenchFixture(t);
+  const task = (await createDefaultExplorationTasks(fixture)).find(x => x.id === 'generate-paper-note');
+  const key = `arxiv:${PAPERS[0].id}`;
+  const result0 = await task.verify({ observation: { controls: [] }, actions: [] });
+  assert.equal(result0.passed, false);
+  const actions = [
+    { type: 'click', control: { paperKey: key } },
+    { type: 'click', control: { name: '生成详细总结' } },
+    { type: 'click', control: { name: '开始生成' } },
+  ];
+  const result1 = await task.verify({ observation: { controls: [] }, actions });
+  assert.equal(result1.passed, false, 'must not pass before the note file exists');
+});
+
+test('generate-paper-note: verify passes once the note file, index entry and UI link all agree; fails if the index was never updated', async t => {
+  const fixture = await makeWorkbenchFixture(t);
+  const task = (await createDefaultExplorationTasks(fixture)).find(x => x.id === 'generate-paper-note');
+  const paper = PAPERS[0], key = `arxiv:${paper.id}`;
+  const actions = [
+    { type: 'click', control: { paperKey: key } },
+    { type: 'click', control: { name: '生成详细总结' } },
+    { type: 'click', control: { name: '开始生成' } },
+  ];
+  const notePath = path.join(fixture.vaultRoot, 'arxiv-daily/papers', `${paper.id}.md`);
+  await mkdir(path.dirname(notePath), { recursive: true });
+  await writeFile(notePath, `---\narxiv_id: "${paper.id}"\n---\n\nReal generated content, well over a hundred characters long, so the length check in verify() actually exercises a real body rather than a stub.\n`);
+  const observation = { controls: [{ name: '阅读详细总结' }] };
+  // Mutation: the file exists but the index was never updated to reflect it.
+  const withoutIndex = await task.verify({ observation, actions });
+  assert.equal(withoutIndex.passed, false);
+  await writeWorkbenchPaperIndex(fixture, { [key]: { detail: true, paperPath: `arxiv-daily/papers/${paper.id}.md` } });
+  const result = await task.verify({ observation, actions });
+  assert.equal(result.passed, true, JSON.stringify(result));
+});
+
+test('generate-paper-note: prepare() ensures the daily report exists and clears any existing note for the target', async t => {
+  const fixture = await makeWorkbenchFixture(t);
+  const paper = PAPERS[0];
+  const notePath = path.join(fixture.vaultRoot, 'arxiv-daily/papers', `${paper.id}.md`);
+  await mkdir(path.dirname(notePath), { recursive: true });
+  await writeFile(notePath, 'stale note');
+  const task = (await createDefaultExplorationTasks(fixture)).find(x => x.id === 'generate-paper-note');
+  const calls = [];
+  await task.prepare({ driver: { ensureDailyReport: async date => calls.push(date) } });
+  assert.deepEqual(calls, [ACCEPTANCE_DATE]);
+  await assert.rejects(readFile(notePath));
+});
+
+test('external-config-conflict: verify never writes the external change until the model field is actually observed rendered', async t => {
+  const fixture = await makeWorkbenchFixture(t);
+  const task = (await createDefaultExplorationTasks(fixture)).find(x => x.id === 'external-config-conflict');
+  await task.prepare();
+  const before = await readFile(fixture.configPath, 'utf8');
+  const result = await task.verify({ observation: { controls: [{ name: 'Settings' }] }, actions: [] });
+  assert.equal(result.passed, false);
+  const after = await readFile(fixture.configPath, 'utf8');
+  assert.equal(after, before, 'no model field observed yet; no external write should happen');
+});
+
+test('external-config-conflict: verify writes the external value to disk exactly once, the first time the model field is observed rendered', async t => {
+  const fixture = await makeWorkbenchFixture(t);
+  const task = (await createDefaultExplorationTasks(fixture)).find(x => x.id === 'external-config-conflict');
+  await task.prepare();
+  const observationWithModelField = { controls: [{ field: 'model', value: 'fixture-model' }] };
+  await task.verify({ observation: observationWithModelField, actions: [] });
+  const config1 = await readFile(fixture.configPath, 'utf8');
+  assert.match(config1, /workbench-conflict-external-model/);
+  await task.verify({ observation: observationWithModelField, actions: [] });
+  const config2 = await readFile(fixture.configPath, 'utf8');
+  assert.equal(config2, config1, 'the external write only happens once per task run');
+});
+
+test('external-config-conflict: verify passes once discard-then-reopen is fully observed and disk/UI agree on the external value; fails if the draft ever reached disk', async t => {
+  const fixture = await makeWorkbenchFixture(t);
+  const task = (await createDefaultExplorationTasks(fixture)).find(x => x.id === 'external-config-conflict');
+  await task.prepare();
+  await task.verify({ observation: { controls: [{ field: 'model', value: 'fixture-model' }] }, actions: [] });
+  const actions = [
+    { type: 'fill', control: { field: 'model' }, value: 'workbench-conflict-draft-model' },
+    { type: 'click', control: { name: '放弃未保存修改并关闭' } },
+    { type: 'click', control: { name: '放弃修改并关闭' } },
+    { type: 'click', control: { name: '设置' } },
+  ];
+  const result = await task.verify({ observation: { controls: [{ field: 'model', value: 'workbench-conflict-external-model' }] }, actions });
+  assert.equal(result.passed, true, JSON.stringify(result));
+  const config = await readFile(fixture.configPath, 'utf8');
+  assert.match(config, /workbench-conflict-external-model/);
+  assert.doesNotMatch(config, /workbench-conflict-draft-model/);
+});
+
+test('external-config-conflict: verify fails if "设置" is clicked again before the discard was actually confirmed', async t => {
+  const fixture = await makeWorkbenchFixture(t);
+  const task = (await createDefaultExplorationTasks(fixture)).find(x => x.id === 'external-config-conflict');
+  await task.prepare();
+  await task.verify({ observation: { controls: [{ field: 'model', value: 'fixture-model' }] }, actions: [] });
+  const actions = [
+    { type: 'fill', control: { field: 'model' }, value: 'workbench-conflict-draft-model' },
+    { type: 'click', control: { name: '放弃未保存修改并关闭' } },
+    { type: 'click', control: { name: '设置' } },
+  ];
+  const result = await task.verify({ observation: { controls: [{ field: 'model', value: 'fixture-model' }] }, actions });
+  assert.equal(result.passed, false);
 });

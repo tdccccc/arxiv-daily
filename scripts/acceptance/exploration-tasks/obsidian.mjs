@@ -13,6 +13,7 @@ import { ACCEPTANCE_DATE, PAPERS } from "../fixtures.mjs";
 import { dailyReportFile, entryFor, HISTORY_FILE, INDEX_FILE, paperNoteFile, SETTINGS_FILE, STATE_FILE } from "../exploration-obsidian.mjs";
 import { poll, pollJsonFile } from "../obsidian-ui.mjs";
 import { checkResult, taskResult } from "./checks.mjs";
+import { PERSONA_TASK_IDS, personaTasks as sharedPersonaTasks } from "./personas.mjs";
 
 /** Single source of truth for the default Obsidian goal-task ids, usable without a fixture (e.g. --list). */
 export const GOAL_TASK_IDS = [
@@ -23,8 +24,8 @@ export const GOAL_TASK_IDS = [
   "dashboard-tabs-paging", "mark-to-read", "create-paper-note", "summarize-by-id", "open-today-report",
 ];
 
-/** No Obsidian personas yet (P3 Chunk 5); kept as an explicit empty array, not undefined, so `--list` and selection stay uniform across hosts. */
-export const PERSONA_TASK_IDS = [];
+/** P3 Chunk 5: re-exports the shared persona id list (exploration-tasks/personas.mjs) so `--list`/selection keep reading it from each host's own module, unchanged from before chunk 5 wired it up. */
+export { PERSONA_TASK_IDS };
 
 // Fixture topic/direction (scripts/acceptance/obsidian.mjs's createObsidianSettings): one topic named
 // "Research" (id "acceptance-research", tag "research") holding one direction "Reliable research
@@ -738,7 +739,7 @@ export function goalTasks() {
   ];
 }
 
-/** No Obsidian personas yet (P3 Chunk 5). */
+/** P3 Chunk 5: the shared personas (exploration-tasks/personas.mjs), worded for the Obsidian surface. */
 export function personaTasks() {
-  return [];
+  return sharedPersonaTasks("obsidian");
 }

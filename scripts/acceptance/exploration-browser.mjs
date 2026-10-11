@@ -1,4 +1,4 @@
-import { mkdir, readFile, realpath, stat } from "node:fs/promises";
+import { mkdir, readFile, realpath, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
@@ -50,6 +50,20 @@ export async function settings(fixture) {
 async function preferences(fixture) {
   try { return JSON.parse(await readFile(path.join(path.dirname(fixture.configPath), "workbench-ui.json"), "utf8")); }
   catch (error) { if (error.code === "ENOENT") return { sidebarCollapsed: false }; throw error; }
+}
+
+/**
+ * Rewrites the fixture's CLI TOML like a second, independent process would — never through the
+ * workbench's own settings save path — so an exploration task (P3 Chunk 5's `external-config-conflict`)
+ * can simulate an out-of-band edit while the model's own settings dialog is open, and the server's
+ * existing revision check (`saveWorkbenchSettings`'s `assertRevision`, apps/cli/src/workbench/settings.ts)
+ * has something real to detect. `mutate` edits the parsed table in place.
+ */
+export async function writeConfigPatch(fixture, mutate) {
+  const { parse, stringify } = cliRequire("smol-toml");
+  const table = parse(await readFile(fixture.configPath, "utf8"));
+  mutate(table);
+  await writeFile(fixture.configPath, stringify(table));
 }
 
 function browserObservation(id) {
@@ -207,6 +221,46 @@ export async function createExplorationDriver({ page, context, url, fixture, art
         report = (await stat(file)).isFile() && (await readFile(file, "utf8")).includes("2610.10001");
       } catch (error) { if (error.code !== "ENOENT") throw error; }
       return { report, run };
+    },
+    /**
+     * Deterministically guarantees a completed daily report for `date` exists, through the workbench's
+     * own real generation run (never a synthetic file) — mirrors the Obsidian driver's `ensureDailyReport`
+     * so P3 Chunk 5's reading-journey workbench tasks (`star-filter-restore`, `generate-paper-note`) don't
+     * each need their own copy of this. A no-op if the report file is already there.
+     */
+    async ensureDailyReport(date) {
+      assertScope();
+      const config = await settings(fixture);
+      const daily = config.output?.daily_dir;
+      if (typeof daily !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(date)) throw new Error("Invalid fixture report scope");
+      const file = path.resolve(fixture.vaultRoot, daily, `${date}.md`);
+      if (!contained(path.resolve(fixture.vaultRoot), file)) throw new Error("Report path escaped the fixture");
+      try {
+        if (contained(await realpath(fixture.vaultRoot), await realpath(file)) && (await stat(file)).isFile()) return;
+      } catch (error) { if (error.code !== "ENOENT") throw error; }
+      const started = await page.request.post(new URL("api/runs", url).href, { data: { kind: "daily", date } });
+      if (!started.ok()) throw new Error(`Could not start a fixture daily run for ${date}: ${started.status()}`);
+      const { run } = await started.json();
+      const deadline = Date.now() + 60000;
+      while (true) {
+        const current = (await (await page.request.get(new URL("api/runs/current", url).href)).json()).run;
+        if (current?.id === run.id && current.status !== "running") {
+          if (current.status !== "completed" && current.status !== "skipped") throw new Error(`Fixture daily run for ${date} ended as ${current.status}`);
+          return;
+        }
+        if (Date.now() >= deadline) throw new Error(`Fixture daily run for ${date} did not finish in time`);
+        await new Promise(resolve => setTimeout(resolve, 150));
+      }
+    },
+    /** Resets a paper's star mark through the real API (not a synthetic write), at most once per call. */
+    async ensurePaperUnstarred(key) {
+      assertScope();
+      const current = await page.request.get(new URL(`api/paper?key=${encodeURIComponent(key)}`, url).href);
+      if (!current.ok()) return;
+      const { paper } = await current.json();
+      if (paper.priority !== "high") return;
+      const reset = await page.request.post(new URL("api/paper/mark", url).href, { data: { key, action: "star", value: false, expected: paper.priority } });
+      if (!reset.ok()) throw new Error(`Could not reset the star mark for ${key}: ${reset.status()}`);
     },
     async dispose() { page.off("pageerror", onError); context.off("page", onPage); await context.unroute("**/*", guard); },
   };

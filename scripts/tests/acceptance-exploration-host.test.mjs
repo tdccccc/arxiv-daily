@@ -13,6 +13,7 @@ import {
   dailyReportFile,
   HISTORY_FILE,
   INDEX_FILE,
+  obsidianFocusInScopeExpression,
   paperNoteFile,
   SETTINGS_FILE,
   STATE_FILE,
@@ -114,6 +115,40 @@ test("host=workbench (the default) still selects the workbench session/driver, n
   assert.ok(seen.includes("workbench-driver"));
   assert.ok(!seen.includes("obsidian-session"));
   assert.ok(!seen.includes("obsidian-driver"));
+});
+
+test("--release runs every persona alongside the default goal tasks when --persona was not explicitly given", async () => {
+  const fakeDriver = {
+    observe: async () => ({ id: "s1", controls: [], text: "", title: "", layout: { rootMounted: true } }),
+    execute: async () => ({ ok: true }), capture: async () => undefined,
+  };
+  const goalTask = { id: "goal-a", title: "t", goal: "g", async verify() { return { passed: true, checks: [{ label: "x", passed: true }] }; } };
+  const personaTask = { id: "persona-a", title: "p", kind: "persona", goal: "g" };
+  const result = await runExploration({
+    fixture: {}, artifactDir: path.join(tmpdir(), "exploration-release-test"),
+    goalTasks: [goalTask], personaTasks: [personaTask], release: true, model: fakeModel('{"type":"done"}'),
+  }, {
+    startWorkbenchSession: async () => ({}), createExplorationDriver: async () => fakeDriver,
+  });
+  assert.deepEqual(result.scenarios.map(s => s.id), ["goal-a", "persona-a"]);
+  assert.equal(result.scenarios[1].status, "explored");
+});
+
+test("an explicit --persona still wins over --release (release only fills the default when nothing was chosen)", async () => {
+  const fakeDriver = {
+    observe: async () => ({ id: "s1", controls: [], text: "", title: "", layout: { rootMounted: true } }),
+    execute: async () => ({ ok: true }), capture: async () => undefined,
+  };
+  const goalTask = { id: "goal-a", title: "t", goal: "g", async verify() { return { passed: true, checks: [{ label: "x", passed: true }] }; } };
+  const personaA = { id: "persona-a", title: "p", kind: "persona", goal: "g" };
+  const personaB = { id: "persona-b", title: "p", kind: "persona", goal: "g" };
+  const result = await runExploration({
+    fixture: {}, artifactDir: path.join(tmpdir(), "exploration-release-explicit-test"),
+    goalTasks: [goalTask], personaTasks: [personaA, personaB], personaIds: ["persona-b"], release: true, model: fakeModel('{"type":"done"}'),
+  }, {
+    startWorkbenchSession: async () => ({}), createExplorationDriver: async () => fakeDriver,
+  });
+  assert.deepEqual(result.scenarios.map(s => s.id), ["goal-a", "persona-b"]);
 });
 
 // ---------------------------------------------------------------------------
@@ -278,7 +313,11 @@ test("ids are unique across goal tasks and personas combined, per host", async (
 });
 
 test("the workbench goal task ids are unchanged by the move and match goalTasks()'s actual ids", async () => {
-  assert.deepEqual(workbenchTaskLibrary.GOAL_TASK_IDS, ["settings-persistence", "sidebar-persistence", "generate-and-read"]);
+  // P3 Chunk 5 appends three more ids after the original three, keeping every earlier id stable.
+  assert.deepEqual(workbenchTaskLibrary.GOAL_TASK_IDS, [
+    "settings-persistence", "sidebar-persistence", "generate-and-read",
+    "star-filter-restore", "generate-paper-note", "external-config-conflict",
+  ]);
   const root = await mkdtemp(path.join(tmpdir(), "exploration-task-library-workbench-"));
   try {
     const vaultRoot = path.join(root, "vault");
@@ -290,11 +329,32 @@ test("the workbench goal task ids are unchanged by the move and match goalTasks(
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 
-test("neither host has any personas yet, but personaTasks() returns a usable (empty) array, not undefined", () => {
-  assert.deepEqual(obsidianTaskLibrary.personaTasks(), []);
-  assert.deepEqual(workbenchTaskLibrary.personaTasks(), []);
-  assert.deepEqual(obsidianTaskLibrary.PERSONA_TASK_IDS, []);
-  assert.deepEqual(workbenchTaskLibrary.PERSONA_TASK_IDS, []);
+// P3 Chunk 5: both hosts now share the same three persona ids (exploration-tasks/personas.mjs).
+test("both hosts expose the same three persona ids, each a real kind:\"persona\" task with no verify and a worded-for-that-host Chinese brief", () => {
+  assert.deepEqual(obsidianTaskLibrary.PERSONA_TASK_IDS, ["first-time-user", "impatient-clicker", "keyboard-only"]);
+  assert.deepEqual(workbenchTaskLibrary.PERSONA_TASK_IDS, obsidianTaskLibrary.PERSONA_TASK_IDS);
+  for (const [host, lib] of [["obsidian", obsidianTaskLibrary], ["workbench", workbenchTaskLibrary]]) {
+    const personas = lib.personaTasks();
+    assert.deepEqual(personas.map(p => p.id), lib.PERSONA_TASK_IDS, `${host}: personaTasks() order must match PERSONA_TASK_IDS`);
+    for (const p of personas) {
+      assert.equal(p.kind, "persona", `${host}/${p.id}: must be kind "persona"`);
+      assert.equal(p.verify, undefined, `${host}/${p.id}: persona tasks must omit verify`);
+      assert.equal(typeof p.title, "string"); assert.ok(p.title.length > 0);
+      assert.ok(/[一-鿿]/.test(p.goal), `${host}/${p.id}: goal should be in Chinese`);
+      assert.ok(Number.isInteger(p.maxSteps) && p.maxSteps >= 1 && p.maxSteps <= 20, `${host}/${p.id}: maxSteps must be a sane positive integer, got ${p.maxSteps}`);
+    }
+  }
+  // keyboard-only's brief is the one persona with a hard behavioral constraint: it must actually say so.
+  for (const lib of [obsidianTaskLibrary, workbenchTaskLibrary]) {
+    const keyboardOnly = lib.personaTasks().find(p => p.id === "keyboard-only");
+    assert.match(keyboardOnly.goal, /press/);
+    assert.match(keyboardOnly.goal, /wait/);
+    assert.match(keyboardOnly.goal, /click/);
+  }
+  // Same ids, different wording per host (so the brief actually names the right surface).
+  const obsidianBriefs = obsidianTaskLibrary.personaTasks().map(p => p.goal);
+  const workbenchBriefs = workbenchTaskLibrary.personaTasks().map(p => p.goal);
+  for (let i = 0; i < obsidianBriefs.length; i++) assert.notEqual(obsidianBriefs[i], workbenchBriefs[i], "each persona's brief must be worded per host, not identical copy-paste");
 });
 
 test("--list (describeAcceptanceSuites) lists both hosts' goal task ids and personas", async () => {
@@ -303,7 +363,10 @@ test("--list (describeAcceptanceSuites) lists both hosts' goal task ids and pers
   assert.match(output, /workbench/);
   for (const id of obsidianTaskLibrary.GOAL_TASK_IDS) assert.ok(output.includes(id), `--list must mention Obsidian task id ${id}`);
   for (const id of workbenchTaskLibrary.GOAL_TASK_IDS) assert.ok(output.includes(id), `--list must mention workbench task id ${id}`);
-  assert.match(output, /none yet/, "no personas exist yet for either host");
+  // P3 Chunk 5: both hosts now have personas; --list must mention each persona id, and the output must
+  // explain --release.
+  for (const id of obsidianTaskLibrary.PERSONA_TASK_IDS) assert.ok(output.includes(id), `--list must mention persona id ${id}`);
+  assert.match(output, /--release/);
 });
 
 // ---------------------------------------------------------------------------
@@ -392,6 +455,17 @@ test("reset() closes any plugin modal, closes settings, rewrites data.json, full
     assert.deepEqual(reloadCalls, ["disable", "enable"], "reset reloads the whole plugin, once, in order");
     const written = JSON.parse(await (await import("node:fs/promises")).readFile(path.join(fixture.vaultRoot, ".obsidian/plugins/arxiv-daily/data.json"), "utf8"));
     assert.equal(written.settings.output.maxDailyPapers, 20, "data.json was rewritten back to the fixture baseline");
+  });
+});
+
+test("reset() leaves keyboard focus inside the dashboard's own surface, so the keyboard-only persona's first press is not rejected as out-of-scope", async () => {
+  await withTempFixture(async ({ fixture, artifactDir }) => {
+    const { window, session } = buildFakeObsidianSession();
+    const driver = await createObsidianExplorationDriver({ session, fixture, artifactDir });
+    await driver.reset();
+    assert.equal(window.document.activeElement?.className, "arxiv-daily-dashboard__tab is-active", "the dashboard's first tab must hold real keyboard focus after reset(), not body or nothing");
+    const scoped = await session.evaluate(obsidianFocusInScopeExpression());
+    assert.equal(scoped, true, "obsidianFocusInScopeExpression must agree focus is inside the plugin surface right after reset()");
   });
 });
 

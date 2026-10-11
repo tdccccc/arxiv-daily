@@ -326,7 +326,15 @@ export async function runExplorationLoop({ driver, model, tasks, artifactDir, ma
             }
           }
           const screenshot = await driver.capture?.(`${task.id}-step-${event.step}`);
-          if (screenshot) { event.screenshot = screenshot; scenario.artifacts.push(screenshot); }
+          if (screenshot) {
+            event.screenshot = screenshot; scenario.artifacts.push(screenshot);
+            // P3 Chunk 5: a finding raised this same step gets this step's own screenshot attached (never
+            // a later or earlier one — capture() always runs once per step, right after whichever action
+            // this step took), so report.mjs's "待复核" section can link straight to the evidence instead
+            // of just the step number.
+            const lastFinding = findings.at(-1);
+            if (lastFinding && lastFinding.taskId === task.id && lastFinding.step === event.step && lastFinding.screenshot === undefined) lastFinding.screenshot = screenshot;
+          }
         } catch (error) {
           event.error = error.message;
           if (error.name === "ExplorationBudgetError") {
@@ -411,7 +419,7 @@ const EXPLORATION_HOSTS = new Set(["workbench", "obsidian"]);
  * It lets host → driver/session/task-library selection be red-green tested with fakes, without launching a
  * real browser or Obsidian for every wiring assertion.
  */
-export async function runExploration({ fixture, artifactDir, configPath, maxSteps, maxDurationMs, tasks, goalTasks, personaTasks, taskIds, personaIds, taskMaxSteps, taskMaxApiCalls, model, executablePath, headless, modelCallTimeoutMs, maxApiCalls, host = "workbench", signal } = {}, dependencies = {}) {
+export async function runExploration({ fixture, artifactDir, configPath, maxSteps, maxDurationMs, tasks, goalTasks, personaTasks, taskIds, personaIds, release, taskMaxSteps, taskMaxApiCalls, model, executablePath, headless, modelCallTimeoutMs, maxApiCalls, host = "workbench", signal } = {}, dependencies = {}) {
   let session;
   let driver;
   let configured = model;
@@ -443,9 +451,14 @@ export async function runExploration({ fixture, artifactDir, configPath, maxStep
       resolvedGoalTasks = goalTasks ?? await taskLibrary.goalTasks(fixture);
       resolvedPersonaTasks = personaTasks ?? await taskLibrary.personaTasks();
     }
+    // --release means "run the full library for a release": every goal task (already the default) plus
+    // every persona (normally opt-in only, via --persona). An explicit --persona still wins over --release
+    // for personas (e.g. `--release --persona keyboard-only` runs only that one persona, not all three);
+    // --release only fills in the "no --persona given" default.
+    const effectivePersonaIds = personaIds ?? (release ? resolvedPersonaTasks.map(task => task.id) : undefined);
     // Resolve and validate the task/persona selection before touching a model, a browser, or Obsidian, so an
     // unknown --task/--persona id fails fast instead of launching anything first.
-    const selected = tasks ?? selectExplorationTasks({ goalTasks: resolvedGoalTasks, personaTasks: resolvedPersonaTasks, taskIds, personaIds });
+    const selected = tasks ?? selectExplorationTasks({ goalTasks: resolvedGoalTasks, personaTasks: resolvedPersonaTasks, taskIds, personaIds: effectivePersonaIds });
     configured ??= await loadExplorationModel({ configPath, maxApiCalls: maxApiCalls ?? (maxSteps ?? 90) * 2 });
     if (obsidian) {
       session = await startSession({ fixture, artifactDir: directory, signal });

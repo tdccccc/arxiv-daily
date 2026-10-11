@@ -127,3 +127,25 @@ test("model findings remain visible for review even when the trusted task checks
   assert.match(html, /Unclear save feedback/);
   assert.match(html, /Repeated click needed &lt;script&gt;/);
 });
+
+test("P3 Chunk 5: a finding's step number and screenshot surface in report.html's 待复核 section as a link, when present", async t => {
+  const dir = await mkdtemp(join(tmpdir(), "arxiv-acceptance-finding-screenshot-"));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  const screenshotPath = join(dir, "exploration-keyboard-only-step-3.png");
+  await (await import("node:fs/promises")).writeFile(screenshotPath, "fake-png");
+  const report = buildReport({ selectedSuites: ["exploration"], suites: [{ suite: "exploration", status: "passed", scenarios: [{ id: "keyboard-only", title: "Keyboard only", status: "explored", assertions: [] }], findings: [{ status: "needs-review", taskId: "keyboard-only", step: 3, summary: "Focus seems to vanish", evidence: "No visible focus ring", screenshot: screenshotPath }] }] });
+  await writeReport(dir, report);
+  const html = await readFile(join(dir, "report.html"), "utf8");
+  assert.match(html, /step 3/);
+  assert.match(html, /exploration-keyboard-only-step-3\.png/);
+});
+
+test("a finding with no screenshot still renders the 待复核 section without a link", async t => {
+  const dir = await mkdtemp(join(tmpdir(), "arxiv-acceptance-finding-no-screenshot-"));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  const report = buildReport({ selectedSuites: ["exploration"], suites: [{ suite: "exploration", status: "passed", scenarios: [{ id: "settings", title: "Settings", status: "passed", assertions: [{ label: "Saved", passed: true }] }], findings: [{ status: "needs-review", taskId: "settings", summary: "No screenshot here", evidence: "n/a" }] }] });
+  await writeReport(dir, report);
+  const html = await readFile(join(dir, "report.html"), "utf8");
+  assert.match(html, /No screenshot here/);
+  assert.doesNotMatch(html, /\.png/);
+});

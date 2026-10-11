@@ -16,6 +16,7 @@ const HELP = `Usage: npm run test:acceptance -- [options]
   --model-config PATH            Read only [llm] from this CLI TOML file
   --task ID[,ID...]              Run only these exploration goal tasks (repeatable)
   --persona ID[,ID...]           Run only these exploration persona tasks (repeatable)
+  --release                      Also run every persona for --host (unless --persona overrides it)
   --max-steps N                  Model decisions, 1-300 (default: 90)
   --max-api-calls N              Model HTTP requests including retries
   --max-duration-ms N            Exploration time budget (default: 900000)
@@ -58,6 +59,7 @@ export function parseArgs(argv) {
         break;
       }
       case "--explore": explore = true; break;
+      case "--release": options.release = true; break;
       case "--host": {
         const value = take();
         if (!EXPLORATION_HOSTS.includes(value)) throw new TypeError(`Unknown exploration host: ${value}. Supported hosts: ${EXPLORATION_HOSTS.join(", ")}`);
@@ -90,7 +92,7 @@ export function parseArgs(argv) {
       case "--task-max-api-calls": options.taskMaxApiCalls = number(1, 1000); break;
       default: throw new TypeError(`Unknown acceptance option: ${flag}`);
     }
-    if (rest.length && ["--explore", "--skip-build", "--headed", "--list", "--help", "-h"].includes(flag)) throw new TypeError(`${flag} does not take a value`);
+    if (rest.length && ["--explore", "--release", "--skip-build", "--headed", "--list", "--help", "-h"].includes(flag)) throw new TypeError(`${flag} does not take a value`);
   }
   if (explore && !options.suites.includes("exploration")) options.suites.push("exploration");
   return options;
@@ -192,7 +194,7 @@ export async function runAcceptance(options, dependencies = {}) {
       result = await runners[suite]({
         fixture, artifactDir: directory, signal: options.signal,
         executablePath: options.executablePath, headless: options.headless,
-        ...(suite === "exploration" ? { host: options.host, configPath: options.configPath, maxSteps: options.maxSteps, maxDurationMs: options.maxDurationMs, maxApiCalls: options.maxApiCalls, taskIds: options.taskIds, personaIds: options.personaIds, taskMaxSteps: options.taskMaxSteps, taskMaxApiCalls: options.taskMaxApiCalls } : {}),
+        ...(suite === "exploration" ? { host: options.host, configPath: options.configPath, maxSteps: options.maxSteps, maxDurationMs: options.maxDurationMs, maxApiCalls: options.maxApiCalls, taskIds: options.taskIds, personaIds: options.personaIds, taskMaxSteps: options.taskMaxSteps, taskMaxApiCalls: options.taskMaxApiCalls, release: options.release } : {}),
       });
       if (!result || result.suite !== suite) throw new Error(`Runner returned no matching evidence for ${suite}`);
     } catch (error) {
@@ -240,7 +242,7 @@ export async function describeAcceptanceSuites() {
   const workbenchTasks = await import("./exploration-tasks/workbench.mjs");
   const obsidianTasks = await import("./exploration-tasks/obsidian.mjs");
   const personaLine = (host, ids) => `${host} ${ids.length ? ids.join(", ") : "(none yet)"}`;
-  return `workbench    Real browser: settings, daily run, recovery, reading and persistence\nobsidian     Real Obsidian: settings, run/cancel/retry, reading and PDF navigation\nexploration  Opt-in model API: bounded UI tasks with independent evidence checks\n  hosts (--host):                workbench (default), obsidian\n  workbench tasks (--task):      ${workbenchTasks.GOAL_TASK_IDS.join(", ")}\n  obsidian tasks (--task):       ${obsidianTasks.GOAL_TASK_IDS.join(", ")}\n  personas (--persona):          ${personaLine("workbench", workbenchTasks.PERSONA_TASK_IDS)}; ${personaLine("obsidian", obsidianTasks.PERSONA_TASK_IDS)}\n`;
+  return `workbench    Real browser: settings, daily run, recovery, reading and persistence\nobsidian     Real Obsidian: settings, run/cancel/retry, reading and PDF navigation\nexploration  Opt-in model API: bounded UI tasks with independent evidence checks\n  hosts (--host):                workbench (default), obsidian\n  workbench tasks (--task):      ${workbenchTasks.GOAL_TASK_IDS.join(", ")}\n  obsidian tasks (--task):       ${obsidianTasks.GOAL_TASK_IDS.join(", ")}\n  personas (--persona):          ${personaLine("workbench", workbenchTasks.PERSONA_TASK_IDS)}; ${personaLine("obsidian", obsidianTasks.PERSONA_TASK_IDS)}\n  --release runs every persona for --host too (personas are otherwise opt-in only)\n`;
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
