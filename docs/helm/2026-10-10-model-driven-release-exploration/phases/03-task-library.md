@@ -2,8 +2,8 @@
 
 goal_ref: ../goal.md
 created: 2026-10-11T16:00:00+08:00
-updated: 2026-10-11T18:30:00+08:00
-revision: 2
+updated: 2026-10-11T21:00:00+08:00
+revision: 3
 
 ## Outcome
 
@@ -38,7 +38,7 @@ revision: 2
 - Red / baseline signal: 每个任务的 verify 对“未操作”的初始状态返回未通过；任务尚不存在时选择报错。
 - Green check: 受控模型在真实 Obsidian 中完成：设置修改后重载插件仍生效（扩展现有 daily-paper-limit）、新增研究主题方向、删除方向、调整方向顺序；data.json 与重开后的界面一致。
 - regression checks: npm run test:acceptance:tools；固定 Obsidian 验收
-- [ ] implementation and tests accepted
+- [x] implementation and tests accepted — 方向排序无界面控件，改为添加 arXiv 分类任务；本机 Obsidian 1.11.5 走旧版设置渲染，判定兼容两种渲染。真实宿主受控运行两次 5/5 通过。
 
 ### Chunk 3 — Obsidian run tasks
 
