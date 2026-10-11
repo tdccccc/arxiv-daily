@@ -2,8 +2,8 @@
 
 goal_ref: ../goal.md
 created: 2026-10-11T16:00:00+08:00
-updated: 2026-10-12T10:00:00+08:00
-revision: 6
+updated: 2026-10-12T19:00:00+08:00
+revision: 7
 
 ## Outcome
 
@@ -74,7 +74,7 @@ revision: 6
 - Red / baseline signal: apps/cli 测试复现：模型字段仍聚焦时点击“放弃未保存修改并关闭”，失焦触发的自动保存失败回调在确认界面替换后访问已移除的按钮而抛出未处理异常，确认界面不出现。修复前失败。
 - Green check: 该测试通过；external-config-conflict 目标去掉“先 Tab 再等待”的说明后，受控模型在真实浏览器中直接点击放弃仍通过。
 - regression checks: apps/cli 全量测试、typecheck、lint；npm run test:acceptance:tools；固定 workbench 验收
-- [ ] implementation and tests accepted
+- [x] implementation and tests accepted (66ac993, 60b0da8) — 根因：鼠标按下导致失焦自动保存，过渡状态隐藏了放弃按钮，松开时点击落空。真实浏览器直接点击放弃的受控验证并入 Chunk 7 全库运行。
 
 ### Chunk 7 — harden navigation during exploration and run the full libraries
 
