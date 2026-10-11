@@ -2,8 +2,8 @@
 
 goal_ref: ../goal.md
 created: 2026-10-11T16:00:00+08:00
-updated: 2026-10-12T00:30:00+08:00
-revision: 4
+updated: 2026-10-12T03:00:00+08:00
+revision: 5
 
 ## Outcome
 
@@ -56,7 +56,7 @@ revision: 4
 - Red / baseline signal: 同 Chunk 2
 - Green check: 受控模型完成：阅读面板切换标签并翻页、标记待读、生成单篇详细总结（Paper note）、按 arXiv 编号总结、打开今日日报、打开 PDF 到指定页（复用固定场景的判定）；以 papers.json、Vault 文件与界面判定。
 - regression checks: npm run test:acceptance:tools；固定 Obsidian 验收
-- [ ] implementation and tests accepted
+- [x] implementation and tests accepted — Obsidian 共 14 个目标任务；放弃 PDF 定页（界面无入口）；经用户同意在“更多”菜单新增“设置论文标记…”（产品改动单独提交）。真实宿主受控运行两次 14/14 通过。
 
 ### Chunk 5 — workbench tasks and personas for both hosts
 
