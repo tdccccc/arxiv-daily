@@ -196,6 +196,11 @@
             "scripts/tests/product-units.test.mjs",
             "scripts/tests/independent-product-workflows.test.mjs"
           ]
+        },
+        {
+          "path": ".github/workflows/publish-dsh-plugin.yml",
+          "role": "npm-publish",
+          "pathPolicy": "release-tags"
         }
       ]
     }
