@@ -84,6 +84,10 @@ export interface SettingDefinitionsHost {
   renderEmailSenderRow?: (setting: Setting, key: "fromEmail" | "fromName") => void;
   addCategory?: () => void;
   deleteCategory?: (index: number) => void;
+  /** Whether an unsaved "Add category" draft row should be appended. */
+  hasCategoryDraft?: boolean;
+  /** Discards the pending draft row without saving anything. */
+  removeCategoryDraft?: () => void;
   addTopic?: () => void;
   renderScheduleEnabledRow?: (setting: Setting) => void;
   renderRunWindowRow?: (setting: Setting) => void;
@@ -197,10 +201,19 @@ export function buildSettingDefinitions(
     if (section.type === 'field') {
       const item = definition(section.field); if (item) business.push(item);
     } else if (section.type === 'list') {
-      if (section.id === 'categories') business.push({ type: 'list', heading: section.heading, cls: settingsSectionClass('arxiv'),
-        emptyState: section.emptyState, items: categories.map((_category,index)=>({name:String(index+1),render:(setting:Setting)=>host.renderCategoryRow?.(setting,index)})),
-        addItem:{name:section.addItemName,action:()=>void host.addCategory?.()},
-        ...(categories.length>1 ? {onDelete:(index:number)=>void host.deleteCategory?.(index)} : {}) });
+      if (section.id === 'categories') {
+        const draftIndex = categories.length;
+        const items = categories.map((_category,index)=>({name:String(index+1),render:(setting:Setting)=>host.renderCategoryRow?.(setting,index)}));
+        if (host.hasCategoryDraft) items.push({name:String(draftIndex+1),render:(setting:Setting)=>host.renderCategoryRow?.(setting,draftIndex)});
+        const canRemoveSaved = categories.length>1;
+        business.push({ type: 'list', heading: section.heading, cls: settingsSectionClass('arxiv'),
+          emptyState: section.emptyState, items,
+          addItem:{name:section.addItemName,action:()=>void host.addCategory?.()},
+          ...((canRemoveSaved || host.hasCategoryDraft) ? {onDelete:(index:number)=>{
+            if (host.hasCategoryDraft && index===draftIndex) { host.removeCategoryDraft?.(); return; }
+            if (canRemoveSaved) void host.deleteCategory?.(index);
+          }} : {}) });
+      }
       else business.push({ type: 'list', heading: section.heading, cls: settingsSectionClass('topics'),
         emptyState: section.emptyState, items: topics.map((topic,index)=>({name:topic.name.trim()||'(unnamed)',render:(setting:Setting)=>host.renderTopicRow?.(setting,index)})),
         addItem:{name:section.addItemName,action:()=>void host.addTopic?.()} });

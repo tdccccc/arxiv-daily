@@ -232,6 +232,12 @@ export class ArxivDailySettingTab extends PluginSettingTab {
   private pendingTopicDeletionAnchor:
     | { topicId: string; scroller: HTMLElement; top: number }
     | undefined;
+  /**
+   * UI-only "Add category" draft: an unselected row shown after clicking
+   * Add category. Never persisted; cleared on hide() so reopening settings
+   * without picking shows no blank row.
+   */
+  private pendingCategoryDraft = false;
 
   constructor(app: App, public plugin: ArxivDailyPlugin) {
     super(app, plugin);
@@ -308,8 +314,10 @@ export class ArxivDailySettingTab extends PluginSettingTab {
         declarativeRows.renderEmailApiKeyRow(this, setting),
       renderHostedTokenRow: (setting) =>
         declarativeRows.renderHostedTokenRow(this, setting),
-      addCategory: () => void this.addCategory(),
+      addCategory: () => this.addCategory(),
       deleteCategory: (index) => void this.deleteCategory(index),
+      hasCategoryDraft: this.pendingCategoryDraft,
+      removeCategoryDraft: () => this.removeCategoryDraft(),
       addTopic: () => this.runAction("add topic", () => this.addTopic()),
     });
   }
@@ -739,6 +747,8 @@ export class ArxivDailySettingTab extends PluginSettingTab {
     this.libraryStatusUnsubscribe?.();
     this.libraryStatusUnsubscribe = undefined;
     this.libraryRowElements = undefined;
+    // The draft row is UI-only: leaving settings without picking discards it.
+    this.pendingCategoryDraft = false;
     super.hide();
   }
 
@@ -1074,14 +1084,33 @@ export class ArxivDailySettingTab extends PluginSettingTab {
     display?.call(this);
   }
 
-  /** Append a category (the first arXiv option not already in the list). */
-  public async addCategory(): Promise<void> {
-    const categories = arxivCategories(this.plugin.settings.arxiv);
-    if (!await this.setArxivCategories([
-      ...categories,
-      nextCategoryCandidate(categories),
-    ])) return;
+  /**
+   * Show a blank, unselected category row. Nothing is saved until the
+   * row's own dropdown picks a category (see saveCategoryDraft). Repeated
+   * clicks are idempotent: only one draft row is shown at a time.
+   */
+  public addCategory(): void {
+    if (this.pendingCategoryDraft) return;
+    this.pendingCategoryDraft = true;
     this.refreshSettings();
+  }
+
+  /** Discard the pending draft row (its own Remove control) without saving anything. */
+  public removeCategoryDraft(): void {
+    if (!this.pendingCategoryDraft) return;
+    this.pendingCategoryDraft = false;
+    this.refreshSettings();
+  }
+
+  /**
+   * Persist the category picked in the draft row, appended to the existing
+   * ones, then clear the draft. Returns whether the save succeeded.
+   */
+  public async saveCategoryDraft(category: string): Promise<boolean> {
+    const categories = arxivCategories(this.plugin.settings.arxiv);
+    const saved = await this.setArxivCategories([...categories, category]);
+    if (saved) this.pendingCategoryDraft = false;
+    return saved;
   }
 
   /** Remove a category by index; keeps the last remaining category. */
@@ -1597,8 +1626,43 @@ export class ArxivDailySettingTab extends PluginSettingTab {
         );
     }
 
+    if (this.pendingCategoryDraft) {
+      const draftIndex = categories.length;
+      new Setting(containerEl)
+        .setName(`Category ${draftIndex + 1}`)
+        .addDropdown((d) => {
+          addCategoryOptions(d.selectEl);
+          d.setValue("").onChange((v) => {
+            if (!v) return;
+            if (categories.some((other) => other === v)) {
+              new Notice(`arXiv Daily: ${v} is already in the list.`);
+              d.setValue("");
+              return;
+            }
+            this.runAction("save category", async () => {
+              const saved = await this.saveCategoryDraft(v);
+              if (saved) this.renderLegacySettings();
+            });
+          });
+        })
+        .addText((t) => {
+          t.setPlaceholder("Or enter custom category").setValue("");
+          t.inputEl.addEventListener("change", () => {
+            const v = t.inputEl.value.trim();
+            if (!v) return;
+            this.runAction("save category", async () => {
+              const saved = await this.saveCategoryDraft(v);
+              if (saved) this.renderLegacySettings();
+            });
+          });
+        })
+        .addButton((b) =>
+          b.setButtonText("Remove").onClick(() => this.removeCategoryDraft()),
+        );
+    }
+
     new Setting(containerEl).addButton((b) =>
-      b.setButtonText("Add category").onClick(() => void this.addCategory()),
+      b.setButtonText("Add category").onClick(() => this.addCategory()),
     );
 
     // ─── Research Topics ─────────────────────────────
@@ -3375,6 +3439,13 @@ export function addCategoryOptions(
   selectEl: HTMLSelectElement,
   current?: string,
 ): void {
+  if (!current) {
+    const placeholder = selectEl.createEl("option");
+    placeholder.value = "";
+    placeholder.textContent = "Select a category…";
+    placeholder.disabled = true;
+    placeholder.selected = true;
+  }
   let hasCurrent = false;
   for (const group of ARXIV_CATEGORIES) {
     const optgroup = selectEl.createEl("optgroup");
@@ -3401,15 +3472,6 @@ function normalizeUniqueCategories(categories: string[]): string[] {
     out.push(category);
   }
   return out;
-}
-
-function nextCategoryCandidate(existing: string[]): string {  const seen = new Set(existing);
-  for (const group of ARXIV_CATEGORIES) {
-    for (const category of group.categories) {
-      if (!seen.has(category.id)) return category.id;
-    }
-  }
-  return "cs.LG";
 }
 
 function categoriesWillChange(current: string[], next: string[]): boolean {

@@ -1913,12 +1913,12 @@ describe("topic and category saves that fail", () => {
     expect(notices).toMatch(/disk full/);
   });
 
-  it("rolls back an added category and reports", async () => {
+  it("rolls back a category picked in the draft row and reports", async () => {
     const { tab, settings, saveSettings } = makeTab();
     vi.spyOn(tab, "refreshSettings").mockImplementation(() => {});
     saveSettings.mockRejectedValueOnce(new Error("disk full"));
 
-    const notices = await noticesDuring(() => tab.addCategory());
+    const notices = await noticesDuring(() => tab.saveCategoryDraft("cs.LG"));
 
     expect(settings.arxiv.categories).toEqual(["astro-ph"]);
     expect(notices).toMatch(/disk full/);
@@ -1964,6 +1964,71 @@ describe("category rows", () => {
     expect(select.value).toBe("gr-qc");
     expect(notices.map((call) => call.message).join("\n")).toMatch(/already/i);
     expect(refresh).not.toHaveBeenCalled();
+  });
+});
+
+describe("pending category draft (declarative)", () => {
+  function categoriesList(tab: ArxivDailySettingTab) {
+    return tab.getSettingDefinitions().find(
+      (item) => item.type === "list" && item.heading === "arXiv categories",
+    ) as { items: Array<{ name: string; render?: (setting: Setting) => void }>; onDelete?: (index: number) => void } | undefined;
+  }
+
+  it("adds an unselected draft row without saving or calling persistence", () => {
+    const { tab, settings, saveSettings } = makeTab();
+    settings.arxiv.categories = ["astro-ph"];
+
+    tab.addCategory();
+
+    expect(saveSettings).not.toHaveBeenCalled();
+    expect(settings.arxiv.categories).toEqual(["astro-ph"]);
+    const list = categoriesList(tab);
+    expect(list?.items.map((item) => item.name)).toEqual(["1", "2"]);
+    const setting = new Setting(tab.containerEl);
+    list?.items[1]?.render?.(setting);
+    const select = setting.controlEl.querySelector("select") as HTMLSelectElement;
+    expect(select.value).toBe("");
+    expect(select.querySelector("option[value='']")?.textContent).toMatch(/select a category/i);
+  });
+
+  it("saves exactly the existing categories plus the picked one, and the draft row disappears", async () => {
+    const { tab, settings, saveSettings } = makeTab();
+    settings.arxiv.categories = ["astro-ph"];
+    tab.addCategory();
+    const setting = new Setting(tab.containerEl);
+    categoriesList(tab)?.items[1]?.render?.(setting);
+    const select = setting.controlEl.querySelector("select") as HTMLSelectElement;
+
+    select.value = "cs.LG";
+    select.dispatchEvent(new Event("change"));
+
+    await vi.waitFor(() => expect(settings.arxiv.categories).toEqual(["astro-ph", "cs.LG"]));
+    expect(saveSettings).toHaveBeenCalledTimes(1);
+    expect(categoriesList(tab)?.items.map((item) => item.name)).toEqual(["1", "2"]);
+  });
+
+  it("removes the draft row via its own remove control without saving anything", () => {
+    const { tab, settings, saveSettings } = makeTab();
+    settings.arxiv.categories = ["astro-ph"];
+    tab.addCategory();
+    expect(categoriesList(tab)?.items).toHaveLength(2);
+
+    categoriesList(tab)?.onDelete?.(1);
+
+    expect(saveSettings).not.toHaveBeenCalled();
+    expect(settings.arxiv.categories).toEqual(["astro-ph"]);
+    expect(categoriesList(tab)?.items.map((item) => item.name)).toEqual(["1"]);
+  });
+
+  it("shows no draft row after the tab is closed and reopened without picking", () => {
+    const { tab, settings } = makeTab();
+    settings.arxiv.categories = ["astro-ph"];
+    tab.addCategory();
+    expect(categoriesList(tab)?.items).toHaveLength(2);
+
+    tab.hide();
+
+    expect(categoriesList(tab)?.items.map((item) => item.name)).toEqual(["1"]);
   });
 });
 

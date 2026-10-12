@@ -552,6 +552,88 @@ describe("legacy text fields act when editing ends", () => {
   });
 });
 
+describe("legacy pending category draft", () => {
+  function clickButton(container: HTMLElement, text: string): void {
+    const button = Array.from(container.querySelectorAll("button"))
+      .find((item) => item.textContent === text) as HTMLButtonElement | undefined;
+    if (!button) throw new Error(`Missing button: ${text}`);
+    button.click();
+  }
+
+  function rowByName(tab: ArxivDailySettingTab, name: string): HTMLElement | undefined {
+    return Array.from(tab.containerEl.querySelectorAll<HTMLElement>(".setting-item"))
+      .find((row) => row.querySelector(".setting-item-name")?.textContent === name);
+  }
+
+  it("adds an unselected draft row without saving when Add category is clicked", () => {
+    const persistSettings = vi.fn().mockResolvedValue(undefined);
+    const { tab, settings } = makeLegacyApiKeyTab(persistSettings);
+    renderLegacySettings(tab);
+
+    clickButton(tab.containerEl, "Add category");
+    renderLegacySettings(tab);
+
+    expect(persistSettings).not.toHaveBeenCalled();
+    expect(settings.arxiv.categories).toEqual(["astro-ph"]);
+    const draftRow = rowByName(tab, "Category 2");
+    expect(draftRow).toBeDefined();
+    const select = draftRow?.querySelector("select") as HTMLSelectElement;
+    expect(select.value).toBe("");
+    expect(select.querySelector("option[value='']")?.textContent).toMatch(/select a category/i);
+  });
+
+  it("saves categories plus the picked one when the draft row's dropdown changes", async () => {
+    const persistSettings = vi.fn().mockResolvedValue(undefined);
+    const { tab, settings } = makeLegacyApiKeyTab(persistSettings);
+    renderLegacySettings(tab);
+    clickButton(tab.containerEl, "Add category");
+    renderLegacySettings(tab);
+    const draftRow = rowByName(tab, "Category 2")!;
+    const select = draftRow.querySelector("select") as HTMLSelectElement;
+
+    select.value = "cs.LG";
+    select.dispatchEvent(new Event("change"));
+
+    await vi.waitFor(() => expect(settings.arxiv.categories).toEqual(["astro-ph", "cs.LG"]));
+    expect(persistSettings).toHaveBeenCalledTimes(1);
+    renderLegacySettings(tab);
+    expect(rowByName(tab, "Category 3")).toBeUndefined();
+  });
+
+  it("removes the draft row via its Remove button without saving", () => {
+    const persistSettings = vi.fn().mockResolvedValue(undefined);
+    const { tab, settings } = makeLegacyApiKeyTab(persistSettings);
+    renderLegacySettings(tab);
+    clickButton(tab.containerEl, "Add category");
+    renderLegacySettings(tab);
+    expect(rowByName(tab, "Category 2")).toBeDefined();
+
+    const draftRow = rowByName(tab, "Category 2")!;
+    const removeButton = Array.from(draftRow.querySelectorAll("button"))
+      .find((b) => b.textContent === "Remove") as HTMLButtonElement;
+    removeButton.click();
+    renderLegacySettings(tab);
+
+    expect(persistSettings).not.toHaveBeenCalled();
+    expect(settings.arxiv.categories).toEqual(["astro-ph"]);
+    expect(rowByName(tab, "Category 2")).toBeUndefined();
+  });
+
+  it("shows no draft row after the tab is hidden and reopened without picking", () => {
+    const persistSettings = vi.fn().mockResolvedValue(undefined);
+    const { tab } = makeLegacyApiKeyTab(persistSettings);
+    renderLegacySettings(tab);
+    clickButton(tab.containerEl, "Add category");
+    renderLegacySettings(tab);
+    expect(rowByName(tab, "Category 2")).toBeDefined();
+
+    tab.hide();
+    renderLegacySettings(tab);
+
+    expect(rowByName(tab, "Category 2")).toBeUndefined();
+  });
+});
+
 describe("legacy transactional renderers", () => {
   it.each([
     ["API base URL", TextComponent, "https://candidate.example/v1", "llm", "baseUrl"],
