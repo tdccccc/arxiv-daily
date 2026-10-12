@@ -9,9 +9,13 @@ const actionKeys = {
   click: ["ref"], fill: ["ref", "value"], select: ["ref", "value"],
   back: [], reload: [], wait: ["milliseconds"], scroll: ["ref", "direction", "pixels"],
   press: ["key"],
+  // P4 Chunk 2 Fix 2: a host-agnostic recovery action, usable from any state (never carries a ref, like
+  // back/reload/wait) — see exploration-browser.mjs/exploration-obsidian.mjs's own `home` handling for
+  // what "a safe, known starting view" means per host.
+  home: [],
   finding: ["summary", "evidence"], done: [], blocked: [],
 };
-const browserActions = new Set(["click", "fill", "select", "back", "reload", "wait", "scroll", "press"]);
+const browserActions = new Set(["click", "fill", "select", "back", "reload", "wait", "scroll", "press", "home"]);
 /**
  * A host-agnostic keyboard press for the keyboard-only persona (P3): key presses go to whatever
  * element currently has focus, so this never carries a ref — a host's executor is responsible for
@@ -52,9 +56,16 @@ export function parseExplorationAction(raw, observation) {
     }
     if (typeof value.value !== "string" || value.value.length > 2000) throw new ExplorationActionError("Fill value must be text below 2000 characters");
   }
-  if (value.type === "select" && (control.tag !== "select" || typeof value.value !== "string" || value.value.length > 256 ||
-    (control.options && !control.options.some(option => option.value === value.value && !option.disabled)))) {
-    throw new ExplorationActionError("Select requires an enabled option of the observed select control");
+  if (value.type === "select") {
+    // P4 Chunk 2 Fix 3: a select's own options may be inline (`control.options`, every pre-Chunk-2
+    // observation and every existing fake-driver test) or, now, a shared `control.optionsRef` resolved
+    // against `observation.optionSets` (see collapseOptionSets below) — either shape is checked the same
+    // way, so this never becomes a second, looser validation path for the deduplicated case.
+    const options = control.options ?? observation?.optionSets?.[control.optionsRef];
+    if (control.tag !== "select" || typeof value.value !== "string" || value.value.length > 256 ||
+      (options && !options.some(option => option.value === value.value && !option.disabled))) {
+      throw new ExplorationActionError("Select requires an enabled option of the observed select control");
+    }
   }
   if (value.type === "wait" && (!Number.isInteger(value.milliseconds) || value.milliseconds < 1 || value.milliseconds > 2000)) {
     throw new ExplorationActionError("Wait is limited to 1–2000 milliseconds");
@@ -68,6 +79,37 @@ export function parseExplorationAction(raw, observation) {
   }
   if (value.type === "blocked" && !value.reason?.trim()) throw new ExplorationActionError("Blocked needs a reason");
   return value;
+}
+
+/**
+ * P4 Chunk 2 Fix 3: a settings page with many identical `<select>` option lists (e.g. ~41 arXiv-category
+ * options repeated once per category row) was serializing one full inline copy per control, which in the
+ * real P4 Chunk 1 run blew past exploration-model.ts's 100,000-character model-input budget. Both hosts'
+ * drivers call this, in Node (after getting their in-page/CDP observation snapshot back as plain data, not
+ * inside the page/renderer), to replace every `<select>` control's own inline `options` array with a short
+ * `optionsRef` into one shared, observation-level map — one entry per DISTINCT option list (by exact
+ * value/label/disabled identity), however many controls share it. `parseExplorationAction`'s select
+ * validation (above) resolves either shape, so this is purely a payload-size optimization: the same
+ * values are still visible to the model (once, under `observation.optionSets`, instead of once per
+ * control) and the same enabled/disabled values are still enforced. Mutates `controls` in place and
+ * returns the `optionSets` map to assign onto the observation.
+ */
+export function collapseOptionSets(controls) {
+  const optionSets = {};
+  const idBySignature = new Map();
+  for (const control of controls) {
+    if (control.tag !== "select" || !Array.isArray(control.options)) continue;
+    const signature = JSON.stringify(control.options);
+    let id = idBySignature.get(signature);
+    if (id === undefined) {
+      id = `o${idBySignature.size + 1}`;
+      idBySignature.set(signature, id);
+      optionSets[id] = control.options;
+    }
+    control.optionsRef = id;
+    delete control.options;
+  }
+  return optionSets;
 }
 
 /** Example persona-task factory for a later task library (not wired into any default suite yet). */

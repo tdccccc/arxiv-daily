@@ -376,12 +376,13 @@ test("--list (describeAcceptanceSuites) lists both hosts' goal task ids and pers
 // throws when the measured duration exceeds the 30s phase-abort budget.
 // ---------------------------------------------------------------------------
 
-function buildFakeObsidianSession({ modalOpen = false, settingsMarker = false, diagnosticsEntries = [] } = {}) {
+function buildFakeObsidianSession({ modalOpen = false, settingsMarker = false, diagnosticsEntries = [], extraHtml = "" } = {}) {
   const window = new Window();
   window.document.body.innerHTML = `
     ${modalOpen ? '<div class="modal-container"><div class="modal arxiv-daily-modal"><button type="button">Close</button></div></div>' : ""}
     <div class="view-content arxiv-daily-dashboard">
       <div class="arxiv-daily-dashboard__tab is-active" role="tab" tabindex="0">All</div>
+      ${extraHtml}
     </div>
     ${settingsMarker ? '<input class="arxiv-daily-settings__model-input" />' : ""}
   `;
@@ -493,6 +494,60 @@ test("observe() rejects a stale observation id at execute() without sending any 
     assert.equal(result.ok, false);
     assert.match(result.error, /[Ss]tale/);
     assert.equal(calls.length, before, "no CDP input call was sent for a stale observation");
+  });
+});
+
+// P4 Chunk 2 Fix 3: driver.observe() (not just the pure collapseOptionSets helper) must actually dedupe
+// repeated <select> option lists, the same shape the real add-arxiv-category settings page produces (many
+// category rows, each a real <select> with the identical ~41-option arXiv category list). Uses a canned
+// CDP `evaluate` (bypassing happy-dom's own always-zero-geometry visibility gate, which the real
+// obsidianObservationExpression(id, false) call inside observe() applies and which a DOM fixture could
+// never satisfy here) so this exercises observe()'s own post-processing directly, the same way the
+// driver-level tests above fake CDP responses rather than relying on real in-page geometry.
+test("driver.observe() collapses several identical <select> option lists into one shared observation.optionSets entry", async () => {
+  await withTempFixture(async ({ fixture, artifactDir }) => {
+    const rowOptions = [{ value: "cs.AI", label: "AI", disabled: false }, { value: "cs.LG", label: "ML", disabled: false }, { value: "astro-ph", label: "Astro", disabled: false }];
+    const canned = {
+      id: "s1", title: "t", text: "settings",
+      controls: [
+        { ref: "s1-1", tag: "select", type: "", role: "", name: "Category 1", field: "", disabled: false, readOnly: false, options: rowOptions, rect: { x: 0, y: 0, width: 10, height: 10 }, inViewport: true },
+        { ref: "s1-2", tag: "select", type: "", role: "", name: "Category 2", field: "", disabled: false, readOnly: false, options: rowOptions.map(option => ({ ...option })), rect: { x: 0, y: 0, width: 10, height: 10 }, inViewport: true },
+      ],
+      capabilities: ["click", "fill", "select", "scroll", "wait", "press", "home"],
+      layout: { rootMounted: true, view: "settings", dialogOpen: false, viewport: { width: 1200, height: 800 }, notices: [] },
+    };
+    const cannedJson = JSON.stringify(canned);
+    const session = { client: { send: async () => ({}) }, evaluate: async () => cannedJson, diagnostics: { entries: () => [] } };
+    const driver = await createObsidianExplorationDriver({ session, fixture, artifactDir });
+    const observation = await driver.observe();
+    const selects = observation.controls.filter(control => control.tag === "select");
+    assert.equal(selects.length, 2);
+    for (const control of selects) {
+      assert.ok(!("options" in control), "inline options must be replaced by a ref");
+      assert.equal(control.optionsRef, selects[0].optionsRef, "identical option lists share one ref");
+    }
+    assert.equal(Object.keys(observation.optionSets).length, 1);
+    assert.deepEqual(observation.optionSets[selects[0].optionsRef].map(option => option.value), ["cs.AI", "cs.LG", "astro-ph"]);
+  });
+});
+
+// P4 Chunk 2 Fix 2: a host-agnostic recovery action, for when a model has wandered outside the plugin's
+// own observed surface (see exploration-obsidian.mjs's obsidianObservation: zero controls, no fallback).
+// In Obsidian this must go straight through the driver's own existing openDashboard path (obsidian-ui.mjs,
+// the same one reset() already uses, close settings -> run the open-reading-dashboard command -> wait for
+// the dashboard), never through the generic CDP click/back input machinery createObsidianActionExecutor
+// drives every other action through.
+test("execute({type:'home'}) reopens the Reading Dashboard via the driver's own openDashboard path, not the generic CDP click/back machinery", async () => {
+  await withTempFixture(async ({ fixture, artifactDir }) => {
+    const { calls, session } = buildFakeObsidianSession({ modalOpen: true });
+    const driver = await createObsidianExplorationDriver({ session, fixture, artifactDir });
+    const observation = await driver.observe();
+    const before = calls.length;
+    const result = await driver.execute({ type: "home" }, observation);
+    assert.deepEqual(result, { ok: true });
+    const after = calls.slice(before);
+    assert.ok(!after.some(c => c.method === "Input.dispatchKeyEvent" || c.method === "Input.dispatchMouseEvent"),
+      "home must not go through the generic CDP input machinery that click/back/fill use");
   });
 });
 

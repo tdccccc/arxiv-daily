@@ -111,7 +111,7 @@ import { blockersFromError } from "../desktop-acceptance/app-state.mjs";
 import { preflight } from "../desktop-acceptance/preflight.mjs";
 import { runDesktopSession } from "../desktop-acceptance/session.mjs";
 import { installSettingsFixture } from "../desktop-acceptance/settings-fixture.mjs";
-import { ExplorationActionError, PRESS_KEYS } from "./exploration.mjs";
+import { collapseOptionSets, ExplorationActionError, PRESS_KEYS } from "./exploration.mjs";
 import { classifyObsidianDiagnostics, createObsidianSettings } from "./obsidian.mjs";
 import { createObsidianDriver, PLUGIN, pollJsonFile, waitForStableTarget } from "./obsidian-ui.mjs";
 
@@ -248,15 +248,29 @@ export function obsidianObservation(id, testMode) {
   // text-only context per the chunk-1 contract, never as a control.
   const notices = Array.from(document.querySelectorAll(".notice")).map(node => (node.textContent || "").trim()).filter(Boolean).slice(0, 20);
 
+  // P4 Chunk 2 Fix 2: with zero controls and (before this) no explanation, a model that ends up here could
+  // only send `done` (the real P4 Chunk 1 run's first-time-user persona dead-ended exactly this way).
+  // `home` is always advertised (it is always safe: in Obsidian it reopens the Reading Dashboard, see
+  // createObsidianExplorationDriver's execute() below). The guidance triggers on "zero controls", not
+  // only "no surface at all": a real-host run surfaced a second, narrower shape of the same dead-end —
+  // after opening a note from the dashboard, Obsidian kept the dashboard leaf's own `.arxiv-daily-
+  // dashboard` element mounted (so resolveSurface() still reports `view: "dashboard"`, not "none"), but
+  // every control inside it had become invisible because that leaf itself was backgrounded — `controls`
+  // is still empty, and a model there is exactly as stuck as with no surface at all. Any real surface text
+  // is kept (never discarded), with the guidance appended, so no information is lost either way.
+  const noControls = controls.length === 0;
+  const recoveryText = "There are no interactive controls visible right now (you may be outside the arXiv Daily plugin, e.g. viewing a plain note or another pane, or on a plugin view with nothing currently visible). Use the \"home\" action to return to the Reading Dashboard.";
+  const baseText = surface ? surface.innerText ?? surface.textContent ?? "" : "";
   return {
     id, title: document.title,
-    text: (surface ? surface.innerText ?? surface.textContent ?? "" : "").slice(0, 16000),
+    text: (noControls ? [baseText, recoveryText].filter(Boolean).join("\n\n") : baseText).slice(0, 16000),
     controls,
     // Chunk 3: which browser-shaped actions this host currently allows, so the model does not have
     // to guess at back/reload support that differs by host and by whether a modal or the plugin's
     // own menu is open. `reload` is never listed — Obsidian has no per-page reload, and resetting
-    // state between tasks is the driver's job, not an action a model can request.
-    capabilities: ["click", "fill", "select", "scroll", "wait", "press", ...((modalOpen || menuOpen) ? ["back"] : [])],
+    // state between tasks is the driver's job, not an action a model can request. `home` (P4 Chunk 2
+    // Fix 2) is always listed: it is a safe, idempotent recovery action from any state.
+    capabilities: ["click", "fill", "select", "scroll", "wait", "press", ...((modalOpen || menuOpen) ? ["back"] : []), "home"],
     layout: { rootMounted: Boolean(surface), view, dialogOpen: modalOpen || menuOpen, viewport: { width: innerWidth, height: innerHeight }, notices },
   };
 }
@@ -722,6 +736,10 @@ export async function createObsidianExplorationDriver({ session, fixture, artifa
       ? { authorizationFailureExpected: true, fixtureRequests: fixture.server.requests }
       : undefined);
     snapshot.errors = unexpected.map(entry => redact(entry.text ?? JSON.stringify(entry)));
+    // P4 Chunk 2 Fix 3: dedupe repeated <select> option lists (e.g. many identical arXiv-category rows)
+    // into one shared observation.optionSets map, in Node rather than inside the in-page/CDP
+    // observation expression, so obsidianObservation's own DOM-scanning code stays untouched.
+    snapshot.optionSets = collapseOptionSets(snapshot.controls);
     latest = snapshot;
     return snapshot;
   }
@@ -729,6 +747,15 @@ export async function createObsidianExplorationDriver({ session, fixture, artifa
   async function execute(action, observation, options = {}) {
     signal?.throwIfAborted();
     if (latest?.id !== observation.id) return { ok: false, error: "Stale observation; capture a new page state" };
+    // P4 Chunk 2 Fix 2: `home` is the Obsidian counterpart of the model's only way back to the plugin
+    // surface once it has wandered outside it (obsidianObservation offers it from any state, including
+    // zero controls) — it goes straight through the driver's own existing openDashboard path (the same
+    // one reset() already uses), never through createObsidianActionExecutor's generic CDP click/back/fill
+    // machinery, which has no ref or CDP input event to drive for this.
+    if (action.type === "home") {
+      try { await helper.openDashboard(); return { ok: true }; }
+      catch (error) { return { ok: false, error: redact(error.message) }; }
+    }
     return executor.execute(action, observation, options);
   }
 

@@ -14,7 +14,7 @@ Return exactly ONE JSON object with no Markdown, prose, or code fences. Allowed 
 {"type":"click","ref":"CURRENT_REF"}
 {"type":"fill","ref":"CURRENT_REF","value":"text"}
 {"type":"select","ref":"CURRENT_REF","value":"an enabled option value"}
-{"type":"back"} or {"type":"reload"}
+{"type":"back"} or {"type":"reload"} or {"type":"home"}
 {"type":"wait","milliseconds":500} (1 to 2000)
 {"type":"scroll","direction":"down","pixels":600} (up/down, 1 to 1200; optional current ref)
 {"type":"press","key":"Enter"} (keyboard-only navigation; key is one of Enter, Escape, Tab, Shift+Tab, ArrowUp,
@@ -30,6 +30,11 @@ Fill replaces the field; move focus away or close settings when autosave require
 Browser clicks can scroll a control into view. A dialog makes controls outside it unavailable.
 Some hosts narrow which of back/reload/press are currently usable; when the observation includes a
 capabilities list, only use actions named there (plus wait/finding/blocked/done, always available).
+"home" returns to a safe, known starting view (e.g. the Reading Dashboard) and is always available; use it
+if you end up with no useful controls or outside the app's own surface (e.g. a plain note), rather than
+giving up. A select control's options may be listed inline on the control, or, when many controls share
+the exact same option list, once under observation.optionSets and referenced by the control's own
+optionsRef id — look there for the real option values when a control has optionsRef instead of options.
 The checks array contains independent program checks, not judgments you can override. The runner
 automatically finishes a task once they are all satisfied by actual actions. Saying done does NOT pass
 an unfinished task. Incomplete checks may simply mean more actions or a short wait are needed.

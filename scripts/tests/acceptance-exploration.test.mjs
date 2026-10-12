@@ -6,7 +6,7 @@ import path from "node:path";
 import test from "node:test";
 import { classifyControlRestriction, createExplorationDriver } from "../acceptance/exploration-browser.mjs";
 import { goalTasks as createDefaultExplorationTasks } from "../acceptance/exploration-tasks/workbench.mjs";
-import { loadExplorationModel, parseExplorationAction, runExplorationLoop, selectExplorationTasks } from "../acceptance/exploration.mjs";
+import { collapseOptionSets, loadExplorationModel, parseExplorationAction, runExplorationLoop, selectExplorationTasks } from "../acceptance/exploration.mjs";
 import { ACCEPTANCE_DATE, PAPERS } from "../acceptance/fixtures.mjs";
 
 const observation = (version = 1) => ({
@@ -524,6 +524,70 @@ test("a host-agnostic keyboard press is allowed only from a strict allowlist and
   ]) assert.throws(() => parseExplorationAction(JSON.stringify(command), current));
 });
 
+// P4 Chunk 2 Fix 2: a host-agnostic recovery action, usable with no ref, so a model that has wandered
+// outside the explorable plugin/app surface (empty controls) still has a safe way back.
+test("home is a valid action with no ref, and is a browser action routed through driver.execute", async t => {
+  const current = observation();
+  assert.deepEqual(parseExplorationAction('{"type":"home"}', current), { type: "home" });
+  assert.deepEqual(parseExplorationAction('{"type":"home","reason":"left the plugin surface"}', current), { type: "home", reason: "left the plugin surface" });
+  assert.throws(() => parseExplorationAction('{"type":"home","ref":"s1-1"}', current), "home never carries a ref");
+  const driver = fixtureDriver();
+  const result = await runExplorationLoop({ driver, model: async () => '{"type":"home"}', tasks: [{ ...task(), maxSteps: 1 }], artifactDir: await temporary(t), maxSteps: 3 });
+  assert.deepEqual(driver.executed, [{ type: "home" }]);
+  assert.equal(result.scenarios[0].status, "blocked"); // never satisfies the task's own checks, same as any other single action
+});
+
+// P4 Chunk 2 Fix 3: many identical <select> option lists (e.g. ~41 arXiv categories repeated once per
+// settings row) must collapse to one shared observation.optionSets entry, never one inline copy per
+// control, while parseExplorationAction's select validation keeps working either way.
+test("select validation accepts an enabled option via either inline options or a shared optionsRef/optionSets, and rejects a disabled or absent one", () => {
+  const OPTIONS = [{ value: "cs.AI", label: "Artificial Intelligence", disabled: false }, { value: "cs.LG", label: "Machine Learning", disabled: false }, { value: "cs.CV", label: "Computer Vision", disabled: true }];
+  const inline = { id: "snap-inline", controls: [{ ref: "s1-1", tag: "select", options: OPTIONS }] };
+  const shared = { id: "snap-ref", optionSets: { o1: OPTIONS }, controls: [{ ref: "s1-1", tag: "select", optionsRef: "o1" }] };
+  for (const current of [inline, shared]) {
+    assert.deepEqual(parseExplorationAction('{"type":"select","ref":"s1-1","value":"cs.LG"}', current), { type: "select", ref: "s1-1", value: "cs.LG" });
+    assert.throws(() => parseExplorationAction('{"type":"select","ref":"s1-1","value":"cs.CV"}', current), /enabled option/);
+    assert.throws(() => parseExplorationAction('{"type":"select","ref":"s1-1","value":"astro-ph"}', current), /enabled option/);
+  }
+});
+
+test("collapseOptionSets: identical select option lists collapse to one shared entry; distinct lists get their own", () => {
+  const CATEGORY_OPTIONS = Array.from({ length: 41 }, (_, index) => ({ value: `cat.${index}`, label: `Category ${index}`, disabled: false }));
+  const OTHER_OPTIONS = [{ value: "zh", label: "Chinese", disabled: false }, { value: "en", label: "English", disabled: false }];
+  const controls = [
+    { ref: "s1-1", tag: "select", options: CATEGORY_OPTIONS },
+    { ref: "s1-2", tag: "select", options: CATEGORY_OPTIONS.map(option => ({ ...option })) }, // a fresh array, same content
+    { ref: "s1-3", tag: "select", options: OTHER_OPTIONS },
+    { ref: "s1-4", tag: "button" }, // never touched: not a select
+  ];
+  const optionSets = collapseOptionSets(controls);
+  assert.equal(Object.keys(optionSets).length, 2, "two distinct option lists, regardless of how many controls share one");
+  assert.equal(controls[0].optionsRef, controls[1].optionsRef, "identical option lists share one ref");
+  assert.notEqual(controls[0].optionsRef, controls[2].optionsRef);
+  assert.deepEqual(optionSets[controls[0].optionsRef], CATEGORY_OPTIONS);
+  assert.deepEqual(optionSets[controls[2].optionsRef], OTHER_OPTIONS);
+  for (const control of controls.slice(0, 3)) assert.ok(!("options" in control), "the inline copy is replaced, not kept alongside the ref");
+  assert.ok(!("optionsRef" in controls[3]));
+});
+
+// P4 Chunk 2 Fix 3 regression: a settings page with ~20 arXiv-category rows (each a real ~41-option
+// select) used to serialize one full inline options array per row and, in the real P4 Chunk 1 run, blew
+// past exploration-model.ts's 100,000-character model-input budget. After collapseOptionSets, the whole
+// observation (plus the task/checks/history/remaining envelope exploration-model.ts actually sends) must
+// stay well under that budget.
+test("a settings page with ~20 identical-option category rows stays well under the 100000-character model payload budget", () => {
+  const CATEGORY_OPTIONS = Array.from({ length: 41 }, (_, index) => ({ value: `group.cat-${index}`, label: `Some fairly long category label ${index}`, disabled: false }));
+  const controls = Array.from({ length: 20 }, (_, row) => ({
+    ref: `s1-${row + 1}`, tag: "select", name: `Category ${row + 1}`, field: "", type: "", role: "",
+    disabled: false, readOnly: false, options: CATEGORY_OPTIONS.map(option => ({ ...option })),
+    rect: { x: 0, y: row * 40, width: 300, height: 32 }, inViewport: true,
+  }));
+  const optionSets = collapseOptionSets(controls);
+  const payload = JSON.stringify({ task: { id: "add-arxiv-category", title: "x", goal: "x" }, observation: { id: "s99", controls, optionSets }, checks: [], history: [], remaining: {} });
+  assert.ok(payload.length < 20000, `expected a small deduplicated payload, got ${payload.length} characters`);
+  assert.equal(Object.keys(optionSets).length, 1, "every row shares the same option list");
+});
+
 test("press is a browser action routed through driver.execute like click or fill", async t => {
   const driver = fixtureDriver();
   const result = await runExplorationLoop({
@@ -694,6 +758,63 @@ test('completion evidence reads the report after observing the completed run', a
   const evidence = await driver.dailyEvidence('2026-10-01');
   assert.equal(evidence.run.status, 'completed');
   assert.equal(evidence.report, true, 'completed must be paired with a fresh file observation');
+});
+
+// P4 Chunk 2 Fix 1: after external-config-conflict rewrites the fixture's CLI TOML out-of-band
+// (writeConfigPatch, bypassing the server's own save path), the server's in-memory config falls out of
+// sync with disk and every later task/persona in the same session sees the "配置文件已在外部修改..." 409
+// guard leak in (observed in the real P4 Chunk 1 run). reset() must resync the server's held config to
+// disk before every task, not just after that one task.
+function fakeResetPage(url, { revision = 'sha256:current' } = {}) {
+  const calls = [];
+  let currentUrl = url;
+  return {
+    calls,
+    url: () => currentUrl,
+    on() {}, off() {},
+    goto: async target => { currentUrl = String(target); },
+    locator(selector) {
+      if (selector === 'dialog[open]') return { count: async () => 0, waitFor: async () => {}, locator: () => ({ first: () => ({ click: async () => {} }) }) };
+      return { waitFor: async () => {} };
+    },
+    request: {
+      get: async target => { calls.push(['GET', String(target)]); return { ok: () => true, json: async () => ({ revision, setupRequired: revision === null, values: {} }) }; },
+      post: async (target, options) => { calls.push(['POST', String(target), options?.data]); return { ok: () => true, json: async () => ({}) }; },
+    },
+  };
+}
+
+test("reset() resyncs the workbench config revision with disk before every task, so a write after an earlier external config edit is not rejected as conflicting", async t => {
+  const root = await mkdtemp(path.join(tmpdir(), 'exploration-resync-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const fixture = { root, vaultRoot: path.join(root, 'vault'), configPath: path.join(root, 'config.toml') };
+  await mkdir(fixture.vaultRoot);
+  await writeFile(fixture.configPath, `vault_root = ${JSON.stringify(fixture.vaultRoot)}\n`);
+  const url = 'http://127.0.0.1:3100/session/';
+  const page = fakeResetPage(url, { revision: 'sha256:current-disk-revision' });
+  const context = { on() {}, off() {}, route: async () => {}, unroute: async () => {} };
+  const driver = await createExplorationDriver({ page, context, url, fixture, artifactDir: path.join(root, 'artifacts') });
+  t.after(() => driver.dispose());
+  await driver.reset();
+  assert.deepEqual(page.calls.map(call => call[0]), ['GET', 'POST'], "reset() must read, then resave, the config through the server's own settings API, every task boundary");
+  assert.equal(page.calls[1][1], new URL('api/settings', url).href);
+  assert.equal(page.calls[1][2].revision, 'sha256:current-disk-revision', "the resync save must use the revision actually on disk right now, not a stale one");
+  assert.deepEqual(page.calls[1][2].values, {}, "a resync save changes nothing on disk -- it only lets the server's held config catch up to the current disk content");
+});
+
+test("reset() skips the config resync when settings have never been configured (revision null), instead of sending an invalid save", async t => {
+  const root = await mkdtemp(path.join(tmpdir(), 'exploration-resync-unconfigured-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const fixture = { root, vaultRoot: path.join(root, 'vault'), configPath: path.join(root, 'config.toml') };
+  await mkdir(fixture.vaultRoot);
+  await writeFile(fixture.configPath, `vault_root = ${JSON.stringify(fixture.vaultRoot)}\n`);
+  const url = 'http://127.0.0.1:3101/session/';
+  const page = fakeResetPage(url, { revision: null });
+  const context = { on() {}, off() {}, route: async () => {}, unroute: async () => {} };
+  const driver = await createExplorationDriver({ page, context, url, fixture, artifactDir: path.join(root, 'artifacts') });
+  t.after(() => driver.dispose());
+  await driver.reset();
+  assert.deepEqual(page.calls.map(call => call[0]), ['GET'], 'no settings exist yet; there is nothing to resync and no save should be attempted');
 });
 
 // ---------------------------------------------------------------------------

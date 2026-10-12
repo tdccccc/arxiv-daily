@@ -45,6 +45,42 @@ test("no plugin surface open: chrome produces zero controls and layout.view is n
   assert.equal(snapshot.layout.rootMounted, false);
 });
 
+// P4 Chunk 2 Fix 2: with zero controls and no explanation, a model that wandered outside the plugin
+// (e.g. opened a plain note) could only end the task — real P4 Chunk 1 evidence showed the first-time-user
+// persona dead-ending exactly this way. `home` is always advertised as a recovery action, and the
+// observation text must say the model is outside the plugin and how to get back, instead of being empty.
+test("no plugin surface open: text explains the model is outside the plugin and how to return, and home is always offered", () => {
+  const { observe } = buildWindow("");
+  const snapshot = observe();
+  assert.ok(snapshot.capabilities.includes("home"), "home must be offered even with zero controls");
+  assert.ok(snapshot.text.length > 0, "text must not be empty when there is nothing else to tell the model");
+  assert.match(snapshot.text, /plugin/i);
+  assert.match(snapshot.text, /home/i);
+});
+
+test("home is always advertised, including when a normal plugin surface (the dashboard) is open", () => {
+  const { observe } = buildWindow(dashboardFixture);
+  const snapshot = observe();
+  assert.ok(snapshot.capabilities.includes("home"));
+});
+
+// P4 Chunk 2 Fix 2 (real-Obsidian finding): a real host run showed a second, narrower dead-end this fix's
+// first pass missed — after opening a note from the dashboard calendar, Obsidian kept the dashboard
+// leaf's own `.arxiv-daily-dashboard` element mounted (so resolveSurface() still reports
+// layout.view:"dashboard", not "none"), but every control inside it had become invisible (the leaf itself
+// is backgrounded), so `controls` is still empty. The recovery text must trigger on "zero controls",
+// not only on "no surface found at all" — otherwise a model stuck in exactly this real shape gets no
+// guidance (home is already unconditionally offered either way).
+test("a plugin surface is nominally matched (layout.view stays e.g. dashboard) but has zero currently-visible controls: the same recovery guidance still appears", () => {
+  const html = `<div class="view-content arxiv-daily-dashboard"><button type="button">Hidden by real geometry</button></div>`;
+  const { observe } = buildWindow(html, { testMode: false }); // testMode:false -> happy-dom's real (always-zero) getBoundingClientRect hides it
+  const snapshot = observe();
+  assert.equal(snapshot.layout.view, "dashboard", "the surface is still nominally matched");
+  assert.deepEqual(snapshot.controls, []);
+  assert.ok(snapshot.capabilities.includes("home"));
+  assert.match(snapshot.text, /home/i, "guidance must still appear even though a surface was nominally found");
+});
+
 function settingsFixture(markWithClass) {
   const containerClass = markWithClass ? "vertical-tab-content arxiv-daily-settings" : "vertical-tab-content";
   return `
@@ -249,7 +285,7 @@ test("observation and control shape matches the workbench driver's contract", ()
   const { observe } = buildWindow(dashboardFixture);
   const snapshot = observe("shape");
   assert.deepEqual(Object.keys(snapshot).sort(), ["capabilities", "controls", "id", "layout", "text", "title"].sort());
-  assert.deepEqual(snapshot.capabilities, ["click", "fill", "select", "scroll", "wait", "press"]);
+  assert.deepEqual(snapshot.capabilities, ["click", "fill", "select", "scroll", "wait", "press", "home"]);
   for (const control of snapshot.controls) {
     for (const key of ["ref", "tag", "type", "role", "name", "field", "disabled", "readOnly", "dataAction", "paperKey", "purpose", "rect", "inViewport"]) {
       assert.ok(key in control, `control is missing ${key}`);
