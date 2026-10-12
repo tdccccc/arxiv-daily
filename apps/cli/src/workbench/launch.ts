@@ -14,13 +14,23 @@ export interface RunWorkbenchOptions {
   env: Record<string, string | undefined>;
 }
 
+// Only runs (api/runs) and paper marks (api/paper/mark) pass through this guard; reads keep working,
+// and saving Settings resyncs the revision without a restart.
+export const WORKBENCH_CONFIG_CHANGED_MESSAGE = "配置文件已在外部修改，生成日报、标记收藏/已读等操作需要重启工作台或重新打开设置并保存后才能继续；浏览和阅读不受影响。";
+
+/** Rejects workbench writes when the CLI config changed on disk since it was last loaded. */
+export function createWorkbenchConfigGuard(getConfig: () => CliRuntimeConfig | undefined, env: Record<string, string | undefined>): () => Promise<void> {
+  return async () => {
+    const current = await loadCliConfig({ env });
+    const config = getConfig();
+    if (!config || current.configPath !== config.configPath || current.configRevision !== config.configRevision) throw new WorkbenchError(409, WORKBENCH_CONFIG_CHANGED_MESSAGE);
+  };
+}
+
 export async function runWorkbench(config: CliRuntimeConfig | undefined, io: CliIo, options: RunWorkbenchOptions): Promise<number> {
   const executable = process.argv[1];
   if (!executable) throw new Error("The workbench must be launched from the built CLI");
-  const beforeWrite = async () => {
-    const current = await loadCliConfig({ env: options.env });
-    if (!config || current.configPath !== config.configPath || current.configRevision !== config.configRevision) throw new WorkbenchError(409, "配置已改变，请重启工作台后再操作。");
-  };
+  const beforeWrite = createWorkbenchConfigGuard(() => config, options.env);
   const app = await startWorkbench({
     config, configPath: config?.configPath ?? resolveCliConfigPath(options.env), onConfigSaved: next => { config = next; }, port: options.port, assets: workbenchAssets(), beforeWrite, frameOrigin: options.frameOrigin,
     run: async (args, output, signal) => {
