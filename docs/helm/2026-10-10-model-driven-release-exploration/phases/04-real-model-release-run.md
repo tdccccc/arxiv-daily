@@ -2,8 +2,8 @@
 
 goal_ref: ../goal.md
 created: 2026-10-12T22:00:00+08:00
-updated: 2026-10-12T12:00:00+08:00
-revision: 2
+updated: 2026-10-12T20:00:00+08:00
+revision: 3
 
 ## Outcome
 
@@ -38,7 +38,7 @@ revision: 2
 - Red / baseline signal: 每个确认的问题先有复现（测试或受控脚本）再修。
 - Green check: 每条疑点与失败都有结论记录；修复后受控模型全库回归通过。
 - regression checks: npm run test:acceptance:tools；相关 workspace 测试；固定 workbench 与 Obsidian 验收
-- [ ] implementation and tests accepted
+- [x] implementation and tests accepted (ce8fab9, a5adb9f, 28713a2) — 产品：Add category 先选再存；工作台配置变更提示写明受影响操作。测试工具：任务间重同步配置版本、新增 home 动作、下拉选项去重。受控全库回归两端通过。
 
 ### Chunk 3 — confirmation run, budget calibration, release documentation
 
