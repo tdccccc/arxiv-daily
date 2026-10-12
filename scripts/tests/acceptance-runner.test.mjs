@@ -57,6 +57,35 @@ test("--release is a value-less flag, off by default", () => {
   assert.throws(() => parseArgs(["--release=workbench"]), /--release/);
 });
 
+test("ordinary runs keep the small run-wide budget defaults", () => {
+  const options = parseArgs(["--suite", "exploration"]);
+  assert.equal(options.maxSteps, 90);
+  assert.equal(options.maxDurationMs, 900000);
+  assert.equal(options.maxApiCalls, undefined); // exploration.mjs falls back to 2x the effective step budget
+});
+
+test("--release without explicit budget flags raises the run-wide defaults with headroom over measured usage", () => {
+  const options = parseArgs(["--suite", "exploration", "--host", "obsidian", "--release"]);
+  // Measured real-model release runs (2026-10-12, docs/helm/2026-10-10-model-driven-release-exploration):
+  // obsidian used up to 106 model calls / ~536s; workbench up to 80 calls / ~359s. Defaults below give
+  // roughly 2x headroom over the larger (obsidian) figure while staying within the hard maxima
+  // (maxSteps <= 300, maxDurationMs <= 3600000).
+  assert.equal(options.maxSteps, 220);
+  assert.equal(options.maxDurationMs, 1200000);
+  assert.equal(options.maxApiCalls, undefined); // still falls back to 2x maxSteps = 440, well under the 1000 hard cap
+});
+
+test("--release still lets explicit budget flags win, regardless of flag order", () => {
+  const before = parseArgs(["--suite", "exploration", "--max-steps", "50", "--max-duration-ms", "60000", "--max-api-calls", "70", "--release"]);
+  assert.equal(before.maxSteps, 50);
+  assert.equal(before.maxDurationMs, 60000);
+  assert.equal(before.maxApiCalls, 70);
+  const after = parseArgs(["--suite", "exploration", "--release", "--max-steps", "50", "--max-duration-ms", "60000", "--max-api-calls", "70"]);
+  assert.equal(after.maxSteps, 50);
+  assert.equal(after.maxDurationMs, 60000);
+  assert.equal(after.maxApiCalls, 70);
+});
+
 test("each suite receives its own fixture and cleanup runs despite a failed suite", async t => {
   const f = await dependencies(t);
   f.deps.runners.workbench = async () => { f.events.push("fail:workbench"); throw new Error("Product assertion failed"); };

@@ -17,9 +17,9 @@ const HELP = `Usage: npm run test:acceptance -- [options]
   --task ID[,ID...]              Run only these exploration goal tasks (repeatable)
   --persona ID[,ID...]           Run only these exploration persona tasks (repeatable)
   --release                      Also run every persona for --host (unless --persona overrides it)
-  --max-steps N                  Model decisions, 1-300 (default: 90)
-  --max-api-calls N              Model HTTP requests including retries
-  --max-duration-ms N            Exploration time budget (default: 900000)
+  --max-steps N                  Model decisions, 1-300 (default: 90; 220 with --release)
+  --max-api-calls N              Model HTTP requests including retries (default: 2x the effective step budget)
+  --max-duration-ms N            Exploration time budget (default: 900000; 1200000 with --release)
   --task-max-steps N             Default per-task decision budget (default: 20 task, 15 persona)
   --task-max-api-calls N         Default per-task API-call budget (default: 2x its step budget)
   --browser PATH                 Browser executable override
@@ -36,9 +36,20 @@ Exit status: 0 passed; 1 failed; 2 blocked or incomplete.
 
 const EXPLORATION_HOSTS = ["workbench", "obsidian"];
 
+// Run-wide defaults when `--release` is given and the caller did not pass an explicit budget flag.
+// Measured from the real-model release runs in docs/helm/2026-10-10-model-driven-release-exploration
+// (2026-10-12, two runs per host after P4 chunk 2's fixes): obsidian used up to 106 model calls over
+// ~536s, workbench up to 80 calls over ~359s. These defaults give roughly 2x headroom over the larger
+// (obsidian) figure, while staying within the hard maxima (maxSteps <= 300, maxDurationMs <= 3600000),
+// so a release run needs no manual --max-* flags. `--max-api-calls` has no release-specific default: it
+// keeps falling back to 2x the effective step budget (440 under --release), which already has far more
+// headroom than observed (max 106) and needs no separate constant.
+const RELEASE_DEFAULT_MAX_STEPS = 220;
+const RELEASE_DEFAULT_MAX_DURATION_MS = 1200000;
+
 export function parseArgs(argv) {
-  const options = { suites: ["workbench", "obsidian"], build: true, headless: true, maxSteps: 90, maxDurationMs: 900000, host: "workbench" };
-  let explicit = false, explore = false;
+  const options = { suites: ["workbench", "obsidian"], build: true, headless: true, host: "workbench" };
+  let explicit = false, explore = false, explicitMaxSteps = false, explicitMaxDurationMs = false;
   for (let i = 0; i < argv.length; i++) {
     const [flag, ...rest] = argv[i].split("=");
     const take = () => {
@@ -85,9 +96,9 @@ export function parseArgs(argv) {
         options.personaIds = [...(options.personaIds ?? []), ...ids];
         break;
       }
-      case "--max-steps": options.maxSteps = number(1, 300); break;
+      case "--max-steps": options.maxSteps = number(1, 300); explicitMaxSteps = true; break;
       case "--max-api-calls": options.maxApiCalls = number(1, 1000); break;
-      case "--max-duration-ms": options.maxDurationMs = number(1, 3600000); break;
+      case "--max-duration-ms": options.maxDurationMs = number(1, 3600000); explicitMaxDurationMs = true; break;
       case "--task-max-steps": options.taskMaxSteps = number(1, 300); break;
       case "--task-max-api-calls": options.taskMaxApiCalls = number(1, 1000); break;
       default: throw new TypeError(`Unknown acceptance option: ${flag}`);
@@ -95,6 +106,11 @@ export function parseArgs(argv) {
     if (rest.length && ["--explore", "--release", "--skip-build", "--headed", "--list", "--help", "-h"].includes(flag)) throw new TypeError(`${flag} does not take a value`);
   }
   if (explore && !options.suites.includes("exploration")) options.suites.push("exploration");
+  // --release means a full-library run (every goal task plus every persona); apply its own run-wide
+  // budget defaults (see RELEASE_DEFAULT_* above) unless the caller passed an explicit --max-steps /
+  // --max-duration-ms, regardless of whether --release appeared before or after those flags.
+  if (!explicitMaxSteps) options.maxSteps = options.release ? RELEASE_DEFAULT_MAX_STEPS : 90;
+  if (!explicitMaxDurationMs) options.maxDurationMs = options.release ? RELEASE_DEFAULT_MAX_DURATION_MS : 900000;
   return options;
 }
 async function buildProducts(suites, { artifactDir, signal, onProgress }) {
