@@ -4,7 +4,24 @@
   "description": "Read, filter and save research papers in the DSH sidebar with arXiv Daily",
   "type": "module",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/tdccccc/arxiv-daily.git",
+    "directory": "extensions/dsh-arxiv-daily"
+  },
+  "homepage": "https://github.com/tdccccc/arxiv-daily/tree/main/extensions/dsh-arxiv-daily#readme",
+  "bugs": "https://github.com/tdccccc/arxiv-daily/issues",
+  "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "deepseek-harness",
+    "arxiv",
+    "research"
+  ],
   "icon": "./icon.svg",
+  "publishConfig": {
+    "access": "public"
+  },
   "engines": {
     "node": ">=22.19.0"
   },
