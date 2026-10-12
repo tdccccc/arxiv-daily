@@ -2,8 +2,8 @@
 
 goal_ref: ../goal.md
 created: 2026-10-12T22:00:00+08:00
-updated: 2026-10-12T22:00:00+08:00
-revision: 1
+updated: 2026-10-12T12:00:00+08:00
+revision: 2
 
 ## Outcome
 
@@ -29,7 +29,7 @@ revision: 1
 - Green check: `--suite exploration --host obsidian --release` 与 `--host workbench --release` 各跑一次，保存报告；整理逐任务状态、调用、token、耗时与全部疑点。
 - regression checks: 无代码改动
 - exception: 证据收集，不改代码
-- [ ] implementation and tests accepted
+- [x] implementation and tests accepted — 结果与处置见 journal.md 2026-10-12。
 
 ### Chunk 2 — triage and fixes
 
