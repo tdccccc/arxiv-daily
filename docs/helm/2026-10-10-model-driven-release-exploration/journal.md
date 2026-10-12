@@ -6,3 +6,10 @@
 - change: user decisions (2026-10-12): (1) "Add category" adds an unselected row and saves only after a category is chosen; (2) reword the workbench config-changed banner to say which actions need a restart. Owner decisions: fix three harness gaps — task isolation after an external config edit, a way back to the plugin surface from non-plugin Obsidian views, and compact repeated select options in observations.
 - disposition: keep all P1–P3 work; product changes are separate commits with tests.
 - next: P4 chunk 2 — the two product changes in parallel, then the harness fixes, then a scripted full-library regression.
+
+## 2026-10-12 — note (close)
+
+- evidence: confirmation real-model release runs after the P4 chunk 2 fixes. Workbench: 6/6 passed, 3 personas explored, 0 findings, 80 calls, 574,869 input tokens, 6.0 min (/tmp/p4c3-workbench-1791813963). Obsidian: 14/14 passed, 3 personas explored, 0 findings, 105 calls, 514,059 input tokens, 8.1 min (/tmp/p4c3-obsidian-1791814427). add-arxiv-category passed in 5 steps; the first-time-user persona used home 4 times; the config-changed state no longer leaks between tasks.
+- change: all success criteria met. Obsidian has 14 goal tasks, above the 10–12 in the criterion; this is intentional (the reorder task was replaced and reading tasks were added). Release defaults calibrated; README documents the release workflow.
+- disposition: keep everything; branch test/model-exploration is unpushed pending user approval.
+- next: none in this initiative; ask the user about pushing and a PR.

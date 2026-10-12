@@ -2,8 +2,8 @@
 
 goal_ref: ../goal.md
 created: 2026-10-12T22:00:00+08:00
-updated: 2026-10-12T20:00:00+08:00
-revision: 3
+updated: 2026-10-12T23:30:00+08:00
+revision: 4
 
 ## Outcome
 
@@ -47,7 +47,7 @@ revision: 3
 - Red / baseline signal: 新默认值的参数解析测试先失败。
 - Green check: 修复后真实模型再完整跑一次；按两次实测设定 `--release` 的整次与逐任务预算；README 写明发版命令、看报告、退出码含义（含纯角色运行为 0 但不代表验证通过）、预计成本与耗时、如何把确认的疑点转为固定回归。
 - regression checks: npm run test:acceptance:tools；--help/--list 与文档一致
-- [ ] implementation and tests accepted
+- [x] implementation and tests accepted — 确认运行：workbench 6/6、Obsidian 14/14 通过，0 条疑点；--release 默认 220 步 / 440 调用 / 20 分钟；README 改写为发版流程。
 
 ## Phase verification
 
