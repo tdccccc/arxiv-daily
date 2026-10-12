@@ -116,6 +116,14 @@ import { classifyObsidianDiagnostics, createObsidianSettings } from "./obsidian.
 import { createObsidianDriver, PLUGIN, pollJsonFile, waitForStableTarget } from "./obsidian-ui.mjs";
 
 /**
+ * Embed a value in JavaScript sent to the renderer. U+2028 and U+2029 end a
+ * statement in source text, so they are escaped like the other desktop helpers.
+ */
+const asCode = value => JSON.stringify(value)
+  .replace(/\u2028/g, "\\u2028")
+  .replace(/\u2029/g, "\\u2029");
+
+/**
  * The in-page observation. Self-contained (no closures over outer
  * variables) so it can be stringified and sent as a CDP `Runtime.evaluate`
  * expression, exactly like `browserObservation` is passed to Playwright's
@@ -278,7 +286,7 @@ export function obsidianObservation(id, testMode) {
 /** Builds the CDP `Runtime.evaluate` expression string for `obsidianObservation`, matching obsidian-ui.mjs's `read(expression)` convention (the caller wraps with `JSON.stringify(...)`). */
 export function obsidianObservationExpression(id, testMode = false) {
   const shared = [resolveName, controlVisible, resolveSurface, describeControl].map(fn => fn.toString()).join("\n");
-  return `(() => { ${shared}\n  const CONTROL_SELECTOR = ${JSON.stringify(CONTROL_SELECTOR)};\n  return (${obsidianObservation})(${JSON.stringify(id)}, ${JSON.stringify(Boolean(testMode))});\n})()`;
+  return `(() => { ${shared}\n  const CONTROL_SELECTOR = ${asCode(CONTROL_SELECTOR)};\n  return (${obsidianObservation})(${asCode(id)}, ${asCode(Boolean(testMode))});\n})()`;
 }
 
 /**
@@ -301,7 +309,7 @@ function obsidianLiveControl(ref, testMode) {
 
 export function obsidianLiveControlExpression(ref, testMode = false) {
   const shared = [resolveName, controlVisible, resolveSurface, describeControl].map(fn => fn.toString()).join("\n");
-  return `(() => { ${shared}\n  return (${obsidianLiveControl})(${JSON.stringify(ref)}, ${JSON.stringify(Boolean(testMode))});\n})()`;
+  return `(() => { ${shared}\n  return (${obsidianLiveControl})(${asCode(ref)}, ${asCode(Boolean(testMode))});\n})()`;
 }
 
 /**
@@ -315,7 +323,7 @@ export function obsidianLiveControlExpression(ref, testMode = false) {
  * test is cheap for a test to stub directly.
  */
 export function obsidianHitTestExpression(ref) {
-  const selector = JSON.stringify(`[data-acceptance-ref="${ref}"]`);
+  const selector = asCode(`[data-acceptance-ref="${ref}"]`);
   return `(() => {
     const node = document.querySelector(${selector});
     if (!node || !node.isConnected) return { ready: false, reason: "gone" };
@@ -494,11 +502,11 @@ export function createObsidianActionExecutor({ client, evaluate, redact = value 
     try {
       if (["click", "fill", "select"].includes(action.type)) await revalidateRef(action.ref, action.type);
       if (action.type === "click") {
-        await evaluate(`(() => { document.querySelector(${JSON.stringify(refSelector(action.ref))})?.scrollIntoView({ block: "center" }); return true; })()`);
+        await evaluate(`(() => { document.querySelector(${asCode(refSelector(action.ref))})?.scrollIntoView({ block: "center" }); return true; })()`);
         const target = await targetCenter(action.ref, "Obsidian click target stable and hit-testable");
         await dispatchClick(target.x, target.y);
       } else if (action.type === "fill") {
-        await evaluate(`(() => { document.querySelector(${JSON.stringify(refSelector(action.ref))})?.scrollIntoView({ block: "center" }); return true; })()`);
+        await evaluate(`(() => { document.querySelector(${asCode(refSelector(action.ref))})?.scrollIntoView({ block: "center" }); return true; })()`);
         const target = await targetCenter(action.ref, "Obsidian fill target stable and hit-testable");
         await dispatchClick(target.x, target.y);
         // P3 Chunk 3 real-host finding: the "Run for date…"/"Force run for date…" dialog's native
@@ -511,12 +519,12 @@ export function createObsidianActionExecutor({ client, evaluate, redact = value 
         // used by the fixed suite's own `runDate()`) already does — set `.value` directly and dispatch
         // input/change — the same "not reliably drivable with real input in Electron" exception the
         // `select` action above already documents for native `<select>` dropdowns.
-        const isDateField = await read(`document.querySelector(${JSON.stringify(refSelector(action.ref))})?.type === "date"`);
+        const isDateField = await read(`document.querySelector(${asCode(refSelector(action.ref))})?.type === "date"`);
         if (isDateField) {
           await evaluate(`(() => {
-            const node = document.querySelector(${JSON.stringify(refSelector(action.ref))});
+            const node = document.querySelector(${asCode(refSelector(action.ref))});
             if (!node) return false;
-            node.value = ${JSON.stringify(action.value)};
+            node.value = ${asCode(action.value)};
             const EventCtor = node.ownerDocument.defaultView.Event;
             node.dispatchEvent(new EventCtor("input", { bubbles: true }));
             node.dispatchEvent(new EventCtor("change", { bubbles: true }));
@@ -526,20 +534,20 @@ export function createObsidianActionExecutor({ client, evaluate, redact = value 
           await dispatchSelectAll();
           await client.send("Input.insertText", { text: action.value });
         }
-        const after = await read(`document.querySelector(${JSON.stringify(refSelector(action.ref))})?.value`);
+        const after = await read(`document.querySelector(${asCode(refSelector(action.ref))})?.value`);
         if (after !== action.value) throw new ExplorationActionError("Fill did not take effect; the field still shows a different value");
         await dispatchKey("Tab");
       } else if (action.type === "select") {
         const applied = await read(`(() => {
-          const node = document.querySelector(${JSON.stringify(refSelector(action.ref))});
+          const node = document.querySelector(${asCode(refSelector(action.ref))});
           if (!node) return false;
-          const option = Array.from(node.options || []).find(item => item.value === ${JSON.stringify(action.value)});
+          const option = Array.from(node.options || []).find(item => item.value === ${asCode(action.value)});
           if (!option || option.disabled) return false;
-          node.value = ${JSON.stringify(action.value)};
+          node.value = ${asCode(action.value)};
           const EventCtor = node.ownerDocument.defaultView.Event;
           node.dispatchEvent(new EventCtor("input", { bubbles: true }));
           node.dispatchEvent(new EventCtor("change", { bubbles: true }));
-          return node.value === ${JSON.stringify(action.value)};
+          return node.value === ${asCode(action.value)};
         })()`);
         if (!applied) throw new ExplorationActionError("Select did not take effect; the option may be disabled or absent");
       } else if (action.type === "scroll") {
