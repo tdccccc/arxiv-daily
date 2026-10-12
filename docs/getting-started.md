@@ -1,3 +1,5 @@
+English · [简体中文](getting-started.zh-CN.md)
+
 # Getting Started
 
 Get your first **daily report** in Obsidian, then optionally turn on scheduling and email.
@@ -9,14 +11,14 @@ For the product overview, see the [README](../README.md). The numbered guide bel
 | Entry point | Start here |
 |---|---|
 | Obsidian desktop plugin | Install and enable the plugin, then follow the steps below |
-| Standalone browser workbench | Build the CLI from source and run `npm run cli -- ui`; see [CLI instructions](../apps/cli/README.md#local-reading-workbench) |
-| DSH | Install the local `0.1.18` package and click `arxiv-daily` above Settings in the left sidebar; see [build, install and upgrade](../extensions/dsh-arxiv-daily/README.md) |
+| Standalone browser workbench | `npm install -g arxiv-daily && arxiv-daily ui`; see the [workbench guide](workbench.md) |
+| DSH | `dsh plugin --profile web add dsh-arxiv-daily`, restart DSH, then click `arxiv-daily` above Settings in the left sidebar; see [install and upgrade](../extensions/dsh-arxiv-daily/README.md) |
 
 On first open, configure the output folder, model, arXiv categories and research topics in the standalone workbench. **Settings save automatically**: switches and dropdowns save immediately; text edits save after a short pause. The footer shows save progress or errors. **Done**, × and Escape wait for pending saves before closing; after a failure, you can retry or explicitly discard unsaved edits. Turning daily discovery off stays off when you reopen settings. Automatic reports are optional after your first successful report.
 
 A calendar and filters sit on the left; paper lists and a Markdown reader with math, back/forward, reading marks and favorites sit on the right. Use **Generate** to start a report. **Settings → Appearance** controls the theme and Chinese/English interface language separately from the report language. Agent conversation is optional.
 
-The DSH package is currently distributed as a local source build, not an npm release. The workbench and Obsidian share core workflows and settings rules, while configuration values and secrets remain separate. Open **Personal library** to browse/search your indexed papers and open PDFs, then **Review directions** to inspect, edit, preview and accept proposals. Connect and index the library from settings first. Richer run management remains planned.
+The workbench and Obsidian share core workflows and settings rules, while configuration values and secrets remain separate. See the [workbench guide](workbench.md) for the full feature set. Open **Personal library** to browse/search your indexed papers and open PDFs, then **Review directions** to inspect, edit, preview and accept proposals. Connect and index the library from settings first. Richer run management remains planned.
 
 ## What you need
 
