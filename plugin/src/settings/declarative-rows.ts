@@ -283,6 +283,7 @@ export function renderCategoryRow(
 ): void {
   prepareRow(setting);
   const categories = arxivCategories(tab.plugin.settings.arxiv);
+  const isDraft = index >= categories.length;
   const current = categories[index] ?? "";
   const select = setting.controlEl.createEl("select", {
     cls: "arxiv-daily-settings__category-select",
@@ -290,15 +291,20 @@ export function renderCategoryRow(
   addCategoryOptions(select, current);
   select.value = current;
   select.addEventListener("change", () => {
+    if (!select.value) return;
     if (categories.some((category, other) => other !== index && category === select.value)) {
       new Notice(`arXiv Daily: ${select.value} is already in the list.`);
       select.value = current;
       return;
     }
-    const next = [...categories];
-    next[index] = select.value;
     void tab.runAction("save category", async () => {
-      await tab.setArxivCategories(next);
+      if (isDraft) {
+        await tab.saveCategoryDraft(select.value);
+      } else {
+        const next = [...categories];
+        next[index] = select.value;
+        await tab.setArxivCategories(next);
+      }
       tab.refreshSettings();
     });
   });

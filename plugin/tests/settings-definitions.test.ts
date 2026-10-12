@@ -332,6 +332,30 @@ describe("buildSettingDefinitions structure", () => {
     expect(topicNames).toContain("(unnamed)");
   });
 
+  it("appends an unsaved draft row after the saved categories when one is pending, and always allows removing it", () => {
+    const host = makeHost();
+    host.plugin.settings.arxiv.categories = ["astro-ph"];
+    const withoutDraft = buildSettingDefinitions(host)
+      .filter((item) => item.type === "list")
+      .find((list) => list.heading === "arXiv categories");
+    // A single saved category offers no onDelete at all (today's floor).
+    expect(withoutDraft?.items.map((item) => item.name)).toEqual(["1"]);
+    expect(withoutDraft?.onDelete).toBeUndefined();
+
+    const draftHost = { ...host, hasCategoryDraft: true, removeCategoryDraft: vi.fn() };
+    const withDraft = buildSettingDefinitions(draftHost)
+      .filter((item) => item.type === "list")
+      .find((list) => list.heading === "arXiv categories");
+    // The draft row is index 1 (second item); its own remove control must
+    // work even though the single saved category still cannot be removed.
+    expect(withDraft?.items.map((item) => item.name)).toEqual(["1", "2"]);
+    expect(withDraft?.onDelete).toEqual(expect.any(Function));
+
+    withDraft?.onDelete?.(1);
+    expect(draftHost.removeCategoryDraft).toHaveBeenCalledTimes(1);
+    expect(host.plugin.settings.arxiv.categories).toEqual(["astro-ph"]);
+  });
+
   it("keeps the detail-notes profile dropdown on the balanced preset", () => {
     const host = makeHost();
     const items = buildSettingDefinitions(host);

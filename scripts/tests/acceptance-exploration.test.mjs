@@ -4,8 +4,10 @@ import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { classifyControlRestriction, createDefaultExplorationTasks, createExplorationDriver } from "../acceptance/exploration-browser.mjs";
-import { loadExplorationModel, parseExplorationAction, runExplorationLoop } from "../acceptance/exploration.mjs";
+import { classifyControlRestriction, createExplorationDriver } from "../acceptance/exploration-browser.mjs";
+import { goalTasks as createDefaultExplorationTasks } from "../acceptance/exploration-tasks/workbench.mjs";
+import { collapseOptionSets, loadExplorationModel, parseExplorationAction, runExplorationLoop, selectExplorationTasks } from "../acceptance/exploration.mjs";
+import { ACCEPTANCE_DATE, PAPERS } from "../acceptance/fixtures.mjs";
 
 const observation = (version = 1) => ({
   id: `snapshot-${version}`, text: "Settings", url: "/", controls: [
@@ -31,20 +33,120 @@ function task(verify = () => ({ passed: false, checks: [{ label: "saved after re
   return { id: "settings", title: "Save settings", goal: "Save, reload and inspect", verify };
 }
 
+function persona(overrides = {}) {
+  return { id: "new-user", title: "第一次使用的新用户", kind: "persona", goal: "扮演第一次使用的新用户，自由探索当前页面并记录可疑交互", ...overrides };
+}
+
+/** A model shaped like the real HTTP adapter: `.next()` plus cumulative `.metrics()` usage. */
+function usageModel(reply, { apiCallsPerStep = 1, inputTokensPerStep = 0, outputTokensPerStep = 0 } = {}) {
+  const usage = { apiCalls: 0, inputTokens: 0, outputTokens: 0, totalTokens: 0 };
+  return {
+    async next(request) {
+      usage.apiCalls += apiCallsPerStep;
+      usage.inputTokens += inputTokensPerStep;
+      usage.outputTokens += outputTokensPerStep;
+      usage.totalTokens += inputTokensPerStep + outputTokensPerStep;
+      return typeof reply === "function" ? reply(request) : reply;
+    },
+    metrics: () => ({ ...usage }),
+  };
+}
+
 async function temporary(t) {
   const root = await mkdtemp(path.join(tmpdir(), "acceptance-exploration-test-"));
   t.after(() => rm(root, { recursive: true, force: true }));
   return root;
 }
 
-test("an unsupported done claim is blocked and remaining tasks are not run", async t => {
+test("an unsupported done claim is blocked but later tasks still run (rewritten: this used to assert the whole run stopped after the first non-passed task; the new contract runs every task regardless, subject only to run-wide budgets)", async t => {
   const driver = fixtureDriver();
   const result = await runExplorationLoop({ driver, model: async () => '{"type":"done","reason":"Everything works"}',
     tasks: [task(), { ...task(), id: "reading" }], artifactDir: await temporary(t), maxSteps: 5 });
   assert.equal(result.status, "blocked");
-  assert.deepEqual(result.scenarios.map(value => value.status), ["blocked", "not-run"]);
+  assert.deepEqual(result.scenarios.map(value => value.status), ["blocked", "blocked"]);
   assert.match(result.scenarios[0].error, /evidence|判据/i);
+  assert.match(result.scenarios[1].error, /evidence|判据/i);
   assert.equal(driver.executed.length, 0);
+});
+
+test("a failed task does not stop a later passing task", async t => {
+  const driver = fixtureDriver();
+  // The first observe() call reports a product error so task "settings" fails immediately
+  // without ever calling the model; subsequent observe() calls are clean for task "reading".
+  let observeCalls = 0;
+  driver.observe = async () => { observeCalls += 1; return observeCalls === 1 ? { ...observation(observeCalls), errors: ["Uncaught rendering error"] } : observation(observeCalls); };
+  const result = await runExplorationLoop({ driver, model: async request => JSON.stringify({ type: "click", ref: request.observation.controls[0].ref }),
+    tasks: [task(), { ...task(({ actions }) => ({ passed: actions.length === 1, checks: [{ label: "observed saved state", passed: actions.length === 1 }] })), id: "reading" }],
+    artifactDir: await temporary(t), maxSteps: 5 });
+  assert.deepEqual(result.scenarios.map(value => value.status), ["failed", "passed"]);
+  assert.match(result.scenarios[0].error, /rendering/);
+  assert.equal(result.scenarios[1].assertions[0].passed, true);
+});
+
+test("a blocked task (invalid actions exhausted) does not stop a later passing task", async t => {
+  const driver = fixtureDriver();
+  let calls = 0;
+  const result = await runExplorationLoop({ driver, model: async request => {
+    calls += 1;
+    return calls <= 3 ? "not json" : JSON.stringify({ type: "click", ref: request.observation.controls[0].ref });
+  }, tasks: [task(), { ...task(({ actions }) => ({ passed: actions.length === 1, checks: [{ label: "observed saved state", passed: actions.length === 1 }] })), id: "reading" }],
+    artifactDir: await temporary(t), maxSteps: 10, maxInvalidActions: 3 });
+  assert.deepEqual(result.scenarios.map(value => value.status), ["blocked", "passed"]);
+  assert.equal(driver.executed.length, 1);
+});
+
+test("the host is reset before every task, including the first", async t => {
+  const driver = fixtureDriver();
+  driver.reset = async () => { driver.resets = (driver.resets ?? 0) + 1; };
+  const result = await runExplorationLoop({ driver, model: async request => JSON.stringify({ type: "click", ref: request.observation.controls[0].ref }),
+    tasks: [task(({ actions }) => ({ passed: actions.length === 1, checks: [{ label: "ok", passed: actions.length === 1 }] })),
+      { ...task(({ actions }) => ({ passed: actions.length === 1, checks: [{ label: "ok", passed: actions.length === 1 }] })), id: "reading" }],
+    artifactDir: await temporary(t), maxSteps: 5 });
+  assert.deepEqual(result.scenarios.map(value => value.status), ["passed", "passed"]);
+  assert.equal(driver.resets, 2);
+});
+
+test("a throwing reset blocks only that task; the loop tries reset again for the next task", async t => {
+  const driver = fixtureDriver();
+  let attempt = 0;
+  driver.reset = async () => { attempt += 1; if (attempt === 1) throw new Error("dialog would not close"); };
+  const result = await runExplorationLoop({ driver, model: async request => JSON.stringify({ type: "click", ref: request.observation.controls[0].ref }),
+    tasks: [task(({ actions }) => ({ passed: actions.length === 1, checks: [{ label: "ok", passed: actions.length === 1 }] })),
+      { ...task(({ actions }) => ({ passed: actions.length === 1, checks: [{ label: "ok", passed: actions.length === 1 }] })), id: "reading" }],
+    artifactDir: await temporary(t), maxSteps: 5 });
+  assert.deepEqual(result.scenarios.map(value => value.status), ["blocked", "passed"]);
+  assert.match(result.scenarios[0].error, /dialog would not close/);
+  assert.equal(attempt, 2);
+});
+
+// Rewritten for chunk 3: a task's own step budget is always clamped to the run's own, so when the
+// run budget is this tiny every task's own cap equals it too. The first task now exhausts its own
+// (non-fatal) cap at exactly the run limit; the run-wide cap itself only becomes the active, fatal
+// blocker once a next task is attempted with no run budget left, which still leaves later tasks not-run.
+test("run-wide step budget exhaustion is fatal and leaves a task after it not-run, even once a per-task cap absorbs the first task", async t => {
+  const driver = fixtureDriver();
+  const result = await runExplorationLoop({ driver, model: async () => '{"type":"wait","milliseconds":1}',
+    tasks: [task(), { ...task(), id: "reading" }, { ...task(), id: "third" }], artifactDir: await temporary(t), maxSteps: 2 });
+  assert.equal(result.scenarios[0].status, "blocked");
+  assert.match(result.scenarios[0].error, /task budget exhausted/i);
+  assert.equal(result.scenarios[1].status, "blocked");
+  assert.match(result.scenarios[1].error, /step|步数/i);
+  assert.equal(result.scenarios[2].status, "not-run");
+});
+
+test("a task's own step budget never exceeds the run-wide one even when it asks for more", async t => {
+  const result = await runExplorationLoop({ driver: fixtureDriver(), model: async () => '{"type":"wait","milliseconds":1}',
+    tasks: [{ ...task(), maxSteps: 50 }], artifactDir: await temporary(t), maxSteps: 3 });
+  assert.equal(result.scenarios[0].status, "blocked");
+  assert.equal(result.scenarios[0].usage.modelCalls, 3);
+});
+
+test("parent cancellation ends the run and leaves later tasks not-run", async t => {
+  const controller = new AbortController(); controller.abort("owner cancelled");
+  const result = await runExplorationLoop({ driver: fixtureDriver(), model: async () => '{"type":"done"}',
+    tasks: [task(), { ...task(), id: "reading" }], artifactDir: await temporary(t), signal: controller.signal });
+  assert.equal(result.scenarios[0].status, "blocked");
+  assert.equal(result.scenarios[1].status, "not-run");
 });
 
 test("only program checks after an actual action can pass a task", async t => {
@@ -127,6 +229,278 @@ test("findings keep model suspicions separate from verified failures and preserv
   assert.equal(records[0].action.type, "finding");
 });
 
+test("P3 Chunk 5: a finding carries the same step's own screenshot, not a later or earlier step's", async t => {
+  const artifactDir = await temporary(t);
+  let version = 0, calls = 0;
+  const driver = {
+    observe: async () => observation(++version),
+    execute: async action => ({ ok: true, action }),
+    capture: async name => `/artifacts/${name}.png`,
+  };
+  const result = await runExplorationLoop({ driver, model: async request => {
+    calls += 1;
+    return calls === 1 ? '{"type":"finding","summary":"Odd state","evidence":"Settings"}'
+      : JSON.stringify({ type: "click", ref: request.observation.controls[0].ref });
+  }, tasks: [task(({ actions }) => ({ passed: actions.length === 1, checks: [{ label: "Saved state", passed: actions.length === 1 }] }))], artifactDir });
+  assert.equal(result.findings[0].step, 1);
+  assert.equal(result.findings[0].screenshot, "/artifacts/settings-step-1.png");
+  assert.ok(result.scenarios[0].artifacts.includes("/artifacts/settings-step-1.png"));
+});
+
+test("a finding keeps no screenshot field at all when the driver never captures one", async t => {
+  const artifactDir = await temporary(t);
+  let calls = 0;
+  const result = await runExplorationLoop({ driver: fixtureDriver(), model: async () => {
+    calls += 1;
+    return calls === 1 ? '{"type":"finding","summary":"Odd state","evidence":"Settings"}' : '{"type":"done"}';
+  }, tasks: [persona()], artifactDir, maxSteps: 10 });
+  assert.equal(result.findings[0].screenshot, undefined);
+});
+
+// P3 Chunk 7: hardening navigation during exploration. An allowed action (e.g. a click or a keyboard
+// Enter) can cause an in-scope navigation/reload that destroys the page's execution context right as
+// the harness's own observe()/capture() calls race it — a real driver's wording for this is Playwright's
+// "Execution context was destroyed, most likely because of a navigation" (see chunk5's finding #2: Enter
+// on a navigating link -> capture() throws this -> the whole task used to go "blocked"). These tests use
+// fake drivers that throw that exact message to drive the fix without a real browser.
+const CONTEXT_DESTROYED = new Error("Execution context was destroyed, most likely because of a navigation");
+
+test("P3 Chunk 7: a transient context-destroyed observe() failure recovers and the task still passes", async t => {
+  const driver = fixtureDriver();
+  let observeCalls = 0;
+  const realObserve = driver.observe;
+  driver.observe = async () => { observeCalls += 1; if (observeCalls === 2) throw CONTEXT_DESTROYED; return realObserve(); };
+  const result = await runExplorationLoop({ driver, model: async request => JSON.stringify({ type: "click", ref: request.observation.controls[0].ref }),
+    tasks: [task(({ actions }) => ({ passed: actions.length === 1, checks: [{ label: "ok", passed: actions.length === 1 }] }))],
+    artifactDir: await temporary(t), maxSteps: 5 });
+  assert.equal(result.scenarios[0].status, "passed");
+  assert.ok(observeCalls > 2, "observe() must have been retried, not just failed once");
+});
+
+test("P3 Chunk 7: a transient context-destroyed capture() failure after a successful action does not block the task (chunk5 finding #2 repro)", async t => {
+  const artifactDir = await temporary(t);
+  let captureCalls = 0;
+  const driver = {
+    observe: (() => { let version = 0; return async () => observation(++version); })(),
+    execute: async action => ({ ok: true, action }),
+    capture: async name => { captureCalls += 1; if (captureCalls === 1) throw CONTEXT_DESTROYED; return `/artifacts/${name}.png`; },
+  };
+  const result = await runExplorationLoop({ driver, model: async request => JSON.stringify({ type: "click", ref: request.observation.controls[0].ref }),
+    tasks: [task(({ actions }) => ({ passed: actions.length === 1, checks: [{ label: "ok", passed: actions.length === 1 }] }))],
+    artifactDir, maxSteps: 5 });
+  assert.equal(result.scenarios[0].status, "passed");
+  assert.ok(captureCalls > 1, "capture() must have been retried after the context-destroyed failure");
+});
+
+test("P3 Chunk 7: a persistently context-destroyed observe() still blocks after the bounded wait, with a clear reason", async t => {
+  const driver = fixtureDriver();
+  driver.observe = async () => { throw CONTEXT_DESTROYED; };
+  const result = await runExplorationLoop({ driver, model: async () => '{"type":"wait","milliseconds":1}', tasks: [task()],
+    artifactDir: await temporary(t), maxDurationMs: 400 });
+  assert.equal(result.scenarios[0].status, "blocked");
+  assert.match(result.scenarios[0].error, /execution context was destroyed|timeout/i);
+});
+
+test("P3 Chunk 7: a persistently context-destroyed capture() never blocks the task; it is recorded as step evidence instead", async t => {
+  const driver = fixtureDriver();
+  driver.capture = async () => { throw CONTEXT_DESTROYED; };
+  const result = await runExplorationLoop({ driver, model: async request => JSON.stringify({ type: "click", ref: request.observation.controls[0].ref }),
+    tasks: [task(({ actions }) => ({ passed: actions.length === 1, checks: [{ label: "ok", passed: actions.length === 1 }] }))],
+    artifactDir: await temporary(t), maxDurationMs: 4000, maxSteps: 5 });
+  assert.equal(result.scenarios[0].status, "passed");
+  // The bounded wait's own timeout (once it outraces the last retry) is what the task actually sees, so
+  // the recorded reason may read either as the original context-destroyed message or as that bounded
+  // wait's own "... capture timeout after Nms" wording — both are a clear reason, never a silent blocked.
+  assert.ok(result.scenarios[0].steps.some(step => typeof step.captureError === "string" && /execution context was destroyed|capture timeout/i.test(step.captureError)));
+});
+
+test("P3 Chunk 7: an out-of-scope navigation error is a distinct guard, not retried, and still blocks immediately", async t => {
+  const driver = fixtureDriver();
+  let observeCalls = 0;
+  driver.observe = async () => { observeCalls += 1; throw new Error("Browser left the isolated workbench scope"); };
+  const result = await runExplorationLoop({ driver, model: async () => '{"type":"wait","milliseconds":1}', tasks: [task()],
+    artifactDir: await temporary(t), maxDurationMs: 5000 });
+  assert.equal(result.scenarios[0].status, "blocked");
+  assert.match(result.scenarios[0].error, /left the isolated workbench scope/i);
+  assert.equal(observeCalls, 1, "an out-of-scope error must not be retried");
+});
+
+test("a persona task without a verifier ends on done as explored, never passed, and keeps findings", async t => {
+  const driver = fixtureDriver();
+  let calls = 0;
+  const result = await runExplorationLoop({ driver, model: async () => {
+    calls += 1;
+    return calls === 1 ? '{"type":"finding","summary":"Button label is unclear","evidence":"Settings"}' : '{"type":"done","reason":"explored enough"}';
+  }, tasks: [persona()], artifactDir: await temporary(t), maxSteps: 10 });
+  assert.equal(result.scenarios[0].status, "explored");
+  assert.notEqual(result.scenarios[0].status, "passed");
+  assert.equal(result.findings.length, 1);
+  assert.equal(result.scenarios[0].findings.length, 1);
+});
+
+test("a goal task without a verifier is still rejected at entry", async t => {
+  await assert.rejects(runExplorationLoop({ driver: fixtureDriver(), model: async () => '{"type":"done"}',
+    tasks: [{ id: "no-verify", title: "x", goal: "y" }], artifactDir: await temporary(t) }), /verif/i);
+});
+
+test("a persona task that supplies verify is rejected as an ambiguous shape", async t => {
+  await assert.rejects(runExplorationLoop({ driver: fixtureDriver(), model: async () => '{"type":"done"}',
+    tasks: [{ ...persona(), verify: () => ({ passed: true, checks: [] }) }], artifactDir: await temporary(t) }), /verif|persona/i);
+});
+
+test("a persona task that never stops is ended as explored at its own step cap, and the next task still runs", async t => {
+  const driver = fixtureDriver();
+  const result = await runExplorationLoop({ driver, model: async request => request.task.kind === "persona"
+    ? '{"type":"wait","milliseconds":1}'
+    : JSON.stringify({ type: "click", ref: request.observation.controls[0].ref }),
+    tasks: [{ ...persona(), maxSteps: 2 }, task(({ actions }) => ({ passed: actions.length === 1, checks: [{ label: "ok", passed: actions.length === 1 }] }))],
+    artifactDir: await temporary(t), maxSteps: 50 });
+  assert.equal(result.scenarios[0].status, "explored");
+  assert.equal(result.scenarios[1].status, "passed");
+});
+
+test("a persona task that observes a product error is still failed, not explored", async t => {
+  const driver = fixtureDriver();
+  driver.observe = async () => ({ ...observation(), errors: ["Uncaught rendering error"] });
+  const result = await runExplorationLoop({ driver, model: async () => '{"type":"done"}', tasks: [persona()], artifactDir: await temporary(t) });
+  assert.equal(result.scenarios[0].status, "failed");
+  assert.match(result.scenarios[0].error, /rendering/);
+});
+
+test("a suite with a passed goal task and an explored persona is overall passed", async t => {
+  const driver = fixtureDriver();
+  const result = await runExplorationLoop({ driver, model: async request => request.task.kind === "persona"
+    ? '{"type":"done"}'
+    : JSON.stringify({ type: "click", ref: request.observation.controls[0].ref }),
+    tasks: [task(({ actions }) => ({ passed: actions.length === 1, checks: [{ label: "ok", passed: actions.length === 1 }] })), persona()],
+    artifactDir: await temporary(t), maxSteps: 10 });
+  assert.equal(result.status, "passed");
+  assert.deepEqual(result.scenarios.map(s => s.status), ["passed", "explored"]);
+});
+
+test("a suite made only of personas that all explore is still overall passed", async t => {
+  const result = await runExplorationLoop({ driver: fixtureDriver(), model: async () => '{"type":"done"}',
+    tasks: [persona(), { ...persona(), id: "impatient" }], artifactDir: await temporary(t) });
+  assert.equal(result.status, "passed");
+  assert.deepEqual(result.scenarios.map(s => s.status), ["explored", "explored"]);
+});
+
+test("selectExplorationTasks picks only the chosen ids, in library order, not the selection order", () => {
+  const goalTasks = [{ id: "a" }, { id: "b" }, { id: "c" }];
+  const personaTasks = [{ id: "x" }, { id: "y" }];
+  const selected = selectExplorationTasks({ goalTasks, personaTasks, taskIds: ["c", "a"], personaIds: ["y"] });
+  assert.deepEqual(selected.map(value => value.id), ["a", "c", "y"]);
+});
+
+test("selectExplorationTasks defaults to every goal task and no personas when nothing is selected", () => {
+  const goalTasks = [{ id: "a" }, { id: "b" }], personaTasks = [{ id: "x" }];
+  assert.deepEqual(selectExplorationTasks({ goalTasks, personaTasks }).map(value => value.id), ["a", "b"]);
+});
+
+test("selectExplorationTasks rejects an unknown id and lists the ids that do exist", () => {
+  const goalTasks = [{ id: "a" }, { id: "b" }];
+  assert.throws(() => selectExplorationTasks({ goalTasks, taskIds: ["zzz"] }), /zzz/);
+  assert.throws(() => selectExplorationTasks({ goalTasks, taskIds: ["zzz"] }), /a, b/);
+  const personaTasks = [{ id: "x" }];
+  assert.throws(() => selectExplorationTasks({ goalTasks, personaTasks, personaIds: ["nope"] }), /nope.*\bx\b/s);
+});
+
+test("selectExplorationTasks selects goal tasks and personas independently", () => {
+  const goalTasks = [{ id: "a" }, { id: "b" }], personaTasks = [{ id: "x" }, { id: "y" }];
+  assert.deepEqual(selectExplorationTasks({ goalTasks, personaTasks, taskIds: ["b"] }).map(value => value.id), ["b"]);
+  assert.deepEqual(selectExplorationTasks({ goalTasks, personaTasks, taskIds: [], personaIds: ["y"] }).map(value => value.id), ["y"]);
+});
+
+test("a goal task that exhausts its own step budget is blocked, not fatal; the next task still runs", async t => {
+  const driver = fixtureDriver();
+  const result = await runExplorationLoop({ driver, model: async () => '{"type":"wait","milliseconds":1}',
+    tasks: [{ ...task(), maxSteps: 3 }, { ...task(({ actions }) => ({ passed: actions.length === 1, checks: [{ label: "ok", passed: actions.length === 1 }] })), id: "reading" }],
+    artifactDir: await temporary(t), maxSteps: 50 });
+  assert.equal(result.scenarios[0].status, "blocked");
+  assert.match(result.scenarios[0].error, /task budget exhausted/i);
+  assert.equal(result.scenarios[0].usage.modelCalls, 3);
+  // The second task gets its own fresh model behaviour (clicks) and can still pass.
+  const second = await runExplorationLoop({ driver: fixtureDriver(), model: async request => JSON.stringify({ type: "click", ref: request.observation.controls[0].ref }),
+    tasks: [task(({ actions }) => ({ passed: actions.length === 1, checks: [{ label: "ok", passed: actions.length === 1 }] }))], artifactDir: await temporary(t), maxSteps: 5 });
+  assert.equal(second.scenarios[0].status, "passed");
+});
+
+test("goal tasks default to a 20-step budget and persona tasks to 15", async t => {
+  const driver = fixtureDriver();
+  const goal = await runExplorationLoop({ driver, model: async () => '{"type":"wait","milliseconds":1}', tasks: [task()], artifactDir: await temporary(t), maxSteps: 100 });
+  assert.equal(goal.scenarios[0].status, "blocked");
+  assert.equal(goal.scenarios[0].usage.modelCalls, 20);
+  const explored = await runExplorationLoop({ driver: fixtureDriver(), model: async () => '{"type":"wait","milliseconds":1}', tasks: [persona()], artifactDir: await temporary(t), maxSteps: 100 });
+  assert.equal(explored.scenarios[0].status, "explored");
+  assert.equal(explored.scenarios[0].usage.modelCalls, 15);
+});
+
+test("--task-max-steps overrides the default per-task step budget for tasks without their own maxSteps", async t => {
+  const result = await runExplorationLoop({ driver: fixtureDriver(), model: async () => '{"type":"wait","milliseconds":1}',
+    tasks: [task()], artifactDir: await temporary(t), maxSteps: 50, taskMaxSteps: 4 });
+  assert.equal(result.scenarios[0].status, "blocked");
+  assert.equal(result.scenarios[0].usage.modelCalls, 4);
+});
+
+test("a goal task that exhausts its own model API-call budget is blocked, not fatal; a later task still passes", async t => {
+  const driver = fixtureDriver();
+  const model = usageModel(request => request.task.id === "settings" ? '{"type":"wait","milliseconds":1}' : JSON.stringify({ type: "click", ref: request.observation.controls[0].ref }), { apiCallsPerStep: 5 });
+  const result = await runExplorationLoop({
+    driver, model,
+    tasks: [{ ...task(), maxApiCalls: 12, maxSteps: 50 },
+      { ...task(({ actions }) => ({ passed: actions.length === 1, checks: [{ label: "ok", passed: actions.length === 1 }] })), id: "reading" }],
+    artifactDir: await temporary(t), maxSteps: 50,
+  });
+  assert.equal(result.scenarios[0].status, "blocked");
+  assert.match(result.scenarios[0].error, /task budget exhausted.*api/i);
+  assert.ok(result.scenarios[0].usage.apiCalls >= 12);
+  assert.equal(result.scenarios[1].status, "passed");
+});
+
+test("run-wide model API-call budget exhaustion (the adapter's own cap) is fatal; later tasks are not-run", async t => {
+  const driver = fixtureDriver();
+  let calls = 0;
+  const model = {
+    async next() {
+      calls += 1;
+      if (calls > 2) { const error = new Error("Exploration model API call budget exhausted (2)"); error.name = "ExplorationBudgetError"; throw error; }
+      return '{"type":"wait","milliseconds":1}';
+    },
+    metrics: () => ({ apiCalls: calls, inputTokens: 0, outputTokens: 0, totalTokens: 0 }),
+  };
+  const result = await runExplorationLoop({ driver, model, tasks: [task(), { ...task(), id: "reading" }, { ...task(), id: "third" }], artifactDir: await temporary(t), maxSteps: 50 });
+  assert.equal(result.scenarios[0].status, "blocked");
+  assert.match(result.scenarios[0].error, /budget exhausted/i);
+  assert.deepEqual(result.scenarios.slice(1).map(value => value.status), ["not-run", "not-run"]);
+});
+
+test("per-scenario usage is recorded and the run totals equal the sum", async t => {
+  const driver = fixtureDriver();
+  const model = usageModel(request => request.task.id === "settings" ? JSON.stringify({ type: "click", ref: request.observation.controls[0].ref }) : '{"type":"done"}',
+    { apiCallsPerStep: 1, inputTokensPerStep: 100, outputTokensPerStep: 10 });
+  const result = await runExplorationLoop({
+    driver, model,
+    tasks: [task(({ actions }) => ({ passed: actions.length === 1, checks: [{ label: "ok", passed: actions.length === 1 }] })), persona()],
+    artifactDir: await temporary(t), maxSteps: 10,
+  });
+  assert.equal(result.scenarios[0].status, "passed");
+  assert.equal(result.scenarios[1].status, "explored");
+  assert.equal(result.scenarios[0].usage.modelCalls, 1);
+  assert.equal(result.scenarios[1].usage.modelCalls, 1);
+  const totals = result.metrics.usage;
+  assert.equal(totals.apiCalls, result.scenarios[0].usage.apiCalls + result.scenarios[1].usage.apiCalls);
+  assert.equal(totals.inputTokens, result.scenarios[0].usage.inputTokens + result.scenarios[1].usage.inputTokens);
+  assert.equal(totals.apiCalls, 2);
+  assert.equal(totals.inputTokens, 200);
+});
+
+test("a task's own remaining step budget is sent to the model alongside the run's", async t => {
+  const requests = [];
+  await runExplorationLoop({ driver: fixtureDriver(), model: async request => { requests.push(request); return '{"type":"wait","milliseconds":1}'; },
+    tasks: [{ ...task(), maxSteps: 3 }], artifactDir: await temporary(t), maxSteps: 50 });
+  assert.deepEqual(requests.map(request => request.remaining.taskSteps), [3, 2, 1]);
+});
+
 test("action validation only accepts current refs and bounded browser operations", () => {
   const current = observation();
   assert.deepEqual(parseExplorationAction('{"type":"fill","ref":"s1-2","value":"5"}', current), { type: "fill", ref: "s1-2", value: "5" });
@@ -136,6 +510,93 @@ test("action validation only accepts current refs and bounded browser operations
     { type: "fill", ref: "s1-4", value: "/real-vault" }, { type: "wait", milliseconds: 600000 },
     { type: "click", ref: "s1-1", unexpected: true }, { type: "fill", ref: "s1-1", value: "text" },
   ]) assert.throws(() => parseExplorationAction(JSON.stringify(command), current));
+});
+
+test("a host-agnostic keyboard press is allowed only from a strict allowlist and never carries a ref", () => {
+  const current = observation();
+  assert.deepEqual(parseExplorationAction('{"type":"press","key":"Enter"}', current), { type: "press", key: "Enter" });
+  assert.deepEqual(parseExplorationAction('{"type":"press","key":"Shift+Tab"}', current), { type: "press", key: "Shift+Tab" });
+  assert.deepEqual(parseExplorationAction('{"type":"press","key":"ArrowDown","reason":"move to the next option"}', current), { type: "press", key: "ArrowDown", reason: "move to the next option" });
+  for (const command of [
+    { type: "press", key: "a" }, { type: "press", key: "Control+C" }, { type: "press", key: "F5" },
+    { type: "press" }, { type: "press", key: "" }, { type: "press", key: "enter" },
+    { type: "press", key: "Enter", ref: current.controls[0].ref },
+  ]) assert.throws(() => parseExplorationAction(JSON.stringify(command), current));
+});
+
+// P4 Chunk 2 Fix 2: a host-agnostic recovery action, usable with no ref, so a model that has wandered
+// outside the explorable plugin/app surface (empty controls) still has a safe way back.
+test("home is a valid action with no ref, and is a browser action routed through driver.execute", async t => {
+  const current = observation();
+  assert.deepEqual(parseExplorationAction('{"type":"home"}', current), { type: "home" });
+  assert.deepEqual(parseExplorationAction('{"type":"home","reason":"left the plugin surface"}', current), { type: "home", reason: "left the plugin surface" });
+  assert.throws(() => parseExplorationAction('{"type":"home","ref":"s1-1"}', current), "home never carries a ref");
+  const driver = fixtureDriver();
+  const result = await runExplorationLoop({ driver, model: async () => '{"type":"home"}', tasks: [{ ...task(), maxSteps: 1 }], artifactDir: await temporary(t), maxSteps: 3 });
+  assert.deepEqual(driver.executed, [{ type: "home" }]);
+  assert.equal(result.scenarios[0].status, "blocked"); // never satisfies the task's own checks, same as any other single action
+});
+
+// P4 Chunk 2 Fix 3: many identical <select> option lists (e.g. ~41 arXiv categories repeated once per
+// settings row) must collapse to one shared observation.optionSets entry, never one inline copy per
+// control, while parseExplorationAction's select validation keeps working either way.
+test("select validation accepts an enabled option via either inline options or a shared optionsRef/optionSets, and rejects a disabled or absent one", () => {
+  const OPTIONS = [{ value: "cs.AI", label: "Artificial Intelligence", disabled: false }, { value: "cs.LG", label: "Machine Learning", disabled: false }, { value: "cs.CV", label: "Computer Vision", disabled: true }];
+  const inline = { id: "snap-inline", controls: [{ ref: "s1-1", tag: "select", options: OPTIONS }] };
+  const shared = { id: "snap-ref", optionSets: { o1: OPTIONS }, controls: [{ ref: "s1-1", tag: "select", optionsRef: "o1" }] };
+  for (const current of [inline, shared]) {
+    assert.deepEqual(parseExplorationAction('{"type":"select","ref":"s1-1","value":"cs.LG"}', current), { type: "select", ref: "s1-1", value: "cs.LG" });
+    assert.throws(() => parseExplorationAction('{"type":"select","ref":"s1-1","value":"cs.CV"}', current), /enabled option/);
+    assert.throws(() => parseExplorationAction('{"type":"select","ref":"s1-1","value":"astro-ph"}', current), /enabled option/);
+  }
+});
+
+test("collapseOptionSets: identical select option lists collapse to one shared entry; distinct lists get their own", () => {
+  const CATEGORY_OPTIONS = Array.from({ length: 41 }, (_, index) => ({ value: `cat.${index}`, label: `Category ${index}`, disabled: false }));
+  const OTHER_OPTIONS = [{ value: "zh", label: "Chinese", disabled: false }, { value: "en", label: "English", disabled: false }];
+  const controls = [
+    { ref: "s1-1", tag: "select", options: CATEGORY_OPTIONS },
+    { ref: "s1-2", tag: "select", options: CATEGORY_OPTIONS.map(option => ({ ...option })) }, // a fresh array, same content
+    { ref: "s1-3", tag: "select", options: OTHER_OPTIONS },
+    { ref: "s1-4", tag: "button" }, // never touched: not a select
+  ];
+  const optionSets = collapseOptionSets(controls);
+  assert.equal(Object.keys(optionSets).length, 2, "two distinct option lists, regardless of how many controls share one");
+  assert.equal(controls[0].optionsRef, controls[1].optionsRef, "identical option lists share one ref");
+  assert.notEqual(controls[0].optionsRef, controls[2].optionsRef);
+  assert.deepEqual(optionSets[controls[0].optionsRef], CATEGORY_OPTIONS);
+  assert.deepEqual(optionSets[controls[2].optionsRef], OTHER_OPTIONS);
+  for (const control of controls.slice(0, 3)) assert.ok(!("options" in control), "the inline copy is replaced, not kept alongside the ref");
+  assert.ok(!("optionsRef" in controls[3]));
+});
+
+// P4 Chunk 2 Fix 3 regression: a settings page with ~20 arXiv-category rows (each a real ~41-option
+// select) used to serialize one full inline options array per row and, in the real P4 Chunk 1 run, blew
+// past exploration-model.ts's 100,000-character model-input budget. After collapseOptionSets, the whole
+// observation (plus the task/checks/history/remaining envelope exploration-model.ts actually sends) must
+// stay well under that budget.
+test("a settings page with ~20 identical-option category rows stays well under the 100000-character model payload budget", () => {
+  const CATEGORY_OPTIONS = Array.from({ length: 41 }, (_, index) => ({ value: `group.cat-${index}`, label: `Some fairly long category label ${index}`, disabled: false }));
+  const controls = Array.from({ length: 20 }, (_, row) => ({
+    ref: `s1-${row + 1}`, tag: "select", name: `Category ${row + 1}`, field: "", type: "", role: "",
+    disabled: false, readOnly: false, options: CATEGORY_OPTIONS.map(option => ({ ...option })),
+    rect: { x: 0, y: row * 40, width: 300, height: 32 }, inViewport: true,
+  }));
+  const optionSets = collapseOptionSets(controls);
+  const payload = JSON.stringify({ task: { id: "add-arxiv-category", title: "x", goal: "x" }, observation: { id: "s99", controls, optionSets }, checks: [], history: [], remaining: {} });
+  assert.ok(payload.length < 20000, `expected a small deduplicated payload, got ${payload.length} characters`);
+  assert.equal(Object.keys(optionSets).length, 1, "every row shares the same option list");
+});
+
+test("press is a browser action routed through driver.execute like click or fill", async t => {
+  const driver = fixtureDriver();
+  const result = await runExplorationLoop({
+    driver, model: async () => '{"type":"press","key":"Tab"}',
+    tasks: [task(({ actions }) => ({ passed: actions.some(action => action.type === "press"), checks: [{ label: "pressed a key", passed: actions.some(action => action.type === "press") }] }))],
+    artifactDir: await temporary(t), maxSteps: 5,
+  });
+  assert.equal(result.scenarios[0].status, "passed");
+  assert.deepEqual(driver.executed.map(action => action.type), ["press"]);
 });
 
 async function localModel(t, respond = (_body, response) => {
@@ -297,4 +758,269 @@ test('completion evidence reads the report after observing the completed run', a
   const evidence = await driver.dailyEvidence('2026-10-01');
   assert.equal(evidence.run.status, 'completed');
   assert.equal(evidence.report, true, 'completed must be paired with a fresh file observation');
+});
+
+// P4 Chunk 2 Fix 1: after external-config-conflict rewrites the fixture's CLI TOML out-of-band
+// (writeConfigPatch, bypassing the server's own save path), the server's in-memory config falls out of
+// sync with disk and every later task/persona in the same session sees the "配置文件已在外部修改..." 409
+// guard leak in (observed in the real P4 Chunk 1 run). reset() must resync the server's held config to
+// disk before every task, not just after that one task.
+function fakeResetPage(url, { revision = 'sha256:current' } = {}) {
+  const calls = [];
+  let currentUrl = url;
+  return {
+    calls,
+    url: () => currentUrl,
+    on() {}, off() {},
+    goto: async target => { currentUrl = String(target); },
+    locator(selector) {
+      if (selector === 'dialog[open]') return { count: async () => 0, waitFor: async () => {}, locator: () => ({ first: () => ({ click: async () => {} }) }) };
+      return { waitFor: async () => {} };
+    },
+    request: {
+      get: async target => { calls.push(['GET', String(target)]); return { ok: () => true, json: async () => ({ revision, setupRequired: revision === null, values: {} }) }; },
+      post: async (target, options) => { calls.push(['POST', String(target), options?.data]); return { ok: () => true, json: async () => ({}) }; },
+    },
+  };
+}
+
+test("reset() resyncs the workbench config revision with disk before every task, so a write after an earlier external config edit is not rejected as conflicting", async t => {
+  const root = await mkdtemp(path.join(tmpdir(), 'exploration-resync-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const fixture = { root, vaultRoot: path.join(root, 'vault'), configPath: path.join(root, 'config.toml') };
+  await mkdir(fixture.vaultRoot);
+  await writeFile(fixture.configPath, `vault_root = ${JSON.stringify(fixture.vaultRoot)}\n`);
+  const url = 'http://127.0.0.1:3100/session/';
+  const page = fakeResetPage(url, { revision: 'sha256:current-disk-revision' });
+  const context = { on() {}, off() {}, route: async () => {}, unroute: async () => {} };
+  const driver = await createExplorationDriver({ page, context, url, fixture, artifactDir: path.join(root, 'artifacts') });
+  t.after(() => driver.dispose());
+  await driver.reset();
+  assert.deepEqual(page.calls.map(call => call[0]), ['GET', 'POST'], "reset() must read, then resave, the config through the server's own settings API, every task boundary");
+  assert.equal(page.calls[1][1], new URL('api/settings', url).href);
+  assert.equal(page.calls[1][2].revision, 'sha256:current-disk-revision', "the resync save must use the revision actually on disk right now, not a stale one");
+  assert.deepEqual(page.calls[1][2].values, {}, "a resync save changes nothing on disk -- it only lets the server's held config catch up to the current disk content");
+});
+
+test("reset() skips the config resync when settings have never been configured (revision null), instead of sending an invalid save", async t => {
+  const root = await mkdtemp(path.join(tmpdir(), 'exploration-resync-unconfigured-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const fixture = { root, vaultRoot: path.join(root, 'vault'), configPath: path.join(root, 'config.toml') };
+  await mkdir(fixture.vaultRoot);
+  await writeFile(fixture.configPath, `vault_root = ${JSON.stringify(fixture.vaultRoot)}\n`);
+  const url = 'http://127.0.0.1:3101/session/';
+  const page = fakeResetPage(url, { revision: null });
+  const context = { on() {}, off() {}, route: async () => {}, unroute: async () => {} };
+  const driver = await createExplorationDriver({ page, context, url, fixture, artifactDir: path.join(root, 'artifacts') });
+  t.after(() => driver.dispose());
+  await driver.reset();
+  assert.deepEqual(page.calls.map(call => call[0]), ['GET'], 'no settings exist yet; there is nothing to resync and no save should be attempted');
+});
+
+// ---------------------------------------------------------------------------
+// P3 Chunk 5: workbench reading-journey and settings-conflict goal tasks.
+// Same convention as the tests above: a real temporary fixture directory
+// (vaultRoot + configPath on disk), task.verify()/task.prepare() called
+// directly with hand-built observations/actions/fake driver methods — never a
+// real browser or model here (that is the real-host evidence in the chunk
+// report, not this file).
+// ---------------------------------------------------------------------------
+
+async function makeWorkbenchFixture(t) {
+  const root = await mkdtemp(path.join(tmpdir(), 'exploration-chunk5-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const fixture = { root, vaultRoot: path.join(root, 'vault'), configPath: path.join(root, 'config.toml') };
+  await mkdir(fixture.vaultRoot);
+  await writeFile(fixture.configPath, `vault_root = ${JSON.stringify(fixture.vaultRoot)}\n[llm]\nmodel = "fixture-model"\n[output]\ndaily_dir = "arxiv-daily/daily"\npapers_dir = "arxiv-daily/papers"\nmax_daily_papers = 2\n`);
+  return fixture;
+}
+async function writeWorkbenchPaperIndex(fixture, papers) {
+  const file = path.join(fixture.vaultRoot, 'arxiv-daily/.index/papers.json');
+  await mkdir(path.dirname(file), { recursive: true });
+  await writeFile(file, JSON.stringify({ papers }));
+}
+
+// P3 Chunk 7 negative-evidence audit: settings-persistence, sidebar-persistence and generate-and-read
+// (the original 3 workbench goal tasks, P1) had no dedicated "verify fails on the untouched state" unit
+// test anywhere in the suite before this — added here, same convention as every reading-journey task's
+// own untouched-state test below.
+test('settings-persistence: verify fails on the untouched state (no fill, no reload)', async t => {
+  const fixture = await makeWorkbenchFixture(t);
+  const task = (await createDefaultExplorationTasks(fixture)).find(x => x.id === 'settings-persistence');
+  const driver = { inspect: async () => ({ maxDailyPapers: 2, preferences: {} }) };
+  const result = await task.verify({ driver, observation: { controls: [] }, actions: [] });
+  assert.equal(result.passed, false);
+  assert.equal(result.checks[0].passed, false, 'must not pass without an observed fill of maxDailyPapers');
+});
+
+test('sidebar-persistence: verify fails on the untouched state (no toggle, no reload)', async t => {
+  const fixture = await makeWorkbenchFixture(t);
+  const task = (await createDefaultExplorationTasks(fixture)).find(x => x.id === 'sidebar-persistence');
+  const driver = { inspect: async () => ({ preferences: { sidebarCollapsed: false } }) };
+  const result = await task.verify({ driver, observation: { layout: {} }, actions: [] });
+  assert.equal(result.passed, false);
+  assert.equal(result.checks[0].passed, false, 'must not pass without an observed sidebar-toggle click');
+});
+
+test('generate-and-read: verify fails on the fully untouched state (no action at all)', async t => {
+  const fixture = await makeWorkbenchFixture(t);
+  const task = (await createDefaultExplorationTasks(fixture)).find(x => x.id === 'generate-and-read');
+  const driver = { dailyEvidence: async () => ({ report: false, run: null }) };
+  const result = await task.verify({ driver, observation: { layout: { view: 'list' }, text: '' }, actions: [], startedAt: Date.now() });
+  assert.equal(result.passed, false);
+  assert.equal(result.checks[0].passed, false, 'must not pass without an observed click on the generate entry point');
+});
+
+test('star-filter-restore: verify fails on the untouched state (no star click yet)', async t => {
+  const fixture = await makeWorkbenchFixture(t);
+  const task = (await createDefaultExplorationTasks(fixture)).find(x => x.id === 'star-filter-restore');
+  const result = await task.verify({ observation: { controls: [] }, actions: [] });
+  assert.equal(result.passed, false);
+  assert.equal(result.checks[0].passed, false);
+});
+
+test('star-filter-restore: verify fails after the star click alone, before the "收藏" scope filter is used', async t => {
+  const fixture = await makeWorkbenchFixture(t);
+  const task = (await createDefaultExplorationTasks(fixture)).find(x => x.id === 'star-filter-restore');
+  const actions = [{ type: 'click', control: { name: `收藏 · ${PAPERS[1].title}` } }];
+  const result = await task.verify({ observation: { controls: [] }, actions });
+  assert.equal(result.passed, false);
+  assert.equal(result.checks[0].passed, true);
+  assert.equal(result.checks[1].passed, false);
+});
+
+test('star-filter-restore: verify passes once star, filter, open and back are all observed, in order, and the disk/UI state agree', async t => {
+  const fixture = await makeWorkbenchFixture(t);
+  const task = (await createDefaultExplorationTasks(fixture)).find(x => x.id === 'star-filter-restore');
+  const paper = PAPERS[1], other = PAPERS[0];
+  const starKey = `arxiv:${paper.id}`, otherKey = `arxiv:${other.id}`;
+  const actions = [
+    { type: 'click', control: { name: `收藏 · ${paper.title}` } },
+    { type: 'click', control: { name: '收藏12' } },
+    { type: 'click', control: { paperKey: starKey, name: paper.title } },
+    { type: 'click', control: { name: '← 返回列表' } },
+  ];
+  await writeWorkbenchPaperIndex(fixture, { [starKey]: { priority: 'high' } });
+  const result = await task.verify({ observation: { controls: [{ paperKey: starKey }] }, actions });
+  assert.equal(result.passed, true, JSON.stringify(result));
+  // Mutation: the other (unstarred) paper still showing means the filter never really restored.
+  const stillShowingOther = await task.verify({ observation: { controls: [{ paperKey: starKey }, { paperKey: otherKey }] }, actions });
+  assert.equal(stillShowingOther.passed, false);
+  // Mutation: the on-disk mark was never actually "high".
+  await writeWorkbenchPaperIndex(fixture, { [starKey]: { priority: 'normal' } });
+  const notMarked = await task.verify({ observation: { controls: [{ paperKey: starKey }] }, actions });
+  assert.equal(notMarked.passed, false);
+});
+
+test('star-filter-restore: prepare() ensures the daily report exists and resets the target paper to unstarred', async t => {
+  const fixture = await makeWorkbenchFixture(t);
+  const task = (await createDefaultExplorationTasks(fixture)).find(x => x.id === 'star-filter-restore');
+  const calls = [];
+  await task.prepare({ driver: { ensureDailyReport: async date => calls.push(['ensureDailyReport', date]), ensurePaperUnstarred: async key => calls.push(['ensurePaperUnstarred', key]) } });
+  assert.deepEqual(calls, [['ensureDailyReport', ACCEPTANCE_DATE], ['ensurePaperUnstarred', `arxiv:${PAPERS[1].id}`]]);
+});
+
+test('generate-paper-note: verify fails on the untouched state, and still fails after all three clicks while the note file does not exist yet', async t => {
+  const fixture = await makeWorkbenchFixture(t);
+  const task = (await createDefaultExplorationTasks(fixture)).find(x => x.id === 'generate-paper-note');
+  const key = `arxiv:${PAPERS[0].id}`;
+  const result0 = await task.verify({ observation: { controls: [] }, actions: [] });
+  assert.equal(result0.passed, false);
+  const actions = [
+    { type: 'click', control: { paperKey: key } },
+    { type: 'click', control: { name: '生成详细总结' } },
+    { type: 'click', control: { name: '开始生成' } },
+  ];
+  const result1 = await task.verify({ observation: { controls: [] }, actions });
+  assert.equal(result1.passed, false, 'must not pass before the note file exists');
+});
+
+test('generate-paper-note: verify passes once the note file, index entry and UI link all agree; fails if the index was never updated', async t => {
+  const fixture = await makeWorkbenchFixture(t);
+  const task = (await createDefaultExplorationTasks(fixture)).find(x => x.id === 'generate-paper-note');
+  const paper = PAPERS[0], key = `arxiv:${paper.id}`;
+  const actions = [
+    { type: 'click', control: { paperKey: key } },
+    { type: 'click', control: { name: '生成详细总结' } },
+    { type: 'click', control: { name: '开始生成' } },
+  ];
+  const notePath = path.join(fixture.vaultRoot, 'arxiv-daily/papers', `${paper.id}.md`);
+  await mkdir(path.dirname(notePath), { recursive: true });
+  await writeFile(notePath, `---\narxiv_id: "${paper.id}"\n---\n\nReal generated content, well over a hundred characters long, so the length check in verify() actually exercises a real body rather than a stub.\n`);
+  const observation = { controls: [{ name: '阅读详细总结' }] };
+  // Mutation: the file exists but the index was never updated to reflect it.
+  const withoutIndex = await task.verify({ observation, actions });
+  assert.equal(withoutIndex.passed, false);
+  await writeWorkbenchPaperIndex(fixture, { [key]: { detail: true, paperPath: `arxiv-daily/papers/${paper.id}.md` } });
+  const result = await task.verify({ observation, actions });
+  assert.equal(result.passed, true, JSON.stringify(result));
+});
+
+test('generate-paper-note: prepare() ensures the daily report exists and clears any existing note for the target', async t => {
+  const fixture = await makeWorkbenchFixture(t);
+  const paper = PAPERS[0];
+  const notePath = path.join(fixture.vaultRoot, 'arxiv-daily/papers', `${paper.id}.md`);
+  await mkdir(path.dirname(notePath), { recursive: true });
+  await writeFile(notePath, 'stale note');
+  const task = (await createDefaultExplorationTasks(fixture)).find(x => x.id === 'generate-paper-note');
+  const calls = [];
+  await task.prepare({ driver: { ensureDailyReport: async date => calls.push(date) } });
+  assert.deepEqual(calls, [ACCEPTANCE_DATE]);
+  await assert.rejects(readFile(notePath));
+});
+
+test('external-config-conflict: verify never writes the external change until the model field is actually observed rendered', async t => {
+  const fixture = await makeWorkbenchFixture(t);
+  const task = (await createDefaultExplorationTasks(fixture)).find(x => x.id === 'external-config-conflict');
+  await task.prepare();
+  const before = await readFile(fixture.configPath, 'utf8');
+  const result = await task.verify({ observation: { controls: [{ name: 'Settings' }] }, actions: [] });
+  assert.equal(result.passed, false);
+  const after = await readFile(fixture.configPath, 'utf8');
+  assert.equal(after, before, 'no model field observed yet; no external write should happen');
+});
+
+test('external-config-conflict: verify writes the external value to disk exactly once, the first time the model field is observed rendered', async t => {
+  const fixture = await makeWorkbenchFixture(t);
+  const task = (await createDefaultExplorationTasks(fixture)).find(x => x.id === 'external-config-conflict');
+  await task.prepare();
+  const observationWithModelField = { controls: [{ field: 'model', value: 'fixture-model' }] };
+  await task.verify({ observation: observationWithModelField, actions: [] });
+  const config1 = await readFile(fixture.configPath, 'utf8');
+  assert.match(config1, /workbench-conflict-external-model/);
+  await task.verify({ observation: observationWithModelField, actions: [] });
+  const config2 = await readFile(fixture.configPath, 'utf8');
+  assert.equal(config2, config1, 'the external write only happens once per task run');
+});
+
+test('external-config-conflict: verify passes once discard-then-reopen is fully observed and disk/UI agree on the external value; fails if the draft ever reached disk', async t => {
+  const fixture = await makeWorkbenchFixture(t);
+  const task = (await createDefaultExplorationTasks(fixture)).find(x => x.id === 'external-config-conflict');
+  await task.prepare();
+  await task.verify({ observation: { controls: [{ field: 'model', value: 'fixture-model' }] }, actions: [] });
+  const actions = [
+    { type: 'fill', control: { field: 'model' }, value: 'workbench-conflict-draft-model' },
+    { type: 'click', control: { name: '放弃未保存修改并关闭' } },
+    { type: 'click', control: { name: '放弃修改并关闭' } },
+    { type: 'click', control: { name: '设置' } },
+  ];
+  const result = await task.verify({ observation: { controls: [{ field: 'model', value: 'workbench-conflict-external-model' }] }, actions });
+  assert.equal(result.passed, true, JSON.stringify(result));
+  const config = await readFile(fixture.configPath, 'utf8');
+  assert.match(config, /workbench-conflict-external-model/);
+  assert.doesNotMatch(config, /workbench-conflict-draft-model/);
+});
+
+test('external-config-conflict: verify fails if "设置" is clicked again before the discard was actually confirmed', async t => {
+  const fixture = await makeWorkbenchFixture(t);
+  const task = (await createDefaultExplorationTasks(fixture)).find(x => x.id === 'external-config-conflict');
+  await task.prepare();
+  await task.verify({ observation: { controls: [{ field: 'model', value: 'fixture-model' }] }, actions: [] });
+  const actions = [
+    { type: 'fill', control: { field: 'model' }, value: 'workbench-conflict-draft-model' },
+    { type: 'click', control: { name: '放弃未保存修改并关闭' } },
+    { type: 'click', control: { name: '设置' } },
+  ];
+  const result = await task.verify({ observation: { controls: [{ field: 'model', value: 'fixture-model' }] }, actions });
+  assert.equal(result.passed, false);
 });

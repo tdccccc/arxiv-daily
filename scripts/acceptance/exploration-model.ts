@@ -14,9 +14,12 @@ Return exactly ONE JSON object with no Markdown, prose, or code fences. Allowed 
 {"type":"click","ref":"CURRENT_REF"}
 {"type":"fill","ref":"CURRENT_REF","value":"text"}
 {"type":"select","ref":"CURRENT_REF","value":"an enabled option value"}
-{"type":"back"} or {"type":"reload"}
+{"type":"back"} or {"type":"reload"} or {"type":"home"}
 {"type":"wait","milliseconds":500} (1 to 2000)
 {"type":"scroll","direction":"down","pixels":600} (up/down, 1 to 1200; optional current ref)
+{"type":"press","key":"Enter"} (keyboard-only navigation; key is one of Enter, Escape, Tab, Shift+Tab, ArrowUp,
+ArrowDown, ArrowLeft, ArrowRight, Space, Home, End, PageUp, PageDown; it goes to whatever is currently focused,
+never carries a ref, and is refused if focus has drifted outside the explorable area)
 {"type":"finding","summary":"suspected interaction problem","evidence":"visible evidence and reproduction"}
 {"type":"blocked","reason":"why this task cannot continue"}
 {"type":"done","reason":"what was completed"}
@@ -25,15 +28,26 @@ Use only refs from the latest observation. They change on EVERY observation. Nev
 Do not act on disabled, sensitive or restricted controls. Select uses an option VALUE, not its label.
 Fill replaces the field; move focus away or close settings when autosave requires it. Read feedback.
 Browser clicks can scroll a control into view. A dialog makes controls outside it unavailable.
+Some hosts narrow which of back/reload/press are currently usable; when the observation includes a
+capabilities list, only use actions named there (plus wait/finding/blocked/done, always available).
+"home" returns to a safe, known starting view (e.g. the Reading Dashboard) and is always available; use it
+if you end up with no useful controls or outside the app's own surface (e.g. a plain note), rather than
+giving up. A select control's options may be listed inline on the control, or, when many controls share
+the exact same option list, once under observation.optionSets and referenced by the control's own
+optionsRef id — look there for the real option values when a control has optionsRef instead of options.
 The checks array contains independent program checks, not judgments you can override. The runner
 automatically finishes a task once they are all satisfied by actual actions. Saying done does NOT pass
 an unfinished task. Incomplete checks may simply mean more actions or a short wait are needed.
 Report suspicious interactions as findings with concrete evidence; these are marked for human review.
-You have limited model calls and time. Avoid repeated waits when a visible control advances the task.`;
+You have limited model calls and time. Avoid repeated waits when a visible control advances the task.
+When task.kind is "persona", there is no checks array to satisfy: you are freely exploring as the
+persona described in task.goal. Keep investigating the current page, report anything suspicious as a
+finding, and send {"type":"done"} once you have explored enough — ending this way is expected, not a
+failure, and is never reported as having passed anything.`;
 
 interface ModelOptions { configPath?: string; maxApiCalls?: number }
 interface ModelRequest {
-  task: { id: string; title: string; goal: string };
+  task: { id: string; title: string; goal: string; kind?: string };
   observation: unknown;
   history?: unknown;
   checks?: unknown;

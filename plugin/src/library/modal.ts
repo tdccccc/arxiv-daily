@@ -4,6 +4,7 @@ import type {
   LibraryAuthorizationDisclosure,
   LibraryInventoryPreview,
 } from "./connection";
+import { markArxivDailyModal } from "../plugin-modal";
 
 /**
  * Stable handle on the disclosure dialog, for anything that has to find it
@@ -41,6 +42,7 @@ export function confirmLibraryAuthorization(
 ): Promise<boolean> {
   return new Promise((resolve) => {
     const modal = new Modal(app);
+    markArxivDailyModal(modal);
     const copy = libraryAuthorizationCopy(disclosure.processingDepth);
     modal.modalEl.addClass(LIBRARY_AUTHORIZATION_MODAL_CLASS);
     modal.titleEl.setText(copy.title);
@@ -98,6 +100,7 @@ export function confirmLibraryRevocation(
 ): Promise<boolean> {
   return new Promise((resolve) => {
     const modal = new Modal(app);
+    markArxivDailyModal(modal);
     modal.titleEl.setText(
       options.switchesToLocal
         ? "Revoke authorization and return to local embedding?"
@@ -135,6 +138,7 @@ export function showPersonalLibraryCatalogSummary(
   catalog: PersonalLibraryCatalog,
 ): void {
   const modal = new Modal(app);
+  markArxivDailyModal(modal);
   modal.titleEl.setText("Personal library catalog");
   const summary = catalog.lastScan ?? {
     ready: 0,
@@ -167,6 +171,7 @@ export function showLibraryInventoryPreview(
   preview: LibraryInventoryPreview,
 ): void {
   const modal = new Modal(app);
+  markArxivDailyModal(modal);
   modal.titleEl.setText("Personal library inventory");
   modal.contentEl.createEl("p", {
     text: `${preview.eligible.length} eligible PDF${preview.eligible.length === 1 ? "" : "s"}, ${preview.ignored.length} ignored, ${preview.folders} folders.`,
@@ -211,6 +216,7 @@ function renderPaths(parent: HTMLElement, heading: string, paths: string[]): voi
 export function confirmEmbeddingMode(app: App): Promise<"local" | "remote"> {
   return new Promise((resolve) => {
     const modal = new Modal(app);
+    markArxivDailyModal(modal);
     modal.titleEl.setText("Embedding mode");
     modal.contentEl.createEl("p", {
       text: "How should arXiv Daily turn your library's titles and abstracts into similarity vectors? "

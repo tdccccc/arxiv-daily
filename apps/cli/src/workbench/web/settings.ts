@@ -226,22 +226,31 @@ export function bindSettings(form: HTMLFormElement, snapshot: SettingsSnapshot, 
   const content=settingsSetupGuide(currentSnapshot,firstReportComplete);
   if(!content || !host.firstElementChild || !content.isEqualNode(host.firstElementChild))host.replaceChildren(...(content?[content]:[]));
  }
- let disposed=false, rootEditing=false, closing=false, rootBlocksClose=false, rootBlocksCloseDirty=false;
+ let disposed=false, rootEditing=false, closing=false, rootBlocksClose=false, rootBlocksCloseDirty=false, discarding=false;
  let timer: number|undefined;
  let draining: Promise<boolean>|undefined;
  let actionGate: Promise<void>|undefined;
  let appliedAppearance={...(options.appearance??DEFAULT_UI_APPEARANCE)};
  let lastValues=JSON.stringify(values());
  const appearanceValues=():UiAppearancePreferences=>({theme:get('appearance.theme') as UiAppearancePreferences['theme'],language:get('appearance.language') as UiAppearancePreferences['language']});
- function saveStatus(message:string,failed=false) {
+ // `failed` is tri-state: `true`/`false` are terminal outcomes that set the retry/discard buttons'
+ // visibility; `undefined` (the transitional "正在自动保存…" messages that fire *before* an attempt's
+ // outcome is known) leaves them exactly as they were. Previously this always defaulted to hiding them,
+ // which raced a user click on the already-visible "放弃未保存修改并关闭" footer button: a blur-triggered
+ // retry of the very draft being discarded could hide that button out from under the pointer between
+ // mousedown and mouseup, so the click never landed and the confirm screen never appeared. Terminal
+ // outcomes still decide the buttons; an attempt merely starting no longer does.
+ function saveStatus(message:string,failed?:boolean) {
   if(disposed||!form.isConnected)return;
   const status=find('.settings-save-status');
   status.textContent=t(message);
   // The save root message blocks every business save during first run; call it out in the
   // (always-visible, non-scrolling) footer so it doesn't read as just another transient status.
   status.classList.toggle('is-warning',message==='请先填写完整的保存根目录。');
-  find<HTMLButtonElement>('[data-settings="retry-save"]').hidden=!failed;
-  find<HTMLButtonElement>('[data-settings="discard-close"]').hidden=!failed;
+  if(failed!==undefined){
+   find<HTMLButtonElement>('[data-settings="retry-save"]').hidden=!failed;
+   find<HTMLButtonElement>('[data-settings="discard-close"]').hidden=!failed;
+  }
  }
  function localizeForm(selectedAppearance=appearanceValues()) {
   const current=values(), topics=find('.settings-topic-list');
@@ -270,7 +279,13 @@ export function bindSettings(form: HTMLFormElement, snapshot: SettingsSnapshot, 
   rootBlocksClose=false;rootBlocksCloseDirty=false;
   try {
    while(!disposed&&form.isConnected){
+    // The user's "放弃未保存修改并关闭" click supersedes any autosave of the draft it is discarding,
+    // whether that attempt is still queued or already in flight: its eventual outcome (success or the
+    // same stale-revision conflict) must not resurrect the retry/discard UI or an error banner behind
+    // the confirm screen that click already opened.
+    if(discarding)return false;
     if(actionGate)await actionGate;
+    if(discarding)return false;
     const next=values(), signature=JSON.stringify(next);
     const nextAppearance=appearanceValues();
     const businessChanged=signature!==lastValues;
@@ -280,7 +295,7 @@ export function bindSettings(form: HTMLFormElement, snapshot: SettingsSnapshot, 
      saveStatus('正在自动保存…');
      const secrets=Array.from(form.querySelectorAll<HTMLInputElement>('.settings-secret input')).map(el=>({el,value:el.value,revealed:el.dataset.revealed}));
      const result=await request<SettingsSnapshot>('api/settings',{revision,values:next});
-     if(disposed||!form.isConnected)return false;
+     if(disposed||!form.isConnected||discarding)return false;
      revision=result.revision;currentSnapshot=result;
      lastValues=JSON.stringify(stripSecrets(next));
      for(const {el,value,revealed} of secrets)if(el.value===value&&!revealed&&value){el.value='';delete el.dataset.revealed;el.type='password';el.closest('.settings-secret')!.querySelector('button')!.textContent=t('Show');el.closest('.settings-secret')!.querySelector('small')!.textContent=t('Saved. Leave blank to keep unchanged.');}
@@ -289,7 +304,7 @@ export function bindSettings(form: HTMLFormElement, snapshot: SettingsSnapshot, 
     }
     if(JSON.stringify(nextAppearance)!==JSON.stringify(appliedAppearance)){
      saveStatus('正在自动保存…');await request('api/preferences',{appearance:nextAppearance});
-     if(disposed||!form.isConnected)return false;
+     if(disposed||!form.isConnected||discarding)return false;
      const selectedAppearance=appearanceValues();
      const changedLanguage=appliedAppearance.language!==nextAppearance.language;
      appliedAppearance=nextAppearance;setUiLanguage(nextAppearance.language);
@@ -301,10 +316,10 @@ export function bindSettings(form: HTMLFormElement, snapshot: SettingsSnapshot, 
      continue;
     }
     if(waitingForRoot&&(businessChanged||currentSnapshot.setupRequired)){saveStatus('请先填写完整的保存根目录。');if(force){find('[role="alert"]').hidden=false;find('[role="alert"]').textContent=t('请先填写完整的保存根目录。');}rootBlocksClose=true;rootBlocksCloseDirty=businessChanged;return false;}
-    find('[role="alert"]').hidden=true;saveStatus('已自动保存');return true;
+    find('[role="alert"]').hidden=true;saveStatus('已自动保存',false);return true;
    }
    return false;
-  }catch(error){if(!disposed&&form.isConnected){find('[role="alert"]').hidden=false;find('[role="alert"]').textContent=t(error instanceof Error?error.message:'自动保存失败，修改仍保留。');saveStatus('自动保存失败，修改仍保留。',true);}return false;}
+  }catch(error){if(!disposed&&form.isConnected&&!discarding){find('[role="alert"]').hidden=false;find('[role="alert"]').textContent=t(error instanceof Error?error.message:'自动保存失败，修改仍保留。');saveStatus('自动保存失败，修改仍保留。',true);}return false;}
  }
  async function flush(force=true):Promise<boolean> {
   if(timer){window.clearTimeout(timer);timer=undefined;}
@@ -434,6 +449,11 @@ export function bindSettings(form: HTMLFormElement, snapshot: SettingsSnapshot, 
   const name=target.dataset.settings!;
   if(name==='retry-save'){void flush();return;}
   if(name==='discard-close'){
+   // From here on, any autosave of this draft — queued (the debounce timer) or already in flight (a
+   // blur-triggered retry racing this very click) — is superseded: see the `discarding` checks in
+   // drain(). Cancelling the timer too means a stray later edit event can't silently queue yet another
+   // attempt while the confirm screen is up.
+   discarding=true;if(timer){window.clearTimeout(timer);timer=undefined;}
    find('.settings-action-host').replaceChildren(
     h("div", { class: "settings-confirm", role: "group", "aria-label": t('放弃未保存修改并关闭') },
      h("p", null, t('尚未保存的修改将被放弃，已保存的设置保持不变。')),
@@ -481,7 +501,7 @@ export function bindSettings(form: HTMLFormElement, snapshot: SettingsSnapshot, 
    );
    find<HTMLInputElement>('[name="libraryPath"]').focus();return;
   }
-  if(name==='cancel-action'){find('.settings-action-host').replaceChildren();return;}
+  if(name==='cancel-action'){discarding=false;find('.settings-action-host').replaceChildren();return;}
   void task(async()=>{
    if(name==='library-cancel'){if(library?.run){libraryCancelling=true;renderLibrary();try{const result=await request<{run:import('../server').WorkbenchRun}>('api/runs/cancel',{id:library.run.id});library.run=result.run;libraryCancelling=result.run.status==='running';onRun?.(result.run);}catch(error){libraryCancelling=false;throw error;}finally{renderLibrary();}}return;}
    await saveDraft();

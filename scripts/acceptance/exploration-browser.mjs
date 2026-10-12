@@ -1,8 +1,8 @@
-import { mkdir, readFile, realpath, stat } from "node:fs/promises";
+import { mkdir, readFile, realpath, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
-import { createExplorationRedactor, ExplorationActionError, parseExplorationAction } from "./exploration.mjs";
+import { collapseOptionSets, createExplorationRedactor, ExplorationActionError, parseExplorationAction } from "./exploration.mjs";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const cliRequire = createRequire(path.resolve(here, "../../apps/cli/package.json"));
@@ -31,13 +31,16 @@ function contained(root, file) {
   return relative !== "" && !relative.startsWith(`..${path.sep}`) && relative !== ".." && !path.isAbsolute(relative);
 }
 
-async function assertFixture(fixture) {
+// Exported so exploration-tasks/workbench.mjs's `goalTasks(fixture)` can read the same fixture-contained
+// settings this driver's own observe()/inspect() rely on, without a second copy of these checks drifting
+// out of sync.
+export async function assertFixture(fixture) {
   if (!fixture?.root || !fixture.vaultRoot || !fixture.configPath) throw new Error("Exploration needs an owned temporary fixture");
   const root = await realpath(fixture.root);
   for (const file of [fixture.vaultRoot, fixture.configPath]) if (!contained(root, await realpath(file))) throw new Error("Exploration fixture paths must remain under its owned temporary root");
 }
 
-async function settings(fixture) {
+export async function settings(fixture) {
   const { parse } = cliRequire("smol-toml");
   const config = parse(await readFile(fixture.configPath, "utf8"));
   if (path.resolve(config.vault_root) !== path.resolve(fixture.vaultRoot)) throw new Error("Fixture vault location changed outside the exploration contract");
@@ -47,6 +50,20 @@ async function settings(fixture) {
 async function preferences(fixture) {
   try { return JSON.parse(await readFile(path.join(path.dirname(fixture.configPath), "workbench-ui.json"), "utf8")); }
   catch (error) { if (error.code === "ENOENT") return { sidebarCollapsed: false }; throw error; }
+}
+
+/**
+ * Rewrites the fixture's CLI TOML like a second, independent process would — never through the
+ * workbench's own settings save path — so an exploration task (P3 Chunk 5's `external-config-conflict`)
+ * can simulate an out-of-band edit while the model's own settings dialog is open, and the server's
+ * existing revision check (`saveWorkbenchSettings`'s `assertRevision`, apps/cli/src/workbench/settings.ts)
+ * has something real to detect. `mutate` edits the parsed table in place.
+ */
+export async function writeConfigPatch(fixture, mutate) {
+  const { parse, stringify } = cliRequire("smol-toml");
+  const table = parse(await readFile(fixture.configPath, "utf8"));
+  mutate(table);
+  await writeFile(fixture.configPath, stringify(table));
 }
 
 function browserObservation(id) {
@@ -120,6 +137,10 @@ export async function createExplorationDriver({ page, context, url, fixture, art
         const restriction = classifyControlRestriction(control, url);
         if (restriction) { control.restricted = restriction; if (control.sensitive) control.value = ""; }
       }
+      // P4 Chunk 2 Fix 3: dedupe repeated <select> option lists (e.g. many identical arXiv-category rows)
+      // into one shared observation.optionSets map, in Node rather than inside browserObservation's own
+      // page.evaluate() scan, so the in-page DOM-reading code stays untouched.
+      snapshot.optionSets = collapseOptionSets(snapshot.controls);
       snapshot.errors = [...new Set([...pageErrors, ...(diagnostics?.pageErrors || []).map(redact)])];
       if (!snapshot.layout.rootMounted) snapshot.errors.push("Workbench root disappeared from the page");
       snapshot.boundaryEvents = [...boundaryEvents];
@@ -144,14 +165,22 @@ export async function createExplorationDriver({ page, context, url, fixture, art
             readOnly: node.readOnly === true, outsideDialog: Boolean(document.querySelector("dialog[open]") && !node.closest("dialog[open]")) }));
           const restriction = classifyControlRestriction(live, url);
           if (restriction || live.disabled || live.outsideDialog) throw new ExplorationActionError(restriction || "The control is no longer interactive");
-          parseExplorationAction(JSON.stringify(action), { controls: [{ ...latest.controls.find(control => control.ref === action.ref), ...live }] });
+          // optionSets is carried through from the latest observation (not rebuilt here) so a select's
+          // optionsRef (P4 Chunk 2 Fix 3) still resolves during this live re-validation pass.
+          parseExplorationAction(JSON.stringify(action), { controls: [{ ...latest.controls.find(control => control.ref === action.ref), ...live }], optionSets: latest.optionSets });
         }
         if (action.type === "click") await target.click({ timeout: 6000 });
         else if (action.type === "fill") await target.fill(action.value, { timeout: 6000 });
         else if (action.type === "select") await target.selectOption(action.value, { timeout: 6000 });
         else if (action.type === "reload") { await page.reload({ waitUntil: "domcontentloaded", timeout: 8000 }); await page.locator(".workbench").waitFor({ state: "visible", timeout: 6000 }); }
         else if (action.type === "back") await page.goBack({ waitUntil: "domcontentloaded", timeout: 8000 });
+        // P4 Chunk 2 Fix 2: the workbench equivalent of Obsidian's "home" — a safe, known starting view —
+        // is just reloading the start URL; unlike `reload`, it is always safe to call from any state
+        // (including a page that has somehow lost its own root) because it is a fresh navigation, not a
+        // same-document reload.
+        else if (action.type === "home") { await page.goto(url, { waitUntil: "domcontentloaded", timeout: 8000 }); await page.locator(".workbench").waitFor({ state: "visible", timeout: 6000 }); }
         else if (action.type === "wait") await new Promise(resolve => setTimeout(resolve, action.milliseconds));
+        else if (action.type === "press") await page.keyboard.press(action.key);
         else if (action.type === "scroll") {
           if (target) await target.hover({ timeout: 6000 });
           else { const region = page.locator("dialog[open] .settings-content, .reading-pane").last(); if (await region.isVisible()) await region.hover(); }
@@ -160,6 +189,43 @@ export async function createExplorationDriver({ page, context, url, fixture, art
         options.signal?.throwIfAborted(); assertScope();
         return { ok: true };
       } finally { options.signal?.removeEventListener("abort", onAbort); }
+    },
+    async reset({ signal: resetSignal } = {}) {
+      assertScope();
+      resetSignal?.throwIfAborted();
+      // P4 Chunk 2 Fix 1: a prior task may have edited the CLI TOML out-of-band (writeConfigPatch, used
+      // only by the external-config-conflict task to simulate a second process editing the config while
+      // the workbench is open) without going through the server's own save path
+      // (apps/cli/src/workbench/settings.ts's saveWorkbenchSettings / server.ts's activate()) — the only
+      // place that updates the in-memory `config` launch.ts's createWorkbenchConfigGuard compares disk
+      // against. Left alone, that mismatch (and its "配置文件已在外部修改..." 409 guard) leaks into every
+      // later task and persona in the same session (observed in the P4 Chunk 1 real-model run). This is a
+      // general reset-level guarantee, not a cleanup specific to that one task: every task boundary reads
+      // the config currently on disk and, if settings exist at all, performs one real, no-op settings save
+      // (empty `values`, current `revision`) through the server's own POST /api/settings — a legitimate
+      // save, not a bypass — so the server's held config always matches disk again before the next task's
+      // first observation. Deliberately resyncs server-to-disk rather than reverting disk to some earlier
+      // baseline: the latter would also discard a legitimate settings change an earlier task already made
+      // and verified (e.g. settings-persistence's maxDailyPapers) through the real save path, which must
+      // survive into later tasks. Cost measured on a real host: ~10-20ms for the two same-origin HTTP
+      // calls, negligible next to the rest of reset()'s own page navigation.
+      const current = await page.request.get(new URL("api/settings", url).href, { timeout: 5000 });
+      if (!current.ok()) throw new Error(`Could not read workbench settings to resync the config revision: ${current.status()}`);
+      const { revision } = await current.json();
+      if (revision !== null) {
+        const saved = await page.request.post(new URL("api/settings", url).href, { data: { revision, values: {} }, timeout: 5000 });
+        if (!saved.ok()) throw new Error(`Could not resync the workbench config revision: ${saved.status()}`);
+      }
+      resetSignal?.throwIfAborted();
+      await page.goto(url, { waitUntil: "domcontentloaded", timeout: 15000 });
+      const dialog = page.locator("dialog[open]");
+      if (await dialog.count()) {
+        await dialog.locator('[data-action="close-dialog"]').first().click({ timeout: 3000 }).catch(() => {});
+        await dialog.waitFor({ state: "hidden", timeout: 6000 }).catch(() => {});
+      }
+      await page.locator(".workbench").waitFor({ state: "visible", timeout: 12000 });
+      resetSignal?.throwIfAborted();
+      assertScope();
     },
     async capture(name) {
       assertScope();
@@ -191,67 +257,46 @@ export async function createExplorationDriver({ page, context, url, fixture, art
       } catch (error) { if (error.code !== "ENOENT") throw error; }
       return { report, run };
     },
+    /**
+     * Deterministically guarantees a completed daily report for `date` exists, through the workbench's
+     * own real generation run (never a synthetic file) — mirrors the Obsidian driver's `ensureDailyReport`
+     * so P3 Chunk 5's reading-journey workbench tasks (`star-filter-restore`, `generate-paper-note`) don't
+     * each need their own copy of this. A no-op if the report file is already there.
+     */
+    async ensureDailyReport(date) {
+      assertScope();
+      const config = await settings(fixture);
+      const daily = config.output?.daily_dir;
+      if (typeof daily !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(date)) throw new Error("Invalid fixture report scope");
+      const file = path.resolve(fixture.vaultRoot, daily, `${date}.md`);
+      if (!contained(path.resolve(fixture.vaultRoot), file)) throw new Error("Report path escaped the fixture");
+      try {
+        if (contained(await realpath(fixture.vaultRoot), await realpath(file)) && (await stat(file)).isFile()) return;
+      } catch (error) { if (error.code !== "ENOENT") throw error; }
+      const started = await page.request.post(new URL("api/runs", url).href, { data: { kind: "daily", date } });
+      if (!started.ok()) throw new Error(`Could not start a fixture daily run for ${date}: ${started.status()}`);
+      const { run } = await started.json();
+      const deadline = Date.now() + 60000;
+      while (true) {
+        const current = (await (await page.request.get(new URL("api/runs/current", url).href)).json()).run;
+        if (current?.id === run.id && current.status !== "running") {
+          if (current.status !== "completed" && current.status !== "skipped") throw new Error(`Fixture daily run for ${date} ended as ${current.status}`);
+          return;
+        }
+        if (Date.now() >= deadline) throw new Error(`Fixture daily run for ${date} did not finish in time`);
+        await new Promise(resolve => setTimeout(resolve, 150));
+      }
+    },
+    /** Resets a paper's star mark through the real API (not a synthetic write), at most once per call. */
+    async ensurePaperUnstarred(key) {
+      assertScope();
+      const current = await page.request.get(new URL(`api/paper?key=${encodeURIComponent(key)}`, url).href);
+      if (!current.ok()) return;
+      const { paper } = await current.json();
+      if (paper.priority !== "high") return;
+      const reset = await page.request.post(new URL("api/paper/mark", url).href, { data: { key, action: "star", value: false, expected: paper.priority } });
+      if (!reset.ok()) throw new Error(`Could not reset the star mark for ${key}: ${reset.status()}`);
+    },
     async dispose() { page.off("pageerror", onError); context.off("page", onPage); await context.unroute("**/*", guard); },
   };
-}
-
-const check = (label, passed, actual) => ({ label, passed: Boolean(passed), ...(actual === undefined ? {} : { actual }) });
-const result = checks => ({ passed: checks.every(value => value.passed), checks });
-
-export async function createDefaultExplorationTasks(fixture) {
-  await assertFixture(fixture);
-  const initial = await settings(fixture);
-  const target = initial.output?.max_daily_papers === 13 ? 14 : 13;
-  let collapsedAfterReload = false, collapseReloadStep = 0;
-  return [
-    {
-      id: "settings-persistence", title: "设置自动保存并刷新复查",
-      goal: `打开设置，把每日论文数量上限 maxDailyPapers 改为 ${target}。移开焦点并等待保存完成，关闭设置，刷新页面，再打开设置，确认上限仍为 ${target}。不要修改路径、模型连接或密钥。`,
-      async verify({ driver, observation, actions }) {
-        const changed = actions.find(action => action.type === "fill" && (action.control?.field || action.control?.name) === "maxDailyPapers" && action.value === String(target));
-        const refreshed = changed && actions.some(action => action.type === "reload" && action.step > changed.step);
-        const state = await driver.inspect();
-        return result([
-          check("通过界面修改每日论文数量上限", changed),
-          check("修改后刷新了页面", refreshed),
-          check("隔离配置文件保存了新上限", state.maxDailyPapers === target, state.maxDailyPapers),
-          check("刷新后重新打开设置仍显示新上限", refreshed && observation.controls.some(control => control.field === "maxDailyPapers" && control.value === String(target))),
-        ]);
-      },
-    },
-    {
-      id: "sidebar-persistence", title: "侧栏折叠和展开状态持久化",
-      goal: "关闭设置（如果仍打开）。收起侧栏，刷新页面确认侧栏仍收起；再展开侧栏，再次刷新，确认侧栏仍展开。等待偏好保存后再刷新。",
-      async verify({ driver, observation, actions }) {
-        const state = await driver.inspect();
-        const last = actions.findLast(action => action.type === "reload");
-        const lastToggle = actions.findLast(action => action.type === "click" && action.control?.purpose === "sidebar-toggle");
-        const clicked = actions.some(action => action.type === "click" && action.control?.purpose === "sidebar-toggle");
-        if (clicked && last && lastToggle && last.step > lastToggle.step && state.preferences.sidebarCollapsed === true && observation.layout.sidebarCollapsed) {
-          collapsedAfterReload = true; collapseReloadStep = last.step;
-        }
-        const expandedAfterReload = collapsedAfterReload && last && lastToggle && last.step > lastToggle.step && last.step > collapseReloadStep && state.preferences.sidebarCollapsed === false && !observation.layout.sidebarCollapsed;
-        return result([check("通过界面切换侧栏", clicked), check("刷新后持久化收起状态与页面一致", collapsedAfterReload), check("再展开并刷新后持久化状态与页面一致", expandedAfterReload)]);
-      },
-    },
-    {
-      id: "generate-and-read", title: "生成固定日期日报并打开论文",
-      goal: "通过生成按钮生成 2026-10-01 日报（选择指定日期，不要生成今天）。等待成功，再从列表打开 arXiv 2610.10001 论文，确认阅读内容出现。无需判断论文内容质量。",
-      async verify({ driver, observation, actions, startedAt }) {
-        const state = await driver.dailyEvidence("2026-10-01");
-        const generated = actions.some(action => action.type === "click" && action.control?.dataAction === "generate");
-        const run = state.run;
-        const checks = [
-          check("通过生成入口启动任务", generated),
-          check("本任务的指定日期运行已完成", run?.status === "completed" && run.date === "2026-10-01" && Date.parse(run.startedAt) >= startedAt, run ? { date: run.date, status: run.status } : null),
-          check("真实日报文件包含夹具论文", state.report),
-          check("论文阅读视图已打开", observation.layout.view === "reading" && observation.text.includes("2610.10001")),
-        ];
-        if (run?.date === "2026-10-01" && Date.parse(run.startedAt) >= startedAt && (run.status === "failed" || (run.status === "completed" && !state.report))) {
-          return { passed: false, failed: true, checks, error: run.status === "failed" ? "The requested fixture generation reported failure" : "Generation reported completion without the expected report file" };
-        }
-        return result(checks);
-      },
-    },
-  ];
 }

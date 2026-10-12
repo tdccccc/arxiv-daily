@@ -1,5 +1,6 @@
-import { Modal, Notice, type App } from "obsidian";
+import { Notice, type App } from "obsidian";
 import type ArxivDailyPlugin from "../../main";
+import { ArxivDailyModal } from "../plugin-modal";
 import { DEFAULT_LOG_LEVELS, formatLogEntries } from "./log-format";
 import { errorMessage } from "./actions";
 import { formatRunHistoryRecords } from "@arxiv-daily/core";
@@ -13,7 +14,7 @@ interface HubPanel {
   text: string;
 }
 
-export class HubModal extends Modal {
+export class HubModal extends ArxivDailyModal {
   private activeTab: HubModalTab = "logs";
   private panels = new Map<HubModalTab, HubPanel>();
   private logLevels: Set<string> = new Set(DEFAULT_LOG_LEVELS);

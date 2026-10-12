@@ -59,6 +59,62 @@ test("report writes inspectable JSON and escaped HTML without credentials", asyn
   assert.match(html, /&lt;script&gt;/);
 });
 
+test("explored scenarios are distinct from passed, never required to pass, and keep the suite's exit code", async t => {
+  const dir = await mkdtemp(join(tmpdir(), "arxiv-acceptance-explored-"));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  const report = buildReport({ selectedSuites: ["exploration"], suites: [{ suite: "exploration", status: "passed", scenarios: [
+    { id: "settings", title: "Settings", status: "passed", assertions: [{ label: "Saved", passed: true }] },
+    { id: "new-user", title: "新用户角色", status: "explored", assertions: [] },
+  ], findings: [{ status: "needs-review", taskId: "new-user", summary: "Unexpected confirm dialog", evidence: "Clicked twice" }] }] });
+  assert.equal(report.status, "passed");
+  assert.equal(report.exitCode, 0);
+  assert.equal(report.counts.explored, 1);
+  assert.equal(report.counts.passed, 1);
+  await writeReport(dir, report);
+  const html = await readFile(join(dir, "report.html"), "utf8");
+  assert.match(html, /已探索/);
+  assert.match(html, /Unexpected confirm dialog/);
+});
+
+test("a persona-only exploration suite exits 0 but the report states no goal task was verified", async t => {
+  const dir = await mkdtemp(join(tmpdir(), "arxiv-acceptance-persona-only-"));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  const report = buildReport({ selectedSuites: ["exploration"], suites: [{ suite: "exploration", status: "passed", scenarios: [
+    { id: "new-user", title: "新用户角色", status: "explored", assertions: [] },
+    { id: "impatient", title: "没耐心的用户", status: "explored", assertions: [] },
+  ] }] });
+  assert.equal(report.status, "passed");
+  assert.equal(report.exitCode, 0);
+  await writeReport(dir, report);
+  const html = await readFile(join(dir, "report.html"), "utf8");
+  assert.match(html, /未验证任何目标任务/);
+});
+
+test("a failed scenario inside an exploration suite with personas still fails the suite", async t => {
+  const report = buildReport({ selectedSuites: ["exploration"], suites: [{ suite: "exploration", status: "blocked", scenarios: [
+    { id: "new-user", title: "新用户角色", status: "failed", error: "product error" },
+  ] }] });
+  assert.equal(report.status, "failed");
+  assert.equal(report.exitCode, 1);
+});
+
+test("per-task and run-wide model usage render compactly without breaking redaction", async t => {
+  const dir = await mkdtemp(join(tmpdir(), "arxiv-acceptance-usage-"));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  const report = buildReport({ selectedSuites: ["exploration"], suites: [{ suite: "exploration", status: "passed",
+    scenarios: [{ id: "settings", title: "Settings", status: "passed", assertions: [{ label: "Saved", passed: true }],
+      usage: { modelCalls: 3, apiCalls: 3, inputTokens: 1200, outputTokens: 80, totalTokens: 1280, durationMs: 2100 } }],
+    metrics: { modelCalls: 3, actions: 1, elapsedMs: 2100, usage: { modelCalls: 3, apiCalls: 3, inputTokens: 1200, outputTokens: 80, totalTokens: 1280, durationMs: 2100 } },
+    model: { apiKey: "do-not-publish" } }] });
+  await writeReport(dir, report);
+  const json = await readFile(join(dir, "report.json"), "utf8");
+  const html = await readFile(join(dir, "report.html"), "utf8");
+  assert.match(html, /3 次决策/);
+  assert.match(html, /1200\/80 tokens/);
+  assert.match(JSON.parse(json).suites[0].metrics.usage.apiCalls.toString(), /3/);
+  assert.doesNotMatch(json + html, /do-not-publish/);
+});
+
 test("model findings remain visible for review even when the trusted task checks pass", async t => {
   const dir = await mkdtemp(join(tmpdir(), "arxiv-acceptance-findings-"));
   t.after(() => rm(dir, { recursive: true, force: true }));
@@ -70,4 +126,26 @@ test("model findings remain visible for review even when the trusted task checks
   assert.match(html, /待复核/);
   assert.match(html, /Unclear save feedback/);
   assert.match(html, /Repeated click needed &lt;script&gt;/);
+});
+
+test("P3 Chunk 5: a finding's step number and screenshot surface in report.html's 待复核 section as a link, when present", async t => {
+  const dir = await mkdtemp(join(tmpdir(), "arxiv-acceptance-finding-screenshot-"));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  const screenshotPath = join(dir, "exploration-keyboard-only-step-3.png");
+  await (await import("node:fs/promises")).writeFile(screenshotPath, "fake-png");
+  const report = buildReport({ selectedSuites: ["exploration"], suites: [{ suite: "exploration", status: "passed", scenarios: [{ id: "keyboard-only", title: "Keyboard only", status: "explored", assertions: [] }], findings: [{ status: "needs-review", taskId: "keyboard-only", step: 3, summary: "Focus seems to vanish", evidence: "No visible focus ring", screenshot: screenshotPath }] }] });
+  await writeReport(dir, report);
+  const html = await readFile(join(dir, "report.html"), "utf8");
+  assert.match(html, /step 3/);
+  assert.match(html, /exploration-keyboard-only-step-3\.png/);
+});
+
+test("a finding with no screenshot still renders the 待复核 section without a link", async t => {
+  const dir = await mkdtemp(join(tmpdir(), "arxiv-acceptance-finding-no-screenshot-"));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  const report = buildReport({ selectedSuites: ["exploration"], suites: [{ suite: "exploration", status: "passed", scenarios: [{ id: "settings", title: "Settings", status: "passed", assertions: [{ label: "Saved", passed: true }] }], findings: [{ status: "needs-review", taskId: "settings", summary: "No screenshot here", evidence: "n/a" }] }] });
+  await writeReport(dir, report);
+  const html = await readFile(join(dir, "report.html"), "utf8");
+  assert.match(html, /No screenshot here/);
+  assert.doesNotMatch(html, /\.png/);
 });

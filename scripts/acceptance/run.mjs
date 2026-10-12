@@ -12,10 +12,16 @@ const HELP = `Usage: npm run test:acceptance -- [options]
   --suite workbench|obsidian|all   Choose fixed UI suites (default: all)
   --explore                      Also run the model API exploration
   --suite exploration            Run only model API exploration
+  --host workbench|obsidian      Exploration target product (default: workbench)
   --model-config PATH            Read only [llm] from this CLI TOML file
-  --max-steps N                  Model decisions, 1-300 (default: 50)
-  --max-api-calls N              Model HTTP requests including retries
-  --max-duration-ms N            Exploration time budget (default: 600000)
+  --task ID[,ID...]              Run only these exploration goal tasks (repeatable)
+  --persona ID[,ID...]           Run only these exploration persona tasks (repeatable)
+  --release                      Also run every persona for --host (unless --persona overrides it)
+  --max-steps N                  Model decisions, 1-300 (default: 90; 220 with --release)
+  --max-api-calls N              Model HTTP requests including retries (default: 2x the effective step budget)
+  --max-duration-ms N            Exploration time budget (default: 900000; 1200000 with --release)
+  --task-max-steps N             Default per-task decision budget (default: 20 task, 15 persona)
+  --task-max-api-calls N         Default per-task API-call budget (default: 2x its step budget)
   --browser PATH                 Browser executable override
   --headed                       Show the workbench browser
   --skip-build                   Use an existing build (for local debugging)
@@ -28,9 +34,22 @@ Exploration uses the existing workbench model config only when selected.
 Exit status: 0 passed; 1 failed; 2 blocked or incomplete.
 `;
 
+const EXPLORATION_HOSTS = ["workbench", "obsidian"];
+
+// Run-wide defaults when `--release` is given and the caller did not pass an explicit budget flag.
+// Measured from the real-model release runs in docs/helm/2026-10-10-model-driven-release-exploration
+// (2026-10-12, two runs per host after P4 chunk 2's fixes): obsidian used up to 106 model calls over
+// ~536s, workbench up to 80 calls over ~359s. These defaults give roughly 2x headroom over the larger
+// (obsidian) figure, while staying within the hard maxima (maxSteps <= 300, maxDurationMs <= 3600000),
+// so a release run needs no manual --max-* flags. `--max-api-calls` has no release-specific default: it
+// keeps falling back to 2x the effective step budget (440 under --release), which already has far more
+// headroom than observed (max 106) and needs no separate constant.
+const RELEASE_DEFAULT_MAX_STEPS = 220;
+const RELEASE_DEFAULT_MAX_DURATION_MS = 1200000;
+
 export function parseArgs(argv) {
-  const options = { suites: ["workbench", "obsidian"], build: true, headless: true, maxSteps: 50, maxDurationMs: 600000 };
-  let explicit = false, explore = false;
+  const options = { suites: ["workbench", "obsidian"], build: true, headless: true, host: "workbench" };
+  let explicit = false, explore = false, explicitMaxSteps = false, explicitMaxDurationMs = false;
   for (let i = 0; i < argv.length; i++) {
     const [flag, ...rest] = argv[i].split("=");
     const take = () => {
@@ -51,6 +70,13 @@ export function parseArgs(argv) {
         break;
       }
       case "--explore": explore = true; break;
+      case "--release": options.release = true; break;
+      case "--host": {
+        const value = take();
+        if (!EXPLORATION_HOSTS.includes(value)) throw new TypeError(`Unknown exploration host: ${value}. Supported hosts: ${EXPLORATION_HOSTS.join(", ")}`);
+        options.host = value;
+        break;
+      }
       case "--skip-build": options.build = false; break;
       case "--headed": options.headless = false; break;
       case "--list": options.list = true; break;
@@ -58,14 +84,33 @@ export function parseArgs(argv) {
       case "--output": options.output = resolve(take()); break;
       case "--browser": options.executablePath = resolve(take()); break;
       case "--model-config": options.configPath = resolve(take()); break;
-      case "--max-steps": options.maxSteps = number(1, 300); break;
+      case "--task": {
+        const ids = take().split(",").map(value => value.trim()).filter(Boolean);
+        if (!ids.length) throw new TypeError("--task needs at least one id");
+        options.taskIds = [...(options.taskIds ?? []), ...ids];
+        break;
+      }
+      case "--persona": {
+        const ids = take().split(",").map(value => value.trim()).filter(Boolean);
+        if (!ids.length) throw new TypeError("--persona needs at least one id");
+        options.personaIds = [...(options.personaIds ?? []), ...ids];
+        break;
+      }
+      case "--max-steps": options.maxSteps = number(1, 300); explicitMaxSteps = true; break;
       case "--max-api-calls": options.maxApiCalls = number(1, 1000); break;
-      case "--max-duration-ms": options.maxDurationMs = number(1, 3600000); break;
+      case "--max-duration-ms": options.maxDurationMs = number(1, 3600000); explicitMaxDurationMs = true; break;
+      case "--task-max-steps": options.taskMaxSteps = number(1, 300); break;
+      case "--task-max-api-calls": options.taskMaxApiCalls = number(1, 1000); break;
       default: throw new TypeError(`Unknown acceptance option: ${flag}`);
     }
-    if (rest.length && ["--explore", "--skip-build", "--headed", "--list", "--help", "-h"].includes(flag)) throw new TypeError(`${flag} does not take a value`);
+    if (rest.length && ["--explore", "--release", "--skip-build", "--headed", "--list", "--help", "-h"].includes(flag)) throw new TypeError(`${flag} does not take a value`);
   }
   if (explore && !options.suites.includes("exploration")) options.suites.push("exploration");
+  // --release means a full-library run (every goal task plus every persona); apply its own run-wide
+  // budget defaults (see RELEASE_DEFAULT_* above) unless the caller passed an explicit --max-steps /
+  // --max-duration-ms, regardless of whether --release appeared before or after those flags.
+  if (!explicitMaxSteps) options.maxSteps = options.release ? RELEASE_DEFAULT_MAX_STEPS : 90;
+  if (!explicitMaxDurationMs) options.maxDurationMs = options.release ? RELEASE_DEFAULT_MAX_DURATION_MS : 900000;
   return options;
 }
 async function buildProducts(suites, { artifactDir, signal, onProgress }) {
@@ -165,7 +210,7 @@ export async function runAcceptance(options, dependencies = {}) {
       result = await runners[suite]({
         fixture, artifactDir: directory, signal: options.signal,
         executablePath: options.executablePath, headless: options.headless,
-        ...(suite === "exploration" ? { configPath: options.configPath, maxSteps: options.maxSteps, maxDurationMs: options.maxDurationMs, maxApiCalls: options.maxApiCalls } : {}),
+        ...(suite === "exploration" ? { host: options.host, configPath: options.configPath, maxSteps: options.maxSteps, maxDurationMs: options.maxDurationMs, maxApiCalls: options.maxApiCalls, taskIds: options.taskIds, personaIds: options.personaIds, taskMaxSteps: options.taskMaxSteps, taskMaxApiCalls: options.taskMaxApiCalls, release: options.release } : {}),
       });
       if (!result || result.suite !== suite) throw new Error(`Runner returned no matching evidence for ${suite}`);
     } catch (error) {
@@ -203,6 +248,19 @@ export async function runAcceptance(options, dependencies = {}) {
   return persist();
 }
 
+/**
+ * `--list`'s own text, as a pure(ish) async function so a test can assert on it without spawning the
+ * CLI. Task/persona ids come from each host's own task-library module (scripts/acceptance/
+ * exploration-tasks/{obsidian,workbench}.mjs) — the single place chunks 2-5 add tasks/personas to — so
+ * this listing never drifts out of sync with what `selectExplorationTasks` actually offers.
+ */
+export async function describeAcceptanceSuites() {
+  const workbenchTasks = await import("./exploration-tasks/workbench.mjs");
+  const obsidianTasks = await import("./exploration-tasks/obsidian.mjs");
+  const personaLine = (host, ids) => `${host} ${ids.length ? ids.join(", ") : "(none yet)"}`;
+  return `workbench    Real browser: settings, daily run, recovery, reading and persistence\nobsidian     Real Obsidian: settings, run/cancel/retry, reading and PDF navigation\nexploration  Opt-in model API: bounded UI tasks with independent evidence checks\n  hosts (--host):                workbench (default), obsidian\n  workbench tasks (--task):      ${workbenchTasks.GOAL_TASK_IDS.join(", ")}\n  obsidian tasks (--task):       ${obsidianTasks.GOAL_TASK_IDS.join(", ")}\n  personas (--persona):          ${personaLine("workbench", workbenchTasks.PERSONA_TASK_IDS)}; ${personaLine("obsidian", obsidianTasks.PERSONA_TASK_IDS)}\n  --release runs every persona for --host too (personas are otherwise opt-in only)\n`;
+}
+
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
   const controller = new AbortController();
   const interrupt = () => controller.abort(new Error("Acceptance interrupted; unfinished scenarios are not verified"));
@@ -211,7 +269,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1]
     const options = parseArgs(process.argv.slice(2));
     if (options.help) process.stdout.write(HELP);
     else if (options.list) {
-      process.stdout.write("workbench    Real browser: settings, daily run, recovery, reading and persistence\nobsidian     Real Obsidian: settings, run/cancel/retry, reading and PDF navigation\nexploration  Opt-in model API: bounded UI tasks with independent evidence checks\n");
+      process.stdout.write(await describeAcceptanceSuites());
     } else {
       const report = await runAcceptance({ ...options, signal: controller.signal }, { onProgress: message => process.stdout.write(`${message}\n`) });
       process.stdout.write(`Acceptance ${report.status}: ${JSON.stringify(report.counts)}; needs review: ${report.reviewCount}\nReport: ${join(report.artifactDir, "report.html")}\n`);

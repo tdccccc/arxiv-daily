@@ -152,6 +152,45 @@ it('offers an explicit discard escape after persistent revision conflicts withou
  expect(closed).toHaveBeenCalledOnce();expect(posts(request)).toHaveLength(2);
 });
 
+it('keeps the discard button clickable through a blur-triggered retry and ignores that retry once discarding',async()=>{
+ let postCount=0;let releaseSecond!:()=>void;
+ const {form,request,closed}=await setup(false,async(url,body)=>{
+  if(url==='api/settings'&&body){
+   postCount++;
+   if(postCount===1)throw new Error('Write conflict');
+   return new Promise((_resolve,reject)=>{releaseSecond=()=>reject(new Error('Write conflict'));});
+  }
+ });
+ field(form,'model').focus();
+ change(form,'model','conflict-draft');await settle();
+ expect(field(form,'model').value).toBe('conflict-draft');
+ const discardButton=()=>form.querySelector<HTMLButtonElement>('[data-settings="discard-close"]')!;
+ expect(discardButton().hidden).toBe(false);
+ expect(document.activeElement).toBe(field(form,'model'));
+ // Still focused: in a real browser, clicking the footer "放弃未保存修改并关闭" button blurs the field
+ // first (firing 'change', which schedules an immediate re-autosave of the same stale draft) and only
+ // *then* dispatches 'click' on the button — so the button must still be visible/clickable at this
+ // instant, or the click never lands on it (hit-testing finds nothing there) and the user is stuck.
+ field(form,'model').dispatchEvent(new Event('change',{bubbles:true}));
+ expect(discardButton().hidden).toBe(false);
+ discardButton().click();
+ expect(form.querySelector('.settings-action-host .settings-confirm')).toBeTruthy();
+ expect(releaseSecond).toBeTypeOf('function');
+ // The blur-triggered retry now resolves (still failing on the same stale revision) *after* the
+ // discard click already swapped the action host to the confirm screen.
+ releaseSecond();
+ await settle();
+ expect(form.isConnected).toBe(true);
+ // The stale retry's failure must not crash or disturb the confirm screen that is already showing.
+ expect(form.querySelector('.settings-action-host .settings-confirm')).toBeTruthy();
+ (form.querySelector('[data-settings="confirm-discard-close"]') as HTMLButtonElement).click();
+ await settle();
+ expect(closed).toHaveBeenCalledOnce();
+ // Both attempts tried (and failed) to save the draft being discarded; neither ever succeeded, so
+ // nothing of the draft was ever committed.
+ expect(postCount).toBeGreaterThanOrEqual(2);
+});
+
 it('translates category controls and empty topic UI without changing selection or typed topics',async()=>{
  const {form}=await setup(true);(form.querySelector('[data-settings="add-topic"]') as HTMLButtonElement).click();
  const before=Array.from(form.querySelectorAll<HTMLSelectElement>('[name="category"]')).map(el=>el.value);

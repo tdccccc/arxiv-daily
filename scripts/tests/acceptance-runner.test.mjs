@@ -41,6 +41,51 @@ test("command explicitly selects suites and bounds optional model exploration", 
   assert.throws(() => parseArgs(["--what"]), /Unknown/);
 });
 
+test("--task and --persona accumulate across repeated and comma-separated flags; per-task budget flags parse", () => {
+  const options = parseArgs(["--suite", "exploration", "--task", "a,b", "--task", "c", "--persona", "x", "--task-max-steps", "5", "--task-max-api-calls", "8"]);
+  assert.deepEqual(options.taskIds, ["a", "b", "c"]);
+  assert.deepEqual(options.personaIds, ["x"]);
+  assert.equal(options.taskMaxSteps, 5);
+  assert.equal(options.taskMaxApiCalls, 8);
+  assert.throws(() => parseArgs(["--task", ""]), /--task/);
+  assert.equal(parseArgs([]).taskIds, undefined);
+});
+
+test("--release is a value-less flag, off by default", () => {
+  assert.equal(parseArgs([]).release, undefined);
+  assert.equal(parseArgs(["--suite", "exploration", "--release"]).release, true);
+  assert.throws(() => parseArgs(["--release=workbench"]), /--release/);
+});
+
+test("ordinary runs keep the small run-wide budget defaults", () => {
+  const options = parseArgs(["--suite", "exploration"]);
+  assert.equal(options.maxSteps, 90);
+  assert.equal(options.maxDurationMs, 900000);
+  assert.equal(options.maxApiCalls, undefined); // exploration.mjs falls back to 2x the effective step budget
+});
+
+test("--release without explicit budget flags raises the run-wide defaults with headroom over measured usage", () => {
+  const options = parseArgs(["--suite", "exploration", "--host", "obsidian", "--release"]);
+  // Measured real-model release runs (2026-10-12, docs/helm/2026-10-10-model-driven-release-exploration):
+  // obsidian used up to 106 model calls / ~536s; workbench up to 80 calls / ~359s. Defaults below give
+  // roughly 2x headroom over the larger (obsidian) figure while staying within the hard maxima
+  // (maxSteps <= 300, maxDurationMs <= 3600000).
+  assert.equal(options.maxSteps, 220);
+  assert.equal(options.maxDurationMs, 1200000);
+  assert.equal(options.maxApiCalls, undefined); // still falls back to 2x maxSteps = 440, well under the 1000 hard cap
+});
+
+test("--release still lets explicit budget flags win, regardless of flag order", () => {
+  const before = parseArgs(["--suite", "exploration", "--max-steps", "50", "--max-duration-ms", "60000", "--max-api-calls", "70", "--release"]);
+  assert.equal(before.maxSteps, 50);
+  assert.equal(before.maxDurationMs, 60000);
+  assert.equal(before.maxApiCalls, 70);
+  const after = parseArgs(["--suite", "exploration", "--release", "--max-steps", "50", "--max-duration-ms", "60000", "--max-api-calls", "70"]);
+  assert.equal(after.maxSteps, 50);
+  assert.equal(after.maxDurationMs, 60000);
+  assert.equal(after.maxApiCalls, 70);
+});
+
 test("each suite receives its own fixture and cleanup runs despite a failed suite", async t => {
   const f = await dependencies(t);
   f.deps.runners.workbench = async () => { f.events.push("fail:workbench"); throw new Error("Product assertion failed"); };
@@ -63,6 +108,21 @@ test("model config stays separate from the product fixture and model only runs w
   const report = await runAcceptance({ ...options, output: f.output }, f.deps);
   assert.equal(report.status, "passed");
   assert.deepEqual(report.selectedSuites, ["workbench", "exploration"]);
+});
+
+test("task/persona selection and per-task budget options reach the exploration runner", async t => {
+  const f = await dependencies(t);
+  f.deps.runners.exploration = async options => {
+    assert.deepEqual(options.taskIds, ["generate-and-read"]);
+    assert.deepEqual(options.personaIds, ["new-user"]);
+    assert.equal(options.taskMaxSteps, 10);
+    assert.equal(options.taskMaxApiCalls, 20);
+    assert.equal(options.release, true);
+    return passed("exploration");
+  };
+  const options = parseArgs(["--suite", "workbench", "--explore", "--task", "generate-and-read", "--persona", "new-user", "--task-max-steps", "10", "--task-max-api-calls", "20", "--release"]);
+  const report = await runAcceptance({ ...options, output: f.output }, f.deps);
+  assert.equal(report.status, "passed");
 });
 
 test("build failure prevents product runs and writes a failure report", async t => {

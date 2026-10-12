@@ -1,4 +1,5 @@
 import { App, Modal } from "obsidian";
+import { markArxivDailyModal } from "../plugin-modal";
 
 export interface ChooseOption {
   label: string;
@@ -19,6 +20,7 @@ export function chooseModal(
 ): Promise<string | null> {
   return new Promise((resolve) => {
     const modal = new Modal(app);
+    markArxivDailyModal(modal);
     modal.titleEl.setText(title);
     modal.contentEl.createEl("p", { text: message });
     const btnRow = modal.contentEl.createDiv({

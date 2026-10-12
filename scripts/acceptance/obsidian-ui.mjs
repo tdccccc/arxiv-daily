@@ -102,6 +102,13 @@ export async function createObsidianDriver({ session, fixture, artifactDir }) {
     await closeSettings();
     await command("open-reading-dashboard");
     await wait('document.querySelectorAll(".arxiv-daily-dashboard__tab").length', value => value > 0, "reading dashboard");
+    // P3 Chunk 5: give the dashboard's first control real keyboard focus. Without this,
+    // document.activeElement after opening is whatever it was before (often nothing inside the plugin at
+    // all), and exploration-obsidian.mjs's `press` action is rejected whenever focus is outside the
+    // plugin's current surface (obsidianFocusInScopeExpression) — which would make the keyboard-only
+    // persona unable to take a single step from a fresh reset(). Every task and persona starts from
+    // reset() → openDashboard(), so this is the one place that needs to seed focus for all of them.
+    await evaluate('(() => { document.querySelector(".arxiv-daily-dashboard__tab")?.focus(); return true; })()');
   };
   const runDate = async (date, { force = false } = {}) => {
     const trace = { date, force, samples: [] };
