@@ -1,10 +1,12 @@
+[English](../README.md) · 简体中文
+
 # arXiv Daily
 
 跟踪研究方向，筛选 arXiv 新论文，将日报与详细论文总结沉淀为本地 Markdown。
 
-[新手教程](getting-started.zh-CN.md) · [English README](../README.md) · [Getting Started](getting-started.md)
+![arxiv daily：跟踪研究方向，全部保存在本地 Markdown。在 Obsidian 社区插件中搜索 arXiv Daily 即可安装。](assets/readme-hero.png)
 
-**arXiv Daily** 是以 **Obsidian 插件**为主要入口的个人研究助手；独立浏览器工作台和 DeepSeek Harness（DSH）扩展同样无需 Obsidian 即可使用。
+**arXiv Daily** 是以 **Obsidian 插件**为主要入口的个人研究助手；独立浏览器工作台和 DeepSeek Harness（DSH）插件同样无需 Obsidian 即可使用。
 
 ## 功能
 
@@ -18,27 +20,27 @@
 
 日报存放在 `arxiv-daily/daily/YYYY-MM-DD.md`；论文总结存放在 `arxiv-daily/papers/<arxiv_id>.md`。
 
-## 使用方式
+## 选择使用方式
 
 | 入口 | 适合 |
 |---|---|
 | **Obsidian 插件** | 在 Vault 内阅读和整理研究资料 |
 | **CLI + 浏览器工作台** | 终端操作、外部定时，或不依赖 Obsidian 的独立阅读 |
-| **DSH 扩展** | 在 DeepSeek Harness 固定侧栏打开同一工作台 |
+| **DSH 插件** | 在 DeepSeek Harness 固定侧栏打开同一工作台 |
 
-Obsidian 与 CLI 的配置值、API 密钥不会自动同步；浏览器工作台和 DSH 扩展都复用 CLI 配置。
+Obsidian 与 CLI 的配置值、API 密钥不会自动同步；浏览器工作台和 DSH 插件都复用 CLI 配置。
 
-## 安装与快速开始
+## 安装
 
-**Obsidian**（仅桌面版）：
+### Obsidian 插件（仅桌面版）
 
 1. **社区插件** — 设置 → 第三方插件 → 浏览 → **arXiv Daily**
 2. **BRAT** — 添加 `tdccccc/arxiv-daily`
 3. **手动** — 将 [最新 Release](https://github.com/tdccccc/arxiv-daily/releases/latest) 中的 `manifest.json`、`main.js`、`styles.css` 放入 `<vault>/.obsidian/plugins/arxiv-daily/`
 
-启用插件后打开 **设置 → arXiv Daily**。细节见 [新手教程](getting-started.zh-CN.md)。
+启用插件后打开 **设置 → arXiv Daily**。
 
-**CLI 与浏览器工作台**（需要 Node.js 20.19+）：
+### CLI + 浏览器工作台（需要 Node.js 20.19+）
 
 ```bash
 npm install -g arxiv-daily
@@ -47,9 +49,31 @@ arxiv-daily run --today
 arxiv-daily ui            # 在浏览器中打开本地阅读工作台
 ```
 
-更多：[CLI 安装与命令参考](../apps/cli/README.md)。
+### DSH 插件（需要 Node.js 22.19+）
 
-**DSH** — 从源码构建并安装扩展：[extensions/dsh-arxiv-daily/README.md](../extensions/dsh-arxiv-daily/README.md)。
+```bash
+dsh plugin --profile web add dsh-arxiv-daily
+```
+
+重启 DSH，然后点击左侧栏“设置”上方的 **arxiv-daily**（或右侧栏对应标签）。DSH Desktop：**Plugins → Add plugin**，填写包名 `dsh-arxiv-daily`。
+
+## 快速开始
+
+第一次使用？跟着[新手教程](getting-started.zh-CN.md)（English: [Getting Started](getting-started.md)）走一遍完整的首次设置：连接模型、选择 arXiv 分类、描述研究主题，并生成第一份日报。
+
+## 文档
+
+| 文档 | English |
+|---|---|
+| [新手教程](getting-started.zh-CN.md) | [Getting Started](getting-started.md) |
+| [CLI 安装与命令参考](../apps/cli/README.zh-CN.md) | [English](../apps/cli/README.md) |
+| [浏览器工作台指南](workbench.zh-CN.md) | [English](workbench.md) |
+| [Obsidian 插件](../plugin/README.zh-CN.md) | [English](../plugin/README.md) |
+| [DSH 插件](../extensions/dsh-arxiv-daily/README.zh-CN.md) | [English](../extensions/dsh-arxiv-daily/README.md) |
+
+## 贡献
+
+见[功能与交互验收](../scripts/acceptance/README.md)，覆盖真实浏览器/桌面检查和可选的模型 API 探索。
 
 ## 许可证
 

@@ -93,9 +93,9 @@ const USAGE = `Usage:
   arxiv-daily ui [--port PORT] [--no-open] [--frame-origin ORIGIN]
   arxiv-daily papers [--query TEXT] [--offset N] [--limit N]
   arxiv-daily library connect PATH
-  arxiv-daily library status|prepare|scan|index|propose|directions|update|revoke
+  arxiv-daily library status|prepare|scan|index|propose|directions|revoke
   arxiv-daily library authorize --fingerprint HASH
-  arxiv-daily library confirm --candidate ID --proposal-revision N --profile-revision N
+  arxiv-daily library confirm --candidate ID --proposal-revision N
   arxiv-daily library search --query TEXT [--mode hybrid|lexical|dense] [--limit N]
   arxiv-daily library review --input REQUEST.json
   arxiv-daily update [--check] [--yes]

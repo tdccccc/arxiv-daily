@@ -2,7 +2,8 @@ name: Release Obsidian plugin
 
 on:
   push:
-    tags: ["*.*.*"]
+    # dsh-v* tags belong to the independently versioned DSH plugin.
+    tags: ["*.*.*", "!dsh-v*"]
 
 concurrency:
   group: release-${{ github.ref_name }}

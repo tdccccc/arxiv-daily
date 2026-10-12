@@ -60,7 +60,7 @@ jobs:
           if test -n "$REQUESTED_VERSION"; then
             version="$REQUESTED_VERSION"
           else
-            version="$(git tag --points-at "$RELEASE_SHA" --list '*.*.*')"
+            version="$(git tag --points-at "$RELEASE_SHA" --list '[0-9]*.*.*')"
             test "$(printf '%s\n' "$version" | sed '/^$/d' | wc -l)" -eq 1
           fi
           node --input-type=module - "$version" <<'NODE'
