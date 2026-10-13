@@ -12,7 +12,7 @@
 import { ACCEPTANCE_DATE, PAPERS } from "../fixtures.mjs";
 import { dailyReportFile, entryFor, HISTORY_FILE, INDEX_FILE, paperNoteFile, SETTINGS_FILE, STATE_FILE } from "../exploration-obsidian.mjs";
 import { poll, pollJsonFile } from "../obsidian-ui.mjs";
-import { checkResult, taskResult } from "./checks.mjs";
+import { checkResult, exactLabelPattern, taskResult } from "./checks.mjs";
 import { PERSONA_TASK_IDS, personaTasks as sharedPersonaTasks } from "./personas.mjs";
 
 /** Single source of truth for the default Obsidian goal-task ids, usable without a fixture (e.g. --list). */
@@ -129,6 +129,46 @@ export const SUMMARIZE_BY_ID_TARGET = "2610.20001";
 // the latest report's month, which is the same October-2026 month as the real host's current month, so no
 // month navigation is needed to reach ACCEPTANCE_DATE's cell.
 
+// ─── P2: declared UI labels ──────────────────────────────────────────────────
+// scripts/tests/acceptance-exploration-labels.test.mjs asserts every task's own `uiLabels` array (every
+// product UI label its goal text names or its verify() matches on) is still literally present somewhere
+// in plugin/src/**, so a rename shows up as a failing fixed test instead of only a blocked, paid real-
+// model run. Shared the same way the fixture topic/direction constants above are: every verify() that
+// matches one of these reads the exact constant below, never a second, independently-typed copy of the
+// same string, so the goal text, the verifier and the declared label cannot drift apart.
+const DAILY_PAPER_LIMIT_LABEL = "Daily paper limit";
+const STAR_PAPER_LABEL = "Star paper";
+const ALL_TAB_LABEL = "All";
+// plugin/src/dashboard/view.ts's getDisplayText() renders this "Reading dashboard" (lowercase "d"); the
+// stale-label check is case-insensitive, the same way every regex-matched label below already is.
+const READING_DASHBOARD_LABEL = "Reading Dashboard";
+const ADD_DIRECTION_LABEL = "Add direction";
+const REMOVE_DIRECTION_BUTTON_LABEL = "×";
+const ARXIV_CATEGORIES_SECTION_LABEL = "arXiv categories";
+const ADD_CATEGORY_LABEL = "Add category";
+const MORE_ACTIONS_LABEL = "More arXiv Daily actions";
+const RUN_FOR_DATE_LABEL = "Run for date…";
+const DATE_FIELD_LABEL = "Date";
+const CANCEL_ACTIVE_TASKS_LABEL = "Cancel active tasks";
+const SHOW_LOGS_AND_HISTORY_LABEL = "Show logs & history";
+const RUN_HISTORY_LABEL = "Run History";
+// The menu item is this plus an ellipsis ("Force run for date…"); the dialog's own submit button is the
+// shorter FORCE_RUN_BUTTON_LABEL below. Kept without the ellipsis so it is still a literal substring of
+// the menu item's label — the ellipsis itself is handled by the verifier's own regex, unchanged from
+// before this chunk.
+const FORCE_RUN_FOR_DATE_LABEL = "Force run for date";
+const FORCE_RUN_BUTTON_LABEL = "Force run";
+const SET_PAPER_MARK_LABEL = "Set paper mark…";
+const PAPER_ID_OR_URL_LABEL = "Paper ID or URL";
+const MARK_FIELD_LABEL = "Mark";
+const WATCH_MARK_LABEL = "Watch";
+const SET_MARK_LABEL = "Set mark";
+const NEXT_PAGE_LABEL = "Next page";
+const SUMMARIZE_BY_ARXIV_ID_LABEL = "Summarize by arXiv ID";
+const SUMMARIZE_BY_ID_LABEL = "Summarize by ID";
+const SUMMARIZE_LABEL = "Summarize";
+const DAILY_REPORTS_LABEL = "Daily reports";
+
 /** Parses the real run-history.jsonl (append-only, never truncated by clearDateState) into records. */
 async function readHistory(driver) {
   const text = await driver.file(HISTORY_FILE).catch(error => { if (error.code === "ENOENT") return ""; throw error; });
@@ -169,14 +209,15 @@ export function goalTasks() {
   return [
     {
       id: GOAL_TASK_IDS[0], title: "修改每日论文数量上限",
-      goal: `打开插件设置页，把 Daily paper limit 改为 ${target}。移开焦点，等待保存完成即可，不需要关闭设置；不要修改路径、模型连接、密钥或邮件相关设置。`,
+      goal: `打开插件设置页，把 ${DAILY_PAPER_LIMIT_LABEL} 改为 ${target}。移开焦点，等待保存完成即可，不需要关闭设置；不要修改路径、模型连接、密钥或邮件相关设置。`,
+      uiLabels: [DAILY_PAPER_LIMIT_LABEL],
       async verify({ driver, observation, actions }) {
-        const filled = actions.some(action => action.type === "fill" && action.control?.name === "Daily paper limit" && action.value === String(target));
-        if (!filled) return taskResult([checkResult(`通过设置页将 Daily paper limit 改为 ${target}`, false)]);
+        const filled = actions.some(action => action.type === "fill" && action.control?.name === DAILY_PAPER_LIMIT_LABEL && action.value === String(target));
+        if (!filled) return taskResult([checkResult(`通过设置页将 ${DAILY_PAPER_LIMIT_LABEL} 改为 ${target}`, false)]);
         const onDisk = await pollJsonFile(() => driver.jsonFile(SETTINGS_FILE), value => value?.settings?.output?.maxDailyPapers === target, "daily paper limit on disk", { timeoutMs: 5000 }).catch(() => null);
         const persisted = onDisk?.settings?.output?.maxDailyPapers === target;
         if (!persisted) {
-          return taskResult([checkResult(`通过设置页将 Daily paper limit 改为 ${target}`, true), checkResult("隔离设置文件保存了新上限", false)]);
+          return taskResult([checkResult(`通过设置页将 ${DAILY_PAPER_LIMIT_LABEL} 改为 ${target}`, true), checkResult("隔离设置文件保存了新上限", false)]);
         }
         // Only the test program closes and reopens settings (the model has no exposed control for Obsidian's
         // own settings chrome — the plugin's observed surface is scoped to its own tab container), and only
@@ -186,7 +227,7 @@ export function goalTasks() {
         reopenCheck ??= (async () => {
           await driver.closeThenReopenSettings();
           const value = await poll(
-            () => driver.read(`Array.from(document.querySelectorAll("input")).find(el => el.getAttribute("aria-label") === "Daily paper limit")?.value`),
+            () => driver.read(`Array.from(document.querySelectorAll("input")).find(el => el.getAttribute("aria-label") === ${JSON.stringify(DAILY_PAPER_LIMIT_LABEL)})?.value`),
             value => value === String(target), "re-rendered daily paper limit", { timeoutMs: 3000 },
           ).catch(() => undefined);
           return value;
@@ -200,14 +241,14 @@ export function goalTasks() {
         reloadCheck ??= (async () => {
           await driver.reloadThenReopenSettings();
           const value = await poll(
-            () => driver.read(`Array.from(document.querySelectorAll("input")).find(el => el.getAttribute("aria-label") === "Daily paper limit")?.value`),
+            () => driver.read(`Array.from(document.querySelectorAll("input")).find(el => el.getAttribute("aria-label") === ${JSON.stringify(DAILY_PAPER_LIMIT_LABEL)})?.value`),
             value => value === String(target), "re-rendered daily paper limit after a full plugin reload", { timeoutMs: 3000 },
           ).catch(() => undefined);
           return value;
         })();
         const reloaded = await reloadCheck;
         return taskResult([
-          checkResult(`通过设置页将 Daily paper limit 改为 ${target}`, true),
+          checkResult(`通过设置页将 ${DAILY_PAPER_LIMIT_LABEL} 改为 ${target}`, true),
           checkResult("隔离设置文件保存了新上限", persisted, onDisk.settings.output.maxDailyPapers),
           checkResult("重新打开设置后界面仍显示新上限", reopened === String(target), reopened),
           checkResult("完整重载插件后设置页仍显示新上限", reloaded === String(target), reloaded),
@@ -216,18 +257,19 @@ export function goalTasks() {
     },
     {
       id: GOAL_TASK_IDS[1], title: "在阅读面板收藏一篇论文",
-      goal: `打开阅读面板（Reading Dashboard）的 All 列表，找到 arXiv ${paperId} 对应行，点击它的 Star paper 按钮将其标记为收藏。`,
+      goal: `打开阅读面板（${READING_DASHBOARD_LABEL}）的 ${ALL_TAB_LABEL} 列表，找到 arXiv ${paperId} 对应行，点击它的 ${STAR_PAPER_LABEL} 按钮将其标记为收藏。`,
+      uiLabels: [READING_DASHBOARD_LABEL, ALL_TAB_LABEL, STAR_PAPER_LABEL],
       async prepare({ driver }) {
         await driver.ensureDailyReport(ACCEPTANCE_DATE);
         await driver.ensurePaperUnstarred(paperId);
       },
       async verify({ driver, actions }) {
-        const starred = actions.some(action => action.type === "click" && action.control?.paperKey === paperId && /star paper/i.test(action.control?.name || ""));
-        if (!starred) return taskResult([checkResult(`点击 arXiv ${paperId} 的 Star paper 收藏按钮`, false)]);
+        const starred = actions.some(action => action.type === "click" && action.control?.paperKey === paperId && new RegExp(STAR_PAPER_LABEL, "i").test(action.control?.name || ""));
+        if (!starred) return taskResult([checkResult(`点击 arXiv ${paperId} 的 ${STAR_PAPER_LABEL} 收藏按钮`, false)]);
         const onDisk = await pollJsonFile(() => driver.jsonFile(INDEX_FILE), value => entryFor(value, paperId)?.priority === "high", "starred priority on disk", { timeoutMs: 5000 }).catch(() => null);
         const marked = entryFor(onDisk, paperId)?.priority === "high";
         return taskResult([
-          checkResult(`点击 arXiv ${paperId} 的 Star paper 收藏按钮`, true),
+          checkResult(`点击 arXiv ${paperId} 的 ${STAR_PAPER_LABEL} 收藏按钮`, true),
           checkResult("插件的收藏标记已写入论文索引", marked, onDisk ? entryFor(onDisk, paperId)?.priority : undefined),
         ]);
       },
@@ -235,7 +277,8 @@ export function goalTasks() {
     // ─── P3 Chunk 2: Research topic/direction editing ─────────────────────
     {
       id: "add-topic-direction", title: "新增研究方向",
-      goal: `打开插件设置页，展开研究主题“${FIXTURE_TOPIC_NAME}”（点击该主题的标题行即可展开），点击 Add direction 新增一个方向，并将其内容填写为：“${NEW_DIRECTION_TEXT}”。不要修改已有的方向“${FIXTURE_DIRECTION_TEXT}”，也不要新增或删除任何主题。`,
+      goal: `打开插件设置页，展开研究主题“${FIXTURE_TOPIC_NAME}”（点击该主题的标题行即可展开），点击 ${ADD_DIRECTION_LABEL} 新增一个方向，并将其内容填写为：“${NEW_DIRECTION_TEXT}”。不要修改已有的方向“${FIXTURE_DIRECTION_TEXT}”，也不要新增或删除任何主题。`,
+      uiLabels: [ADD_DIRECTION_LABEL],
       async verify({ driver }) {
         const onDisk = await pollJsonFile(() => driver.jsonFile(SETTINGS_FILE), value => {
           const topic = value?.settings?.arxiv?.topics?.find(item => item.id === FIXTURE_TOPIC_ID);
@@ -267,7 +310,8 @@ export function goalTasks() {
     },
     {
       id: "remove-topic-direction", title: "删除研究方向",
-      goal: `插件设置页中，研究主题“${FIXTURE_TOPIC_NAME}”现在有两个方向：“${FIXTURE_DIRECTION_TEXT}”和“${SEEDED_DIRECTION_TEXT}”。展开该主题，删除“${SEEDED_DIRECTION_TEXT}”这一条（点击它旁边的 × 按钮），保留“${FIXTURE_DIRECTION_TEXT}”不变。`,
+      goal: `插件设置页中，研究主题“${FIXTURE_TOPIC_NAME}”现在有两个方向：“${FIXTURE_DIRECTION_TEXT}”和“${SEEDED_DIRECTION_TEXT}”。展开该主题，删除“${SEEDED_DIRECTION_TEXT}”这一条（点击它旁边的 ${REMOVE_DIRECTION_BUTTON_LABEL} 按钮），保留“${FIXTURE_DIRECTION_TEXT}”不变。`,
+      uiLabels: [REMOVE_DIRECTION_BUTTON_LABEL],
       // Deterministically seeds the second direction by writing data.json directly and reloading the
       // plugin — never through the model's own actions — so the task starts from a known two-direction
       // state regardless of what any earlier task left behind (every task's reset() already restored the
@@ -326,7 +370,8 @@ export function goalTasks() {
     // (renderCategoryRow, declarative-rows.ts) the `select` action already supports.
     {
       id: "add-arxiv-category", title: "新增 arXiv 分类",
-      goal: `打开插件设置页，在 arXiv categories 区域点击 Add category 新增一行，并把新增的下拉框选为 ${TARGET_CATEGORY_ID}（${TARGET_CATEGORY_LABEL}）。不要移除或修改已有的 cs.AI。`,
+      goal: `打开插件设置页，在 ${ARXIV_CATEGORIES_SECTION_LABEL} 区域点击 ${ADD_CATEGORY_LABEL} 新增一行，并把新增的下拉框选为 ${TARGET_CATEGORY_ID}（${TARGET_CATEGORY_LABEL}）。不要移除或修改已有的 cs.AI。`,
+      uiLabels: [ARXIV_CATEGORIES_SECTION_LABEL, ADD_CATEGORY_LABEL],
       async verify({ driver }) {
         const onDisk = await pollJsonFile(() => driver.jsonFile(SETTINGS_FILE), value => {
           const categories = value?.settings?.arxiv?.categories;
@@ -367,7 +412,8 @@ export function goalTasks() {
     // ─── P3 Chunk 3: run tasks ──────────────────────────────────────────────
     {
       id: "run-for-date", title: "按日期生成日报",
-      goal: `点击仪表盘工具栏的“More arXiv Daily actions”按钮打开菜单，点击其中的“Run for date…”，在弹出的日期对话框里把 Date 填为 ${RUN_FOR_DATE_DATE}，再点击 Run 提交，等待生成完成。`,
+      goal: `点击仪表盘工具栏的“${MORE_ACTIONS_LABEL}”按钮打开菜单，点击其中的“${RUN_FOR_DATE_LABEL}”，在弹出的日期对话框里把 ${DATE_FIELD_LABEL} 填为 ${RUN_FOR_DATE_DATE}，再点击 Run 提交，等待生成完成。`,
+      uiLabels: [MORE_ACTIONS_LABEL, RUN_FOR_DATE_LABEL, DATE_FIELD_LABEL, "Run"],
       // Deterministically starts this date "not yet generated" (never through the model): clears any
       // run-state entry, daily report file and paper-index links a previous pass of this same task left
       // behind, so a second full-library pass in one session still begins from the same untouched state.
@@ -376,7 +422,7 @@ export function goalTasks() {
         await driver.openDashboard();
       },
       async verify({ driver, actions }) {
-        const submitted = actions.some(action => action.type === "fill" && action.control?.name === "Date" && action.value === RUN_FOR_DATE_DATE);
+        const submitted = actions.some(action => action.type === "fill" && action.control?.name === DATE_FIELD_LABEL && action.value === RUN_FOR_DATE_DATE);
         if (!submitted) return taskResult([checkResult(`通过 Run for date 对话框提交 ${RUN_FOR_DATE_DATE}`, false)]);
         const state = await pollJsonFile(() => driver.jsonFile(STATE_FILE), value => value?.runState?.[RUN_FOR_DATE_DATE]?.status === "completed", "run-state completed", { timeoutMs: 5000 }).catch(() => null);
         const completed = state?.runState?.[RUN_FOR_DATE_DATE]?.status === "completed";
@@ -401,7 +447,8 @@ export function goalTasks() {
     },
     {
       id: "cancel-then-rerun", title: "运行中取消后重跑",
-      goal: `点击“More arXiv Daily actions”打开菜单，点击“Run for date…”，日期填 ${CANCEL_THEN_RERUN_DATE} 并提交；测试环境会让这次运行暂停在处理中。再次打开菜单，点击“Cancel active tasks”取消这次运行。取消完成后，再次打开菜单点击“Run for date…”，同样填入 ${CANCEL_THEN_RERUN_DATE} 并提交，让这次真正跑完。`,
+      goal: `点击“${MORE_ACTIONS_LABEL}”打开菜单，点击“${RUN_FOR_DATE_LABEL}”，日期填 ${CANCEL_THEN_RERUN_DATE} 并提交；测试环境会让这次运行暂停在处理中。再次打开菜单，点击“${CANCEL_ACTIVE_TASKS_LABEL}”取消这次运行。取消完成后，再次打开菜单点击“${RUN_FOR_DATE_LABEL}”，同样填入 ${CANCEL_THEN_RERUN_DATE} 并提交，让这次真正跑完。`,
+      uiLabels: [MORE_ACTIONS_LABEL, RUN_FOR_DATE_LABEL, DATE_FIELD_LABEL, CANCEL_ACTIVE_TASKS_LABEL],
       async prepare({ driver }) {
         await driver.clearDateState(CANCEL_THEN_RERUN_DATE);
         // Program-only fixture control (mirrors obsidian-scenarios.mjs's cancelAndRepeat): holds the
@@ -411,9 +458,9 @@ export function goalTasks() {
         await driver.openDashboard();
       },
       async verify({ driver, actions }) {
-        const firstSubmitted = actions.some(action => action.type === "fill" && action.control?.name === "Date" && action.value === CANCEL_THEN_RERUN_DATE);
+        const firstSubmitted = actions.some(action => action.type === "fill" && action.control?.name === DATE_FIELD_LABEL && action.value === CANCEL_THEN_RERUN_DATE);
         if (!firstSubmitted) return taskResult([checkResult(`通过 Run for date 提交 ${CANCEL_THEN_RERUN_DATE}`, false)]);
-        const cancelClickIndex = actions.findIndex(action => action.type === "click" && /^cancel active tasks$/i.test((action.control?.name || "").trim()));
+        const cancelClickIndex = actions.findIndex(action => action.type === "click" && exactLabelPattern(CANCEL_ACTIVE_TASKS_LABEL).test((action.control?.name || "").trim()));
         const cancelClicked = cancelClickIndex !== -1;
         // Releasing the held request and restoring normal fixture mode is a program-only side effect
         // (never a UI action the model can reach), performed at most once, and only once the model has
@@ -432,7 +479,7 @@ export function goalTasks() {
         }
         const cancelHistory = await pollHistory(driver, records => records.some(record => record.date === CANCEL_THEN_RERUN_DATE && record.resultKind === "cancelled"), "cancelled run-history record").catch(() => []);
         const cancelRecorded = cancelHistory.some(record => record.date === CANCEL_THEN_RERUN_DATE && record.resultKind === "cancelled");
-        const rerunSubmitted = actions.slice(cancelClickIndex + 1).some(action => action.type === "fill" && action.control?.name === "Date" && action.value === CANCEL_THEN_RERUN_DATE);
+        const rerunSubmitted = actions.slice(cancelClickIndex + 1).some(action => action.type === "fill" && action.control?.name === DATE_FIELD_LABEL && action.value === CANCEL_THEN_RERUN_DATE);
         if (!cancelRecorded || !rerunSubmitted) {
           return taskResult([
             checkResult(`通过 Run for date 提交 ${CANCEL_THEN_RERUN_DATE}`, true),
@@ -457,7 +504,8 @@ export function goalTasks() {
     },
     {
       id: "auth-failure-retry", title: "认证失败后重试",
-      goal: `点击“More arXiv Daily actions”打开菜单，点击“Run for date…”，日期填 ${AUTH_FAILURE_RETRY_DATE} 并提交；这次运行会因认证失败而结束。打开菜单，点击“Show logs & history”，在弹出的面板里点击“Run History”标签查看这次失败的记录，然后关闭面板。确认失败原因后，再次打开菜单点击“Force run for date…”，同样填入 ${AUTH_FAILURE_RETRY_DATE} 并提交以重新运行。`,
+      goal: `点击“${MORE_ACTIONS_LABEL}”打开菜单，点击“${RUN_FOR_DATE_LABEL}”，日期填 ${AUTH_FAILURE_RETRY_DATE} 并提交；这次运行会因认证失败而结束。打开菜单，点击“${SHOW_LOGS_AND_HISTORY_LABEL}”，在弹出的面板里点击“${RUN_HISTORY_LABEL}”标签查看这次失败的记录，然后关闭面板。确认失败原因后，再次打开菜单点击“${FORCE_RUN_FOR_DATE_LABEL}…”，同样填入 ${AUTH_FAILURE_RETRY_DATE} 并提交以重新运行。`,
+      uiLabels: [MORE_ACTIONS_LABEL, RUN_FOR_DATE_LABEL, DATE_FIELD_LABEL, SHOW_LOGS_AND_HISTORY_LABEL, RUN_HISTORY_LABEL, `${FORCE_RUN_FOR_DATE_LABEL}…`],
       // Design: the API key field is restricted/sensitive and off-limits to the model (classify
       // ControlRestriction in exploration-obsidian.mjs), so "fix the credential" is not an action the
       // model can take. Instead the fixture itself is only restored to accepting requests once the model
@@ -472,7 +520,7 @@ export function goalTasks() {
         await driver.openDashboard();
       },
       async verify({ driver, actions }) {
-        const submitted = actions.some(action => action.type === "fill" && action.control?.name === "Date" && action.value === AUTH_FAILURE_RETRY_DATE);
+        const submitted = actions.some(action => action.type === "fill" && action.control?.name === DATE_FIELD_LABEL && action.value === AUTH_FAILURE_RETRY_DATE);
         if (!submitted) return taskResult([checkResult(`通过 Run for date 提交 ${AUTH_FAILURE_RETRY_DATE}`, false)]);
         // Memoized once observed: by the time the model has force-retried, the run-state's CURRENT
         // status has already moved on to "completed", overwriting "failed_permanent" — re-polling the
@@ -489,7 +537,7 @@ export function goalTasks() {
             checkResult("运行状态记录了认证失败", false),
           ]);
         }
-        const reviewedHistory = actions.some(action => action.type === "click" && /^run history$/i.test((action.control?.name || "").trim()));
+        const reviewedHistory = actions.some(action => action.type === "click" && exactLabelPattern(RUN_HISTORY_LABEL).test((action.control?.name || "").trim()));
         // Restoring fixture access is withheld until the failure is both real (confirmed above) and the
         // model has reviewed it; memoized so it only ever runs once per task.
         if (reviewedHistory && !authFixtureRestored) {
@@ -503,8 +551,8 @@ export function goalTasks() {
             checkResult("打开 Show logs & history 并查看 Run History 标签", false),
           ]);
         }
-        const forceSubmitted = actions.some(action => action.type === "click" && /^force run for date…?$/i.test((action.control?.name || "").trim()));
-        const retrySubmitted = actions.filter(action => action.type === "fill" && action.control?.name === "Date" && action.value === AUTH_FAILURE_RETRY_DATE).length >= 2;
+        const forceSubmitted = actions.some(action => action.type === "click" && new RegExp(`^${FORCE_RUN_FOR_DATE_LABEL}…?$`, "i").test((action.control?.name || "").trim()));
+        const retrySubmitted = actions.filter(action => action.type === "fill" && action.control?.name === DATE_FIELD_LABEL && action.value === AUTH_FAILURE_RETRY_DATE).length >= 2;
         if (!forceSubmitted || !retrySubmitted) {
           return taskResult([
             checkResult(`通过 Run for date 提交 ${AUTH_FAILURE_RETRY_DATE}`, true),
@@ -533,7 +581,8 @@ export function goalTasks() {
     },
     {
       id: "completed-date-idempotent", title: "对已完成日期重复运行不重复生成",
-      goal: `该日期（${ACCEPTANCE_DATE}）已经生成过日报。点击“More arXiv Daily actions”打开菜单，点击“Run for date…”（不是 Force run），日期填 ${ACCEPTANCE_DATE} 并提交；预期它会被判定为已完成而跳过，不会重新生成。`,
+      goal: `该日期（${ACCEPTANCE_DATE}）已经生成过日报。点击“${MORE_ACTIONS_LABEL}”打开菜单，点击“${RUN_FOR_DATE_LABEL}”（不是 ${FORCE_RUN_BUTTON_LABEL}），日期填 ${ACCEPTANCE_DATE} 并提交；预期它会被判定为已完成而跳过，不会重新生成。`,
+      uiLabels: [MORE_ACTIONS_LABEL, RUN_FOR_DATE_LABEL, DATE_FIELD_LABEL, FORCE_RUN_BUTTON_LABEL],
       // Deterministically ensures a completed date exists (never via the model) and records the exact
       // baseline — report content and the fixture request count — prepare()'s own moment, independent
       // of whatever earlier task may or may not have already generated this same date.
@@ -548,7 +597,7 @@ export function goalTasks() {
         await driver.openDashboard();
       },
       async verify({ driver, actions }) {
-        const submitted = actions.some(action => action.type === "fill" && action.control?.name === "Date" && action.value === ACCEPTANCE_DATE);
+        const submitted = actions.some(action => action.type === "fill" && action.control?.name === DATE_FIELD_LABEL && action.value === ACCEPTANCE_DATE);
         if (!submitted) return taskResult([checkResult(`通过 Run for date 提交 ${ACCEPTANCE_DATE}`, false)]);
         const history = await readHistory(driver).catch(() => []);
         const freshHistory = history.slice(idempotentBaseline.historyCount);
@@ -576,7 +625,8 @@ export function goalTasks() {
     // ─── P3 Chunk 4: reading tasks ──────────────────────────────────────────
     {
       id: "dashboard-tabs-paging", title: "切换到 All 标签并翻到第二页",
-      goal: "打开阅读面板，点击 All 标签，然后点击分页区域的 Next page 按钮，翻到第 2 页。",
+      goal: `打开阅读面板，点击 ${ALL_TAB_LABEL} 标签，然后点击分页区域的 ${NEXT_PAGE_LABEL} 按钮，翻到第 2 页。`,
+      uiLabels: [ALL_TAB_LABEL, NEXT_PAGE_LABEL],
       // Writes one real daily-report-shaped Markdown file plus one real Paper note per synthetic id (never
       // through the model), so the normal vault scan (not a direct papers.json write — see this file's own
       // comment above for why that does not survive a reload) indexes enough papers that the existing
@@ -601,9 +651,9 @@ export function goalTasks() {
         // Default active tab is "starred" and any tab click resets to page 0 (view.ts), so reaching "All,
         // page 2" is only possible through a real tab click followed by a real Next-page click — never a
         // default.
-        const switchedToAll = actions.some(action => action.type === "click" && /^all\d*$/i.test((action.control?.name || "").trim()));
+        const switchedToAll = actions.some(action => action.type === "click" && new RegExp(`^${ALL_TAB_LABEL}\\d*$`, "i").test((action.control?.name || "").trim()));
         if (!switchedToAll) return taskResult([checkResult("点击 All 标签", false)]);
-        const clickedNext = actions.some(action => action.type === "click" && /^next page$/i.test((action.control?.name || "").trim()));
+        const clickedNext = actions.some(action => action.type === "click" && exactLabelPattern(NEXT_PAGE_LABEL).test((action.control?.name || "").trim()));
         if (!clickedNext) return taskResult([checkResult("点击 All 标签", true), checkResult("点击 Next page 翻到第 2 页", false)]);
         const activeTab = await poll(
           () => driver.read('document.querySelector(\'.arxiv-daily-dashboard__tab[data-tab="all"]\')?.getAttribute("aria-pressed")'),
@@ -626,15 +676,16 @@ export function goalTasks() {
     },
     {
       id: "mark-to-read", title: "将论文标记为待读",
-      goal: `点击仪表盘工具栏的“More arXiv Daily actions”按钮打开菜单，点击其中的“Set paper mark…”，在弹出的对话框里把 Paper ID or URL 填为 ${MARK_TO_READ_ID}，Mark 保持默认的 Watch，点击 Set mark 提交。`,
+      goal: `点击仪表盘工具栏的“${MORE_ACTIONS_LABEL}”按钮打开菜单，点击其中的“${SET_PAPER_MARK_LABEL}”，在弹出的对话框里把 ${PAPER_ID_OR_URL_LABEL} 填为 ${MARK_TO_READ_ID}，${MARK_FIELD_LABEL} 保持默认的 ${WATCH_MARK_LABEL}，点击 ${SET_MARK_LABEL} 提交。`,
+      uiLabels: [MORE_ACTIONS_LABEL, SET_PAPER_MARK_LABEL, PAPER_ID_OR_URL_LABEL, MARK_FIELD_LABEL, WATCH_MARK_LABEL, SET_MARK_LABEL],
       async prepare({ driver }) {
         await driver.ensureDailyReport(ACCEPTANCE_DATE);
         await driver.openDashboard();
       },
       async verify({ driver, actions }) {
-        const filled = actions.some(action => action.type === "fill" && /paper id or url/i.test(action.control?.name || "") && action.value === MARK_TO_READ_ID);
+        const filled = actions.some(action => action.type === "fill" && new RegExp(PAPER_ID_OR_URL_LABEL, "i").test(action.control?.name || "") && action.value === MARK_TO_READ_ID);
         if (!filled) return taskResult([checkResult(`在 Set paper mark 对话框中填写 ${MARK_TO_READ_ID}`, false)]);
-        const submitted = actions.some(action => action.type === "click" && /^set mark$/i.test((action.control?.name || "").trim()));
+        const submitted = actions.some(action => action.type === "click" && exactLabelPattern(SET_MARK_LABEL).test((action.control?.name || "").trim()));
         if (!submitted) {
           return taskResult([checkResult(`在 Set paper mark 对话框中填写 ${MARK_TO_READ_ID}`, true), checkResult("点击 Set mark 提交", false)]);
         }
@@ -650,7 +701,8 @@ export function goalTasks() {
     },
     {
       id: "create-paper-note", title: "为指定论文生成论文总结",
-      goal: `打开阅读面板，切换到 All 标签，找到 arXiv ${CREATE_PAPER_NOTE_ID} 对应行，点击该行的“Summarize by arXiv ID”按钮，为这篇论文生成一份论文总结（Paper note）。`,
+      goal: `打开阅读面板，切换到 ${ALL_TAB_LABEL} 标签，找到 arXiv ${CREATE_PAPER_NOTE_ID} 对应行，点击该行的“${SUMMARIZE_BY_ARXIV_ID_LABEL}”按钮，为这篇论文生成一份论文总结（Paper note）。`,
+      uiLabels: [ALL_TAB_LABEL, SUMMARIZE_BY_ARXIV_ID_LABEL],
       // Clears the target's own note and seeds the fixture's other paper with one, so exactly one row in
       // the table shows "Summarize by arXiv ID" (see CREATE_PAPER_NOTE_ID's own comment above for why this
       // is necessary — the action buttons carry no per-paper DOM attribute to disambiguate by).
@@ -668,7 +720,7 @@ export function goalTasks() {
         await driver.openDashboard();
       },
       async verify({ driver, actions }) {
-        const clicked = actions.some(action => action.type === "click" && /^summarize by arxiv id$/i.test((action.control?.name || "").trim()));
+        const clicked = actions.some(action => action.type === "click" && exactLabelPattern(SUMMARIZE_BY_ARXIV_ID_LABEL).test((action.control?.name || "").trim()));
         if (!clicked) return taskResult([checkResult(`点击 arXiv ${CREATE_PAPER_NOTE_ID} 行的 Summarize by arXiv ID 按钮`, false)]);
         const notePath = paperNoteFile(CREATE_PAPER_NOTE_ID);
         const content = await poll(() => driver.file(notePath).catch(() => null), value => value !== null, "论文总结文件已写出", { timeoutMs: 5000 }).catch(() => null);
@@ -688,16 +740,17 @@ export function goalTasks() {
     },
     {
       id: "summarize-by-id", title: "按 arXiv 编号生成论文总结",
-      goal: `点击阅读面板工具栏的“Summarize by ID”按钮，在弹出的对话框里把 Paper ID or URL 填为 ${SUMMARIZE_BY_ID_TARGET}，点击 Summarize 提交，等待生成完成。`,
+      goal: `点击阅读面板工具栏的“${SUMMARIZE_BY_ID_LABEL}”按钮，在弹出的对话框里把 ${PAPER_ID_OR_URL_LABEL} 填为 ${SUMMARIZE_BY_ID_TARGET}，点击 ${SUMMARIZE_LABEL} 提交，等待生成完成。`,
+      uiLabels: [SUMMARIZE_BY_ID_LABEL, PAPER_ID_OR_URL_LABEL, SUMMARIZE_LABEL],
       async prepare({ driver }) {
         await driver.removeVaultFile(paperNoteFile(SUMMARIZE_BY_ID_TARGET));
         await driver.applyIndexPatch(current => { delete current.papers[`arxiv:${SUMMARIZE_BY_ID_TARGET}`]; });
         await driver.openDashboard();
       },
       async verify({ driver, actions }) {
-        const filled = actions.some(action => action.type === "fill" && /paper id or url/i.test(action.control?.name || "") && action.value === SUMMARIZE_BY_ID_TARGET);
+        const filled = actions.some(action => action.type === "fill" && new RegExp(PAPER_ID_OR_URL_LABEL, "i").test(action.control?.name || "") && action.value === SUMMARIZE_BY_ID_TARGET);
         if (!filled) return taskResult([checkResult(`在 Summarize by ID 对话框中填写 ${SUMMARIZE_BY_ID_TARGET}`, false)]);
-        const submitted = actions.some(action => action.type === "click" && /^summarize$/i.test((action.control?.name || "").trim()));
+        const submitted = actions.some(action => action.type === "click" && exactLabelPattern(SUMMARIZE_LABEL).test((action.control?.name || "").trim()));
         if (!submitted) {
           return taskResult([checkResult(`在 Summarize by ID 对话框中填写 ${SUMMARIZE_BY_ID_TARGET}`, true), checkResult("点击 Summarize 提交", false)]);
         }
@@ -718,7 +771,8 @@ export function goalTasks() {
     },
     {
       id: "open-today-report", title: "从日历打开日报",
-      goal: `打开阅读面板，在 Daily reports 日历中找到 ${ACCEPTANCE_DATE} 对应的日期格（已生成日报，带有论文数角标），点击它打开当天的日报。`,
+      goal: `打开阅读面板，在 ${DAILY_REPORTS_LABEL} 日历中找到 ${ACCEPTANCE_DATE} 对应的日期格（已生成日报，带有论文数角标），点击它打开当天的日报。`,
+      uiLabels: [DAILY_REPORTS_LABEL],
       async prepare({ driver }) {
         await driver.ensureDailyReport(ACCEPTANCE_DATE);
         await driver.openDashboard();

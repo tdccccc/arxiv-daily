@@ -12,7 +12,7 @@ import { readFile, rm } from "node:fs/promises";
 import path from "node:path";
 import { ACCEPTANCE_DATE, PAPERS } from "../fixtures.mjs";
 import { assertFixture, settings, writeConfigPatch } from "../exploration-browser.mjs";
-import { checkResult, taskResult } from "./checks.mjs";
+import { checkResult, exactLabelPattern, taskResult } from "./checks.mjs";
 import { PERSONA_TASK_IDS, personaTasks as sharedPersonaTasks } from "./personas.mjs";
 
 /** Single source of truth for the default workbench goal-task ids, usable without a fixture (e.g. --list). */
@@ -44,6 +44,27 @@ const NOTE_KEY = `arxiv:${NOTE_PAPER.id}`;
 // times the library has already run.
 const EXTERNAL_CONFLICT_DRAFT_MODEL = "workbench-conflict-draft-model";
 const EXTERNAL_CONFLICT_EXTERNAL_MODEL = "workbench-conflict-external-model";
+
+// ─── P2: declared UI labels ──────────────────────────────────────────────────
+// scripts/tests/acceptance-exploration-labels.test.mjs asserts every task's own `uiLabels` array (every
+// product UI label its goal text names or its verify() matches on) is still literally present somewhere
+// in apps/cli/src/workbench/**, so a rename shows up as a failing fixed test instead of only a blocked,
+// paid real-model run. Every verify() that matches one of these reads the exact constant below, never a
+// second, independently-typed copy of the same string, so the goal text, the verifier and the declared
+// label cannot drift apart.
+const MAX_DAILY_PAPERS_FIELD_LABEL = "maxDailyPapers";
+const SIDEBAR_TOGGLE_PURPOSE_LABEL = "sidebar-toggle";
+const GENERATE_ACTION_LABEL = "generate";
+const STAR_FILTER_TAB_LABEL = "收藏";
+const BACK_TO_LIST_LABEL = "← 返回列表";
+const GENERATE_DETAIL_SUMMARY_LABEL = "生成详细总结";
+const START_GENERATION_LABEL = "开始生成";
+const READ_DETAIL_SUMMARY_LABEL = "阅读详细总结";
+const MODEL_FIELD_LABEL = "Model";
+const DISCARD_UNSAVED_AND_CLOSE_LABEL = "放弃未保存修改并关闭";
+const CONFIRM_DISCARD_AND_CLOSE_LABEL = "放弃修改并关闭";
+const SETTINGS_BUTTON_LABEL = "设置";
+const RETRY_SAVE_LABEL = "重试保存";
 
 async function paperIndexPath(fixture) {
   const config = await settings(fixture);
@@ -85,27 +106,29 @@ export async function goalTasks(fixture) {
   return [
     {
       id: GOAL_TASK_IDS[0], title: "设置自动保存并刷新复查",
-      goal: `打开设置，把每日论文数量上限 maxDailyPapers 改为 ${target}。移开焦点并等待保存完成，关闭设置，刷新页面，再打开设置，确认上限仍为 ${target}。不要修改路径、模型连接或密钥。`,
+      goal: `打开设置，把每日论文数量上限 ${MAX_DAILY_PAPERS_FIELD_LABEL} 改为 ${target}。移开焦点并等待保存完成，关闭设置，刷新页面，再打开设置，确认上限仍为 ${target}。不要修改路径、模型连接或密钥。`,
+      uiLabels: [MAX_DAILY_PAPERS_FIELD_LABEL],
       async verify({ driver, observation, actions }) {
-        const changed = actions.find(action => action.type === "fill" && (action.control?.field || action.control?.name) === "maxDailyPapers" && action.value === String(target));
+        const changed = actions.find(action => action.type === "fill" && (action.control?.field || action.control?.name) === MAX_DAILY_PAPERS_FIELD_LABEL && action.value === String(target));
         const refreshed = changed && actions.some(action => action.type === "reload" && action.step > changed.step);
         const state = await driver.inspect();
         return taskResult([
           checkResult("通过界面修改每日论文数量上限", changed),
           checkResult("修改后刷新了页面", refreshed),
           checkResult("隔离配置文件保存了新上限", state.maxDailyPapers === target, state.maxDailyPapers),
-          checkResult("刷新后重新打开设置仍显示新上限", refreshed && observation.controls.some(control => control.field === "maxDailyPapers" && control.value === String(target))),
+          checkResult("刷新后重新打开设置仍显示新上限", refreshed && observation.controls.some(control => control.field === MAX_DAILY_PAPERS_FIELD_LABEL && control.value === String(target))),
         ]);
       },
     },
     {
       id: GOAL_TASK_IDS[1], title: "侧栏折叠和展开状态持久化",
       goal: "关闭设置（如果仍打开）。收起侧栏，刷新页面确认侧栏仍收起；再展开侧栏，再次刷新，确认侧栏仍展开。等待偏好保存后再刷新。",
+      uiLabels: [SIDEBAR_TOGGLE_PURPOSE_LABEL],
       async verify({ driver, observation, actions }) {
         const state = await driver.inspect();
         const last = actions.findLast(action => action.type === "reload");
-        const lastToggle = actions.findLast(action => action.type === "click" && action.control?.purpose === "sidebar-toggle");
-        const clicked = actions.some(action => action.type === "click" && action.control?.purpose === "sidebar-toggle");
+        const lastToggle = actions.findLast(action => action.type === "click" && action.control?.purpose === SIDEBAR_TOGGLE_PURPOSE_LABEL);
+        const clicked = actions.some(action => action.type === "click" && action.control?.purpose === SIDEBAR_TOGGLE_PURPOSE_LABEL);
         if (clicked && last && lastToggle && last.step > lastToggle.step && state.preferences.sidebarCollapsed === true && observation.layout.sidebarCollapsed) {
           collapsedAfterReload = true; collapseReloadStep = last.step;
         }
@@ -116,9 +139,10 @@ export async function goalTasks(fixture) {
     {
       id: GOAL_TASK_IDS[2], title: "生成固定日期日报并打开论文",
       goal: "通过生成按钮生成 2026-10-01 日报（选择指定日期，不要生成今天）。等待成功，再从列表打开 arXiv 2610.10001 论文，确认阅读内容出现。无需判断论文内容质量。",
+      uiLabels: [GENERATE_ACTION_LABEL],
       async verify({ driver, observation, actions, startedAt }) {
         const state = await driver.dailyEvidence("2026-10-01");
-        const generated = actions.some(action => action.type === "click" && action.control?.dataAction === "generate");
+        const generated = actions.some(action => action.type === "click" && action.control?.dataAction === GENERATE_ACTION_LABEL);
         const run = state.run;
         const checks = [
           checkResult("通过生成入口启动任务", generated),
@@ -135,24 +159,25 @@ export async function goalTasks(fixture) {
     // ─── P3 Chunk 5: reading-journey and settings-conflict tasks ────────────
     {
       id: GOAL_TASK_IDS[3], title: "收藏后切换筛选并恢复阅读",
-      goal: `打开阅读面板。找到标题为“${STAR_FILTER_PAPER.title}”的论文，点击它的收藏按钮（Star paper）将其标记为收藏。点击顶部的“收藏”筛选，确认这篇论文仍显示在列表里。点击它的标题进入阅读概览，再点击“← 返回列表”返回列表。确认返回后仍停留在“收藏”筛选，并且仍能看到这篇论文。`,
+      goal: `打开阅读面板。找到标题为“${STAR_FILTER_PAPER.title}”的论文，点击它的收藏按钮将其标记为收藏。点击顶部的“${STAR_FILTER_TAB_LABEL}”筛选，确认这篇论文仍显示在列表里。点击它的标题进入阅读概览，再点击“${BACK_TO_LIST_LABEL}”返回列表。确认返回后仍停留在“${STAR_FILTER_TAB_LABEL}”筛选，并且仍能看到这篇论文。`,
+      uiLabels: [STAR_FILTER_TAB_LABEL, BACK_TO_LIST_LABEL],
       async prepare({ driver }) {
         await driver.ensureDailyReport(ACCEPTANCE_DATE);
         await driver.ensurePaperUnstarred(STAR_FILTER_KEY);
       },
       async verify({ observation, actions }) {
-        const starName = control => (control?.name || "").includes("收藏") && (control?.name || "").includes(STAR_FILTER_PAPER.title);
+        const starName = control => (control?.name || "").includes(STAR_FILTER_TAB_LABEL) && (control?.name || "").includes(STAR_FILTER_PAPER.title);
         const starClickIndex = actions.findIndex(action => action.type === "click" && starName(action.control));
         if (starClickIndex === -1) return taskResult([checkResult(`点击“${STAR_FILTER_PAPER.title}”的收藏按钮`, false)]);
         // The scope filter button's own accessible name is just "收藏" plus a live count ("收藏12"), never
         // " · <title>" — distinct from the star button's aria-label by construction, not just by luck.
-        const filterClickIndex = actions.findIndex((action, index) => index > starClickIndex && action.type === "click" && /^收藏[\d—]*$/.test((action.control?.name || "").trim()));
+        const filterClickIndex = actions.findIndex((action, index) => index > starClickIndex && action.type === "click" && new RegExp(`^${STAR_FILTER_TAB_LABEL}[\\d—]*$`).test((action.control?.name || "").trim()));
         if (filterClickIndex === -1) return taskResult([checkResult(`点击“${STAR_FILTER_PAPER.title}”的收藏按钮`, true), checkResult("切换到顶部“收藏”筛选", false)]);
         const openClickIndex = actions.findIndex((action, index) => index > filterClickIndex && action.type === "click" && action.control?.paperKey === STAR_FILTER_KEY);
         if (openClickIndex === -1) {
           return taskResult([checkResult(`点击“${STAR_FILTER_PAPER.title}”的收藏按钮`, true), checkResult("切换到顶部“收藏”筛选", true), checkResult("点击该论文标题进入阅读概览", false)]);
         }
-        const backClicked = actions.slice(openClickIndex + 1).some(action => action.type === "click" && (action.control?.name || "").trim() === "← 返回列表");
+        const backClicked = actions.slice(openClickIndex + 1).some(action => action.type === "click" && (action.control?.name || "").trim() === BACK_TO_LIST_LABEL);
         if (!backClicked) {
           return taskResult([checkResult(`点击“${STAR_FILTER_PAPER.title}”的收藏按钮`, true), checkResult("切换到顶部“收藏”筛选", true), checkResult("点击该论文标题进入阅读概览", true), checkResult("点击“← 返回列表”返回", false)]);
         }
@@ -171,7 +196,8 @@ export async function goalTasks(fixture) {
     },
     {
       id: GOAL_TASK_IDS[4], title: "为单篇论文生成详细总结",
-      goal: `打开阅读面板，点击标题为“${NOTE_PAPER.title}”的论文进入概览。点击“生成详细总结”按钮，在弹出的对话框里直接点击“开始生成”，等待生成完成（概览里出现“阅读详细总结”链接即代表完成）。`,
+      goal: `打开阅读面板，点击标题为“${NOTE_PAPER.title}”的论文进入概览。点击“${GENERATE_DETAIL_SUMMARY_LABEL}”按钮，在弹出的对话框里直接点击“${START_GENERATION_LABEL}”，等待生成完成（概览里出现“${READ_DETAIL_SUMMARY_LABEL}”链接即代表完成）。`,
+      uiLabels: [GENERATE_DETAIL_SUMMARY_LABEL, START_GENERATION_LABEL, READ_DETAIL_SUMMARY_LABEL],
       async prepare({ driver }) {
         await driver.ensureDailyReport(ACCEPTANCE_DATE);
         await rm(await paperNotePath(fixture, NOTE_PAPER.id), { force: true });
@@ -179,9 +205,9 @@ export async function goalTasks(fixture) {
       async verify({ observation, actions }) {
         const openedOverview = actions.some(action => action.type === "click" && action.control?.paperKey === NOTE_KEY);
         if (!openedOverview) return taskResult([checkResult(`点击“${NOTE_PAPER.title}”进入概览`, false)]);
-        const clickedGenerate = actions.some(action => action.type === "click" && (action.control?.name || "").trim() === "生成详细总结");
+        const clickedGenerate = actions.some(action => action.type === "click" && (action.control?.name || "").trim() === GENERATE_DETAIL_SUMMARY_LABEL);
         if (!clickedGenerate) return taskResult([checkResult(`点击“${NOTE_PAPER.title}”进入概览`, true), checkResult("点击“生成详细总结”按钮", false)]);
-        const submitted = actions.some(action => action.type === "click" && (action.control?.name || "").trim() === "开始生成");
+        const submitted = actions.some(action => action.type === "click" && (action.control?.name || "").trim() === START_GENERATION_LABEL);
         if (!submitted) {
           return taskResult([checkResult(`点击“${NOTE_PAPER.title}”进入概览`, true), checkResult("点击“生成详细总结”按钮", true), checkResult("在弹出的对话框里点击“开始生成”", false)]);
         }
@@ -190,7 +216,7 @@ export async function goalTasks(fixture) {
         const index = await pollFile(() => readPaperIndex(fixture), value => value?.papers?.[NOTE_KEY]?.detail === true);
         const entry = index?.papers?.[NOTE_KEY];
         const indexed = entry?.detail === true && typeof entry.paperPath === "string";
-        const shownInUi = observation.controls.some(control => (control.name || "").trim() === "阅读详细总结");
+        const shownInUi = observation.controls.some(control => (control.name || "").trim() === READ_DETAIL_SUMMARY_LABEL);
         return taskResult([
           checkResult(`点击“${NOTE_PAPER.title}”进入概览`, true),
           checkResult("点击“生成详细总结”按钮", true),
@@ -203,7 +229,8 @@ export async function goalTasks(fixture) {
     },
     {
       id: GOAL_TASK_IDS[5], title: "设置冲突后放弃草稿并重新打开",
-      goal: `打开设置，把 Model 字段改为“${EXTERNAL_CONFLICT_DRAFT_MODEL}”。测试环境会在设置加载完成后立刻在磁盘上修改配置文件，这会让自动保存因“配置已改变”失败，界面上会出现“放弃未保存修改并关闭”按钮。不要点击“重试保存”：点击“放弃未保存修改并关闭”，再点击随后出现的确认按钮“放弃修改并关闭”，设置会关闭。关闭后重新点击“设置”打开设置，确认 Model 字段显示的是磁盘上的最新值，而不是你刚才填写的草稿。`,
+      goal: `打开设置，把 ${MODEL_FIELD_LABEL} 字段改为“${EXTERNAL_CONFLICT_DRAFT_MODEL}”。测试环境会在设置加载完成后立刻在磁盘上修改配置文件，这会让自动保存因“配置已改变”失败，界面上会出现“${DISCARD_UNSAVED_AND_CLOSE_LABEL}”按钮。不要点击“${RETRY_SAVE_LABEL}”：点击“${DISCARD_UNSAVED_AND_CLOSE_LABEL}”，再点击随后出现的确认按钮“${CONFIRM_DISCARD_AND_CLOSE_LABEL}”，设置会关闭。关闭后重新点击“${SETTINGS_BUTTON_LABEL}”打开设置，确认 ${MODEL_FIELD_LABEL} 字段显示的是磁盘上的最新值，而不是你刚才填写的草稿。`,
+      uiLabels: [MODEL_FIELD_LABEL, DISCARD_UNSAVED_AND_CLOSE_LABEL, CONFIRM_DISCARD_AND_CLOSE_LABEL, SETTINGS_BUTTON_LABEL, RETRY_SAVE_LABEL],
       async prepare() {
         externalConflictWritten = false;
       },
@@ -217,24 +244,24 @@ export async function goalTasks(fixture) {
           await writeConfigPatch(fixture, table => { table.llm = { ...table.llm, model: EXTERNAL_CONFLICT_EXTERNAL_MODEL }; });
         }
         const filledDraft = actions.some(action => action.type === "fill" && action.control?.field === "model" && action.value === EXTERNAL_CONFLICT_DRAFT_MODEL);
-        if (!filledDraft) return taskResult([checkResult(`把 Model 字段改为“${EXTERNAL_CONFLICT_DRAFT_MODEL}”`, false)]);
-        const discardClicked = actions.some(action => action.type === "click" && (action.control?.name || "").trim() === "放弃未保存修改并关闭");
+        if (!filledDraft) return taskResult([checkResult(`把 ${MODEL_FIELD_LABEL} 字段改为“${EXTERNAL_CONFLICT_DRAFT_MODEL}”`, false)]);
+        const discardClicked = actions.some(action => action.type === "click" && (action.control?.name || "").trim() === DISCARD_UNSAVED_AND_CLOSE_LABEL);
         if (!discardClicked) {
-          return taskResult([checkResult(`把 Model 字段改为“${EXTERNAL_CONFLICT_DRAFT_MODEL}”`, true), checkResult("看到保存失败后点击“放弃未保存修改并关闭”", false)]);
+          return taskResult([checkResult(`把 ${MODEL_FIELD_LABEL} 字段改为“${EXTERNAL_CONFLICT_DRAFT_MODEL}”`, true), checkResult("看到保存失败后点击“放弃未保存修改并关闭”", false)]);
         }
-        const confirmIndex = actions.findIndex(action => action.type === "click" && (action.control?.name || "").trim() === "放弃修改并关闭");
+        const confirmIndex = actions.findIndex(action => action.type === "click" && (action.control?.name || "").trim() === CONFIRM_DISCARD_AND_CLOSE_LABEL);
         if (confirmIndex === -1) {
-          return taskResult([checkResult(`把 Model 字段改为“${EXTERNAL_CONFLICT_DRAFT_MODEL}”`, true), checkResult("看到保存失败后点击“放弃未保存修改并关闭”", true), checkResult("点击确认按钮“放弃修改并关闭”", false)]);
+          return taskResult([checkResult(`把 ${MODEL_FIELD_LABEL} 字段改为“${EXTERNAL_CONFLICT_DRAFT_MODEL}”`, true), checkResult("看到保存失败后点击“放弃未保存修改并关闭”", true), checkResult("点击确认按钮“放弃修改并关闭”", false)]);
         }
-        const reopened = actions.slice(confirmIndex + 1).some(action => action.type === "click" && (action.control?.name || "").trim() === "设置");
+        const reopened = actions.slice(confirmIndex + 1).some(action => action.type === "click" && (action.control?.name || "").trim() === SETTINGS_BUTTON_LABEL);
         if (!reopened) {
-          return taskResult([checkResult(`把 Model 字段改为“${EXTERNAL_CONFLICT_DRAFT_MODEL}”`, true), checkResult("看到保存失败后点击“放弃未保存修改并关闭”", true), checkResult("点击确认按钮“放弃修改并关闭”", true), checkResult("重新点击“设置”打开设置", false)]);
+          return taskResult([checkResult(`把 ${MODEL_FIELD_LABEL} 字段改为“${EXTERNAL_CONFLICT_DRAFT_MODEL}”`, true), checkResult("看到保存失败后点击“放弃未保存修改并关闭”", true), checkResult("点击确认按钮“放弃修改并关闭”", true), checkResult("重新点击“设置”打开设置", false)]);
         }
         const config = await settings(fixture);
         const onDisk = config.llm?.model === EXTERNAL_CONFLICT_EXTERNAL_MODEL;
         const shownValue = observation.controls.find(control => control.field === "model")?.value;
         return taskResult([
-          checkResult(`把 Model 字段改为“${EXTERNAL_CONFLICT_DRAFT_MODEL}”`, true),
+          checkResult(`把 ${MODEL_FIELD_LABEL} 字段改为“${EXTERNAL_CONFLICT_DRAFT_MODEL}”`, true),
           checkResult("看到保存失败后点击“放弃未保存修改并关闭”", true),
           checkResult("点击确认按钮“放弃修改并关闭”", true),
           checkResult("重新点击“设置”打开设置", true),
