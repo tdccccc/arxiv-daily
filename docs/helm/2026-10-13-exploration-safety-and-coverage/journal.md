@@ -34,3 +34,10 @@
 - change: user decision (2026-10-13): option B — the harness may pre-install the PDF runtime into a test-only cache before the model acts (network on first run only); model-time requests stay on fixtures. Recorded as a constraint; the open question is removed.
 - disposition: no code yet; applies to P4.
 - next: continue P3 Chunk 1.
+
+## 2026-10-13 — note (tighten the label check after P3)
+
+- evidence: P2's label check is case-insensitive and searches the whole host source, so a rename survives when the same text remains elsewhere (plugin has "Run History" in dashboard/hub-modal.ts:39 and "Run history" in commands.ts:904).
+- change: user decision (2026-10-13): tighten it after P3 so P3's new tasks are covered in one pass. New P6: each label declares its source file and must appear there as a complete, case-sensitive string literal; runtime-built text is listed as an explicit exception. P2 stays done (its outcome holds; P6 is incremental).
+- disposition: no code yet.
+- next: continue P3 Chunk 1 (embedding-mode policy, local-embedding network question).

@@ -2,8 +2,8 @@
 
 status: active
 created: 2026-10-13T10:05:00+08:00
-updated: 2026-10-13T13:05:00+08:00
-revision: 5
+updated: 2026-10-13T13:30:00+08:00
+revision: 6
 owner: main-session-3a9f449b
 
 ## Intent
@@ -45,6 +45,7 @@ owner: main-session-3a9f449b
 3. P3 — Plugin product 上的个人文献库目标任务就绪，起点由夹具确定性准备 — status: active
 4. P4 — Reading workbench 上的个人文献库目标任务就绪 — status: pending
 5. P5 — 真实模型完整运行、疑点复核与处置、发版说明更新 — status: pending
+6. P6 — 界面文字检查按出处文件、区分大小写的完整字符串核对，同一文字在别处残留时改名也能发现（在 P3 之后、P4 之前执行） — status: pending
 
 ## Open questions
 
