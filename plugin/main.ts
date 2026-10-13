@@ -438,6 +438,15 @@ export default class ArxivDailyPlugin extends Plugin {
       (message) => this.logger.warn(`settings: ${message}`),
     );
 
+    // Obsidian's disable is synchronous and does not cancel this still-running
+    // onload(): disabling the plugin while an earlier await above was pending
+    // leaves this a stale instance that nothing will ever call onunload() on
+    // again. Registering the status bar, dashboard view, commands, ribbon icon
+    // or scheduler below on its behalf would leak (an orphaned status bar item,
+    // a running scheduler timer) or collide with the next enabled instance's own
+    // registration (e.g. "Attempting to register an existing view type").
+    if (this.unloading) return;
+
     try {
       this.progress = new StatusBarController(
         this.addStatusBarItem(),
@@ -458,6 +467,12 @@ export default class ArxivDailyPlugin extends Plugin {
     await this.buildMarkdownWriter().cleanupTemporaryFiles().catch((e) =>
       this.logger.warn("markdown temp cleanup failed", e),
     );
+
+    // Same guard as above: this await is another point where a mid-flight disable
+    // could have landed, and everything from here on (scheduler, settings tab,
+    // dashboard view, commands, ribbon icon) is a registration or a running timer
+    // that must not be created for a stale, already-unloaded instance.
+    if (this.unloading) return;
 
     this.scheduler = new SchedulerService({
       getSettings: () => this.settings,

@@ -136,6 +136,61 @@ describe("plugin settings reload lifecycle", () => {
     }
   });
 
+  it("skips registering the dashboard view, commands and scheduler when unloaded while onload is still awaiting", async () => {
+    // Obsidian's disable is synchronous and does not cancel a still-running async
+    // onload(): if the user toggles the plugin off and back on quickly, the old
+    // (disabled) instance's onload() keeps running in the background. Without a
+    // guard it would still register the dashboard view, commands, ribbon icon and
+    // start a scheduler on behalf of an instance nothing will ever unload again,
+    // leaking a timer and colliding with the next instance's own registration
+    // ("Attempting to register an existing view type").
+    const plugin = new ArxivDailyPlugin();
+    const settings = structuredClone(DEFAULT_SETTINGS);
+    settings.schedule.enabled = true;
+    let releaseSettingsLoad!: () => void;
+    const settingsLoadGate = new Promise<void>((resolve) => { releaseSettingsLoad = resolve; });
+    const storage: StorageAdapter = {
+      ...memoryStorage(),
+      writeTextAtomic: async () => {},
+      acquireLock: vi.fn(async () => null),
+      list: vi.fn(async () => []),
+      remove: vi.fn(async () => {}),
+    };
+    const buildHost = vi.spyOn(obsidianHost, "buildObsidianHostAdapters")
+      .mockReturnValue({ storage, http: {}, markupParser: {} } as any);
+    const registeredViewTypes: string[] = [];
+    const registeredCommandIds: string[] = [];
+    Object.assign(plugin, {
+      settings,
+      app: {},
+      loadSettingsAndState: vi.fn(async () => {
+        await settingsLoadGate;
+        return [];
+      }),
+      cleanupCachesIfDue: vi.fn(),
+      addStatusBarItem: vi.fn(() => document.createElement("div")),
+      addSettingTab: vi.fn(),
+      registerView: vi.fn((type: string) => registeredViewTypes.push(type)),
+      addCommand: vi.fn((command: { id: string }) => registeredCommandIds.push(command.id)),
+      addRibbonIcon: vi.fn(() => document.createElement("div")),
+    });
+
+    try {
+      const onloadResult = plugin.onload();
+      // Mirrors Obsidian: the user disables the plugin (synchronous unload) while
+      // the stale instance's onload() is still awaiting settings/state I/O.
+      plugin.onunload();
+      releaseSettingsLoad();
+      await onloadResult;
+
+      expect(registeredViewTypes).toEqual([]);
+      expect(registeredCommandIds).toEqual([]);
+      expect(plugin.scheduler).toBeUndefined();
+    } finally {
+      buildHost.mockRestore();
+    }
+  });
+
   it("routes base URL persistence through effective-endpoint cancellation", async () => {
     const plugin = Object.create(ArxivDailyPlugin.prototype) as ArxivDailyPlugin;
     const settings = structuredClone(DEFAULT_SETTINGS);
