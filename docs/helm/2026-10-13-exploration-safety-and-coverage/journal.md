@@ -69,3 +69,10 @@
 - change: Chunks 3 and 6 checked; new Chunk 7 fixes the two observer gaps, restores discard in `library-edit-candidate`, and reuses the fixture PDF builder.
 - disposition: keep a99e230 and eefbeff.
 - next: P3 Chunk 7, then phase verification.
+
+## 2026-10-13 — L1 adjust (P3 verification found a library state leak)
+
+- evidence: bfb09e6 (observer: topmost dialog, collapsed content hidden; discard restored) accepted. Phase verification (/tmp/p3verify): the 21-task run with an always-blocked model ended 20 tasks by the model's blocked action, but `library-edit-candidate` failed in `prepare()` with "no-evidence: clustering produced no evidence groups" (both runs). The 7 library tasks with scripted plans in one run: first five passed; `library-accept-direction` failed and `library-edit-candidate` blocked with the same error (both runs identical); alone, each passes. `reset()` restores data.json and reloads the plugin but leaves library PDFs and `.index` state from earlier tasks. No unexpected network requests; release tools 751/751. This is the phase's abort trigger "library state leaks … through reset()".
+- change: Chunk 7 checked; new Chunk 8 finds the root cause first — a harness leak, or a plugin bug where a paper added after an earlier index is not picked up — then fixes it.
+- disposition: keep bfb09e6. No new library tasks until Chunk 8 is accepted.
+- next: P3 Chunk 8.

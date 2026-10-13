@@ -2,8 +2,8 @@
 
 goal_ref: ../goal.md
 created: 2026-10-13T12:40:00+08:00
-updated: 2026-10-13T19:30:00+08:00
-revision: 4
+updated: 2026-10-13T21:30:00+08:00
+revision: 5
 
 ## Outcome
 
@@ -87,6 +87,15 @@ First build a small library fixture helper for the exploration host that reuses 
 - Red / baseline signal: observation tests (happy-dom) show (a) controls inside a closed `<details>` reported as visible and clickable, and (b) with a confirmation `.arxiv-daily-modal` stacked on the review modal, the observation resolves the older modal so the confirm buttons are absent.
 - Green check: closed-`<details>` content is not offered (its `<summary>` still is); the topmost plugin modal is the observed surface; `library-edit-candidate` asks for discard again and a scripted real-host discard run passes. The duplicated tiny PDF builder in `exploration-tasks/library.mjs` reuses the one in `scripts/acceptance/fixtures.mjs`.
 - regression checks: `node --test scripts/tests/acceptance-exploration*.test.mjs`; `npm run test:acceptance:tools`; scripted real-host runs of one older settings task and one dashboard task.
+- [x] implementation and tests accepted
+
+### Chunk 8 — library state does not leak between tasks
+
+- change kind: bug fix (test tooling; product if the root cause is in the plugin)
+- strategy: strict Red-Green-Refactor
+- Red / baseline signal: in one run, `library-accept-direction` and `library-edit-candidate` fail with "no-evidence: … every paper fell into the outlier pool" after the earlier library tasks, but pass alone (/tmp/p3verify run2, run2b, solo1). `reset()` rewrites data.json and reloads the plugin but leaves vault library files and `arxiv-daily/.index` state.
+- Green check: root cause identified (harness leak vs a plugin bug where a newly added library paper is not picked up by a later index or proposal); the fixed path is covered by a test; the 7 library tasks pass back to back and the 21-task blocked run ends every task by the model's own blocked action.
+- regression checks: `node --test scripts/tests/acceptance-exploration*.test.mjs`; `npm run test:acceptance:tools`; `npm run test:release-tools`.
 - [ ] implementation and tests accepted
 
 ## Phase verification
