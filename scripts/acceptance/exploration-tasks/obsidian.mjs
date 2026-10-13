@@ -237,10 +237,12 @@ const ADD_TO_RESEARCH_TOPICS_LABEL = "Add to research topics";
 const ADD_TO_RESEARCH_TOPICS_TITLE = "Adds the selected topics with only their checked directions to your research topics. You can edit or remove them there afterwards.";
 // interest-profile-modal.ts's `renameTopic`'s own "Rename topic" <details> disclosure and its "Topic
 // name" field (both the aria-label and the wrapping <label>'s own text, lines 480-484) — library-edit-
-// candidate's rename path. "Discard" is the per-candidate card's own button (line 930) — its discard
-// path.
+// candidate's rename path. "Edit" is `createCardDetail`'s own per-candidate-card disclosure summary
+// (line ~744) that must be expanded before its "Discard" button (the per-candidate card's own button,
+// line 930) becomes reachable — library-edit-candidate's discard path.
 const RENAME_TOPIC_LABEL = "Rename topic";
 const TOPIC_NAME_FIELD_LABEL = "Topic name";
+const CARD_EDIT_LABEL = "Edit";
 const DISCARD_LABEL = "Discard";
 /** The new topic name library-edit-candidate's rename path asks the model to type, verified byte-for-byte on disk. */
 const LIBRARY_EDIT_NEW_TOPIC_NAME = "文献库候选主题（已重命名）";
@@ -1121,39 +1123,32 @@ export function goalTasks() {
     },
     {
       id: "library-edit-candidate", title: "编辑个人文献库的一个候选研究方向",
-      // Real-host evidence (2026-10-13), two separate findings:
+      // Real-host evidence (2026-10-13), two separate findings, both now fixed at the shared Obsidian
+      // observer level (exploration-obsidian.mjs), not worked around here:
       //
       // 1. Every proposed topic renders collapsed (<details>, closed by default — interest-profile-
-      //    modal.ts's own `expandedTopics` starts empty). The shared Obsidian observer's
-      //    `controlVisible()` (exploration-obsidian.mjs) does not check whether a node's ancestor is a
-      //    closed <details> — only the node's own computed style and `getBoundingClientRect()` — so it
-      //    wrongly reports every control inside a still-collapsed topic (Rename topic, Topic name, Save
-      //    edits, Discard, …) as present and clickable, each carrying a real-looking but wrong rect. A
-      //    real-host run confirmed clicking any of them straight from the just-opened dialog times out
-      //    hit-testing ("Obsidian click target stable and hit-testable" never becomes true, landing on
-      //    either a sibling toolbar <div> or the modal's own backdrop instead) — safely refused, never a
-      //    stray click, but the task could not complete. The fix within this task's own control (no
-      //    observer change needed): click the candidate's own topic row first to actually expand it
-      //    before touching anything inside; a real-host run with that extra click first passes (below).
-      //    This is itself worth the owner's attention as a standing observer gap beyond this task.
+      //    modal.ts's own `expandedTopics` starts empty). `controlVisible()` did not check whether a
+      //    node's ancestor was a closed <details>, so it wrongly reported every control inside a still-
+      //    collapsed topic as present and clickable; a real-host run confirmed clicking any of them timed
+      //    out hit-testing — safely refused, never a stray click, but wasted model steps. Fixed (P3
+      //    Chunk 7): `controlVisible()` now excludes a closed `<details>`'s content, except its own
+      //    `<summary>` — so the goal still has the model click the topic's own heading row (its
+      //    `<summary>`) to expand it before anything inside becomes visible or reachable.
       //
-      // 2. The "Discard" path is NOT asked for here, even though verify() below still accepts it, because
-      //    it hits an unrelated, unfixable-at-this-level issue: clicking the candidate card's "Discard"
-      //    button opens a second `.arxiv-daily-modal`-marked confirmation dialog (chooseModal, modal.ts)
-      //    stacked on top of the still-open review modal. resolveSurface() finds the plugin's modal
-      //    surface with `document.querySelector(".arxiv-daily-modal")`, which returns the FIRST such
-      //    element in DOM order — the older review modal underneath, never the newer confirm dialog — so
-      //    the confirm dialog's own Confirm/Cancel buttons are never observed at all. A real-host run
-      //    (first expanding the topic, then clicking Edit, then Discard) confirms the first click reaches
-      //    and opens the confirm dialog, but then the model is stuck: nothing it can see offers a way to
-      //    confirm, every subsequent observation still shows the stale review-modal content, and it
-      //    exhausts its own step budget never passing. This is a resolveSurface()-level limitation
-      //    (first-match instead of topmost-match when two plugin modals stack), not something this task's
-      //    own goal/verify can work around; reported rather than silently routed around (phase's own abort
-      //    trigger). Only the rename path — a single modal throughout, no stacking — is asked for until
-      //    that is fixed.
-      goal: `打开插件设置页，找到 ${PERSONAL_LIBRARY_SECTION_LABEL} 区域下的 ${TOPICS_FROM_LIBRARY_LABEL} 这一行，点击 ${REVIEW_SUGGESTIONS_LABEL} 按钮打开建议审核对话框（已经生成好一份建议，不需要重新生成）。点击对话框里列出的第一个候选研究方向所在主题的标题行，将其展开；再展开它的“${RENAME_TOPIC_LABEL}”，把“${TOPIC_NAME_FIELD_LABEL}”改为“${LIBRARY_EDIT_NEW_TOPIC_NAME}”并移开焦点确认。不需要点击 ${ADD_TO_RESEARCH_TOPICS_LABEL}。`,
-      uiLabels: [PERSONAL_LIBRARY_SECTION_LABEL, TOPICS_FROM_LIBRARY_LABEL, REVIEW_SUGGESTIONS_LABEL, RENAME_TOPIC_LABEL, TOPIC_NAME_FIELD_LABEL, DISCARD_LABEL, ADD_TO_RESEARCH_TOPICS_LABEL],
+      // 2. Clicking the candidate card's own "Discard" button opens a second `.arxiv-daily-modal`-marked
+      //    confirmation dialog (chooseModal, services/modal.ts) stacked on top of the still-open review
+      //    modal. `resolveSurface()` used to resolve the FIRST `.arxiv-daily-modal` in DOM order — the
+      //    older review modal underneath, never the newer confirm dialog — so the confirm dialog's own
+      //    "Discard"/"Cancel" buttons were never observed and the flow could never be completed. Fixed
+      //    (P3 Chunk 7): `resolveSurface()` now resolves the LAST (topmost, most recently opened)
+      //    `.arxiv-daily-modal`. A real-host run of the discard path below (expand the topic, expand the
+      //    candidate card's own "Edit", click Discard, then click Discard again in the now-observable
+      //    confirmation dialog) passes.
+      //
+      // The goal below asks for either outcome — rename or discard — matching verify()'s own two
+      // branches; a model picks one, never both.
+      goal: `打开插件设置页，找到 ${PERSONAL_LIBRARY_SECTION_LABEL} 区域下的 ${TOPICS_FROM_LIBRARY_LABEL} 这一行，点击 ${REVIEW_SUGGESTIONS_LABEL} 按钮打开建议审核对话框（已经生成好一份建议，不需要重新生成）。点击对话框里列出的第一个候选研究方向所在主题的标题行，将其展开。然后二选一完成以下一项：(1) 展开它的“${RENAME_TOPIC_LABEL}”，把“${TOPIC_NAME_FIELD_LABEL}”改为“${LIBRARY_EDIT_NEW_TOPIC_NAME}”并移开焦点确认；(2) 展开该候选方向卡片自己的“${CARD_EDIT_LABEL}”，点击其中的 ${DISCARD_LABEL} 按钮丢弃该候选方向，并在随后弹出的确认对话框中再次点击 ${DISCARD_LABEL} 以确认丢弃。不需要点击 ${ADD_TO_RESEARCH_TOPICS_LABEL}。`,
+      uiLabels: [PERSONAL_LIBRARY_SECTION_LABEL, TOPICS_FROM_LIBRARY_LABEL, REVIEW_SUGGESTIONS_LABEL, RENAME_TOPIC_LABEL, TOPIC_NAME_FIELD_LABEL, CARD_EDIT_LABEL, DISCARD_LABEL, ADD_TO_RESEARCH_TOPICS_LABEL],
       // Starts connected, remote, authorized and indexed like library-accept-direction, but additionally
       // generates a real proposal in prepare() itself (driver.generatePersonalLibraryDirections(), the
       // plugin's own real clustering/generation pipeline — never a hand-written direction-proposal.json,

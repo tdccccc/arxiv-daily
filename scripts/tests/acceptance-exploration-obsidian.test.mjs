@@ -249,6 +249,121 @@ test("known gap closed: an unmarked (non-plugin) modal is invisible, with no fal
   assert.deepEqual(snapshot.controls, []);
 });
 
+// Exploration safety and coverage P3 Chunk 7 (phases/03-obsidian-library-tasks.md): with a confirmation
+// `.arxiv-daily-modal` (e.g. `chooseModal`) stacked on top of an already-open plugin modal (e.g. the
+// personal-library review dialog), `resolveSurface()` used to resolve `document.querySelector(
+// ".arxiv-daily-modal")` — the FIRST such element in DOM order, i.e. the older, underlying modal — so the
+// newer confirmation dialog's own buttons were never observed and a discard-style flow could never be
+// completed. Obsidian's `Modal.open()` appends a newly opened modal's container as the last child of
+// `document.body`, so the topmost (most recently opened) modal is the LAST `.arxiv-daily-modal` in DOM
+// order, not the first.
+test("two stacked plugin modals: the topmost (last-opened) modal's controls are observed, and the older modal's controls are excluded", () => {
+  const stacked = `
+    <div class="modal-container"><div class="modal arxiv-daily-modal">
+      <button type="button">Older modal button</button>
+    </div></div>
+    <div class="modal-container"><div class="modal arxiv-daily-modal">
+      <button type="button">Confirm</button>
+      <button type="button">Cancel</button>
+    </div></div>
+  `;
+  const { observe } = buildWindow(stacked);
+  const snapshot = observe();
+  assert.equal(snapshot.layout.view, "modal");
+  assert.ok(snapshot.controls.some(c => c.name === "Confirm"));
+  assert.ok(snapshot.controls.some(c => c.name === "Cancel"));
+  assert.ok(!snapshot.controls.some(c => c.name === "Older modal button"), "the older, covered modal's controls must not be observed");
+});
+
+test("two stacked plugin modals: live re-validation of a ref from the now-covered older modal reports it out of scope, not ok", async () => {
+  const { window, calls, observe, execute } = buildSession('<div class="modal-container"><div class="modal arxiv-daily-modal"><button type="button">Older modal button</button></div></div>');
+  const firstSnapshot = observe();
+  const olderRef = firstSnapshot.controls.find(c => c.name === "Older modal button").ref;
+  // A second modal opens on top (same DOM-append-order convention Obsidian itself uses), covering the first.
+  const secondModal = window.document.createElement("div");
+  secondModal.className = "modal-container";
+  secondModal.innerHTML = '<div class="modal arxiv-daily-modal"><button type="button">Confirm</button></div>';
+  window.document.body.appendChild(secondModal);
+  const result = await execute({ type: "click", ref: olderRef }, firstSnapshot);
+  assert.equal(result.ok, false);
+  assert.match(result.error, /scope/i);
+  assert.equal(calls.length, 0);
+});
+
+test("two stacked plugin modals: press is rejected as out of scope when focus is still inside the now-covered older modal", async () => {
+  const { window, calls, execute } = buildSession('<div class="modal-container"><div class="modal arxiv-daily-modal"><button type="button">Older modal button</button></div></div>');
+  window.document.querySelector(".arxiv-daily-modal button").focus();
+  const secondModal = window.document.createElement("div");
+  secondModal.className = "modal-container";
+  secondModal.innerHTML = '<div class="modal arxiv-daily-modal"><button type="button">Confirm</button></div>';
+  window.document.body.appendChild(secondModal);
+  const result = await execute({ type: "press", key: "Enter" }, { id: "s1" });
+  assert.equal(result.ok, false);
+  assert.match(result.error, /scope/i);
+  assert.equal(calls.length, 0);
+});
+
+// Exploration safety and coverage P3 Chunk 7: `controlVisible()` only checked a node's own computed style
+// and geometry, never whether an ancestor `<details>` was closed — a closed `<details>` hides every
+// descendant except its own `<summary>` (native browser behaviour), so controls nested inside a still-
+// collapsed section (e.g. the personal-library review dialog's per-topic/per-candidate `<details>`) were
+// wrongly reported as present and clickable; a real-host run confirmed clicking one times out hit-testing
+// (safe, but wastes model steps) instead of simply never being offered.
+test("closed <details>: content is hidden except the summary; opening it reveals the content", () => {
+  const html = `
+    <div class="arxiv-daily-dashboard">
+      <details>
+        <summary>Topic heading</summary>
+        <button type="button">Hidden while collapsed</button>
+      </details>
+    </div>
+  `;
+  const { window, observe } = buildWindow(html);
+  const closedSnapshot = observe("s1");
+  assert.ok(closedSnapshot.controls.some(c => c.name === "Topic heading"), "the summary itself must stay observable even while collapsed");
+  assert.ok(!closedSnapshot.controls.some(c => c.name === "Hidden while collapsed"), "content inside a closed details must not be observed");
+  window.document.querySelector("details").open = true;
+  const openSnapshot = observe("s2");
+  assert.ok(openSnapshot.controls.some(c => c.name === "Hidden while collapsed"), "content inside an opened details must be observed");
+});
+
+test("nested closed <details>: a control stays hidden if any ancestor details is closed, even when its own immediate details is open", () => {
+  const html = `
+    <div class="arxiv-daily-dashboard">
+      <details>
+        <summary>Outer (closed)</summary>
+        <details open>
+          <summary>Inner (open)</summary>
+          <button type="button">Nested content</button>
+        </details>
+      </details>
+    </div>
+  `;
+  const { observe } = buildWindow(html);
+  const snapshot = observe();
+  assert.ok(snapshot.controls.some(c => c.name === "Outer (closed)"));
+  assert.ok(!snapshot.controls.some(c => c.name === "Inner (open)"), "the inner summary is inside the still-closed outer details and must stay hidden");
+  assert.ok(!snapshot.controls.some(c => c.name === "Nested content"));
+});
+
+test("closed <details>: live re-validation rejects a ref that was observed while open but has since collapsed", async () => {
+  const { window, observe, execute, calls } = buildSession(`
+    <div class="arxiv-daily-dashboard">
+      <details open>
+        <summary>Topic heading</summary>
+        <button type="button">Was visible</button>
+      </details>
+    </div>
+  `);
+  const snapshot = observe();
+  const ref = snapshot.controls.find(c => c.name === "Was visible").ref;
+  window.document.querySelector("details").open = false;
+  const result = await execute({ type: "click", ref }, snapshot);
+  assert.equal(result.ok, false);
+  assert.match(result.error, /hidden|disappeared|scope/i);
+  assert.equal(calls.length, 0);
+});
+
 test("refs are unique per observation and tagged onto the DOM for re-finding", () => {
   const { window, observe } = buildWindow(dashboardFixture);
   const snapshot = observe("sref");

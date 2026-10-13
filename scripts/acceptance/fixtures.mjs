@@ -154,14 +154,22 @@ export async function startFixtureServer(options = {}) {
   } };
 }
 
-/** Small valid PDF owned by the test; useful for native PDF navigation and scanning. */
-function fixturePdf(paper) {
-  const objects = ["<< /Type /Catalog /Pages 2 0 R >>", "<< /Type /Pages /Count 4 /Kids [4 0 R 6 0 R 8 0 R 10 0 R] >>", "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>"];
+/**
+ * Small, minimal-but-valid multi-page PDF bytes, built from an uncompressed text-operator stream (`(...)
+ * Tj`) the plugin's real PDF identification/extraction reads successfully — shared by every fixture that
+ * needs a tiny on-disk PDF, so there is exactly one place that knows this encoding. `pages` controls how
+ * many identical-shape pages are produced (object numbering/Kids/xref scale with it); `extraLine`, when
+ * given, is called per zero-based page index to append one more text line to that page only (used by the
+ * default library fixture's 4-page PDFs for a "Page N: ..." footer that single-page fixtures don't need).
+ */
+export function buildFixturePdf({ id, title, abstract, pages = 1, extraLine } = {}) {
+  const kids = Array.from({ length: pages }, (_, page) => `${4 + page * 2} 0 R`).join(" ");
+  const objects = ["<< /Type /Catalog /Pages 2 0 R >>", `<< /Type /Pages /Count ${pages} /Kids [${kids}] >>`, "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>"];
   const literal = value => value.replaceAll("\\", "\\\\").replaceAll("(", "\\(").replaceAll(")", "\\)");
-  for (let page = 0; page < 4; page++) {
+  for (let page = 0; page < pages; page++) {
     const contentId = 5 + page * 2;
     objects.push(`<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 3 0 R >> >> /Contents ${contentId} 0 R >>`);
-    const lines = [paper.title, "A. Researcher", `arXiv:${paper.id}`, "Abstract", paper.abstract, `Page ${page + 1}: controlled methods, evidence and limitations.`];
+    const lines = [title, "A. Researcher", `arXiv:${id}`, "Abstract", abstract, ...(extraLine ? [extraLine(page)] : [])];
     const stream = `BT /F1 11 Tf 40 730 Td ${lines.map((line, i) => `${i ? "0 -24 Td " : ""}(${literal(line)}) Tj`).join("\n")} ET\n`;
     objects.push(`<< /Length ${Buffer.byteLength(stream)} >>\nstream\n${stream}endstream`);
   }
@@ -170,6 +178,14 @@ function fixturePdf(paper) {
   const start = Buffer.byteLength(result);
   result += `xref\n0 ${objects.length + 1}\n0000000000 65535 f \n${offsets.slice(1).map(offset => `${String(offset).padStart(10, "0")} 00000 n \n`).join("")}trailer\n<< /Size ${objects.length + 1} /Root 1 0 R >>\nstartxref\n${start}\n%%EOF\n`;
   return result;
+}
+
+/** Small valid PDF owned by the test; useful for native PDF navigation and scanning. */
+function fixturePdf(paper) {
+  return buildFixturePdf({
+    ...paper, pages: 4,
+    extraLine: page => `Page ${page + 1}: controlled methods, evidence and limitations.`,
+  });
 }
 
 export function fixtureConfig({ vaultRoot, cacheDir }) {

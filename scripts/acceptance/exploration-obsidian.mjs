@@ -179,11 +179,29 @@ function resolveName(node) {
   return (node.getAttribute("name") || own() || "").trim();
 }
 
+/**
+ * P3 Chunk 7 (phases/03-obsidian-library-tasks.md): a closed `<details>` hides every descendant except
+ * its own direct `<summary>` child (native browser behaviour) — `controlVisible()` never checked this, so
+ * a still-collapsed section (e.g. the personal-library review dialog's per-topic/per-candidate
+ * `<details>`) reported its hidden content as present and clickable; a real-host run confirmed clicking
+ * one safely times out hit-testing instead of ever being offered. Walks every ancestor `<details>` (not
+ * only the nearest), so a control nested inside an open details that itself sits inside a closed outer
+ * details still correctly stays hidden.
+ */
+function hiddenByClosedDetails(node) {
+  for (let ancestor = node.parentElement; ancestor; ancestor = ancestor.parentElement) {
+    if (ancestor.tagName !== "DETAILS" || ancestor.open) continue;
+    const summary = Array.from(ancestor.children).find(child => child.tagName === "SUMMARY");
+    if (!(node === summary || summary?.contains(node))) return true;
+  }
+  return false;
+}
+
 function controlVisible(node, testMode) {
   const rect = node.getBoundingClientRect();
   const style = getComputedStyle(node);
   const sized = testMode ? true : rect.width > 0 && rect.height > 0;
-  return sized && style.display !== "none" && style.visibility !== "hidden" && style.opacity !== "0" && !node.closest("[hidden],[inert]");
+  return sized && style.display !== "none" && style.visibility !== "hidden" && style.opacity !== "0" && !node.closest("[hidden],[inert]") && !hiddenByClosedDetails(node);
 }
 
 /**
@@ -206,7 +224,14 @@ function resolveSurface() {
   const markedMenu = document.querySelector(".arxiv-daily-menu");
   if (markedMenu) { surface = markedMenu; view = "menu"; menuOpen = true; }
   if (!surface) {
-    const markedModal = document.querySelector(".arxiv-daily-modal");
+    // P3 Chunk 7: a confirmation modal (e.g. `chooseModal`) can open stacked on top of an already-open
+    // plugin modal (e.g. the personal-library review dialog). Obsidian's `Modal.open()` appends a newly
+    // opened modal's container as the last child of `document.body`, so the topmost (most recently
+    // opened, currently visible) modal is the LAST `.arxiv-daily-modal` in DOM order — picking the first
+    // one (as before) always resolved the older, now-covered modal underneath, so the newer modal's own
+    // buttons (e.g. a discard confirmation's "Confirm"/"Cancel") were never observed at all.
+    const markedModals = document.querySelectorAll(".arxiv-daily-modal");
+    const markedModal = markedModals[markedModals.length - 1];
     if (markedModal) { surface = markedModal.closest(".modal") || markedModal; view = "modal"; modalOpen = true; }
   }
   if (!surface) {
@@ -301,7 +326,7 @@ export function obsidianObservation(id, testMode) {
 
 /** Builds the CDP `Runtime.evaluate` expression string for `obsidianObservation`, matching obsidian-ui.mjs's `read(expression)` convention (the caller wraps with `JSON.stringify(...)`). */
 export function obsidianObservationExpression(id, testMode = false) {
-  const shared = [resolveName, isSecretField, controlVisible, resolveSurface, describeControl].map(fn => fn.toString()).join("\n");
+  const shared = [resolveName, isSecretField, hiddenByClosedDetails, controlVisible, resolveSurface, describeControl].map(fn => fn.toString()).join("\n");
   return `(() => { ${shared}\n  const CONTROL_SELECTOR = ${asCode(CONTROL_SELECTOR)};\n  return (${obsidianObservation})(${asCode(id)}, ${asCode(Boolean(testMode))});\n})()`;
 }
 
@@ -324,7 +349,7 @@ function obsidianLiveControl(ref, testMode) {
 }
 
 export function obsidianLiveControlExpression(ref, testMode = false) {
-  const shared = [resolveName, isSecretField, controlVisible, resolveSurface, describeControl].map(fn => fn.toString()).join("\n");
+  const shared = [resolveName, isSecretField, hiddenByClosedDetails, controlVisible, resolveSurface, describeControl].map(fn => fn.toString()).join("\n");
   return `(() => { ${shared}\n  return (${obsidianLiveControl})(${asCode(ref)}, ${asCode(Boolean(testMode))});\n})()`;
 }
 
@@ -405,7 +430,7 @@ function obsidianFocusedControl(testMode) {
 
 /** Describes the currently focused element (scope + the shared control descriptor), for `press`. */
 export function obsidianFocusedControlExpression(testMode = false) {
-  const shared = [resolveName, isSecretField, controlVisible, resolveSurface, describeControl].map(fn => fn.toString()).join("\n");
+  const shared = [resolveName, isSecretField, hiddenByClosedDetails, controlVisible, resolveSurface, describeControl].map(fn => fn.toString()).join("\n");
   return `(() => { ${shared}\n  return (${obsidianFocusedControl})(${asCode(Boolean(testMode))});\n})()`;
 }
 

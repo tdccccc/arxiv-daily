@@ -9,6 +9,7 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { connectedLibraryFixture, readRootIdentity, resolveLibraryRoot } from "../../desktop-acceptance/settings-fixture.mjs";
+import { buildFixturePdf } from "../fixtures.mjs";
 
 /** fixtures.mjs's `/embeddings` handler returns 3-dimensional vectors; remote embedding settings must declare that dimension, not the exploration default (384). */
 export const LIBRARY_EMBEDDING_DIMENSION = 3;
@@ -71,27 +72,6 @@ export async function startLibraryFixture(driver, { embeddingMode = "local", aut
 }
 
 /**
- * P3 Chunk 3 (Direction candidate review tasks): a minimal, uncompressed-text-stream PDF, structurally
- * identical to fixtures.mjs's own (unexported) `fixturePdf()` — same `(literal) Tj` text-operator
- * encoding the plugin's real PDF identification/extraction already reads successfully for the fixture's
- * two library PDFs — duplicated here rather than imported, since fixtures.mjs is shared infrastructure
- * outside this chunk's file ownership and exporting from it is not this chunk's call to make.
- */
-function syntheticLibraryPdfBytes({ id, title, abstract }) {
-  const objects = ["<< /Type /Catalog /Pages 2 0 R >>", "<< /Type /Pages /Count 1 /Kids [4 0 R] >>", "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>"];
-  const literal = value => value.replaceAll("\\", "\\\\").replaceAll("(", "\\(").replaceAll(")", "\\)");
-  objects.push("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 3 0 R >> >> /Contents 5 0 R >>");
-  const lines = [title, "A. Researcher", `arXiv:${id}`, "Abstract", abstract];
-  const stream = `BT /F1 11 Tf 40 730 Td ${lines.map((line, i) => `${i ? "0 -24 Td " : ""}(${literal(line)}) Tj`).join("\n")} ET\n`;
-  objects.push(`<< /Length ${Buffer.byteLength(stream)} >>\nstream\n${stream}endstream`);
-  let result = "%PDF-1.4\n", offsets = [0];
-  objects.forEach((object, i) => { offsets.push(Buffer.byteLength(result)); result += `${i + 1} 0 obj\n${object}\nendobj\n`; });
-  const start = Buffer.byteLength(result);
-  result += `xref\n0 ${objects.length + 1}\n0000000000 65535 f \n${offsets.slice(1).map(offset => `${String(offset).padStart(10, "0")} 00000 n \n`).join("")}trailer\n<< /Size ${objects.length + 1} /Root 1 0 R >>\nstartxref\n${start}\n%%EOF\n`;
-  return result;
-}
-
-/**
  * P3 Chunk 3: the real `generatePersonalLibraryDirections()` clusters papers by chunk-vector similarity
  * and drops any group smaller than `minClusterSize` (default 2, packages/core/src/library/clustering/
  * clusterer.ts) into an outlier pool; with only the fixture's own two library PDFs — whose titles/
@@ -113,6 +93,6 @@ export async function seedClusterableLibraryPaper(driver, {
 } = {}) {
   const libraryDir = path.join(driver.fixture.vaultRoot, "library");
   await mkdir(libraryDir, { recursive: true });
-  await writeFile(path.join(libraryDir, `${id}.pdf`), syntheticLibraryPdfBytes({ id, title, abstract }));
+  await writeFile(path.join(libraryDir, `${id}.pdf`), buildFixturePdf({ id, title, abstract }));
   return { id, title, abstract };
 }
