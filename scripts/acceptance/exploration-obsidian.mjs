@@ -1008,6 +1008,42 @@ export async function createObsidianExplorationDriver({ session, fixture, artifa
       const match = entries.find(entry => entry.endsWith("current.json"));
       return match ? path.join(base, match) : null;
     },
+    // Exploration safety and coverage P3 Chunk 3 (Direction candidate review tasks): a task's
+    // deterministic `prepare()` calls this (never the model) to produce a real direction proposal
+    // through the plugin's own `generatePersonalLibraryDirections()` — the real clustering/LLM-generation
+    // pipeline (hits the fixture's own "proposal"-kind model response), never a hand-written
+    // `direction-proposal.json` (the phase's own approach, reused from Chunk 2's `buildLibraryIndex`:
+    // "states that need an index/proposal are produced by running the plugin's real scan and generation
+    // in prepare(), not by hand-writing files"). Needs library-processing consent and a built index
+    // already in place (same preconditions the "Review suggestions" button's own auto-generation checks),
+    // so callers run this after `startLibraryFixture({ authorized: true })` and `buildLibraryIndex()`.
+    // Uses `helper.evaluate` directly, for the same reason `buildLibraryIndex` above does.
+    async generatePersonalLibraryDirections() {
+      const raw = await helper.evaluate(`(async () => {
+        const proposal = await ${PLUGIN}.generatePersonalLibraryDirections();
+        return JSON.stringify(proposal);
+      })()`);
+      if (typeof raw !== "string") throw new Error("generatePersonalLibraryDirections() did not resolve to a reportable proposal");
+      return JSON.parse(raw);
+    },
+    // Exploration safety and coverage P3 Chunk 3: reads the real `direction-proposal.json` the plugin's
+    // own proposal store writes under the vault's `arxiv-daily/.index/personal-library-profiles/
+    // <scopeHex>/<identificationHex>/` (research.md; personal-library-proposal-store.ts's
+    // `derivePersonalLibraryInterestProfileStorePaths`, the same fingerprint-derived-hex-directory
+    // convention `findLibrarySearchIndexFile` above already walks instead of hardcoding). Returns the
+    // parsed document (never null-coalesced into a default shape — a task's verify() tells "no proposal
+    // yet" apart from "proposal exists but edited" by checking for null itself), or null before any
+    // proposal has ever been generated, mirroring `findLibrarySearchIndexFile`'s own ENOENT tolerance.
+    async readLibraryDirectionProposal() {
+      const base = path.join(fixture.vaultRoot, "arxiv-daily", ".index", "personal-library-profiles");
+      let entries;
+      try { entries = await fs.readdir(base, { recursive: true }); }
+      catch (error) { if (error.code === "ENOENT") return null; throw error; }
+      const match = entries.find(entry => entry.endsWith("direction-proposal.json"));
+      if (!match) return null;
+      const raw = await fs.readFile(path.join(base, match), "utf8");
+      return JSON.parse(raw);
+    },
     // P3 Chunk 3: opts the current task's observe() into the fixed suite's existing "expected
     // authentication failure" carve-out (see observe()'s own comment above); only auth-failure-retry's
     // prepare() calls this, and reset() clears it before every task.

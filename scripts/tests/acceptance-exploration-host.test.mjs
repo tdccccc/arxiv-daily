@@ -298,9 +298,10 @@ test("the default Obsidian goal tasks have ids, titles, Chinese goals and a prog
   // Chunk 2 appends topic/direction/category tasks after the original two, P3 Chunk 3 appends the
   // four run tasks after those, P3 Chunk 4 appends the five reading tasks, New-P3 Chunk 1 (personal
   // library tasks, docs/helm/2026-10-13-exploration-safety-and-coverage) appends library-revoke-consent,
-  // then library-remote-consent (same phase, Chunk 1's other half), and New-P3 Chunk 2 (03-obsidian-
-  // library-tasks.md) appends library-build-index, library-search and library-similar-papers, keeping
-  // every earlier id stable.
+  // then library-remote-consent (same phase, Chunk 1's other half), New-P3 Chunk 2 (03-obsidian-
+  // library-tasks.md) appends library-build-index, library-search and library-similar-papers, and
+  // New-P3 Chunk 3 appends library-accept-direction and library-edit-candidate, keeping every earlier
+  // id stable.
   assert.deepEqual(obsidianTaskLibrary.GOAL_TASK_IDS, [
     "daily-paper-limit", "star-paper-from-report",
     "add-topic-direction", "remove-topic-direction", "add-arxiv-category",
@@ -308,6 +309,7 @@ test("the default Obsidian goal tasks have ids, titles, Chinese goals and a prog
     "dashboard-tabs-paging", "mark-to-read", "create-paper-note", "summarize-by-id", "open-today-report",
     "library-revoke-consent", "library-remote-consent",
     "library-build-index", "library-search", "library-similar-papers",
+    "library-accept-direction", "library-edit-candidate",
   ]);
   for (const t of tasks) {
     assert.equal(typeof t.title, "string");
@@ -1680,15 +1682,18 @@ async function withRealLibraryRoot(run) {
   finally { await rm(root, { recursive: true, force: true }); }
 }
 
-function createFakeLibraryTaskDriver(initialDisk, { vaultRoot, indexFile = null, requests = [], dom = {} } = {}) {
+function createFakeLibraryTaskDriver(initialDisk, { vaultRoot, indexFile = null, requests = [], dom = {}, proposal = null } = {}) {
   let disk = structuredClone(initialDisk);
   let currentIndexFile = indexFile;
+  let currentProposal = proposal;
   const buildLibraryIndexCalls = [];
   const ensureDailyReportCalls = [];
+  const generatePersonalLibraryDirectionsCalls = [];
   return {
     disk: () => disk,
     buildLibraryIndexCalls,
     ensureDailyReportCalls,
+    generatePersonalLibraryDirectionsCalls,
     // Only populated for tests that actually call the real prepare() (startLibraryFixture needs a real
     // folder to stat/readdir); `server.requests` is the same mutable array a test pushes/reads directly,
     // exactly like completed-date-idempotent/cancel-then-rerun's existing fixture.server.requests use.
@@ -1706,6 +1711,20 @@ function createFakeLibraryTaskDriver(initialDisk, { vaultRoot, indexFile = null,
     async buildLibraryIndex() { buildLibraryIndexCalls.push(true); return { papers: 2 }; },
     async findLibrarySearchIndexFile() { return currentIndexFile; },
     setIndexFile(value) { currentIndexFile = value; },
+    // library-edit-candidate's prepare() calls this (never a hand-written direction-proposal.json) to
+    // obtain a real-shaped proposal; the fake driver hands back whatever `proposal` the test configured
+    // (or throws, like the real `generatePersonalLibraryDirections()` does on a genuinely empty result,
+    // if the test configured none) and also seeds `readLibraryDirectionProposal()`'s own on-disk view —
+    // mirroring how the real plugin both returns the generated proposal and persists it to disk in the
+    // same call.
+    async generatePersonalLibraryDirections() {
+      generatePersonalLibraryDirectionsCalls.push(true);
+      if (!currentProposal) throw new Error("fake driver: no proposal configured for generatePersonalLibraryDirections()");
+      currentProposal = structuredClone(currentProposal);
+      return structuredClone(currentProposal);
+    },
+    async readLibraryDirectionProposal() { return currentProposal ? structuredClone(currentProposal) : null; },
+    setProposal(value) { currentProposal = value; },
     async read(expression) {
       if (expression.includes("arxiv-daily-dashboard__library-list")) return dom.librarySearchResultCount ?? 0;
       if (expression.includes("arxiv-daily-similar-modal")) return dom.similarLibraryResultCount ?? 0;
@@ -1713,6 +1732,14 @@ function createFakeLibraryTaskDriver(initialDisk, { vaultRoot, indexFile = null,
       throw new Error(`Unhandled fake read: ${expression}`);
     },
   };
+}
+
+/** A minimal, realistically-shaped proposal matching the fixture LLM's own canned response shape
+ * (fixtures.mjs's `completion()`, the "proposal" branch): one topic with one direction, both carrying
+ * real-looking (but fake) identities, so library-edit-candidate's prepare()/verify() can be exercised
+ * without a real Obsidian/CDP session. */
+function fakeLibraryProposal({ topicId = "proposal-topic-1", topicName = "Research evidence 1", candidateId = "proposal-direction-1", candidateText = "Reliable research methods" } = {}) {
+  return { topics: [{ id: topicId, suggestedName: topicName, directions: [{ id: candidateId, text: candidateText, representatives: [{ paperKey: "fake-paper-1" }, { paperKey: "fake-paper-2" }], discoveryCues: [] }] }] };
 }
 
 function minimalLibraryDisk() { return { settings: {} }; }
@@ -1879,5 +1906,149 @@ test("library-similar-papers: prepare() connects the library remote+authorized, 
     assert.deepEqual(driver.ensureDailyReportCalls, [ACCEPTANCE_DATE]);
     assert.equal(driver.disk().settings.embedding.mode, "remote");
     assert.ok(driver.disk().libraryConnection?.authorization);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// New-P3 Chunk 3 (docs/helm/2026-10-13-exploration-safety-and-coverage/phases/03-obsidian-library-
+// tasks.md, "Direction candidate review tasks"): library-accept-direction and library-edit-candidate.
+// ---------------------------------------------------------------------------
+
+// ─── library-accept-direction ────────────────────────────────────────────────
+
+test("library-accept-direction: verify fails on the untouched state (Review suggestions never opened)", async () => {
+  const task = (await obsidianTaskLibrary.goalTasks()).find(t => t.id === "library-accept-direction");
+  assert.ok(task, "library-accept-direction must exist in the Obsidian goal task library");
+  const driver = createFakeLibraryTaskDriver(minimalLibraryDisk());
+  const result = await task.verify({ driver, actions: [] });
+  assert.equal(result.passed, false);
+});
+
+test("library-accept-direction: verify fails after opening Review suggestions alone, before Add to research topics is clicked", async () => {
+  const task = (await obsidianTaskLibrary.goalTasks()).find(t => t.id === "library-accept-direction");
+  const driver = createFakeLibraryTaskDriver(minimalLibraryDisk());
+  const result = await task.verify({ driver, actions: [clickNamed("Review suggestions")] });
+  assert.equal(result.passed, false);
+  assert.equal(result.checks.find(c => c.label.includes("Add to research topics")).passed, false);
+});
+
+test("library-accept-direction: verify fails if both clicks are observed but settings never actually gained a library-origin direction (a plausible wrong outcome: the clicks did not actually accept anything, e.g. nothing was selected)", async () => {
+  const task = (await obsidianTaskLibrary.goalTasks()).find(t => t.id === "library-accept-direction");
+  const driver = createFakeLibraryTaskDriver(minimalLibraryDisk());
+  const result = await task.verify({ driver, actions: [clickNamed("Review suggestions"), clickNamed("Add to research topics")] });
+  assert.equal(result.passed, false, `verify must not pass from the clicks alone; a library-origin direction and an acceptance receipt must actually land on disk: ${JSON.stringify(result)}`);
+});
+
+test("library-accept-direction: verify passes once both clicks are observed and settings gained a library-origin direction with an acceptance receipt", async () => {
+  const task = (await obsidianTaskLibrary.goalTasks()).find(t => t.id === "library-accept-direction");
+  const driver = createFakeLibraryTaskDriver({
+    settings: { arxiv: { topics: [{ id: "proposal-topic-1", name: "Research evidence 1", directions: [{ id: "proposal-direction-1", text: "Reliable research methods", origin: "library" }] }] } },
+    libraryProposalAcceptances: [{ scopeFingerprint: "fake-scope", processedCandidateIds: ["proposal-direction-1"] }],
+  });
+  const result = await task.verify({ driver, actions: [clickNamed("Review suggestions"), clickNamed("Add to research topics")] });
+  assert.equal(result.passed, true, `verify should pass once both clicks and the on-disk acceptance agree: ${JSON.stringify(result)}`);
+});
+
+test("library-accept-direction: verify also passes when the accept click is recorded under the button's own title text instead of its visible label — real-host evidence (2026-10-13) showed the Obsidian observer resolves this button's accessible name from its `title` attribute, not its visible \"Add to research topics\" text", async () => {
+  const task = (await obsidianTaskLibrary.goalTasks()).find(t => t.id === "library-accept-direction");
+  const driver = createFakeLibraryTaskDriver({
+    settings: { arxiv: { topics: [{ id: "proposal-topic-1", name: "Research evidence 1", directions: [{ id: "proposal-direction-1", text: "Reliable research methods", origin: "library" }] }] } },
+    libraryProposalAcceptances: [{ scopeFingerprint: "fake-scope", processedCandidateIds: ["proposal-direction-1"] }],
+  });
+  const result = await task.verify({
+    driver,
+    actions: [clickNamed("Review suggestions"), clickNamed("Adds the selected topics with only their checked directions to your research topics. You can edit or remove them there afterwards.")],
+  });
+  assert.equal(result.passed, true, `verify should pass from the real observed (title-text) click name too: ${JSON.stringify(result)}`);
+});
+
+test("library-accept-direction: prepare() starts the library connected, remote and already authorized, with a real index already built — generating/selecting/accepting the proposal is the model's job", async () => {
+  await withRealLibraryRoot(async (vaultRoot) => {
+    const task = (await obsidianTaskLibrary.goalTasks()).find(t => t.id === "library-accept-direction");
+    const driver = createFakeLibraryTaskDriver(minimalLibraryDisk(), { vaultRoot, requests: [] });
+    await task.prepare({ driver });
+    assert.equal(driver.buildLibraryIndexCalls.length, 1);
+    assert.equal(driver.generatePersonalLibraryDirectionsCalls.length, 0, "prepare() must not pre-generate the proposal itself — the model drives Review suggestions' own auto-generation");
+    assert.equal(driver.disk().settings.embedding.mode, "remote");
+    assert.ok(driver.disk().libraryConnection?.authorization);
+  });
+});
+
+// ─── library-edit-candidate ──────────────────────────────────────────────────
+
+test("library-edit-candidate: verify fails on the untouched state (Review suggestions never opened)", async () => {
+  const task = (await obsidianTaskLibrary.goalTasks()).find(t => t.id === "library-edit-candidate");
+  assert.ok(task, "library-edit-candidate must exist in the Obsidian goal task library");
+  const driver = createFakeLibraryTaskDriver(minimalLibraryDisk());
+  const result = await task.verify({ driver, actions: [] });
+  assert.equal(result.passed, false);
+});
+
+test("library-edit-candidate: verify fails after opening Review suggestions alone, before either a rename or a Discard is observed", async () => {
+  const task = (await obsidianTaskLibrary.goalTasks()).find(t => t.id === "library-edit-candidate");
+  const driver = createFakeLibraryTaskDriver(minimalLibraryDisk());
+  const result = await task.verify({ driver, actions: [clickNamed("Review suggestions")] });
+  assert.equal(result.passed, false);
+});
+
+test("library-edit-candidate: verify fails if a rename fill is observed but direction-proposal.json still shows the original topic name (a plausible wrong outcome: the fill never actually committed)", async () => {
+  await withRealLibraryRoot(async (vaultRoot) => {
+    const task = (await obsidianTaskLibrary.goalTasks()).find(t => t.id === "library-edit-candidate");
+    const driver = createFakeLibraryTaskDriver(minimalLibraryDisk(), { vaultRoot, requests: [], proposal: fakeLibraryProposal() });
+    await task.prepare({ driver });
+    const result = await task.verify({ driver, actions: [clickNamed("Review suggestions"), fillNamed("Topic name", "文献库候选主题（已重命名）")] });
+    assert.equal(result.passed, false, `verify must not pass from the fill action alone; direction-proposal.json must actually show the new name: ${JSON.stringify(result)}`);
+  });
+});
+
+test("library-edit-candidate: verify passes once a rename fill is observed and direction-proposal.json shows the new name for the exact topic prepare() captured", async () => {
+  await withRealLibraryRoot(async (vaultRoot) => {
+    const task = (await obsidianTaskLibrary.goalTasks()).find(t => t.id === "library-edit-candidate");
+    const driver = createFakeLibraryTaskDriver(minimalLibraryDisk(), { vaultRoot, requests: [], proposal: fakeLibraryProposal() });
+    await task.prepare({ driver });
+    driver.setProposal(fakeLibraryProposal({ topicName: "文献库候选主题（已重命名）" }));
+    const result = await task.verify({ driver, actions: [clickNamed("Review suggestions"), fillNamed("Topic name", "文献库候选主题（已重命名）")] });
+    assert.equal(result.passed, true, `verify should pass once the fill and the on-disk rename agree: ${JSON.stringify(result)}`);
+  });
+});
+
+test("library-edit-candidate: verify fails if a Discard click is observed but direction-proposal.json still lists the candidate (a plausible wrong outcome: the click did not actually discard it)", async () => {
+  await withRealLibraryRoot(async (vaultRoot) => {
+    const task = (await obsidianTaskLibrary.goalTasks()).find(t => t.id === "library-edit-candidate");
+    const driver = createFakeLibraryTaskDriver(minimalLibraryDisk(), { vaultRoot, requests: [], proposal: fakeLibraryProposal() });
+    await task.prepare({ driver });
+    const result = await task.verify({ driver, actions: [clickNamed("Review suggestions"), clickNamed("Discard")] });
+    assert.equal(result.passed, false, `verify must not pass from the click alone; direction-proposal.json must actually have dropped the candidate: ${JSON.stringify(result)}`);
+  });
+});
+
+test("library-edit-candidate: verify passes once a Discard click is observed and direction-proposal.json no longer lists the exact candidate prepare() captured", async () => {
+  await withRealLibraryRoot(async (vaultRoot) => {
+    const task = (await obsidianTaskLibrary.goalTasks()).find(t => t.id === "library-edit-candidate");
+    const driver = createFakeLibraryTaskDriver(minimalLibraryDisk(), { vaultRoot, requests: [], proposal: fakeLibraryProposal() });
+    await task.prepare({ driver });
+    driver.setProposal({ topics: [] });
+    const result = await task.verify({ driver, actions: [clickNamed("Review suggestions"), clickNamed("Discard")] });
+    assert.equal(result.passed, true, `verify should pass once the Discard click and the on-disk removal agree: ${JSON.stringify(result)}`);
+  });
+});
+
+test("library-edit-candidate: prepare() connects the library remote+authorized, builds a real index and builds a real proposal through generatePersonalLibraryDirections() — never a hand-written direction-proposal.json", async () => {
+  await withRealLibraryRoot(async (vaultRoot) => {
+    const task = (await obsidianTaskLibrary.goalTasks()).find(t => t.id === "library-edit-candidate");
+    const driver = createFakeLibraryTaskDriver(minimalLibraryDisk(), { vaultRoot, requests: [], proposal: fakeLibraryProposal() });
+    await task.prepare({ driver });
+    assert.equal(driver.buildLibraryIndexCalls.length, 1);
+    assert.equal(driver.generatePersonalLibraryDirectionsCalls.length, 1);
+    assert.equal(driver.disk().settings.embedding.mode, "remote");
+    assert.ok(driver.disk().libraryConnection?.authorization);
+  });
+});
+
+test("library-edit-candidate: prepare() throws when real generation produces no proposed topic/direction to edit (an empty proposal must not silently continue)", async () => {
+  await withRealLibraryRoot(async (vaultRoot) => {
+    const task = (await obsidianTaskLibrary.goalTasks()).find(t => t.id === "library-edit-candidate");
+    const driver = createFakeLibraryTaskDriver(minimalLibraryDisk(), { vaultRoot, requests: [], proposal: { topics: [] } });
+    await assert.rejects(() => task.prepare({ driver }), /did not produce any proposed topic\/direction/);
   });
 });

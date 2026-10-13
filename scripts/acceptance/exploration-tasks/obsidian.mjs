@@ -13,7 +13,7 @@ import { ACCEPTANCE_DATE, PAPERS } from "../fixtures.mjs";
 import { dailyReportFile, entryFor, HISTORY_FILE, INDEX_FILE, paperNoteFile, SETTINGS_FILE, STATE_FILE } from "../exploration-obsidian.mjs";
 import { poll, pollJsonFile } from "../obsidian-ui.mjs";
 import { checkResult, exactLabelPattern, taskResult } from "./checks.mjs";
-import { startLibraryFixture } from "./library.mjs";
+import { seedClusterableLibraryPaper, startLibraryFixture } from "./library.mjs";
 import { PERSONA_TASK_IDS, personaTasks as sharedPersonaTasks } from "./personas.mjs";
 
 /** Single source of truth for the default Obsidian goal-task ids, usable without a fixture (e.g. --list). */
@@ -27,6 +27,8 @@ export const GOAL_TASK_IDS = [
   "library-revoke-consent", "library-remote-consent",
   // Exploration safety and coverage P3 Chunk 2: index build, library search and similar-paper tasks.
   "library-build-index", "library-search", "library-similar-papers",
+  // Exploration safety and coverage P3 Chunk 3: Direction candidate review tasks.
+  "library-accept-direction", "library-edit-candidate",
 ];
 
 /** P3 Chunk 5: re-exports the shared persona id list (exploration-tasks/personas.mjs) so `--list`/selection keep reading it from each host's own module, unchanged from before chunk 5 wired it up. */
@@ -213,6 +215,35 @@ const LIBRARY_SIMILAR_TAB_LABEL = "Library similar";
 // chunks — guaranteeing at least one non-empty "Library matches" result without depending on any
 // particular ranking/threshold behavior.
 const LIBRARY_SEARCH_QUERY = "measurement";
+// Exploration safety and coverage P3 Chunk 3 (Direction candidate review tasks): the "Personal library"
+// section heading and the "Topics from library" row's own name (plugin/src/settings/tab.ts:1876,1884;
+// `definitions.ts:226` for the 1.13+ declarative path, which names the row identically), and its
+// "Review suggestions" button (tab.ts:767's `renderLibrarySuggestionsControls`) — opens the review
+// dialog, auto-generating a proposal on first use (`openPersonalLibraryDirectionReview({
+// generateIfMissing: true })`, tab.ts:774) when the index already has papers, exactly the precondition
+// library-accept-direction's own prepare() establishes.
+const PERSONAL_LIBRARY_SECTION_LABEL = "Personal library";
+const TOPICS_FROM_LIBRARY_LABEL = "Topics from library";
+const REVIEW_SUGGESTIONS_LABEL = "Review suggestions";
+// The accept bar's own button (interest-profile-modal.ts:405), only enabled once at least one proposed
+// direction is selected for a selected topic. Real-host evidence (2026-10-13): this button also carries
+// a `title` attribute (its own tooltip text), and the shared Obsidian observer's `resolveName()`
+// (exploration-obsidian.mjs) reads `title` before a <button>'s own text content — so the control's
+// *observed* accessible name is the longer tooltip sentence below, never the visible "Add to research
+// topics" label. The button is still fully observable and clickable; a model (or this task's own
+// verify()) matching on the visible label alone would never find it. Both strings are declared and
+// matched so a rename of either one is still caught by the label-literalness check.
+const ADD_TO_RESEARCH_TOPICS_LABEL = "Add to research topics";
+const ADD_TO_RESEARCH_TOPICS_TITLE = "Adds the selected topics with only their checked directions to your research topics. You can edit or remove them there afterwards.";
+// interest-profile-modal.ts's `renameTopic`'s own "Rename topic" <details> disclosure and its "Topic
+// name" field (both the aria-label and the wrapping <label>'s own text, lines 480-484) — library-edit-
+// candidate's rename path. "Discard" is the per-candidate card's own button (line 930) — its discard
+// path.
+const RENAME_TOPIC_LABEL = "Rename topic";
+const TOPIC_NAME_FIELD_LABEL = "Topic name";
+const DISCARD_LABEL = "Discard";
+/** The new topic name library-edit-candidate's rename path asks the model to type, verified byte-for-byte on disk. */
+const LIBRARY_EDIT_NEW_TOPIC_NAME = "文献库候选主题（已重命名）";
 
 /** Parses the real run-history.jsonl (append-only, never truncated by clearDateState) into records. */
 async function readHistory(driver) {
@@ -256,6 +287,11 @@ export function goalTasks() {
   // any embeddings request happened *after* this task actually started, not merely that one exists
   // somewhere in the fixture's full history (e.g. left over from a different task in the same pass).
   let libraryBuildIndexBaseline;
+  // Exploration safety and coverage P3 Chunk 3: library-edit-candidate's own baseline — the real
+  // proposal's first topic/candidate identity, captured once by prepare()'s own real generation (never
+  // the model's claim of which one it edited), so verify() can tell this exact topic's name or candidate
+  // actually changed on disk, not merely that *some* proposal document changed.
+  let libraryEditCandidateBaseline;
   return [
     {
       id: GOAL_TASK_IDS[0], title: "修改每日论文数量上限",
@@ -1034,6 +1070,148 @@ export function goalTasks() {
           checkResult(`点击某一行的 ${FIND_SIMILAR_PAPERS_LABEL} 按钮`, true),
           checkResult(`在对话框中点击“${LIBRARY_SIMILAR_TAB_LABEL}”标签`, true),
           checkResult("Similar papers 对话框的文献库匹配列表非空", libraryListCount > 0, libraryListCount),
+        ]);
+      },
+    },
+    // ─── Exploration safety and coverage P3 Chunk 3: Direction candidate review tasks ───
+    {
+      id: "library-accept-direction", title: "采纳一个来自个人文献库的候选研究方向",
+      goal: `打开插件设置页，找到 ${PERSONAL_LIBRARY_SECTION_LABEL} 区域下的 ${TOPICS_FROM_LIBRARY_LABEL} 这一行，点击 ${REVIEW_SUGGESTIONS_LABEL} 按钮打开建议审核对话框（个人文献库已连接、已授权且已完成索引，首次打开会自动生成建议，请等待生成完成）。在列出的候选研究方向中，确保其中一个方向的复选框处于勾选状态（如果还没有勾选，点击它勾选），然后点击 ${ADD_TO_RESEARCH_TOPICS_LABEL} 按钮（它可能显示为这段说明文字：“${ADD_TO_RESEARCH_TOPICS_TITLE}”），把它加入研究主题。`,
+      uiLabels: [PERSONAL_LIBRARY_SECTION_LABEL, TOPICS_FROM_LIBRARY_LABEL, REVIEW_SUGGESTIONS_LABEL, ADD_TO_RESEARCH_TOPICS_LABEL, ADD_TO_RESEARCH_TOPICS_TITLE],
+      // Starts connected, remote and already authorized with a real completed index (never through the
+      // model — see library-build-index's own prepare() comment): "Review suggestions" is disabled
+      // until the index has a completed run with papers, and the authorization scope startLibraryFixture
+      // grants (llmBaseUrl + the remote embedding endpoint) already covers the generation disclosure too
+      // (both read the plugin's own libraryAuthorizationScope(), main.ts:604-613), so the model never has
+      // to drive a second consent dialog — the one thing this task actually tests is generating,
+      // selecting and accepting a real proposed direction.
+      async prepare({ driver }) {
+        await startLibraryFixture(driver, { embeddingMode: "remote", authorized: true });
+        // See seedClusterableLibraryPaper's own comment: the fixture's two library PDFs alone embed to
+        // two different vectors and cluster into nothing (real-host evidence, 2026-10-13); this third
+        // paper shares PAPERS[0]'s own vector so a real two-member cluster — and so a real proposal —
+        // always exists for the model's own Review suggestions click to generate.
+        await seedClusterableLibraryPaper(driver);
+        await driver.buildLibraryIndex();
+        await driver.openDashboard();
+      },
+      async verify({ driver, actions }) {
+        const reviewOpened = actions.some(action => action.type === "click" && exactLabelPattern(REVIEW_SUGGESTIONS_LABEL).test((action.control?.name || "").trim()));
+        if (!reviewOpened) return taskResult([checkResult(`点击 ${REVIEW_SUGGESTIONS_LABEL} 打开建议审核对话框`, false)]);
+        const accepted = actions.some(action => action.type === "click" && (name => exactLabelPattern(ADD_TO_RESEARCH_TOPICS_LABEL).test(name) || exactLabelPattern(ADD_TO_RESEARCH_TOPICS_TITLE).test(name))((action.control?.name || "").trim()));
+        if (!accepted) {
+          return taskResult([
+            checkResult(`点击 ${REVIEW_SUGGESTIONS_LABEL} 打开建议审核对话框`, true),
+            checkResult(`点击 ${ADD_TO_RESEARCH_TOPICS_LABEL} 采纳选中的候选方向`, false),
+          ]);
+        }
+        const onDisk = await pollJsonFile(() => driver.jsonFile(SETTINGS_FILE), value => {
+          const addedDirection = (value?.settings?.arxiv?.topics ?? []).some(topic => topic.directions?.some(direction => direction.origin === "library"));
+          return addedDirection && Array.isArray(value?.libraryProposalAcceptances) && value.libraryProposalAcceptances.length > 0;
+        }, "library-origin direction and acceptance receipt on disk", { timeoutMs: 8000 }).catch(() => null);
+        const addedDirection = (onDisk?.settings?.arxiv?.topics ?? []).some(topic => topic.directions?.some(direction => direction.origin === "library"));
+        const hasReceipt = Array.isArray(onDisk?.libraryProposalAcceptances) && onDisk.libraryProposalAcceptances.length > 0;
+        return taskResult([
+          checkResult(`点击 ${REVIEW_SUGGESTIONS_LABEL} 打开建议审核对话框`, true),
+          checkResult(`点击 ${ADD_TO_RESEARCH_TOPICS_LABEL} 采纳选中的候选方向`, true),
+          checkResult("研究主题中新增了一个来源为 library 的方向", addedDirection, onDisk?.settings?.arxiv?.topics),
+          checkResult("插件记录了本次建议采纳的回执（libraryProposalAcceptances）", hasReceipt, onDisk?.libraryProposalAcceptances),
+        ]);
+      },
+    },
+    {
+      id: "library-edit-candidate", title: "编辑个人文献库的一个候选研究方向",
+      // Real-host evidence (2026-10-13), two separate findings:
+      //
+      // 1. Every proposed topic renders collapsed (<details>, closed by default — interest-profile-
+      //    modal.ts's own `expandedTopics` starts empty). The shared Obsidian observer's
+      //    `controlVisible()` (exploration-obsidian.mjs) does not check whether a node's ancestor is a
+      //    closed <details> — only the node's own computed style and `getBoundingClientRect()` — so it
+      //    wrongly reports every control inside a still-collapsed topic (Rename topic, Topic name, Save
+      //    edits, Discard, …) as present and clickable, each carrying a real-looking but wrong rect. A
+      //    real-host run confirmed clicking any of them straight from the just-opened dialog times out
+      //    hit-testing ("Obsidian click target stable and hit-testable" never becomes true, landing on
+      //    either a sibling toolbar <div> or the modal's own backdrop instead) — safely refused, never a
+      //    stray click, but the task could not complete. The fix within this task's own control (no
+      //    observer change needed): click the candidate's own topic row first to actually expand it
+      //    before touching anything inside; a real-host run with that extra click first passes (below).
+      //    This is itself worth the owner's attention as a standing observer gap beyond this task.
+      //
+      // 2. The "Discard" path is NOT asked for here, even though verify() below still accepts it, because
+      //    it hits an unrelated, unfixable-at-this-level issue: clicking the candidate card's "Discard"
+      //    button opens a second `.arxiv-daily-modal`-marked confirmation dialog (chooseModal, modal.ts)
+      //    stacked on top of the still-open review modal. resolveSurface() finds the plugin's modal
+      //    surface with `document.querySelector(".arxiv-daily-modal")`, which returns the FIRST such
+      //    element in DOM order — the older review modal underneath, never the newer confirm dialog — so
+      //    the confirm dialog's own Confirm/Cancel buttons are never observed at all. A real-host run
+      //    (first expanding the topic, then clicking Edit, then Discard) confirms the first click reaches
+      //    and opens the confirm dialog, but then the model is stuck: nothing it can see offers a way to
+      //    confirm, every subsequent observation still shows the stale review-modal content, and it
+      //    exhausts its own step budget never passing. This is a resolveSurface()-level limitation
+      //    (first-match instead of topmost-match when two plugin modals stack), not something this task's
+      //    own goal/verify can work around; reported rather than silently routed around (phase's own abort
+      //    trigger). Only the rename path — a single modal throughout, no stacking — is asked for until
+      //    that is fixed.
+      goal: `打开插件设置页，找到 ${PERSONAL_LIBRARY_SECTION_LABEL} 区域下的 ${TOPICS_FROM_LIBRARY_LABEL} 这一行，点击 ${REVIEW_SUGGESTIONS_LABEL} 按钮打开建议审核对话框（已经生成好一份建议，不需要重新生成）。点击对话框里列出的第一个候选研究方向所在主题的标题行，将其展开；再展开它的“${RENAME_TOPIC_LABEL}”，把“${TOPIC_NAME_FIELD_LABEL}”改为“${LIBRARY_EDIT_NEW_TOPIC_NAME}”并移开焦点确认。不需要点击 ${ADD_TO_RESEARCH_TOPICS_LABEL}。`,
+      uiLabels: [PERSONAL_LIBRARY_SECTION_LABEL, TOPICS_FROM_LIBRARY_LABEL, REVIEW_SUGGESTIONS_LABEL, RENAME_TOPIC_LABEL, TOPIC_NAME_FIELD_LABEL, DISCARD_LABEL, ADD_TO_RESEARCH_TOPICS_LABEL],
+      // Starts connected, remote, authorized and indexed like library-accept-direction, but additionally
+      // generates a real proposal in prepare() itself (driver.generatePersonalLibraryDirections(), the
+      // plugin's own real clustering/generation pipeline — never a hand-written direction-proposal.json,
+      // per the phase's own approach) so the model edits an already-existing candidate rather than also
+      // having to generate one; captures that candidate's real identity so verify() can check the exact
+      // record changed, not merely that *some* proposal document did.
+      async prepare({ driver }) {
+        await startLibraryFixture(driver, { embeddingMode: "remote", authorized: true });
+        // See seedClusterableLibraryPaper's own comment (library-accept-direction's prepare()): the
+        // fixture's two library PDFs alone cluster into nothing, so real generation here needs this
+        // third, same-vector paper too.
+        await seedClusterableLibraryPaper(driver);
+        await driver.buildLibraryIndex();
+        const proposal = await driver.generatePersonalLibraryDirections();
+        const topic = proposal?.topics?.[0];
+        const candidate = topic?.directions?.[0];
+        if (!topic || !candidate) {
+          throw new Error("library-edit-candidate: prepare()'s real generation did not produce any proposed topic/direction to edit");
+        }
+        libraryEditCandidateBaseline = { topicId: topic.id, originalTopicName: topic.suggestedName, candidateId: candidate.id };
+        await driver.openDashboard();
+      },
+      async verify({ driver, actions }) {
+        const reviewOpened = actions.some(action => action.type === "click" && exactLabelPattern(REVIEW_SUGGESTIONS_LABEL).test((action.control?.name || "").trim()));
+        if (!reviewOpened) return taskResult([checkResult(`点击 ${REVIEW_SUGGESTIONS_LABEL} 打开建议审核对话框`, false)]);
+        const renamed = actions.some(action => action.type === "fill" && exactLabelPattern(TOPIC_NAME_FIELD_LABEL).test((action.control?.name || "").trim()) && action.value === LIBRARY_EDIT_NEW_TOPIC_NAME);
+        const discarded = actions.some(action => action.type === "click" && exactLabelPattern(DISCARD_LABEL).test((action.control?.name || "").trim()));
+        if (!renamed && !discarded) {
+          return taskResult([
+            checkResult(`点击 ${REVIEW_SUGGESTIONS_LABEL} 打开建议审核对话框`, true),
+            checkResult(`重命名该主题为“${LIBRARY_EDIT_NEW_TOPIC_NAME}”，或点击该候选方向的 ${DISCARD_LABEL} 按钮丢弃它（二选一）`, false),
+          ]);
+        }
+        if (renamed) {
+          const proposal = await poll(
+            () => driver.readLibraryDirectionProposal(),
+            value => value?.topics?.find(item => item.id === libraryEditCandidateBaseline?.topicId)?.suggestedName === LIBRARY_EDIT_NEW_TOPIC_NAME,
+            "direction-proposal.json 中该主题已重命名", { timeoutMs: 8000 },
+          ).catch(() => null);
+          const topic = proposal?.topics?.find(item => item.id === libraryEditCandidateBaseline?.topicId);
+          const ok = topic?.suggestedName === LIBRARY_EDIT_NEW_TOPIC_NAME;
+          return taskResult([
+            checkResult(`点击 ${REVIEW_SUGGESTIONS_LABEL} 打开建议审核对话框`, true),
+            checkResult(`填写“${TOPIC_NAME_FIELD_LABEL}”为“${LIBRARY_EDIT_NEW_TOPIC_NAME}”`, true),
+            checkResult("direction-proposal.json 中该主题的名称已更新为新名称", ok, topic?.suggestedName),
+          ]);
+        }
+        const proposal = await poll(
+          () => driver.readLibraryDirectionProposal(),
+          value => !(value?.topics ?? []).some(topic => topic.directions?.some(direction => direction.id === libraryEditCandidateBaseline?.candidateId)),
+          "direction-proposal.json 中该候选方向已被丢弃", { timeoutMs: 8000 },
+        ).catch(() => null);
+        const stillPresent = (proposal?.topics ?? []).some(topic => topic.directions?.some(direction => direction.id === libraryEditCandidateBaseline?.candidateId));
+        const ok = Boolean(proposal) && !stillPresent;
+        return taskResult([
+          checkResult(`点击 ${REVIEW_SUGGESTIONS_LABEL} 打开建议审核对话框`, true),
+          checkResult(`点击该候选方向的 ${DISCARD_LABEL} 按钮`, true),
+          checkResult("direction-proposal.json 中该候选方向已被丢弃", ok, proposal?.topics),
         ]);
       },
     },
