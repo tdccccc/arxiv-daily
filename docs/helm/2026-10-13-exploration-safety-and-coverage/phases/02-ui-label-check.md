@@ -27,7 +27,7 @@ Add a `uiLabels` list to every goal task in `scripts/acceptance/exploration-task
 - Red / baseline signal: new test file (e.g. `scripts/tests/acceptance-exploration-labels.test.mjs`) fails because goal tasks have no `uiLabels`; a second assertion run against a deliberately renamed label (test-local copy of the check with an injected missing label) shows the failure message names the task id and the label.
 - Green check: `node --test scripts/tests/acceptance-exploration-labels.test.mjs` passes for all 14 Obsidian and 6 workbench goal tasks.
 - regression checks: `node --test scripts/tests/acceptance-exploration*.test.mjs`; `npm run test:acceptance:tools`; the test is picked up by `npm run test:release-tools`.
-- [ ] implementation and tests accepted
+- [x] implementation and tests accepted
 
 ## Phase verification
 

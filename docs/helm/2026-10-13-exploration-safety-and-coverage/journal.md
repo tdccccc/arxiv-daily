@@ -20,3 +20,10 @@
 - change: success criteria 1 and 2 checked; P1 done, P2 started. New observation recorded as an open question: after opening Obsidian settings, keyboard focus stays outside the settings pane, so every press is refused as out of scope until the model clicks inside; the keyboard-only persona may stall there. The scope check predates P1. Workbench library scope (npm ci at index build) recorded as an open question for P4.
 - disposition: keep all P1 work.
 - next: P2 — a fixed test that checks every UI label a goal task depends on still exists in the product.
+
+## 2026-10-13 — note (P2 done)
+
+- evidence: d8d230e. All 14 Obsidian and 6 workbench goal tasks declare `uiLabels`; verifiers match the same declared strings through `exactLabelPattern`. The new label test failed before labels existed and passes after (7/7); renaming every "Run History" in the plugin source makes it report `auth-failure-retry`. `npm run test:release-tools` 686/686. Owner removed "（Star paper）" from the workbench star task goal: it is Obsidian-only text that never existed in the workbench. Known limits: the check is case-insensitive and substring-based, so renaming one of several occurrences of a label (e.g. the plugin also has a "Run history" command) does not trip it; runtime-built text such as "Page 2 / N" is not declared.
+- change: success criterion 3 checked; P2 done, P3 started.
+- disposition: keep.
+- next: P3 — Obsidian personal-library goal tasks.
