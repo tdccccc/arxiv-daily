@@ -13,3 +13,10 @@
 - change: user decisions (2026-10-13): drop the two menu tasks (now a non-goal); replace the "task out of date" report reason with a fixed test that checks every label a goal task depends on still exists in the product. Success criteria 3 and 4 merged into one; P2 outcome rewritten. P1, P3–P5 unchanged.
 - disposition: no code existed for P2; P1 work in progress is unaffected and continues.
 - next: continue P1.
+
+## 2026-10-13 — note (P1 done)
+
+- evidence: chunks 388a471 (Obsidian press), fb93a8b (workbench press; owner follow-up lets Tab, Shift+Tab and Escape leave a restricted control so keyboard navigation cannot get stuck), a17880d (Obsidian screenshot mask), 65711ab (shared secret rule and navigation keys). Each fix had new tests fail before and pass after; `npm run test:release-tools` 679/679. Real-host check with a scripted local fake model (/tmp/p1-verify): workbench Tab×20 onto the schedule switch then Space was refused ("external service and scheduling settings are fixed by the fixture"), the switch stayed off, Tab and Escape still worked; Obsidian Shift+Tab onto "Show LLM API key" then Enter was refused, the key field stayed a password field, fixture-requests had no external URL, and the step screenshots show the key field covered by a black box (owner viewed daily-paper-limit-step-3.png).
+- change: success criteria 1 and 2 checked; P1 done, P2 started. New observation recorded as an open question: after opening Obsidian settings, keyboard focus stays outside the settings pane, so every press is refused as out of scope until the model clicks inside; the keyboard-only persona may stall there. The scope check predates P1. Workbench library scope (npm ci at index build) recorded as an open question for P4.
+- disposition: keep all P1 work.
+- next: P2 — a fixed test that checks every UI label a goal task depends on still exists in the product.

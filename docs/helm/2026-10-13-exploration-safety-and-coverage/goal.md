@@ -2,8 +2,8 @@
 
 status: active
 created: 2026-10-13T10:05:00+08:00
-updated: 2026-10-13T10:19:00+08:00
-revision: 2
+updated: 2026-10-13T11:55:00+08:00
+revision: 3
 owner: main-session-3a9f449b
 
 ## Intent
@@ -12,8 +12,8 @@ owner: main-session-3a9f449b
 
 ## Success criteria
 
-- [ ] 两端的键盘按键动作和点击一样受危险操作拦截：焦点落在外部链接、调度开关、清除运行状态、密钥显示等受限或敏感控件上，或焦点不在本产品界面内时，按键不发送；固定测试覆盖这些情形。
-- [ ] Obsidian 端截图与 workbench 一样遮住密钥字段；固定测试覆盖。
+- [x] 两端的键盘按键动作和点击一样受危险操作拦截：焦点落在外部链接、调度开关、清除运行状态、密钥显示等受限或敏感控件上，或焦点不在本产品界面内时，按键不发送；固定测试覆盖这些情形。
+- [x] Obsidian 端截图与 workbench 一样遮住密钥字段；固定测试覆盖。
 - [ ] 每个目标任务依赖的界面文字由一项普通固定测试（不调用模型）核对仍存在于产品中；产品改名后该测试失败，并指出需要更新的任务和缺失的文字。
 - [ ] 个人文献库在 Plugin product 和 Reading workbench 上各有一组带程序判定的目标任务（覆盖范围在对应阶段确定），起点由夹具确定性准备，不使用系统文件选择框，不读写真实文献库。
 - [ ] 至少一次真实模型完整运行取得证据（运行前征得用户同意费用）；疑点逐条复核处置；发版执行说明更新任务数量与成本。
@@ -39,12 +39,14 @@ owner: main-session-3a9f449b
 ## Phases
 
 <!-- Single source of truth for phase status. PN ↔ filename NN. Integer IDs are permanent and never reused; replacement phases take the next unused number. Outcomes only — no steps. The active line is the current focus. -->
-1. P1 — 两端按键动作受与点击相同的受限/敏感/范围拦截，Obsidian 截图遮住密钥字段 — status: active
-2. P2 — 一项普通固定测试核对所有目标任务依赖的界面文字仍存在于产品中，改名时指出需更新的任务 — status: pending
+1. P1 — 两端按键动作受与点击相同的受限/敏感/范围拦截，Obsidian 截图遮住密钥字段 — status: done
+2. P2 — 一项普通固定测试核对所有目标任务依赖的界面文字仍存在于产品中，改名时指出需更新的任务 — status: active
 3. P3 — Plugin product 上的个人文献库目标任务就绪，起点由夹具确定性准备 — status: pending
 4. P4 — Reading workbench 上的个人文献库目标任务就绪 — status: pending
 5. P5 — 真实模型完整运行、疑点复核与处置、发版说明更新 — status: pending
 
 ## Open questions
 
+- Reading workbench 文献库任务的范围：建索引会运行 `npm ci` 访问真实 npm 仓库（见 research.md）；待用户在 P4 开始前决定是否让测试工具预装 PDF 运行时。
+- Obsidian 打开设置后键盘焦点不进入设置页，只用键盘的角色需先点击一次才能按键（P1 验证中发现）；P5 真实运行后再决定是否处理。
 - 审查中"只要有一个非等待动作即可通过"的门槛是否可能借前一任务残留状态误判通过（未找到具体实例）；P2 或 P3 补任务时顺带确认，确认无实例则在 journal 记录后关闭。

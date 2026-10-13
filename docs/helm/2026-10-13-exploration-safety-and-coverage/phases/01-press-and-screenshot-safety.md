@@ -29,7 +29,7 @@ Add a "focused-element check" step to each host's `press` executor that describe
 - Red / baseline signal: new tests in `scripts/tests/acceptance-exploration-obsidian.test.mjs` (happy-dom + fake CDP, same style as the existing "press is rejected … outside the plugin's scope" test) fail because `press Enter` with focus on an external-link settings button, the scheduler toggle, the "Clear run state…" menu item, and a "Show … API key" reveal button still sends `Input.dispatchKeyEvent`.
 - Green check: `node --test scripts/tests/acceptance-exploration-obsidian.test.mjs` — the new tests pass with zero `Input.*` calls and an `ExplorationActionError` naming the restriction; existing press tests (allowed key in scope, Shift+Tab, out of scope, non-allowlisted key) still pass.
 - regression checks: `node --test scripts/tests/acceptance-exploration*.test.mjs`; `npx eslint` on changed files with the repo config's ignore overridden only if the existing phase practice did so (otherwise record "not run").
-- [ ] implementation and tests accepted
+- [x] implementation and tests accepted
 
 ### Chunk 2 — workbench press refuses restricted or out-of-scope focus
 
@@ -38,7 +38,7 @@ Add a "focused-element check" step to each host's `press` executor that describe
 - Red / baseline signal: new tests (in the workbench host test file that already drives the browser driver, `scripts/tests/acceptance-exploration-host.test.mjs` or its existing equivalent) fail because `press Space` with focus on the `schedule.enabled` / `email.enabled` switch, and `press Enter` with focus outside `.workbench`, still reach `page.keyboard.press`.
 - Green check: focused test file passes; the refused cases produce `ExplorationActionError` and no key event; an allowed press on an ordinary control still works.
 - regression checks: `node --test scripts/tests/acceptance-exploration*.test.mjs`; `npm run test:acceptance:tools`.
-- [ ] implementation and tests accepted
+- [x] implementation and tests accepted
 
 ### Chunk 3 — Obsidian screenshots hide secret fields
 
@@ -47,7 +47,7 @@ Add a "focused-element check" step to each host's `press` executor that describe
 - Red / baseline signal: a new test shows that the Obsidian driver's `capture()` sends `Page.captureScreenshot` while a revealed (`type="text"`) API key input or a password input is visible unmasked.
 - Green check: the test observes the mask applied to every secret field before the capture call and removed afterwards (also when capture throws).
 - regression checks: `node --test scripts/tests/acceptance-exploration*.test.mjs`; `npm run test:acceptance:tools`.
-- [ ] implementation and tests accepted
+- [x] implementation and tests accepted
 
 ## Phase verification
 
