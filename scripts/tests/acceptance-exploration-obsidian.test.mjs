@@ -313,6 +313,48 @@ test("the exported classifier is a pure function usable without any DOM", () => 
   assert.equal(classifyControlRestriction({ type: "text", name: "", href: "obsidian://open?vault=x" }), undefined);
 });
 
+// New-P3 Chunk 1 (docs/helm/2026-10-13-exploration-safety-and-coverage/phases/03-obsidian-library-
+// tasks.md), owner steer: the `embedding` clause in classifyControlRestriction was meant to fix only
+// the endpoint/credential/model/dimension sub-fields (and the sidecar sub-fields), not the mode choice
+// itself — but as an unanchored substring match it also caught the bare "Embedding" mode <select>
+// (packages/core/src/settings/schema.ts's embeddingMode business setting, name: "Embedding", mirrored
+// verbatim by the legacy <1.13 display() path at plugin/src/settings/tab.ts:1889), the one control the
+// library-remote-consent task needs the model to actually switch. Every name below is read verbatim
+// from schema.ts's `fields` map AND tab.ts's own display() (both render the identical literal string —
+// confirmed by reading both), so this fixes the policy without guessing at a name that might not be
+// what either rendering path actually produces.
+test("the Embedding mode select itself must not be restricted — only its endpoint/credential/model/dimension sub-fields (and sidecar, API base URL, Better PDF parser) stay restricted", () => {
+  // The one control this policy must newly allow.
+  assert.equal(classifyControlRestriction({ type: "", name: "Embedding" }), undefined, "the bare Embedding mode dropdown must be allowed so the model can actually switch it");
+
+  // Every embedding sub-field (schema.ts: embeddingBaseUrl/embeddingModel/embeddingDimension;
+  // tab.ts:1912,1944,1963) must stay restricted under the same message as before.
+  for (const name of ["Embedding API base URL", "Embedding model", "Embedding dimension"]) {
+    assert.equal(classifyControlRestriction({ type: "", name }), "external service and embedding/parser settings are fixed by the fixture", `${name} must stay restricted`);
+  }
+  // "Embedding API key" (tab.ts:1932) and its own "Show Embedding API key" reveal button are both
+  // independently caught by the earlier credentials rule (an "API key" substring, checked before the
+  // embedding/sidecar clause is ever reached) — restricted regardless of this change, under the
+  // credentials message rather than the embedding/sidecar one.
+  for (const name of ["Embedding API key", "Show Embedding API key"]) {
+    assert.equal(classifyControlRestriction({ type: "", name }), "credentials are excluded from exploration", `${name} must stay restricted`);
+  }
+
+  // The sidecar sub-fields (schema.ts: sidecarCapabilitiesUrl/sidecarParseUrl; tab.ts:1994,2014) must
+  // stay restricted. "Better PDF parser" (sidecarEnabled, tab.ts:1979) was already anchored exactly and
+  // is unaffected by this change — checked here only as a sanity guard against regressing it.
+  for (const name of ["Sidecar capability URL", "Sidecar parse URL", "Better PDF parser"]) {
+    assert.equal(classifyControlRestriction({ type: "", name }), "external service and embedding/parser settings are fixed by the fixture", `${name} must stay restricted`);
+  }
+  // The LLM's own "API base URL" (schema.ts: apiBaseUrl; tab.ts:1456) was already anchored exactly and
+  // is untouched by this change — checked here only as a sanity guard.
+  assert.equal(classifyControlRestriction({ type: "", name: "API base URL" }), "external service and embedding/parser settings are fixed by the fixture");
+
+  // A name that merely starts with "Embedding" but is not one of the four known sub-fields must not
+  // become restricted by accident (guards against an overly broad fix, e.g. a bare prefix match).
+  assert.equal(classifyControlRestriction({ type: "", name: "Embedding" }), undefined);
+});
+
 /**
  * Chunk 3 — createObsidianActionExecutor. A fake CDP client records every
  * `send(method, params)` call and answers `Runtime.evaluate` by running the

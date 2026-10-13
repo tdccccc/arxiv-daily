@@ -20,7 +20,9 @@ import {
   startObsidianExplorationSession,
 } from "../acceptance/exploration-obsidian.mjs";
 import { ACCEPTANCE_DATE, PAPERS } from "../acceptance/fixtures.mjs";
+import { createObsidianSettings } from "../acceptance/obsidian.mjs";
 import * as obsidianTaskLibrary from "../acceptance/exploration-tasks/obsidian.mjs";
+import { LIBRARY_EMBEDDING_DIMENSION, startLibraryFixture } from "../acceptance/exploration-tasks/library.mjs";
 import * as workbenchTaskLibrary from "../acceptance/exploration-tasks/workbench.mjs";
 
 // ---------------------------------------------------------------------------
@@ -270,13 +272,15 @@ test("the default Obsidian goal tasks have ids, titles, Chinese goals and a prog
   assert.deepEqual(tasks.map(t => t.id), obsidianTaskLibrary.GOAL_TASK_IDS);
   // Ids are unchanged by the move (phase contract: "keeping existing task ids/behavior unchanged"); P3
   // Chunk 2 appends topic/direction/category tasks after the original two, P3 Chunk 3 appends the
-  // four run tasks after those, and P3 Chunk 4 appends the five reading tasks, keeping every earlier id
-  // stable.
+  // four run tasks after those, P3 Chunk 4 appends the five reading tasks, and New-P3 Chunk 1 (personal
+  // library tasks, docs/helm/2026-10-13-exploration-safety-and-coverage) appends library-revoke-consent,
+  // keeping every earlier id stable.
   assert.deepEqual(obsidianTaskLibrary.GOAL_TASK_IDS, [
     "daily-paper-limit", "star-paper-from-report",
     "add-topic-direction", "remove-topic-direction", "add-arxiv-category",
     "run-for-date", "cancel-then-rerun", "auth-failure-retry", "completed-date-idempotent",
     "dashboard-tabs-paging", "mark-to-read", "create-paper-note", "summarize-by-id", "open-today-report",
+    "library-revoke-consent",
   ]);
   for (const t of tasks) {
     assert.equal(typeof t.title, "string");
@@ -376,7 +380,7 @@ test("--list (describeAcceptanceSuites) lists both hosts' goal task ids and pers
 // throws when the measured duration exceeds the 30s phase-abort budget.
 // ---------------------------------------------------------------------------
 
-function buildFakeObsidianSession({ modalOpen = false, settingsMarker = false, diagnosticsEntries = [], extraHtml = "" } = {}) {
+function buildFakeObsidianSession({ modalOpen = false, settingsMarker = false, diagnosticsEntries = [], extraHtml = "", authorizeLibraryProcessing } = {}) {
   const window = new Window();
   window.document.body.innerHTML = `
     ${modalOpen ? '<div class="modal-container"><div class="modal arxiv-daily-modal"><button type="button">Close</button></div></div>' : ""}
@@ -388,6 +392,13 @@ function buildFakeObsidianSession({ modalOpen = false, settingsMarker = false, d
   `;
   const calls = [];
   const reloadCalls = [];
+  // New-P3 Chunk 1: records every call to the plugin's own fake authorizeLibraryProcessing(), so a test
+  // can assert driver.authorizeLibraryProcessing() actually reached it (rather than, say, silently
+  // swallowing a stringified pending Promise — see exploration-obsidian.mjs's own comment on why it uses
+  // `helper.evaluate` directly instead of `helper.read` for this). `authorizeLibraryProcessing` lets a
+  // test substitute its own async body (e.g. one that throws) without duplicating this whole builder.
+  const authorizeCalls = [];
+  const authorize = authorizeLibraryProcessing ?? (async () => {});
   const httpClient = { request: async () => ({}) };
   const context = {
     document: window.document,
@@ -400,7 +411,10 @@ function buildFakeObsidianSession({ modalOpen = false, settingsMarker = false, d
       // the real host (see exploration-obsidian.mjs's reset() comment): a bare loadSettingsAndState()
       // call desyncs SettingsChangeService's captured settings reference from the live plugin.settings.
       plugins: {
-        plugins: { "arxiv-daily": { getHttpClient: () => httpClient } },
+        plugins: { "arxiv-daily": {
+          getHttpClient: () => httpClient,
+          authorizeLibraryProcessing: async () => { authorizeCalls.push(true); return authorize(); },
+        } },
         disablePlugin: async () => { reloadCalls.push("disable"); },
         enablePlugin: async () => { reloadCalls.push("enable"); },
       },
@@ -426,7 +440,7 @@ function buildFakeObsidianSession({ modalOpen = false, settingsMarker = false, d
   // `session.diagnostics.entries()` fresh every time and slices off what it already consumed
   // (`diagnosticsSeen`), so a test can push new entries between two observe() calls, exactly like a real
   // CDP session accumulating console/pageerror entries over time.
-  return { window, calls, reloadCalls, diagnosticsEntries, session: { client, evaluate, diagnostics: { entries: () => diagnosticsEntries } } };
+  return { window, calls, reloadCalls, authorizeCalls, diagnosticsEntries, session: { client, evaluate, diagnostics: { entries: () => diagnosticsEntries } } };
 }
 
 async function withTempFixture(run) {
@@ -647,6 +661,65 @@ test("driver.reloadThenReopenSettings reloads the plugin before (re)opening sett
     // opens them again — the open must come after the close the reload performed.
     const closeIndex = after.findIndex(c => c === "settings.close");
     assert.ok(closeIndex >= 0 && openIndex > closeIndex, "settings must close (as part of the reload) before it is reopened");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// New-P3 Chunk 1 (personal library tasks): driver.authorizeLibraryProcessing()
+// grants consent through the plugin's own real method over CDP, and reset()
+// must not let a library connection a task's prepare() wrote leak into the
+// next task (the chunk's own "library state leaks through reset()" abort
+// trigger — exercised directly here against the real reset(), not merely
+// inferred from createObsidianSettings() having no libraryConnection key).
+// ---------------------------------------------------------------------------
+
+test("driver.authorizeLibraryProcessing() reaches the plugin's own authorizeLibraryProcessing() via CDP and awaits it (not a hand-written fingerprint, not a stringified pending Promise)", async () => {
+  await withTempFixture(async ({ fixture, artifactDir }) => {
+    let resolved = false;
+    const { authorizeCalls, session } = buildFakeObsidianSession({
+      authorizeLibraryProcessing: async () => { await Promise.resolve(); resolved = true; },
+    });
+    const driver = await createObsidianExplorationDriver({ session, fixture, artifactDir });
+    await driver.authorizeLibraryProcessing();
+    assert.equal(authorizeCalls.length, 1, "the plugin's own authorizeLibraryProcessing() must be called exactly once");
+    assert.equal(resolved, true, "driver.authorizeLibraryProcessing() must actually await the plugin call, not just fire it and return");
+  });
+});
+
+test("driver.authorizeLibraryProcessing() rejects when the plugin call itself throws (e.g. no library connected)", async () => {
+  await withTempFixture(async ({ fixture, artifactDir }) => {
+    const { session } = buildFakeObsidianSession({
+      authorizeLibraryProcessing: async () => { throw new Error("Choose a personal library first"); },
+    });
+    const driver = await createObsidianExplorationDriver({ session, fixture, artifactDir });
+    await assert.rejects(() => driver.authorizeLibraryProcessing(), /Choose a personal library first/);
+  });
+});
+
+test("reset() clears a libraryConnection an earlier task's prepare() wrote, so library state never leaks into the next task", async () => {
+  await withTempFixture(async ({ fixture, artifactDir }) => {
+    const { session } = buildFakeObsidianSession();
+    const driver = await createObsidianExplorationDriver({ session, fixture, artifactDir });
+    const dataPath = path.join(fixture.vaultRoot, SETTINGS_FILE);
+    await mkdir(path.dirname(dataPath), { recursive: true });
+    await writeFile(dataPath, JSON.stringify(createObsidianSettings({ endpoint: `${fixture.server.url}/v1` })));
+    // Simulates what a library task's prepare() does (startLibraryFixture -> applySettingsPatch),
+    // never through the model.
+    await driver.applySettingsPatch(current => {
+      current.libraryConnection = {
+        schemaVersion: 1, selectedRoot: fixture.vaultRoot, rootIdentity: "1:2",
+        eligibleExtensions: [".pdf"], processingDepth: "metadata-and-abstracts",
+        authorization: { fingerprint: "stale", grantedAt: new Date().toISOString() },
+      };
+      current.settings.embedding.mode = "remote";
+    });
+    const midway = JSON.parse(await (await import("node:fs/promises")).readFile(path.join(fixture.vaultRoot, SETTINGS_FILE), "utf8"));
+    assert.ok(midway.libraryConnection, "sanity check: the simulated task really did write a libraryConnection");
+
+    await driver.reset();
+    const written = JSON.parse(await (await import("node:fs/promises")).readFile(path.join(fixture.vaultRoot, SETTINGS_FILE), "utf8"));
+    assert.equal(written.libraryConnection, undefined, "reset() must restore the fixture baseline, which has no libraryConnection, for the next task");
+    assert.equal(written.settings.embedding.mode, "local", "reset() must also restore the baseline Embedding mode, not leave the previous task's remote choice in place");
   });
 });
 
@@ -1305,4 +1378,157 @@ test("open-today-report: prepare() ensures the ACCEPTANCE_DATE report exists", a
   const driver = createFakeReadingDriver({});
   await task.prepare({ driver });
   assert.deepEqual(driver.calls.ensureDailyReport, [ACCEPTANCE_DATE]);
+});
+
+// ---------------------------------------------------------------------------
+// New-P3 Chunk 1 (docs/helm/2026-10-13-exploration-safety-and-coverage/phases/03-obsidian-library-
+// tasks.md): startLibraryFixture() (the shared, composable library-fixture start other chunks will
+// reuse) and the library-revoke-consent goal task it backs.
+// ---------------------------------------------------------------------------
+
+/** A fake driver for library-revoke-consent's verify(), following the same convention as createFakeSettingsDriver above: jsonFile/applySettingsPatch/authorizeLibraryProcessing/openDashboard all read and write one in-memory "disk". */
+function createFakeLibraryDriver(initialDisk) {
+  let disk = structuredClone(initialDisk);
+  return {
+    disk: () => disk,
+    async jsonFile(relative) {
+      assert.equal(relative, SETTINGS_FILE, `task verify()/prepare() must read the real settings file, not ${relative}`);
+      return structuredClone(disk);
+    },
+    async applySettingsPatch(mutate) { mutate(disk); },
+    async authorizeLibraryProcessing() {
+      disk.libraryConnection.authorization = { fingerprint: "fake-fingerprint", grantedAt: new Date().toISOString() };
+    },
+    async openDashboard() {},
+  };
+}
+
+function authorizedRemoteLibraryDisk() {
+  return {
+    settings: { embedding: { mode: "remote", provider: "", baseUrl: "http://127.0.0.1:1/v1", apiKey: "", model: "", dimension: LIBRARY_EMBEDDING_DIMENSION, initialChoiceDone: true } },
+    libraryConnection: {
+      schemaVersion: 1, selectedRoot: "/fake/vault/library", rootIdentity: "1:2",
+      eligibleExtensions: [".pdf"], processingDepth: "metadata-and-abstracts",
+      authorization: { fingerprint: "fake-fingerprint", grantedAt: "2026-10-13T00:00:00.000Z" },
+    },
+  };
+}
+
+test("library-revoke-consent: verify fails on the untouched state (authorized, but no Revoke click yet)", async () => {
+  const task = (await obsidianTaskLibrary.goalTasks()).find(t => t.id === "library-revoke-consent");
+  assert.ok(task, "library-revoke-consent must exist in the Obsidian goal task library");
+  const driver = createFakeLibraryDriver(authorizedRemoteLibraryDisk());
+  const untouched = await task.verify({ driver, actions: [] });
+  assert.equal(untouched.passed, false, "verify must not pass before the model clicks Revoke at all");
+});
+
+test("library-revoke-consent: verify fails after only the first Revoke click (the row button opening the dialog), before the confirmation click", async () => {
+  const task = (await obsidianTaskLibrary.goalTasks()).find(t => t.id === "library-revoke-consent");
+  const driver = createFakeLibraryDriver(authorizedRemoteLibraryDisk());
+  const oneClick = await task.verify({ driver, actions: [clickNamed("Revoke")] });
+  assert.equal(oneClick.passed, false, "verify must not pass on a single Revoke click — the row button only opens the confirmation dialog, it does not revoke by itself");
+  assert.equal(driver.disk().libraryConnection.authorization !== undefined, true, "a single click must not have changed the underlying (fake) authorization either");
+});
+
+test("library-revoke-consent: verify fails if the on-disk authorization is still present even after two Revoke clicks (a plausible wrong outcome: the model clicked Cancel, or the dialog never actually submitted)", async () => {
+  const task = (await obsidianTaskLibrary.goalTasks()).find(t => t.id === "library-revoke-consent");
+  const driver = createFakeLibraryDriver(authorizedRemoteLibraryDisk());
+  const result = await task.verify({ driver, actions: [clickNamed("Revoke"), clickNamed("Revoke")] });
+  assert.equal(result.passed, false, "verify must not pass merely because two Revoke-labeled clicks were observed; the on-disk grant must actually be gone");
+});
+
+test("library-revoke-consent: verify passes once two Revoke clicks are observed and the on-disk authorization is actually gone (embedding mode also reverted to local)", async () => {
+  const task = (await obsidianTaskLibrary.goalTasks()).find(t => t.id === "library-revoke-consent");
+  const driver = createFakeLibraryDriver(authorizedRemoteLibraryDisk());
+  // Simulates the real product effect of the model's second (confirming) click — never through the
+  // model's own claim of success.
+  await driver.applySettingsPatch(current => {
+    delete current.libraryConnection.authorization;
+    current.settings.embedding.mode = "local";
+  });
+  const result = await task.verify({ driver, actions: [clickNamed("Revoke"), clickNamed("Revoke")] });
+  assert.equal(result.passed, true, `verify should pass once both the action and the on-disk state agree: ${JSON.stringify(result)}`);
+});
+
+test("library-revoke-consent: verify fails if authorization is gone but Embedding mode was not reverted to local (a plausible wrong outcome: a hand-edited disk state, not the real revoke flow)", async () => {
+  const task = (await obsidianTaskLibrary.goalTasks()).find(t => t.id === "library-revoke-consent");
+  const driver = createFakeLibraryDriver(authorizedRemoteLibraryDisk());
+  await driver.applySettingsPatch(current => { delete current.libraryConnection.authorization; });
+  const result = await task.verify({ driver, actions: [clickNamed("Revoke"), clickNamed("Revoke")] });
+  assert.equal(result.passed, false, "verify must not pass if Embedding mode stayed remote despite the authorization being gone");
+});
+
+test("startLibraryFixture: connects the library over the fixture's own vault/library folder, points remote Embedding at the fixture server with dimension 3, and grants consent through the plugin's own authorizeLibraryProcessing when authorized:true", async () => {
+  await withTempFixture(async ({ fixture, artifactDir }) => {
+    const libraryDir = path.join(fixture.vaultRoot, "library");
+    await mkdir(libraryDir, { recursive: true });
+    await writeFile(path.join(libraryDir, "2610.10001.pdf"), "%PDF-1.4\n%%EOF\n");
+    const dataPath = path.join(fixture.vaultRoot, SETTINGS_FILE);
+    await mkdir(path.dirname(dataPath), { recursive: true });
+    await writeFile(dataPath, JSON.stringify(createObsidianSettings({ endpoint: `${fixture.server.url}/v1` })));
+
+    const { authorizeCalls, session } = buildFakeObsidianSession();
+    const driver = await createObsidianExplorationDriver({ session, fixture, artifactDir });
+
+    const { libraryRoot, rootIdentity } = await startLibraryFixture(driver, { embeddingMode: "remote", authorized: true });
+    assert.equal(libraryRoot, libraryDir, "the fixture's own vault/library folder must be used, never a real personal library");
+    assert.match(rootIdentity, /^\d+:\d+$/, "rootIdentity must be the folder's real dev:ino, not a made-up value");
+    assert.equal(authorizeCalls.length, 1, "authorized:true must grant consent through the plugin's own authorizeLibraryProcessing(), exactly once");
+
+    const written = JSON.parse(await (await import("node:fs/promises")).readFile(dataPath, "utf8"));
+    assert.equal(written.libraryConnection.selectedRoot, libraryDir);
+    assert.equal(written.libraryConnection.rootIdentity, rootIdentity);
+    assert.equal(written.settings.embedding.mode, "remote");
+    assert.equal(written.settings.embedding.baseUrl, `${fixture.server.url}/v1`, "remote embedding must point at the fixture server's own origin, not a hand-picked external-looking URL");
+    assert.equal(written.settings.embedding.dimension, LIBRARY_EMBEDDING_DIMENSION, "dimension must match the fixture's actual 3-dimensional /embeddings vectors");
+  });
+});
+
+test("startLibraryFixture: embeddingMode local (the default) connects the library without touching remote embedding fields or granting consent", async () => {
+  await withTempFixture(async ({ fixture, artifactDir }) => {
+    const libraryDir = path.join(fixture.vaultRoot, "library");
+    await mkdir(libraryDir, { recursive: true });
+    await writeFile(path.join(libraryDir, "2610.10001.pdf"), "%PDF-1.4\n%%EOF\n");
+    const dataPath = path.join(fixture.vaultRoot, SETTINGS_FILE);
+    await mkdir(path.dirname(dataPath), { recursive: true });
+    await writeFile(dataPath, JSON.stringify(createObsidianSettings({ endpoint: `${fixture.server.url}/v1` })));
+
+    const { authorizeCalls, session } = buildFakeObsidianSession();
+    const driver = await createObsidianExplorationDriver({ session, fixture, artifactDir });
+    await startLibraryFixture(driver, { embeddingMode: "local" });
+    assert.equal(authorizeCalls.length, 0, "local embedding needs no consent; authorizeLibraryProcessing must not be called");
+
+    const written = JSON.parse(await (await import("node:fs/promises")).readFile(dataPath, "utf8"));
+    assert.equal(written.settings.embedding.mode, "local");
+    assert.equal(written.libraryConnection.authorization, undefined);
+  });
+});
+
+test("startLibraryFixture: rejects authorized:true with embeddingMode local — local embedding has no consent to grant", async () => {
+  await withTempFixture(async ({ fixture, artifactDir }) => {
+    const { session } = buildFakeObsidianSession();
+    const driver = await createObsidianExplorationDriver({ session, fixture, artifactDir });
+    await assert.rejects(() => startLibraryFixture(driver, { embeddingMode: "local", authorized: true }), /authorized only makes sense with embeddingMode "remote"/);
+  });
+});
+
+test("library-revoke-consent: prepare() starts the library connected, remote and already authorized (startLibraryFixture), leaving the dashboard open", async () => {
+  await withTempFixture(async ({ fixture, artifactDir }) => {
+    const libraryDir = path.join(fixture.vaultRoot, "library");
+    await mkdir(libraryDir, { recursive: true });
+    await writeFile(path.join(libraryDir, "2610.10001.pdf"), "%PDF-1.4\n%%EOF\n");
+    const dataPath = path.join(fixture.vaultRoot, SETTINGS_FILE);
+    await mkdir(path.dirname(dataPath), { recursive: true });
+    await writeFile(dataPath, JSON.stringify(createObsidianSettings({ endpoint: `${fixture.server.url}/v1` })));
+
+    const { authorizeCalls, session } = buildFakeObsidianSession();
+    const driver = await createObsidianExplorationDriver({ session, fixture, artifactDir });
+    const task = (await obsidianTaskLibrary.goalTasks()).find(t => t.id === "library-revoke-consent");
+    await task.prepare({ driver });
+    assert.equal(authorizeCalls.length, 1, "prepare() must start the task already authorized, never asking the model to grant it first");
+
+    const written = JSON.parse(await (await import("node:fs/promises")).readFile(dataPath, "utf8"));
+    assert.equal(written.settings.embedding.mode, "remote");
+    assert.ok(written.libraryConnection?.selectedRoot, "a library must be connected before prepare() returns");
+  });
 });

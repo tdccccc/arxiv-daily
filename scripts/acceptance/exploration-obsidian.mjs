@@ -490,7 +490,20 @@ export function classifyControlRestriction(control, allowedUrl) {
   // toggle itself ("Enable scheduler"/"Disable scheduler") is restricted here, same policy as the
   // settings tab's own schedule toggle just above.
   if (/^arxiv-daily-run-window-/.test(field) || /^enable\s*·/i.test(name) || /check every \(minutes\)/i.test(name) || /^(enable|disable) scheduler$/i.test(name)) return "scheduling settings are fixed by the fixture";
-  if (/^api base url$|^better pdf parser$|embedding|sidecar/i.test(name)) return "external service and embedding/parser settings are fixed by the fixture";
+  // New-P3 Chunk 1 (docs/helm/2026-10-13-exploration-safety-and-coverage/phases/03-obsidian-library-
+  // tasks.md), owner steer: this used to match any name containing "embedding" or "sidecar" unanchored,
+  // which also caught the bare Embedding mode <select> (name: "Embedding", packages/core/src/settings/
+  // schema.ts's embeddingMode business setting, mirrored verbatim by the legacy display() path at
+  // plugin/src/settings/tab.ts:1889) — the one control a library goal task needs the model to actually
+  // switch. Anchored to the closed, exhaustive set of sub-field names this rule is actually meant to
+  // fix (read verbatim from schema.ts's `fields` map and tab.ts's own display(), which render the
+  // identical literal strings): the four embedding endpoint/credential/model/dimension fields
+  // (tab.ts:1912,1932,1944,1963) and the two sidecar endpoint fields (tab.ts:1994,2014). The mode
+  // choice itself ("Embedding") and the sidecar on/off toggle ("Better PDF parser", already anchored
+  // exactly just above) are deliberately left out. "Embedding API key"'s own reveal button ("Show
+  // Embedding API key") stays restricted independently, via the credentials rule above (an "API key"
+  // substring), not through this clause.
+  if (/^api base url$|^better pdf parser$|^embedding (api base url|api key|model|dimension)$|^sidecar (capability|parse) url$/i.test(name)) return "external service and embedding/parser settings are fixed by the fixture";
   if (/send test|how to send|your email|send verification email|from email|from name|daily auto-send|resend api key|verification code/i.test(name)) return "email delivery is excluded from exploration";
   // "Clear run state…" (the More menu's command-backed item, commands.ts's clear-run-state): clearing
   // run state is explicitly out of scope for exploration (goal.md), independent of the generic
@@ -946,6 +959,17 @@ export async function createObsidianExplorationDriver({ session, fixture, artifa
     // unauthorized/normal) as a program-only side effect, exactly like the fixed suite's obsidian-
     // scenarios.mjs (`d.fixture.server.setMode(...)`) — never something the model itself can reach.
     fixture,
+    // P3 Chunk 1 (personal library tasks): a task's `prepare()` calls this (never the model) to grant
+    // library-processing consent directly through the plugin's own `authorizeLibraryProcessing()` — the
+    // real fingerprint computation, never a hand-written one — so a task that needs to start already
+    // authorized (e.g. the revoke task) does not have to drive the consent dialog itself first. Uses
+    // `helper.evaluate` directly (not `helper.read`, which wraps the expression in an outer
+    // `JSON.stringify(...)` and would stringify the pending Promise instead of awaiting it — the same
+    // reason `reloadPlugin` above evaluates its async IIFE directly instead of through `read`).
+    async authorizeLibraryProcessing() {
+      const ok = await helper.evaluate(`(async () => { await ${PLUGIN}.authorizeLibraryProcessing(); return true; })()`);
+      if (ok !== true) throw new Error("authorizeLibraryProcessing() did not resolve true");
+    },
     // P3 Chunk 3: opts the current task's observe() into the fixed suite's existing "expected
     // authentication failure" carve-out (see observe()'s own comment above); only auth-failure-retry's
     // prepare() calls this, and reset() clears it before every task.

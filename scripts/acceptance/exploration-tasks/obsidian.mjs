@@ -13,6 +13,7 @@ import { ACCEPTANCE_DATE, PAPERS } from "../fixtures.mjs";
 import { dailyReportFile, entryFor, HISTORY_FILE, INDEX_FILE, paperNoteFile, SETTINGS_FILE, STATE_FILE } from "../exploration-obsidian.mjs";
 import { poll, pollJsonFile } from "../obsidian-ui.mjs";
 import { checkResult, exactLabelPattern, taskResult } from "./checks.mjs";
+import { startLibraryFixture } from "./library.mjs";
 import { PERSONA_TASK_IDS, personaTasks as sharedPersonaTasks } from "./personas.mjs";
 
 /** Single source of truth for the default Obsidian goal-task ids, usable without a fixture (e.g. --list). */
@@ -22,6 +23,8 @@ export const GOAL_TASK_IDS = [
   "run-for-date", "cancel-then-rerun", "auth-failure-retry", "completed-date-idempotent",
   // P3 Chunk 4: reading tasks.
   "dashboard-tabs-paging", "mark-to-read", "create-paper-note", "summarize-by-id", "open-today-report",
+  // Exploration safety and coverage P3: personal literature library tasks.
+  "library-revoke-consent",
 ];
 
 /** P3 Chunk 5: re-exports the shared persona id list (exploration-tasks/personas.mjs) so `--list`/selection keep reading it from each host's own module, unchanged from before chunk 5 wired it up. */
@@ -168,6 +171,11 @@ const SUMMARIZE_BY_ARXIV_ID_LABEL = "Summarize by arXiv ID";
 const SUMMARIZE_BY_ID_LABEL = "Summarize by ID";
 const SUMMARIZE_LABEL = "Summarize";
 const DAILY_REPORTS_LABEL = "Daily reports";
+// New-P3 Chunk 1: shown both on the Personal library row's own button (library-connection.ts's
+// `libraryRowPresentation`, `revoke: { label: "Revoke" }`) and on the revocation confirmation dialog's
+// own answer button (plugin/src/library/modal.ts's `confirmLibraryRevocation`, `text: "Revoke"`) — the
+// same string by construction, so one declared label covers both.
+const REVOKE_LABEL = "Revoke";
 
 /** Parses the real run-history.jsonl (append-only, never truncated by clearDateState) into records. */
 async function readHistory(driver) {
@@ -787,6 +795,38 @@ export function goalTasks() {
         return taskResult([
           checkResult(`点击 ${ACCEPTANCE_DATE} 对应的日历日期格`, true),
           checkResult("打开的笔记正是该日期的日报文件", activeFile === dailyReportFile(ACCEPTANCE_DATE), activeFile),
+        ]);
+      },
+    },
+    // ─── Exploration safety and coverage P3: personal literature library tasks ───
+    {
+      id: "library-revoke-consent", title: "撤销个人文献库的处理授权",
+      goal: `打开插件设置页，个人文献库目前已连接并已获得处理授权（远程 Embedding，已发送标题和摘要）。在“Personal library”区域的库连接行上点击 ${REVOKE_LABEL} 按钮；系统会弹出确认对话框，说明撤销后 Embedding 会改回本地且已有索引需要重建，请再次点击对话框中的 ${REVOKE_LABEL} 按钮确认撤销。不要点击 Cancel，也不要修改其他设置。`,
+      uiLabels: [REVOKE_LABEL],
+      // Starts already connected, remote and authorized (never through the model — startLibraryFixture
+      // calls the plugin's own authorizeLibraryProcessing() over CDP, exactly like every other task's
+      // prepare() seeds its own deterministic starting state directly on disk), so the only thing left
+      // for the model to do is the one UI action this task actually tests: find and confirm Revoke.
+      async prepare({ driver }) {
+        await startLibraryFixture(driver, { embeddingMode: "remote", authorized: true });
+      },
+      async verify({ driver, actions }) {
+        const revokeClicks = actions.filter(action => action.type === "click" && exactLabelPattern(REVOKE_LABEL).test((action.control?.name || "").trim())).length;
+        if (revokeClicks === 0) return taskResult([checkResult(`点击库连接行上的 ${REVOKE_LABEL} 按钮，打开撤销确认对话框`, false)]);
+        if (revokeClicks < 2) {
+          return taskResult([
+            checkResult(`点击库连接行上的 ${REVOKE_LABEL} 按钮，打开撤销确认对话框`, true),
+            checkResult(`在确认对话框中再次点击 ${REVOKE_LABEL} 确认撤销`, false),
+          ]);
+        }
+        const onDisk = await pollJsonFile(() => driver.jsonFile(SETTINGS_FILE), value => !value?.libraryConnection?.authorization, "library authorization revoked on disk", { timeoutMs: 5000 }).catch(() => null);
+        const revoked = Boolean(onDisk) && !onDisk.libraryConnection?.authorization;
+        const switchedToLocal = onDisk?.settings?.embedding?.mode === "local";
+        return taskResult([
+          checkResult(`点击库连接行上的 ${REVOKE_LABEL} 按钮，打开撤销确认对话框`, true),
+          checkResult(`在确认对话框中再次点击 ${REVOKE_LABEL} 确认撤销`, true),
+          checkResult("个人文献库的处理授权已从设置中撤销", revoked, onDisk?.libraryConnection),
+          checkResult("Embedding 模式已随撤销改回 local", switchedToLocal, onDisk?.settings?.embedding?.mode),
         ]);
       },
     },
