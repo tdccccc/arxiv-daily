@@ -31,7 +31,7 @@ First build a small library fixture helper for the exploration host that reuses 
 - Green check: focused task tests pass, including "verify fails on untouched state"; label test passes.
 - regression checks: `node --test scripts/tests/acceptance-exploration*.test.mjs`; `npm run test:acceptance:tools`.
 - exception: the fixture start runs inside a real Obsidian; compensating check is a scripted fake-model run of both tasks on the real host (pass when the scripted steps are done, not passed when the model only waits/finishes).
-- [ ] implementation and tests accepted
+- [x] implementation and tests accepted
 
 ### Chunk 4 — block non-fixture network in Obsidian exploration (runs before Chunk 1's consent task and Chunk 2)
 
@@ -50,7 +50,7 @@ First build a small library fixture helper for the exploration host that reuses 
 - Green check: focused tests pass, including untouched-state failures.
 - regression checks: as Chunk 1.
 - exception: as Chunk 1; the real-host run also measures `prepare()` time for the index build against the 60 s deadline.
-- [ ] implementation and tests accepted
+- [x] implementation and tests accepted
 
 ### Chunk 3 — Direction candidate review tasks
 
@@ -69,7 +69,7 @@ First build a small library fixture helper for the exploration host that reuses 
 - Red / baseline signal: a plugin unit test that disables the plugin while `onload()` is still awaiting and then lets `onload()` finish shows it still registers the Dashboard view (and commands) on the stale instance; on the real host, two overlapping reloads produce "Attempting to register an existing view type \"arxiv-daily-dashboard\"" (/tmp/reload-race, 38 errors in 20 iterations).
 - Green check: the unit test shows a stale instance skips registration; the overlapping-reload repro shows no plugin failure.
 - regression checks: plugin test suite (`npm --prefix plugin test`), plugin typecheck/lint as the plugin's normal checks; `npm run test:release-tools`.
-- [ ] implementation and tests accepted
+- [x] implementation and tests accepted
 
 ### Chunk 6 — harness never overlaps plugin reloads
 

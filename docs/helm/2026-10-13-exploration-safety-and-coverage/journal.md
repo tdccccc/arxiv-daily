@@ -55,3 +55,10 @@
 - change: user decision (2026-10-13): fix both. P3 gains Chunk 5 (product: skip registration when unloaded during onload) and Chunk 6 (harness: serialize reloads, wait for startup load). Chunk 6 starts after Chunk 2 because both touch the Obsidian exploration driver.
 - disposition: keep a4cc797.
 - next: Chunk 5 in parallel with Chunk 2; then Chunk 6.
+
+## 2026-10-13 — note (P3 chunks 1, 2, 5 accepted)
+
+- evidence: a4cc797 (`library-remote-consent`), e4b942f (`library-build-index`, `library-search`, `library-similar-papers`; real index build in `prepare()` ≈3.2 s, far under the 60 s deadline; remote library fixtures carry a stub embedding key because `validateEmbeddingConfig` rejects an empty one), 0740019 (plugin skips registration and scheduler start when unloaded during onload). Scripted fake-model real-host runs passed for every new task; four runs showed no reload flake. The plugin fix closes the stale-instance leak but not the duplicate-view error under concurrent reload stress (37 before, 38 after): overlapping enables give two live instances, which only serialized reloads avoid. Whether users can reach that through the plugin toggle is unconfirmed; not pursued further.
+- change: Chunks 1, 2 and 5 checked.
+- disposition: keep.
+- next: Chunk 6 (serialize harness reloads) and Chunk 3 (Direction candidate review tasks) in parallel with disjoint files.
