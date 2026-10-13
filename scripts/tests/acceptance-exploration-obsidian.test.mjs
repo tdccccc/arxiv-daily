@@ -750,3 +750,114 @@ test("clicking the scheduler-toggle menu item is rejected with zero Input.* call
   assert.match(statusResult.error, /disabled/i);
   assert.equal(calls.length, 0);
 });
+
+/**
+ * P1 Chunk 1 (review Finding 1): `press`'s scope check alone
+ * (`obsidianFocusInScopeExpression`) only asks whether `document.activeElement` is
+ * inside the current plugin surface — it never classifies the focused element itself,
+ * unlike every ref-bearing action's `revalidateRef()`. Tab-focusing a restricted or
+ * sensitive control and pressing Enter/Space therefore reached real product code
+ * (external `openUrl()`, the scheduler toggle, "Clear run state…", the API-key reveal
+ * button) with zero interception. These tests focus each of those controls directly
+ * (same style as the existing "press is rejected … outside the plugin's scope" test
+ * above — a real Tab traversal is not simulated, only the resulting focus state) and
+ * assert the key press is refused before any `Input.*` call, mirroring the exact
+ * restricted/sensitive/disabled error wording `revalidateRef()` already uses for
+ * click/fill/select.
+ */
+test("press Enter is rejected with zero Input.* calls when focus is on a settings external-link button (e.g. 'Report a bug')", async () => {
+  const html = `
+    <div class="vertical-tab-content arxiv-daily-settings" id="our-settings-container">
+      <div class="setting-item"><div class="setting-item-info"><div class="setting-item-name">Support</div></div>
+        <div class="setting-item-control"><button type="button">Report a bug</button></div></div>
+    </div>
+  `;
+  const { window, calls, observe, execute } = buildSession(html);
+  const snapshot = observe();
+  window.document.querySelector(".arxiv-daily-settings button").focus();
+  const result = await execute({ type: "press", key: "Enter" }, snapshot);
+  assert.equal(result.ok, false);
+  assert.match(result.error, /restricted|external/i);
+  assert.equal(calls.length, 0);
+});
+
+test("press Enter is rejected with zero Input.* calls when focus is on the scheduler toggle menu item", async () => {
+  const { window, calls, observe, execute } = buildSession(moreMenuFixture());
+  const snapshot = observe();
+  const ref = snapshot.controls.find(c => c.name === "Disable scheduler").ref;
+  window.document.querySelector(`[data-acceptance-ref="${ref}"]`).focus();
+  const result = await execute({ type: "press", key: "Enter" }, snapshot);
+  assert.equal(result.ok, false);
+  assert.match(result.error, /restricted|scheduling/i);
+  assert.equal(calls.length, 0);
+});
+
+test("press Space is rejected with zero Input.* calls when focus is on the scheduler toggle menu item", async () => {
+  const { window, calls, observe, execute } = buildSession(moreMenuFixture());
+  const snapshot = observe();
+  const ref = snapshot.controls.find(c => c.name === "Disable scheduler").ref;
+  window.document.querySelector(`[data-acceptance-ref="${ref}"]`).focus();
+  const result = await execute({ type: "press", key: "Space" }, snapshot);
+  assert.equal(result.ok, false);
+  assert.match(result.error, /restricted|scheduling/i);
+  assert.equal(calls.length, 0);
+});
+
+test("press Enter is rejected with zero Input.* calls when focus is on the 'Clear run state…' menu item", async () => {
+  const { window, calls, observe, execute } = buildSession(moreMenuFixture());
+  const snapshot = observe();
+  const ref = snapshot.controls.find(c => c.name === "Clear run state…").ref;
+  window.document.querySelector(`[data-acceptance-ref="${ref}"]`).focus();
+  const result = await execute({ type: "press", key: "Enter" }, snapshot);
+  assert.equal(result.ok, false);
+  assert.match(result.error, /restricted/i);
+  assert.equal(calls.length, 0);
+});
+
+test("press Enter is rejected with zero Input.* calls when focus is on the API key reveal button", async () => {
+  const { window, calls, observe, execute } = buildSession(settingsFixture(true));
+  const snapshot = observe();
+  const ref = snapshot.controls.find(c => c.name === "Show LLM API key").ref;
+  window.document.querySelector(`[data-acceptance-ref="${ref}"]`).focus();
+  const result = await execute({ type: "press", key: "Enter" }, snapshot);
+  assert.equal(result.ok, false);
+  assert.match(result.error, /restricted|secret|credential/i);
+  assert.equal(calls.length, 0);
+});
+
+test("press Enter still activates an ordinary, unrestricted focused control", async () => {
+  const { window, calls, observe, execute } = buildSession('<div class="arxiv-daily-dashboard"><button type="button">Generate</button></div>');
+  const snapshot = observe();
+  window.document.querySelector(".arxiv-daily-dashboard button").focus();
+  const result = await execute({ type: "press", key: "Enter" }, snapshot);
+  assert.equal(result.ok, true);
+  assert.deepEqual(calls.map(c => c.params.type), ["keyDown", "keyUp"]);
+  assert.equal(calls[0].params.key, "Enter");
+});
+
+// Tab/Shift+Tab/Escape never invoke the focused control's own activation handler (unlike
+// Enter/Space, or Arrow/Home/End/Page on a native select), so they stay allowed regardless of
+// the focused control's own restriction — otherwise a keyboard-only persona that lands on a
+// restricted control (a legitimate observation, not an activation) would have no way to move
+// past it short of "home", which abandons its current position entirely.
+test("press Tab still moves focus away from a restricted control; navigation itself is not blocked by the new focus check", async () => {
+  const { window, calls, observe, execute } = buildSession(moreMenuFixture());
+  const snapshot = observe();
+  const ref = snapshot.controls.find(c => c.name === "Disable scheduler").ref;
+  window.document.querySelector(`[data-acceptance-ref="${ref}"]`).focus();
+  const result = await execute({ type: "press", key: "Tab" }, snapshot);
+  assert.equal(result.ok, true);
+  assert.deepEqual(calls.map(c => c.params.type), ["keyDown", "keyUp"]);
+  assert.equal(calls[0].params.key, "Tab");
+});
+
+test("press Escape still fires when focus is on a restricted control", async () => {
+  const { window, calls, observe, execute } = buildSession(moreMenuFixture());
+  const snapshot = observe();
+  const ref = snapshot.controls.find(c => c.name === "Clear run state…").ref;
+  window.document.querySelector(`[data-acceptance-ref="${ref}"]`).focus();
+  const result = await execute({ type: "press", key: "Escape" }, snapshot);
+  assert.equal(result.ok, true);
+  assert.deepEqual(calls.map(c => c.params.type), ["keyDown", "keyUp"]);
+  assert.equal(calls[0].params.key, "Escape");
+});

@@ -84,8 +84,25 @@
  *   specific ref — there is no hover region to target, unlike the workbench.
  * - press (the shared, host-agnostic keyboard action from exploration.mjs)
  *   is rejected without sending anything when `document.activeElement` is
- *   outside the current plugin surface, then sent as a real
- *   `Input.dispatchKeyEvent` keyDown/keyUp pair.
+ *   outside the current plugin surface. P1 Chunk 1 (review Finding 1): the
+ *   scope check alone used to be the only guard — it never classified the
+ *   focused element itself, so Tab-focusing a restricted/sensitive control
+ *   (an external-link settings button, the scheduler toggle, "Clear run
+ *   state…", an API-key reveal button) and pressing Enter/Space activated it
+ *   with zero interception. `press` now also describes
+ *   `document.activeElement` with the same `describeControl` the observation
+ *   uses (`obsidianFocusedControlExpression`) and runs it through the same
+ *   `classifyControlRestriction`/sensitive/disabled policy `revalidateRef()`
+ *   applies to click/fill/select — for every key except Tab/Shift+Tab/Escape
+ *   (`PRESS_KEYS_ALWAYS_ALLOWED_ON_FOCUS`), which never activate or mutate
+ *   the focused control and so stay available even on a restricted control,
+ *   keeping a keyboard-only persona from being stranded on one. Only then is
+ *   a real `Input.dispatchKeyEvent` keyDown/keyUp pair sent. Native `<form>`
+ *   submission on Enter is not reachable here: the plugin's settings/modals
+ *   are built with Obsidian's own `Setting` API (plain divs), which never
+ *   renders an actual `<form>` element (confirmed by reading
+ *   plugin/src/settings/tab.ts and plugin/src/plugin-modal.ts) — unlike the
+ *   workbench host, which does use real `<form>`s.
  * - back presses Escape only when a plugin modal (`.arxiv-daily-modal`) or
  *   the plugin's own menu (`.arxiv-daily-menu`, P3 Chunk 1) is open, closing
  *   whichever is open — Obsidian's own `Menu` registers Escape on its
@@ -368,6 +385,40 @@ export function obsidianFocusInScopeExpression() {
 }
 
 /**
+ * P1 Chunk 1 (review Finding 1 fix): `obsidianFocusInScope` above only answers "is focus
+ * somewhere inside the plugin surface" — it never describes/classifies the focused element
+ * itself, unlike every ref-bearing action's `revalidateRef()`. That gap let a Tab-focused
+ * restricted or sensitive control (an external-link settings button, the scheduler toggle,
+ * "Clear run state…", an API-key reveal button) be activated by `press Enter`/`press Space`
+ * with no interception. This reuses the SAME `describeControl` the observation and
+ * `obsidianLiveControl` already build — not a second, divergent describer — so `press`'s
+ * executor can run it through the identical `classifyControlRestriction`/sensitive/disabled
+ * policy `revalidateRef()` applies to click/fill/select.
+ */
+function obsidianFocusedControl(testMode) {
+  const { surface } = resolveSurface();
+  const active = document.activeElement;
+  if (!surface || !active) return { ok: false, reason: "scope" };
+  if (!(active === surface || surface.contains(active))) return { ok: false, reason: "scope" };
+  if (!controlVisible(active, testMode)) return { ok: false, reason: "hidden" };
+  return { ok: true, control: describeControl(active, null) };
+}
+
+/** Describes the currently focused element (scope + the shared control descriptor), for `press`. */
+export function obsidianFocusedControlExpression(testMode = false) {
+  const shared = [resolveName, controlVisible, resolveSurface, describeControl].map(fn => fn.toString()).join("\n");
+  return `(() => { ${shared}\n  return (${obsidianFocusedControl})(${asCode(Boolean(testMode))});\n})()`;
+}
+
+// Keys that only move focus or cancel, rather than activating the focused control's own
+// handler or mutating its value the way native Enter/Space button-activation and native
+// <select>/listbox Arrow/Home/End/Page navigation do — sent regardless of the focused
+// control's own restriction, so a keyboard-only persona that lands on (merely observes) a
+// restricted control can always Tab past it or Escape away, instead of being stranded with
+// only "home" (which abandons its current position entirely) as an escape route.
+const PRESS_KEYS_ALWAYS_ALLOWED_ON_FOCUS = new Set(["Tab", "Shift+Tab", "Escape"]);
+
+/**
  * Obsidian capability restrictions. Pure, like the browser's
  * `classifyControlRestriction` — operates on the already-resolved control
  * (name/field/type/href), no DOM access, so it is unit-testable standalone.
@@ -563,8 +614,19 @@ export function createObsidianActionExecutor({ client, evaluate, redact = value 
         });
       } else if (action.type === "press") {
         if (!PRESS_KEYS.has(action.key)) throw new ExplorationActionError("Press is limited to a small keyboard-navigation allowlist");
-        const scoped = await read(obsidianFocusInScopeExpression());
-        if (!scoped) throw new ExplorationActionError("The focused element is outside the plugin's scope; the key press was not sent");
+        const focused = await read(obsidianFocusedControlExpression(testMode));
+        if (!focused?.ok) throw new ExplorationActionError("The focused element is outside the plugin's scope; the key press was not sent");
+        // P1 Chunk 1: everything except pure navigation/cancel keys (see
+        // PRESS_KEYS_ALWAYS_ALLOWED_ON_FOCUS above) is checked against the same
+        // restricted/sensitive/disabled policy revalidateRef() already applies to
+        // click/fill/select, before any Input.* event is sent.
+        if (!PRESS_KEYS_ALWAYS_ALLOWED_ON_FOCUS.has(action.key)) {
+          const control = focused.control;
+          const restriction = classifyControlRestriction(control);
+          if (restriction) throw new ExplorationActionError(`This control is restricted: ${restriction}`);
+          if (control.sensitive) throw new ExplorationActionError("This control is restricted: secret");
+          if (control.disabled) throw new ExplorationActionError("This control is no longer interactive (disabled)");
+        }
         await dispatchKey(action.key);
       } else if (action.type === "back") {
         // Obsidian's own Menu registers Escape on its keyboard Scope to close itself
