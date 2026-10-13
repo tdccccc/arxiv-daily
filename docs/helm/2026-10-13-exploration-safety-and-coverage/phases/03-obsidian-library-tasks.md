@@ -2,8 +2,8 @@
 
 goal_ref: ../goal.md
 created: 2026-10-13T12:40:00+08:00
-updated: 2026-10-13T16:30:00+08:00
-revision: 3
+updated: 2026-10-13T19:30:00+08:00
+revision: 4
 
 ## Outcome
 
@@ -60,7 +60,7 @@ First build a small library fixture helper for the exploration host that reuses 
 - Green check: focused tests pass, including untouched-state failures.
 - regression checks: as Chunk 1.
 - exception: as Chunk 1.
-- [ ] implementation and tests accepted
+- [x] implementation and tests accepted
 
 ### Chunk 5 — plugin ignores a late onload after it was disabled (product)
 
@@ -78,6 +78,15 @@ First build a small library fixture helper for the exploration host that reuses 
 - Red / baseline signal: a test shows two `reloadPlugin()` calls (e.g. one abandoned by a `withDeadline` timeout and the next task's reset) run concurrently; first exploration reset can also start while Obsidian's own startup load of the plugin is still running.
 - Green check: reloads are serialized per session (a later reload waits for an earlier one, including an abandoned one), and the first reset waits for the startup load; tests prove ordering.
 - regression checks: `node --test scripts/tests/acceptance-exploration*.test.mjs`; `npm run test:acceptance:tools`; scripted real-host runs of the library tasks.
+- [x] implementation and tests accepted
+
+### Chunk 7 — observer sees the topmost dialog and hides collapsed content
+
+- change kind: bug fix (test tooling)
+- strategy: strict Red-Green-Refactor
+- Red / baseline signal: observation tests (happy-dom) show (a) controls inside a closed `<details>` reported as visible and clickable, and (b) with a confirmation `.arxiv-daily-modal` stacked on the review modal, the observation resolves the older modal so the confirm buttons are absent.
+- Green check: closed-`<details>` content is not offered (its `<summary>` still is); the topmost plugin modal is the observed surface; `library-edit-candidate` asks for discard again and a scripted real-host discard run passes. The duplicated tiny PDF builder in `exploration-tasks/library.mjs` reuses the one in `scripts/acceptance/fixtures.mjs`.
+- regression checks: `node --test scripts/tests/acceptance-exploration*.test.mjs`; `npm run test:acceptance:tools`; scripted real-host runs of one older settings task and one dashboard task.
 - [ ] implementation and tests accepted
 
 ## Phase verification

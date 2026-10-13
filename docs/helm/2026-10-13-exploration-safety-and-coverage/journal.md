@@ -62,3 +62,10 @@
 - change: Chunks 1, 2 and 5 checked.
 - disposition: keep.
 - next: Chunk 6 (serialize harness reloads) and Chunk 3 (Direction candidate review tasks) in parallel with disjoint files.
+
+## 2026-10-13 — L1 adjust (P3 chunks 3 and 6 accepted, observer gaps)
+
+- evidence: a99e230 serializes plugin reloads (concurrent-reload stress on real Obsidian 37–38 errors in 20 → 0). eefbeff adds `library-accept-direction` and `library-edit-candidate` (rename only); scripted real-host runs passed, wait-only runs blocked. Real clustering needs two papers on the same fixture vector, so a third fixture PDF is seeded. Two observer gaps found on the real host: controls inside a collapsed `<details>` are reported as clickable (clicks then time out at hit-testing — safe, but wastes model steps), and with a confirmation dialog stacked on the review modal the observer resolves the first `.arxiv-daily-modal` in DOM order, so the confirm buttons are never observed (discard cannot be completed). Also, a button's `title` attribute wins over its text as the observed name.
+- change: Chunks 3 and 6 checked; new Chunk 7 fixes the two observer gaps, restores discard in `library-edit-candidate`, and reuses the fixture PDF builder.
+- disposition: keep a99e230 and eefbeff.
+- next: P3 Chunk 7, then phase verification.
