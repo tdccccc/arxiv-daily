@@ -6,3 +6,10 @@
 - change: new initiative; the user chose to fix the press bypass and screenshot masking, add the two menu tasks and stale-label reporting, and add personal-library tasks (option C), in a new worktree.
 - disposition: the 2026-10-10 initiative stays `done`; this is follow-up work, not a revisit of its phases.
 - next: P1 — refuse `press` on restricted, sensitive, disabled or out-of-scope focus on both hosts; mask secret fields in Obsidian screenshots.
+
+## 2026-10-13 — L3 steer (narrow P2)
+
+- evidence: the user questioned the two "More" menu tasks. Single-date retry is already reachable from the calendar and covered by the run-for-date and auth-failure-retry tasks; "Retry failed dates" and "Run pending" only batch the same run over a set of dates, which ordinary tests suit better than a paid model run. For stale UI labels, a blocked reason in the report would surface only after a paid real-model run, while a plain fixed test catches a rename when it happens.
+- change: user decisions (2026-10-13): drop the two menu tasks (now a non-goal); replace the "task out of date" report reason with a fixed test that checks every label a goal task depends on still exists in the product. Success criteria 3 and 4 merged into one; P2 outcome rewritten. P1, P3–P5 unchanged.
+- disposition: no code existed for P2; P1 work in progress is unaffected and continues.
+- next: continue P1.
