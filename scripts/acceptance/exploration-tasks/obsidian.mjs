@@ -25,6 +25,8 @@ export const GOAL_TASK_IDS = [
   "dashboard-tabs-paging", "mark-to-read", "create-paper-note", "summarize-by-id", "open-today-report",
   // Exploration safety and coverage P3: personal literature library tasks.
   "library-revoke-consent", "library-remote-consent",
+  // Exploration safety and coverage P3 Chunk 2: index build, library search and similar-paper tasks.
+  "library-build-index", "library-search", "library-similar-papers",
 ];
 
 /** P3 Chunk 5: re-exports the shared persona id list (exploration-tasks/personas.mjs) so `--list`/selection keep reading it from each host's own module, unchanged from before chunk 5 wired it up. */
@@ -184,6 +186,33 @@ const REVOKE_LABEL = "Revoke";
 // (plugin/src/library/modal.ts's `libraryAuthorizationCopy`, `confirm: "Send titles and abstracts"`).
 const EMBEDDING_MODE_LABEL = "Embedding";
 const SEND_TITLES_AND_ABSTRACTS_LABEL = "Send titles and abstracts";
+// Exploration safety and coverage P3 Chunk 2: the Personal library row's own primary button when there
+// is no completed index run or a preparation error (packages/core/src/library/library-connection.ts's
+// `libraryRowPresentation`, `primary: { label: "Retry preparation" }`) — the same control "Retry
+// preparation to repair or rebuild the index" in the settings guide copy and the library-connection
+// error strings already name.
+const RETRY_PREPARATION_LABEL = "Retry preparation";
+// The Dashboard's own search box (its accessible name is the <label> wrapping it — view.ts's
+// createFilterField(filters, "Search", ...)), the async "Library matches" result block it feeds
+// (library-search-block.ts's own heading text) and each result row's "Open PDF" action (same file,
+// `const action = "Open PDF"`).
+const SEARCH_FIELD_LABEL = "Search";
+const LIBRARY_MATCHES_LABEL = "Library matches";
+const OPEN_PDF_LABEL = "Open PDF";
+// Each Dashboard row's own "Find similar papers" action (view.ts) and the SimilarPapersModal's "Library
+// similar" tab button (similar-papers-modal.ts) — selected by default when the modal opens, but the
+// goal still asks the model to click it once, for an observed action instead of relying on a default
+// that could change later.
+const FIND_SIMILAR_PAPERS_LABEL = "Find similar papers";
+const LIBRARY_SIMILAR_TAB_LABEL = "Library similar";
+// A term literally present in the fixture's own PAPERS[0] (fixtures.mjs: title "Reliable measurement
+// with controlled experiments", abstract "...repeatable research measurements.") — both the title and
+// the abstract contain this substring, which is exactly what the fixture's `/embeddings` handler keys
+// its vector on (`String(value).includes("measurement") ? [1,0,0] : [0.8,0.6,0]`, fixtures.mjs), so a
+// query embedding of this term scores a perfect cosine match against that same paper's own indexed
+// chunks — guaranteeing at least one non-empty "Library matches" result without depending on any
+// particular ranking/threshold behavior.
+const LIBRARY_SEARCH_QUERY = "measurement";
 
 /** Parses the real run-history.jsonl (append-only, never truncated by clearDateState) into records. */
 async function readHistory(driver) {
@@ -222,6 +251,11 @@ export function goalTasks() {
   // earns it, and never repeated on every polling pass of verify().
   let cancelReleaseDone = false, authFailureSeen = false, authFixtureRestored = false;
   let idempotentBaseline;
+  // Exploration safety and coverage P3 Chunk 2: library-build-index's own baseline — the fixture's
+  // request count at the moment prepare() finishes connecting the library, so verify() can tell whether
+  // any embeddings request happened *after* this task actually started, not merely that one exists
+  // somewhere in the fixture's full history (e.g. left over from a different task in the same pass).
+  let libraryBuildIndexBaseline;
   return [
     {
       id: GOAL_TASK_IDS[0], title: "修改每日论文数量上限",
@@ -875,6 +909,131 @@ export function goalTasks() {
           checkResult(`在披露对话框中点击 “${SEND_TITLES_AND_ABSTRACTS_LABEL}” 确认`, true),
           checkResult("Embedding 模式已保存为 remote", modeRemote, onDisk?.settings?.embedding?.mode),
           checkResult("个人文献库的处理授权已写入设置", authorized, onDisk?.libraryConnection?.authorization),
+        ]);
+      },
+    },
+    // ─── Exploration safety and coverage P3 Chunk 2: index build, library search and similar-paper
+    // tasks (docs/helm/2026-10-13-exploration-safety-and-coverage/phases/03-obsidian-library-tasks.md).
+    // ───────────────────────────────────────────────────────────────────────
+    {
+      id: "library-build-index", title: "构建个人文献库搜索索引",
+      goal: `打开插件设置页，个人文献库目前已连接、已获得处理授权（远程 Embedding），但还没有搜索索引。在“Personal library”区域点击 ${RETRY_PREPARATION_LABEL} 按钮，开始构建索引，等待构建完成即可，不需要关闭设置。`,
+      uiLabels: [RETRY_PREPARATION_LABEL],
+      // Starts connected, remote and already authorized (never through the model — see
+      // library-revoke-consent's own prepare() comment), but deliberately with no index yet
+      // (connectedLibraryFixture never sets lastRun): the one thing this task tests is the model finding
+      // and clicking the row's own "Retry preparation" button and the real indexing it drives actually
+      // finishing. Records the fixture's own request count at this exact moment so verify() can tell a
+      // fresh embeddings request (driven by this task's own click) apart from one left over from an
+      // earlier task in the same pass.
+      async prepare({ driver }) {
+        await startLibraryFixture(driver, { embeddingMode: "remote", authorized: true });
+        libraryBuildIndexBaseline = { requestCount: driver.fixture.server.requests.length };
+      },
+      async verify({ driver, actions }) {
+        const clicked = actions.some(action => action.type === "click" && exactLabelPattern(RETRY_PREPARATION_LABEL).test((action.control?.name || "").trim()));
+        if (!clicked) return taskResult([checkResult(`点击 Personal library 区域的 ${RETRY_PREPARATION_LABEL} 按钮`, false)]);
+        const indexFile = await poll(
+          () => driver.findLibrarySearchIndexFile(),
+          value => value !== null, "个人文献库搜索索引的 current.json 已生成", { timeoutMs: 5000 },
+        ).catch(() => null);
+        const baseline = libraryBuildIndexBaseline?.requestCount ?? 0;
+        const embeddingsRequested = driver.fixture.server.requests.slice(baseline).some(request => request.kind === "embeddings");
+        return taskResult([
+          checkResult(`点击 Personal library 区域的 ${RETRY_PREPARATION_LABEL} 按钮`, true),
+          checkResult("磁盘上生成了个人文献库搜索索引的 current.json", Boolean(indexFile), indexFile),
+          checkResult("任务开始后夹具收到了 embeddings 请求", embeddingsRequested),
+        ]);
+      },
+    },
+    {
+      id: "library-search", title: "在阅读面板搜索个人文献库",
+      goal: `打开阅读面板，个人文献库已经连接、已获得授权，并且已经完成过一次索引构建。在 ${SEARCH_FIELD_LABEL} 输入框中填写“${LIBRARY_SEARCH_QUERY}”，等待下方出现“${LIBRARY_MATCHES_LABEL}”结果区域，再点击其中一条结果的 ${OPEN_PDF_LABEL} 按钮，打开对应的 PDF 文件。`,
+      uiLabels: [SEARCH_FIELD_LABEL, LIBRARY_MATCHES_LABEL, OPEN_PDF_LABEL],
+      // Builds the real index in prepare() by actually running the plugin's own
+      // indexPersonalLibraryFullText() over CDP (driver.buildLibraryIndex(), exploration-obsidian.mjs) —
+      // never a hand-written index file — so the model's search hits a real, populated knowledge base
+      // exactly like a person who had already prepared their library once.
+      async prepare({ driver }) {
+        await startLibraryFixture(driver, { embeddingMode: "remote", authorized: true });
+        await driver.buildLibraryIndex();
+        await driver.openDashboard();
+      },
+      async verify({ driver, actions }) {
+        const filled = actions.some(action => action.type === "fill" && exactLabelPattern(SEARCH_FIELD_LABEL).test((action.control?.name || "").trim()) && action.value === LIBRARY_SEARCH_QUERY);
+        if (!filled) return taskResult([checkResult(`在 ${SEARCH_FIELD_LABEL} 输入框中搜索“${LIBRARY_SEARCH_QUERY}”`, false)]);
+        const resultsCount = await poll(
+          () => driver.read('document.querySelectorAll(".arxiv-daily-dashboard__library-list .arxiv-daily-dashboard__library-item").length'),
+          value => Number(value) > 0, "Library matches 结果列表非空", { timeoutMs: 8000 },
+        ).catch(() => 0);
+        if (!resultsCount) {
+          return taskResult([
+            checkResult(`在 ${SEARCH_FIELD_LABEL} 输入框中搜索“${LIBRARY_SEARCH_QUERY}”`, true),
+            checkResult(`${LIBRARY_MATCHES_LABEL} 区域显示至少一条结果`, false),
+          ]);
+        }
+        const openClicked = actions.some(action => action.type === "click" && exactLabelPattern(OPEN_PDF_LABEL).test((action.control?.name || "").trim()));
+        if (!openClicked) {
+          return taskResult([
+            checkResult(`在 ${SEARCH_FIELD_LABEL} 输入框中搜索“${LIBRARY_SEARCH_QUERY}”`, true),
+            checkResult(`${LIBRARY_MATCHES_LABEL} 区域显示至少一条结果`, true),
+            checkResult(`点击某条结果的 ${OPEN_PDF_LABEL} 按钮`, false),
+          ]);
+        }
+        const activeFile = await poll(
+          () => driver.read("app.workspace.getActiveFile()?.path ?? null"),
+          value => typeof value === "string" && value.startsWith("library/") && value.endsWith(".pdf"),
+          "工作区打开了文献库中的某个 PDF 文件", { timeoutMs: 5000 },
+        ).catch(() => undefined);
+        const opened = typeof activeFile === "string" && activeFile.startsWith("library/") && activeFile.endsWith(".pdf");
+        return taskResult([
+          checkResult(`在 ${SEARCH_FIELD_LABEL} 输入框中搜索“${LIBRARY_SEARCH_QUERY}”`, true),
+          checkResult(`${LIBRARY_MATCHES_LABEL} 区域显示至少一条结果`, true),
+          checkResult(`点击某条结果的 ${OPEN_PDF_LABEL} 按钮`, true),
+          checkResult("工作区打开了文献库中的某个 PDF 文件", opened, activeFile),
+        ]);
+      },
+    },
+    {
+      id: "library-similar-papers", title: "查看论文的文献库相似结果",
+      goal: `打开阅读面板，点击 ${ALL_TAB_LABEL} 标签查看全部论文。找到其中任意一行，点击它的 ${FIND_SIMILAR_PAPERS_LABEL} 按钮打开 Similar papers 对话框。对话框默认就会显示“${LIBRARY_SIMILAR_TAB_LABEL}”标签的内容，请再点击一次该标签以确认，并等待其中的文献库匹配列表加载完成。`,
+      uiLabels: [ALL_TAB_LABEL, FIND_SIMILAR_PAPERS_LABEL, LIBRARY_SIMILAR_TAB_LABEL],
+      // Same real-index prepare() as library-search, plus a daily report so at least one row (with a
+      // real title/abstract, which buildLibrarySimilarOption needs to enable the library tab at all) is
+      // visible once the model switches to the All tab.
+      async prepare({ driver }) {
+        await startLibraryFixture(driver, { embeddingMode: "remote", authorized: true });
+        await driver.buildLibraryIndex();
+        await driver.ensureDailyReport(ACCEPTANCE_DATE);
+        await driver.openDashboard();
+      },
+      async verify({ driver, actions }) {
+        const switchedToAll = actions.some(action => action.type === "click" && new RegExp(`^${ALL_TAB_LABEL}\\d*$`, "i").test((action.control?.name || "").trim()));
+        if (!switchedToAll) return taskResult([checkResult(`点击 ${ALL_TAB_LABEL} 标签`, false)]);
+        const openedSimilar = actions.some(action => action.type === "click" && exactLabelPattern(FIND_SIMILAR_PAPERS_LABEL).test((action.control?.name || "").trim()));
+        if (!openedSimilar) {
+          return taskResult([
+            checkResult(`点击 ${ALL_TAB_LABEL} 标签`, true),
+            checkResult(`点击某一行的 ${FIND_SIMILAR_PAPERS_LABEL} 按钮`, false),
+          ]);
+        }
+        const switchedToLibraryTab = actions.some(action => action.type === "click" && exactLabelPattern(LIBRARY_SIMILAR_TAB_LABEL).test((action.control?.name || "").trim()));
+        if (!switchedToLibraryTab) {
+          return taskResult([
+            checkResult(`点击 ${ALL_TAB_LABEL} 标签`, true),
+            checkResult(`点击某一行的 ${FIND_SIMILAR_PAPERS_LABEL} 按钮`, true),
+            checkResult(`在对话框中点击“${LIBRARY_SIMILAR_TAB_LABEL}”标签`, false),
+          ]);
+        }
+        const libraryListCount = await poll(
+          () => driver.read('document.querySelectorAll(".arxiv-daily-similar-modal .arxiv-daily-dashboard__library-item").length'),
+          value => Number(value) > 0, "Similar papers 对话框的文献库匹配列表非空", { timeoutMs: 8000 },
+        ).catch(() => 0);
+        return taskResult([
+          checkResult(`点击 ${ALL_TAB_LABEL} 标签`, true),
+          checkResult(`点击某一行的 ${FIND_SIMILAR_PAPERS_LABEL} 按钮`, true),
+          checkResult(`在对话框中点击“${LIBRARY_SIMILAR_TAB_LABEL}”标签`, true),
+          checkResult("Similar papers 对话框的文献库匹配列表非空", libraryListCount > 0, libraryListCount),
         ]);
       },
     },

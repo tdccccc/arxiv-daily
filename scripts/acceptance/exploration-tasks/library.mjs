@@ -12,6 +12,17 @@ import { connectedLibraryFixture, readRootIdentity, resolveLibraryRoot } from ".
 export const LIBRARY_EMBEDDING_DIMENSION = 3;
 
 /**
+ * P3 Chunk 2: `connectedLibraryFixture`'s own embedding object always carries `apiKey: ""`; Chunk 1's
+ * consent/revoke tasks never actually ran the embedding pipeline, so this was never exercised. Chunk 2's
+ * tasks do run it (indexing/search), and `validateEmbeddingConfig` (packages/core/src/settings/
+ * validation.ts) rejects a remote config with an empty API key before any request is sent — so a real
+ * key-shaped fixture value is required, never the model's own claim of one. The embedding API key field
+ * is itself restricted from the model (classifyControlRestriction's credentials rule), so this is exactly
+ * the kind of value the phase's own assumptions leave as fixture data.
+ */
+const LIBRARY_EMBEDDING_API_KEY = "fixture-embedding-key";
+
+/**
  * Connects the library to the fixture's own `vault/library` folder (the PDFs `createFixtureEnvironment`
  * already writes there — never a real personal library), sets Embedding mode and, when remote, points
  * its base URL at the fixture server's own origin so fixtures.mjs's `/embeddings` handler serves it
@@ -46,6 +57,10 @@ export async function startLibraryFixture(driver, { embeddingMode = "local", aut
       ...fixtureData.settings.embedding,
       baseUrl: `${driver.fixture.server.url}/v1`,
       dimension: LIBRARY_EMBEDDING_DIMENSION,
+      // Only set once the fixture actually configures remote embedding (embeddingMode "remote"); a task
+      // that starts local (e.g. library-remote-consent) must still start with an empty key, since
+      // supplying one itself is part of what the model's own switch-to-remote flow is not asked to prove.
+      ...(embeddingMode === "remote" ? { apiKey: LIBRARY_EMBEDDING_API_KEY } : {}),
     };
   });
   if (authorized) await driver.authorizeLibraryProcessing();

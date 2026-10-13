@@ -976,6 +976,38 @@ export async function createObsidianExplorationDriver({ session, fixture, artifa
       const ok = await helper.evaluate(`(async () => { await ${PLUGIN}.authorizeLibraryProcessing(); return true; })()`);
       if (ok !== true) throw new Error("authorizeLibraryProcessing() did not resolve true");
     },
+    // P3 Chunk 2 (index build/search/similarity tasks): a task's deterministic `prepare()` calls this
+    // (never the model) to build the real personal-library search index through the plugin's own
+    // `indexPersonalLibraryFullText()` — the real scan/extract/embed/generation-index pipeline, never a
+    // hand-written index file (phases/03-obsidian-library-tasks.md's own approach: "states that need an
+    // index are produced by running the plugin's real scan and index in prepare(), not by hand-writing
+    // index files"). Uses `helper.evaluate` directly, for the same reason `authorizeLibraryProcessing`
+    // above does (awaiting the real async call and reading a snapshot after it resolves, not stringifying
+    // a pending Promise through `helper.read`).
+    async buildLibraryIndex() {
+      const raw = await helper.evaluate(`(async () => {
+        await ${PLUGIN}.indexPersonalLibraryFullText();
+        const snapshot = ${PLUGIN}.libraryIndexStatus.snapshot();
+        return JSON.stringify({ papers: snapshot.lastRun?.papers ?? null, preparationError: snapshot.preparationError ?? null });
+      })()`);
+      if (typeof raw !== "string") throw new Error("indexPersonalLibraryFullText() did not resolve to a reportable summary");
+      return JSON.parse(raw);
+    },
+    // P3 Chunk 2: locates the real personal-library search index's `current.json` under the vault's
+    // `arxiv-daily/.index/personal-library-search-index/<scopeHex>/<idHex>/` (research.md: the hex
+    // segments are fingerprint-derived, produced only by the plugin's own real indexing, never
+    // hand-written, so this walks the directory instead of hardcoding a path — generation-index-
+    // format.ts). Returns null when the directory tree does not exist yet (the untouched "no index"
+    // state), mirroring `file`/`jsonFile`'s own ENOENT-tolerant callers, so a task's verify() can poll it
+    // the same way `pollJsonFile` polls `data.json`.
+    async findLibrarySearchIndexFile() {
+      const base = path.join(fixture.vaultRoot, "arxiv-daily", ".index", "personal-library-search-index");
+      let entries;
+      try { entries = await fs.readdir(base, { recursive: true }); }
+      catch (error) { if (error.code === "ENOENT") return null; throw error; }
+      const match = entries.find(entry => entry.endsWith("current.json"));
+      return match ? path.join(base, match) : null;
+    },
     // P3 Chunk 3: opts the current task's observe() into the fixed suite's existing "expected
     // authentication failure" carve-out (see observe()'s own comment above); only auth-failure-retry's
     // prepare() calls this, and reset() clears it before every task.

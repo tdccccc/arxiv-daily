@@ -296,15 +296,18 @@ test("the default Obsidian goal tasks have ids, titles, Chinese goals and a prog
   assert.deepEqual(tasks.map(t => t.id), obsidianTaskLibrary.GOAL_TASK_IDS);
   // Ids are unchanged by the move (phase contract: "keeping existing task ids/behavior unchanged"); P3
   // Chunk 2 appends topic/direction/category tasks after the original two, P3 Chunk 3 appends the
-  // four run tasks after those, P3 Chunk 4 appends the five reading tasks, and New-P3 Chunk 1 (personal
+  // four run tasks after those, P3 Chunk 4 appends the five reading tasks, New-P3 Chunk 1 (personal
   // library tasks, docs/helm/2026-10-13-exploration-safety-and-coverage) appends library-revoke-consent,
-  // then library-remote-consent (same phase, Chunk 1's other half), keeping every earlier id stable.
+  // then library-remote-consent (same phase, Chunk 1's other half), and New-P3 Chunk 2 (03-obsidian-
+  // library-tasks.md) appends library-build-index, library-search and library-similar-papers, keeping
+  // every earlier id stable.
   assert.deepEqual(obsidianTaskLibrary.GOAL_TASK_IDS, [
     "daily-paper-limit", "star-paper-from-report",
     "add-topic-direction", "remove-topic-direction", "add-arxiv-category",
     "run-for-date", "cancel-then-rerun", "auth-failure-retry", "completed-date-idempotent",
     "dashboard-tabs-paging", "mark-to-read", "create-paper-note", "summarize-by-id", "open-today-report",
     "library-revoke-consent", "library-remote-consent",
+    "library-build-index", "library-search", "library-similar-papers",
   ]);
   for (const t of tasks) {
     assert.equal(typeof t.title, "string");
@@ -404,7 +407,7 @@ test("--list (describeAcceptanceSuites) lists both hosts' goal task ids and pers
 // throws when the measured duration exceeds the 30s phase-abort budget.
 // ---------------------------------------------------------------------------
 
-function buildFakeObsidianSession({ modalOpen = false, settingsMarker = false, diagnosticsEntries = [], extraHtml = "", authorizeLibraryProcessing } = {}) {
+function buildFakeObsidianSession({ modalOpen = false, settingsMarker = false, diagnosticsEntries = [], extraHtml = "", authorizeLibraryProcessing, indexPersonalLibraryFullText, libraryIndexSnapshot } = {}) {
   const window = new Window();
   window.document.body.innerHTML = `
     ${modalOpen ? '<div class="modal-container"><div class="modal arxiv-daily-modal"><button type="button">Close</button></div></div>' : ""}
@@ -423,6 +426,13 @@ function buildFakeObsidianSession({ modalOpen = false, settingsMarker = false, d
   // test substitute its own async body (e.g. one that throws) without duplicating this whole builder.
   const authorizeCalls = [];
   const authorize = authorizeLibraryProcessing ?? (async () => {});
+  // P3 Chunk 2 (index build/search/similarity tasks): a fake counterpart of the plugin's own
+  // indexPersonalLibraryFullText()/libraryIndexStatus, following the same substitutable-body convention
+  // as authorizeLibraryProcessing just above — a test can supply its own async body (e.g. one that
+  // throws, or that updates `libraryIndexSnapshot`) without duplicating this whole builder.
+  const indexCalls = [];
+  const indexFullText = indexPersonalLibraryFullText ?? (async () => {});
+  let indexSnapshot = libraryIndexSnapshot ?? {};
   const httpClient = { request: async () => ({}) };
   const context = {
     document: window.document,
@@ -438,6 +448,8 @@ function buildFakeObsidianSession({ modalOpen = false, settingsMarker = false, d
         plugins: { "arxiv-daily": {
           getHttpClient: () => httpClient,
           authorizeLibraryProcessing: async () => { authorizeCalls.push(true); return authorize(); },
+          indexPersonalLibraryFullText: async () => { indexCalls.push(true); return indexFullText(); },
+          libraryIndexStatus: { snapshot: () => indexSnapshot },
         } },
         disablePlugin: async () => { reloadCalls.push("disable"); },
         enablePlugin: async () => { reloadCalls.push("enable"); },
@@ -464,7 +476,7 @@ function buildFakeObsidianSession({ modalOpen = false, settingsMarker = false, d
   // `session.diagnostics.entries()` fresh every time and slices off what it already consumed
   // (`diagnosticsSeen`), so a test can push new entries between two observe() calls, exactly like a real
   // CDP session accumulating console/pageerror entries over time.
-  return { window, calls, reloadCalls, authorizeCalls, diagnosticsEntries, session: { client, evaluate, diagnostics: { entries: () => diagnosticsEntries } } };
+  return { window, calls, reloadCalls, authorizeCalls, indexCalls, diagnosticsEntries, session: { client, evaluate, diagnostics: { entries: () => diagnosticsEntries } } };
 }
 
 async function withTempFixture(run) {
@@ -1643,5 +1655,229 @@ test("library-remote-consent: prepare() starts the library connected, local embe
     assert.equal(written.settings.embedding.baseUrl, `${fixture.server.url}/v1`, "even while local, the embedding endpoint must already point at the fixture so switching to remote hits it, not a real endpoint");
     assert.equal(written.settings.embedding.dimension, LIBRARY_EMBEDDING_DIMENSION, "dimension must already match the fixture's 3-dimensional vectors");
     assert.ok(written.libraryConnection?.selectedRoot, "a library must be connected before prepare() returns");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Exploration safety and coverage P3 Chunk 2 (docs/helm/2026-10-13-exploration-safety-and-coverage/
+// phases/03-obsidian-library-tasks.md): library-build-index, library-search and library-similar-papers.
+// prepare() for these three tasks calls the real startLibraryFixture() (resolveLibraryRoot/
+// readRootIdentity read real fs), so the fake driver below gives it a real, minimal temp "vault/library"
+// folder (withRealLibraryRoot) while still faking applySettingsPatch/authorizeLibraryProcessing/
+// buildLibraryIndex/findLibrarySearchIndexFile/read in memory — no CDP session needed, the same way
+// createFakeLibraryDriver/createFakeReadingDriver above fake just enough of the driver surface each
+// task's own prepare()/verify() actually touches.
+// ---------------------------------------------------------------------------
+
+async function withRealLibraryRoot(run) {
+  const root = await mkdtemp(path.join(tmpdir(), "exploration-library-task-root-"));
+  const vaultRoot = path.join(root, "vault");
+  const libraryDir = path.join(vaultRoot, "library");
+  await mkdir(libraryDir, { recursive: true });
+  await writeFile(path.join(libraryDir, `${PAPERS[0].id}.pdf`), "%PDF-1.4\n%%EOF\n");
+  await writeFile(path.join(libraryDir, `${PAPERS[1].id}.pdf`), "%PDF-1.4\n%%EOF\n");
+  try { return await run(vaultRoot); }
+  finally { await rm(root, { recursive: true, force: true }); }
+}
+
+function createFakeLibraryTaskDriver(initialDisk, { vaultRoot, indexFile = null, requests = [], dom = {} } = {}) {
+  let disk = structuredClone(initialDisk);
+  let currentIndexFile = indexFile;
+  const buildLibraryIndexCalls = [];
+  const ensureDailyReportCalls = [];
+  return {
+    disk: () => disk,
+    buildLibraryIndexCalls,
+    ensureDailyReportCalls,
+    // Only populated for tests that actually call the real prepare() (startLibraryFixture needs a real
+    // folder to stat/readdir); `server.requests` is the same mutable array a test pushes/reads directly,
+    // exactly like completed-date-idempotent/cancel-then-rerun's existing fixture.server.requests use.
+    fixture: { vaultRoot, server: { url: "http://127.0.0.1:1", requests } },
+    async jsonFile(relative) {
+      assert.equal(relative, SETTINGS_FILE, `task verify()/prepare() must read the real settings file, not ${relative}`);
+      return structuredClone(disk);
+    },
+    async applySettingsPatch(mutate) { mutate(disk); },
+    async authorizeLibraryProcessing() {
+      disk.libraryConnection.authorization = { fingerprint: "fake-fingerprint", grantedAt: new Date().toISOString() };
+    },
+    async openDashboard() {},
+    async ensureDailyReport(date) { ensureDailyReportCalls.push(date); },
+    async buildLibraryIndex() { buildLibraryIndexCalls.push(true); return { papers: 2 }; },
+    async findLibrarySearchIndexFile() { return currentIndexFile; },
+    setIndexFile(value) { currentIndexFile = value; },
+    async read(expression) {
+      if (expression.includes("arxiv-daily-dashboard__library-list")) return dom.librarySearchResultCount ?? 0;
+      if (expression.includes("arxiv-daily-similar-modal")) return dom.similarLibraryResultCount ?? 0;
+      if (expression.includes("getActiveFile")) return dom.activeFile ?? null;
+      throw new Error(`Unhandled fake read: ${expression}`);
+    },
+  };
+}
+
+function minimalLibraryDisk() { return { settings: {} }; }
+
+// ─── library-build-index ────────────────────────────────────────────────────
+
+test("library-build-index: verify fails on the untouched state (no Retry preparation click, no index file, no embeddings request)", async () => {
+  const task = (await obsidianTaskLibrary.goalTasks()).find(t => t.id === "library-build-index");
+  assert.ok(task, "library-build-index must exist in the Obsidian goal task library");
+  const driver = createFakeLibraryTaskDriver(minimalLibraryDisk());
+  const result = await task.verify({ driver, actions: [] });
+  assert.equal(result.passed, false, "verify must not pass before the model clicks Retry preparation at all");
+});
+
+test("library-build-index: verify fails after the Retry preparation click alone, before any index file exists on disk", async () => {
+  const task = (await obsidianTaskLibrary.goalTasks()).find(t => t.id === "library-build-index");
+  const driver = createFakeLibraryTaskDriver(minimalLibraryDisk());
+  const result = await task.verify({ driver, actions: [clickNamed("Retry preparation")] });
+  assert.equal(result.passed, false, "verify must not pass on the click alone; the real index build must actually finish");
+  const indexCheck = result.checks.find(c => c.label.includes("current.json"));
+  assert.equal(indexCheck.passed, false);
+});
+
+test("library-build-index: verify fails if a current.json exists but no embeddings request was ever recorded (a plausible wrong outcome: a hand-placed index file, not a real remote build)", async () => {
+  const task = (await obsidianTaskLibrary.goalTasks()).find(t => t.id === "library-build-index");
+  const driver = createFakeLibraryTaskDriver(minimalLibraryDisk(), { indexFile: "/fake/current.json", requests: [] });
+  const result = await task.verify({ driver, actions: [clickNamed("Retry preparation")] });
+  assert.equal(result.passed, false, "verify must not pass from an index file alone; a real remote embedding request must also have been recorded");
+  const embeddingsCheck = result.checks.find(c => c.label.includes("embeddings"));
+  assert.equal(embeddingsCheck.passed, false);
+});
+
+test("library-build-index: verify passes once the click, a current.json on disk and a recorded embeddings request are all observed together", async () => {
+  const task = (await obsidianTaskLibrary.goalTasks()).find(t => t.id === "library-build-index");
+  const driver = createFakeLibraryTaskDriver(minimalLibraryDisk(), { indexFile: "/fake/current.json", requests: [{ kind: "embeddings", method: "POST" }] });
+  const result = await task.verify({ driver, actions: [clickNamed("Retry preparation")] });
+  assert.equal(result.passed, true, `verify should pass once the click, the on-disk index and a real embeddings request all agree: ${JSON.stringify(result)}`);
+});
+
+test("library-build-index: verify's embeddings-request check ignores a leftover request recorded before this task's own prepare() ran, counting only ones recorded after", async () => {
+  await withRealLibraryRoot(async (vaultRoot) => {
+    const task = (await obsidianTaskLibrary.goalTasks()).find(t => t.id === "library-build-index");
+    const requests = [{ kind: "embeddings", method: "POST" }]; // leftover from an earlier task in the same pass
+    const driver = createFakeLibraryTaskDriver(minimalLibraryDisk(), { vaultRoot, requests });
+    await task.prepare({ driver });
+    driver.setIndexFile(path.join(vaultRoot, "fake-current.json"));
+    const staleResult = await task.verify({ driver, actions: [clickNamed("Retry preparation")] });
+    assert.equal(staleResult.passed, false, "a request already present before prepare() ran must not count as evidence this task's own click triggered one");
+    assert.equal(staleResult.checks.find(c => c.label.includes("embeddings")).passed, false);
+
+    requests.push({ kind: "embeddings", method: "POST" }); // a fresh one, recorded after prepare()'s own baseline
+    const freshResult = await task.verify({ driver, actions: [clickNamed("Retry preparation")] });
+    assert.equal(freshResult.passed, true, `once a fresh request lands after prepare()'s baseline, verify should pass: ${JSON.stringify(freshResult)}`);
+  });
+});
+
+test("library-build-index: prepare() starts the library connected, remote and already authorized (startLibraryFixture) — granting consent is not the model's job in this task", async () => {
+  await withRealLibraryRoot(async (vaultRoot) => {
+    const task = (await obsidianTaskLibrary.goalTasks()).find(t => t.id === "library-build-index");
+    const driver = createFakeLibraryTaskDriver(minimalLibraryDisk(), { vaultRoot, requests: [] });
+    await task.prepare({ driver });
+    assert.equal(driver.disk().settings.embedding.mode, "remote");
+    assert.ok(driver.disk().libraryConnection?.authorization, "prepare() must start already authorized — building the index itself is the model's job");
+  });
+});
+
+// ─── library-search ─────────────────────────────────────────────────────────
+
+test("library-search: verify fails on the untouched state (no search filled)", async () => {
+  const task = (await obsidianTaskLibrary.goalTasks()).find(t => t.id === "library-search");
+  assert.ok(task, "library-search must exist in the Obsidian goal task library");
+  const driver = createFakeLibraryTaskDriver(minimalLibraryDisk());
+  const result = await task.verify({ driver, actions: [] });
+  assert.equal(result.passed, false);
+});
+
+test("library-search: verify fails if the Library matches list is empty even though the search was filled in (disk/DOM state alone must not be enough without the right action, and an empty list must not pass)", async () => {
+  const task = (await obsidianTaskLibrary.goalTasks()).find(t => t.id === "library-search");
+  const driver = createFakeLibraryTaskDriver(minimalLibraryDisk(), { dom: { librarySearchResultCount: 0 } });
+  const result = await task.verify({ driver, actions: [fillNamed("Search", "measurement")] });
+  assert.equal(result.passed, false);
+  assert.equal(result.checks.find(c => c.label.includes("Library matches")).passed, false);
+});
+
+test("library-search: verify fails if results are shown but no Open PDF click was observed", async () => {
+  const task = (await obsidianTaskLibrary.goalTasks()).find(t => t.id === "library-search");
+  const driver = createFakeLibraryTaskDriver(minimalLibraryDisk(), { dom: { librarySearchResultCount: 1 } });
+  const result = await task.verify({ driver, actions: [fillNamed("Search", "measurement")] });
+  assert.equal(result.passed, false);
+  assert.equal(result.checks.find(c => c.label.includes("Open PDF")).passed, false);
+});
+
+test("library-search: verify fails if Open PDF was clicked but the workspace never actually opened a library PDF (a plausible wrong outcome: the click failed silently)", async () => {
+  const task = (await obsidianTaskLibrary.goalTasks()).find(t => t.id === "library-search");
+  const driver = createFakeLibraryTaskDriver(minimalLibraryDisk(), { dom: { librarySearchResultCount: 1, activeFile: null } });
+  const result = await task.verify({ driver, actions: [fillNamed("Search", "measurement"), clickNamed("Open PDF")] });
+  assert.equal(result.passed, false, `verify must not pass merely because the actions look right; the workspace must actually show an opened library PDF: ${JSON.stringify(result)}`);
+});
+
+test("library-search: verify passes once the search fill, a non-empty Library matches list, the Open PDF click and the opened workspace file are all observed together", async () => {
+  const task = (await obsidianTaskLibrary.goalTasks()).find(t => t.id === "library-search");
+  const driver = createFakeLibraryTaskDriver(minimalLibraryDisk(), { dom: { librarySearchResultCount: 1, activeFile: `library/${PAPERS[0].id}.pdf` } });
+  const result = await task.verify({ driver, actions: [fillNamed("Search", "measurement"), clickNamed("Open PDF")] });
+  assert.equal(result.passed, true, `verify should pass once every observed action and the workspace state agree: ${JSON.stringify(result)}`);
+});
+
+test("library-search: prepare() connects the library remote+authorized and builds a real index through buildLibraryIndex() — never a hand-written index file — before opening the dashboard", async () => {
+  await withRealLibraryRoot(async (vaultRoot) => {
+    const task = (await obsidianTaskLibrary.goalTasks()).find(t => t.id === "library-search");
+    const driver = createFakeLibraryTaskDriver(minimalLibraryDisk(), { vaultRoot, requests: [] });
+    await task.prepare({ driver });
+    assert.equal(driver.buildLibraryIndexCalls.length, 1, "prepare() must build the index exactly once, through the plugin's own real indexing");
+    assert.equal(driver.disk().settings.embedding.mode, "remote");
+    assert.ok(driver.disk().libraryConnection?.authorization);
+  });
+});
+
+// ─── library-similar-papers ─────────────────────────────────────────────────
+
+test("library-similar-papers: verify fails on the untouched state (All tab never clicked)", async () => {
+  const task = (await obsidianTaskLibrary.goalTasks()).find(t => t.id === "library-similar-papers");
+  assert.ok(task, "library-similar-papers must exist in the Obsidian goal task library");
+  const driver = createFakeLibraryTaskDriver(minimalLibraryDisk());
+  const result = await task.verify({ driver, actions: [] });
+  assert.equal(result.passed, false);
+});
+
+test("library-similar-papers: verify fails if All was clicked but Find similar papers never was", async () => {
+  const task = (await obsidianTaskLibrary.goalTasks()).find(t => t.id === "library-similar-papers");
+  const driver = createFakeLibraryTaskDriver(minimalLibraryDisk());
+  const result = await task.verify({ driver, actions: [clickNamed("All")] });
+  assert.equal(result.passed, false);
+  assert.equal(result.checks.find(c => c.label.includes("Find similar papers")).passed, false);
+});
+
+test("library-similar-papers: verify fails if the modal was opened but the Library similar tab was never (re-)clicked", async () => {
+  const task = (await obsidianTaskLibrary.goalTasks()).find(t => t.id === "library-similar-papers");
+  const driver = createFakeLibraryTaskDriver(minimalLibraryDisk());
+  const result = await task.verify({ driver, actions: [clickNamed("All"), clickNamed("Find similar papers")] });
+  assert.equal(result.passed, false);
+  assert.equal(result.checks.find(c => c.label.includes("Library similar")).passed, false);
+});
+
+test("library-similar-papers: verify fails if every click is observed but the modal's library list stayed empty (disk/DOM state must actually agree, not just the action sequence)", async () => {
+  const task = (await obsidianTaskLibrary.goalTasks()).find(t => t.id === "library-similar-papers");
+  const driver = createFakeLibraryTaskDriver(minimalLibraryDisk(), { dom: { similarLibraryResultCount: 0 } });
+  const result = await task.verify({ driver, actions: [clickNamed("All"), clickNamed("Find similar papers"), clickNamed("Library similar")] });
+  assert.equal(result.passed, false, `verify must not pass with an empty library-similar list: ${JSON.stringify(result)}`);
+});
+
+test("library-similar-papers: verify passes once All, Find similar papers and Library similar are all observed and the modal's library list is non-empty", async () => {
+  const task = (await obsidianTaskLibrary.goalTasks()).find(t => t.id === "library-similar-papers");
+  const driver = createFakeLibraryTaskDriver(minimalLibraryDisk(), { dom: { similarLibraryResultCount: 1 } });
+  const result = await task.verify({ driver, actions: [clickNamed("All"), clickNamed("Find similar papers"), clickNamed("Library similar")] });
+  assert.equal(result.passed, true, `verify should pass once every observed click and the modal's library list agree: ${JSON.stringify(result)}`);
+});
+
+test("library-similar-papers: prepare() connects the library remote+authorized, builds a real index and ensures a daily report so at least one row is visible", async () => {
+  await withRealLibraryRoot(async (vaultRoot) => {
+    const task = (await obsidianTaskLibrary.goalTasks()).find(t => t.id === "library-similar-papers");
+    const driver = createFakeLibraryTaskDriver(minimalLibraryDisk(), { vaultRoot, requests: [] });
+    await task.prepare({ driver });
+    assert.equal(driver.buildLibraryIndexCalls.length, 1);
+    assert.deepEqual(driver.ensureDailyReportCalls, [ACCEPTANCE_DATE]);
+    assert.equal(driver.disk().settings.embedding.mode, "remote");
+    assert.ok(driver.disk().libraryConnection?.authorization);
   });
 });
