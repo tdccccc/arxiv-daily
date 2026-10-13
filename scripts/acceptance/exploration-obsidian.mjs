@@ -94,7 +94,7 @@
  *   uses (`obsidianFocusedControlExpression`) and runs it through the same
  *   `classifyControlRestriction`/sensitive/disabled policy `revalidateRef()`
  *   applies to click/fill/select — for every key except Tab/Shift+Tab/Escape
- *   (`PRESS_KEYS_ALWAYS_ALLOWED_ON_FOCUS`), which never activate or mutate
+ *   (`PRESS_NAVIGATION_KEYS`), which never activate or mutate
  *   the focused control and so stay available even on a restricted control,
  *   keeping a keyboard-only persona from being stranded on one. Only then is
  *   a real `Input.dispatchKeyEvent` keyDown/keyUp pair sent. Native `<form>`
@@ -128,7 +128,7 @@ import { blockersFromError } from "../desktop-acceptance/app-state.mjs";
 import { preflight } from "../desktop-acceptance/preflight.mjs";
 import { runDesktopSession } from "../desktop-acceptance/session.mjs";
 import { installSettingsFixture } from "../desktop-acceptance/settings-fixture.mjs";
-import { collapseOptionSets, ExplorationActionError, PRESS_KEYS } from "./exploration.mjs";
+import { collapseOptionSets, ExplorationActionError, PRESS_KEYS, PRESS_NAVIGATION_KEYS } from "./exploration.mjs";
 import { classifyObsidianDiagnostics, createObsidianSettings } from "./obsidian.mjs";
 import { createObsidianDriver, PLUGIN, pollJsonFile, waitForStableTarget } from "./obsidian-ui.mjs";
 
@@ -229,8 +229,7 @@ function describeControl(node, ref) {
   const rect = node.getBoundingClientRect();
   const name = resolveName(node).slice(0, 180);
   const field = node.id || node.getAttribute("name") || "";
-  const hasRevealSibling = Boolean(node.parentElement?.querySelector(".arxiv-daily-settings__reveal-key"));
-  const sensitive = node.type === "password" || hasRevealSibling || /api.?key|password|secret|token|verification code/i.test(name);
+  const sensitive = isSecretField(node);
   return {
     ref, tag: node.tagName.toLowerCase(), type: node.getAttribute("type") || "", role: node.getAttribute("role") || "",
     name, field,
@@ -302,7 +301,7 @@ export function obsidianObservation(id, testMode) {
 
 /** Builds the CDP `Runtime.evaluate` expression string for `obsidianObservation`, matching obsidian-ui.mjs's `read(expression)` convention (the caller wraps with `JSON.stringify(...)`). */
 export function obsidianObservationExpression(id, testMode = false) {
-  const shared = [resolveName, controlVisible, resolveSurface, describeControl].map(fn => fn.toString()).join("\n");
+  const shared = [resolveName, isSecretField, controlVisible, resolveSurface, describeControl].map(fn => fn.toString()).join("\n");
   return `(() => { ${shared}\n  const CONTROL_SELECTOR = ${asCode(CONTROL_SELECTOR)};\n  return (${obsidianObservation})(${asCode(id)}, ${asCode(Boolean(testMode))});\n})()`;
 }
 
@@ -325,7 +324,7 @@ function obsidianLiveControl(ref, testMode) {
 }
 
 export function obsidianLiveControlExpression(ref, testMode = false) {
-  const shared = [resolveName, controlVisible, resolveSurface, describeControl].map(fn => fn.toString()).join("\n");
+  const shared = [resolveName, isSecretField, controlVisible, resolveSurface, describeControl].map(fn => fn.toString()).join("\n");
   return `(() => { ${shared}\n  return (${obsidianLiveControl})(${asCode(ref)}, ${asCode(Boolean(testMode))});\n})()`;
 }
 
@@ -406,21 +405,14 @@ function obsidianFocusedControl(testMode) {
 
 /** Describes the currently focused element (scope + the shared control descriptor), for `press`. */
 export function obsidianFocusedControlExpression(testMode = false) {
-  const shared = [resolveName, controlVisible, resolveSurface, describeControl].map(fn => fn.toString()).join("\n");
+  const shared = [resolveName, isSecretField, controlVisible, resolveSurface, describeControl].map(fn => fn.toString()).join("\n");
   return `(() => { ${shared}\n  return (${obsidianFocusedControl})(${asCode(Boolean(testMode))});\n})()`;
 }
 
 /**
- * P1 Chunk 3 (review Finding 1 "Compounding" fix): Obsidian screenshots had no secret masking at
- * all, unlike the workbench driver's `mask:` list (exploration-browser.mjs:234) — a revealed
- * ("Show ... API key") or plain password input would be captured verbatim into a PNG artifact by
- * `capture()` below. Kept byte-for-byte identical to `describeControl`'s own `sensitive`
- * computation above (same three conditions, same name source) rather than a second, divergent
- * rule; defined as its own function instead of folding into `describeControl` so the already-
- * accepted observation/press-revalidation paths and their `shared` serialization bundles (lines
- * 305, 328, 409) stay untouched. `hasRevealSibling` is what covers a *revealed* key input: the
- * reveal button's sibling class is there regardless of whether the input's own `type` is currently
- * "password" or "text".
+ * The one secret-field rule, used by `describeControl` (observation, live re-validation, press) and by
+ * the screenshot mask below. The reveal button's sibling class stays in place whether the plugin
+ * currently shows the key as "password" or "text", so a revealed key still counts as secret.
  */
 function isSecretField(node) {
   const name = resolveName(node).slice(0, 180);
@@ -469,14 +461,6 @@ function obsidianUnmaskSecretFields() {
 export function obsidianUnmaskSecretFieldsExpression() {
   return `(() => { return (${obsidianUnmaskSecretFields})(); })()`;
 }
-
-// Keys that only move focus or cancel, rather than activating the focused control's own
-// handler or mutating its value the way native Enter/Space button-activation and native
-// <select>/listbox Arrow/Home/End/Page navigation do — sent regardless of the focused
-// control's own restriction, so a keyboard-only persona that lands on (merely observes) a
-// restricted control can always Tab past it or Escape away, instead of being stranded with
-// only "home" (which abandons its current position entirely) as an escape route.
-const PRESS_KEYS_ALWAYS_ALLOWED_ON_FOCUS = new Set(["Tab", "Shift+Tab", "Escape"]);
 
 /**
  * Obsidian capability restrictions. Pure, like the browser's
@@ -677,10 +661,10 @@ export function createObsidianActionExecutor({ client, evaluate, redact = value 
         const focused = await read(obsidianFocusedControlExpression(testMode));
         if (!focused?.ok) throw new ExplorationActionError("The focused element is outside the plugin's scope; the key press was not sent");
         // P1 Chunk 1: everything except pure navigation/cancel keys (see
-        // PRESS_KEYS_ALWAYS_ALLOWED_ON_FOCUS above) is checked against the same
+        // PRESS_NAVIGATION_KEYS in exploration.mjs) is checked against the same
         // restricted/sensitive/disabled policy revalidateRef() already applies to
         // click/fill/select, before any Input.* event is sent.
-        if (!PRESS_KEYS_ALWAYS_ALLOWED_ON_FOCUS.has(action.key)) {
+        if (!PRESS_NAVIGATION_KEYS.has(action.key)) {
           const control = focused.control;
           const restriction = classifyControlRestriction(control);
           if (restriction) throw new ExplorationActionError(`This control is restricted: ${restriction}`);
