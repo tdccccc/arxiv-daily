@@ -48,3 +48,10 @@
 - change: owner decision: add P3 Chunk 4 — exploration-only network guard at the Chromium layer (non-loopback requests fail), opt-in so fixed acceptance is unchanged — and finish it before adding `library-remote-consent` and the Chunk 2 tasks. The goal's constraint "外部请求全部走固定响应" already requires this; no goal change.
 - disposition: keep 525a7c5; no real-model run of library tasks until Chunk 4 is accepted.
 - next: P3 Chunk 4.
+
+## 2026-10-13 — L1 adjust (plugin reload race)
+
+- evidence: a4cc797 added `library-remote-consent` (scripted real-host run passed). Its wait-only run failed at the first observation with "Plugin failure: … Attempting to register an existing view type \"arxiv-daily-dashboard\"". Investigation (/tmp/reload-race): Obsidian awaits a plugin's async `onload()` on enable and unloads synchronously on disable; sequential awaited reloads were clean (0 errors in 40), concurrent reloads reproduced the exact error (38 in 20 iterations). Overlap sources: `withDeadline` stops waiting but does not cancel, so an abandoned reset/prepare keeps reloading; possibly also the first reset racing Obsidian's own startup load (that run had a single task, so the exact trigger is not confirmed). Product gap: `plugin/main.ts` `onload()` registers the Dashboard view and commands at its end without checking `this.unloading`, so a plugin disabled mid-onload still registers. Users can hit it by toggling the plugin quickly in Community plugins (no debounce).
+- change: user decision (2026-10-13): fix both. P3 gains Chunk 5 (product: skip registration when unloaded during onload) and Chunk 6 (harness: serialize reloads, wait for startup load). Chunk 6 starts after Chunk 2 because both touch the Obsidian exploration driver.
+- disposition: keep a4cc797.
+- next: Chunk 5 in parallel with Chunk 2; then Chunk 6.
