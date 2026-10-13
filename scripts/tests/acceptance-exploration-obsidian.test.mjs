@@ -1,9 +1,21 @@
 import assert from "node:assert/strict";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import test from "node:test";
 import vm from "node:vm";
+import zlib from "node:zlib";
 import { Window } from "happy-dom";
 import { evaluate as cdpEvaluate } from "../desktop-acceptance/cdp.mjs";
-import { classifyControlRestriction, createObsidianActionExecutor, obsidianObservation, obsidianObservationExpression } from "../acceptance/exploration-obsidian.mjs";
+import {
+  classifyControlRestriction,
+  createObsidianActionExecutor,
+  createObsidianExplorationDriver,
+  obsidianMaskSecretFieldsExpression,
+  obsidianObservation,
+  obsidianObservationExpression,
+  obsidianUnmaskSecretFieldsExpression,
+} from "../acceptance/exploration-obsidian.mjs";
 
 /**
  * Obsidian chrome that must never produce controls, in every scenario below:
@@ -860,4 +872,168 @@ test("press Escape still fires when focus is on a restricted control", async () 
   assert.equal(result.ok, true);
   assert.deepEqual(calls.map(c => c.params.type), ["keyDown", "keyUp"]);
   assert.equal(calls[0].params.key, "Escape");
+});
+
+// ---------------------------------------------------------------------------
+// P1 Chunk 3 (review Finding 1 "Compounding"): Obsidian screenshots have no secret masking at all,
+// unlike the workbench driver's `mask:` list — a revealed ("Show ... API key") or plain password
+// input would be captured verbatim into a PNG artifact. `stubRect` fakes real layout the way
+// `stubTarget` already does for a single ref, since happy-dom's own `getBoundingClientRect` is
+// always zero (see buildWindow's own comment above).
+// ---------------------------------------------------------------------------
+
+function stubRect(node, rect) {
+  node.getBoundingClientRect = () => ({ x: rect.x, y: rect.y, left: rect.x, top: rect.y, right: rect.x + rect.width, bottom: rect.y + rect.height, width: rect.width, height: rect.height });
+}
+
+test("obsidianMaskSecretFieldsExpression covers a revealed API-key input (reveal-sibling present even though its own type is now 'text') and a password input, never an ordinary field", () => {
+  const html = `
+    <div class="view-content arxiv-daily-dashboard">
+      <div class="setting-item-control">
+        <input type="text" class="arxiv-daily-settings__llm-input" aria-label="LLM API key" value="sk-revealed-secret">
+        <button type="button" class="arxiv-daily-settings__reveal-key" aria-label="Show LLM API key"></button>
+      </div>
+      <div class="setting-item-control"><input type="password" value="hunter2"></div>
+      <div class="setting-item-control"><input type="text" value="ordinary"></div>
+    </div>
+  `;
+  const { window, context } = buildWindow(html);
+  const revealedKey = window.document.querySelector(".arxiv-daily-settings__llm-input");
+  const password = window.document.querySelector('input[type="password"]');
+  const ordinary = window.document.querySelector('input[value="ordinary"]');
+  stubRect(revealedKey, { x: 1, y: 2, width: 100, height: 20 });
+  stubRect(password, { x: 3, y: 4, width: 100, height: 20 });
+  stubRect(ordinary, { x: 5, y: 6, width: 100, height: 20 });
+  const count = vm.runInNewContext(obsidianMaskSecretFieldsExpression(), context);
+  assert.equal(count, 2, "exactly the two secret fields are masked");
+  const overlays = [...window.document.querySelectorAll('[data-exploration-mask="1"]')];
+  assert.equal(overlays.length, 2);
+  const lefts = overlays.map(div => div.style.left);
+  assert.ok(lefts.includes("1px") && lefts.includes("3px"), "both secret fields' own rects are covered");
+  assert.ok(!lefts.includes("5px"), "the ordinary field's rect must never be covered");
+});
+
+test("obsidianUnmaskSecretFieldsExpression removes exactly the overlays obsidianMaskSecretFieldsExpression added, and nothing else", () => {
+  const html = `<div class="view-content arxiv-daily-dashboard"><input type="password" value="x"><div class="keep-me"></div></div>`;
+  const { window, context } = buildWindow(html);
+  stubRect(window.document.querySelector('input[type="password"]'), { x: 0, y: 0, width: 50, height: 10 });
+  vm.runInNewContext(obsidianMaskSecretFieldsExpression(), context);
+  assert.equal(window.document.querySelectorAll('[data-exploration-mask="1"]').length, 1);
+  const removed = vm.runInNewContext(obsidianUnmaskSecretFieldsExpression(), context);
+  assert.equal(removed, 1);
+  assert.equal(window.document.querySelectorAll('[data-exploration-mask="1"]').length, 0);
+  assert.ok(window.document.querySelector(".keep-me"), "unrelated elements must not be touched");
+});
+
+/** A minimal 2x1 RGB PNG with two different pixels, so `judgeCapturedImage` (screenshots.mjs) accepts it as real content — the same technique desktop-acceptance-screenshots.test.mjs uses, kept to the one case this file needs (filter 0, no interlacing). */
+function tinyVariedPng() {
+  const raw = Buffer.from([0, 10, 10, 10, 200, 200, 200]); // filter byte, pixel 1 (dark), pixel 2 (light)
+  const chunk = (type, data) => {
+    const out = Buffer.alloc(12 + data.length);
+    out.writeUInt32BE(data.length, 0);
+    out.write(type, 4, "latin1");
+    data.copy(out, 8);
+    return out;
+  };
+  const ihdr = Buffer.alloc(13);
+  ihdr.writeUInt32BE(2, 0); // width
+  ihdr.writeUInt32BE(1, 4); // height
+  ihdr[8] = 8; // bit depth
+  ihdr[9] = 2; // color type: RGB
+  return Buffer.concat([
+    Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+    chunk("IHDR", ihdr),
+    chunk("IDAT", zlib.deflateSync(raw)),
+    chunk("IEND", Buffer.alloc(0)),
+  ]);
+}
+
+/**
+ * A fake CDP session for `createObsidianExplorationDriver`'s `capture()`. Unlike `buildSession`
+ * above (which only drives `createObsidianActionExecutor`), `Runtime.evaluate` here also has to
+ * run screenshots.mjs's own rect-measurement expression (`captureTargetExpression`), which reads
+ * `window.innerWidth`/`window.getComputedStyle` — so the vm context exposes the happy-dom `Window`
+ * itself as `window`, not just its bare globals, and everything runs for real against one document.
+ */
+function buildCaptureSession(bodyHtml) {
+  const window = new Window();
+  window.document.body.innerHTML = bodyHtml;
+  // createObsidianDriver's construction unconditionally installs the fixture HTTP proxy
+  // (obsidian-ui.mjs, installHttpProxyExpression), which reaches into `app.plugins.plugins
+  // ["arxiv-daily"].getHttpClient()` — needed here even though capture() itself never touches it.
+  const httpClient = { request: async () => ({}) };
+  const app = { plugins: { plugins: { "arxiv-daily": { getHttpClient: () => httpClient } } } };
+  const context = { document: window.document, window, getComputedStyle: (...args) => window.getComputedStyle(...args), innerWidth: 1200, innerHeight: 800, app };
+  const trace = [];
+  const client = {
+    async send(method, params = {}) {
+      trace.push({ method, maskedBefore: window.document.querySelectorAll('[data-exploration-mask="1"]').length });
+      if (method === "Runtime.evaluate") {
+        let value;
+        try { value = vm.runInNewContext(params.expression, context); }
+        catch (error) { return { result: {}, exceptionDetails: { text: "Uncaught", exception: { description: error.message } } }; }
+        return { result: { value } };
+      }
+      if (method === "Page.captureScreenshot") return { data: tinyVariedPng().toString("base64") };
+      return {};
+    },
+  };
+  const evaluate = expression => cdpEvaluate(client, expression);
+  return { window, trace, session: { client, evaluate, diagnostics: { entries: () => [] } } };
+}
+
+async function withTempArtifactDir(run) {
+  const root = await mkdtemp(path.join(tmpdir(), "exploration-obsidian-capture-test-"));
+  try { return await run(root); }
+  finally { await rm(root, { recursive: true, force: true }); }
+}
+
+const driverCaptureFixture = `
+  <div class="workspace" style="opacity:1">
+    <div class="vertical-tab-content arxiv-daily-settings">
+      <div class="setting-item"><div class="setting-item-info"><div class="setting-item-name">API key</div></div>
+        <div class="setting-item-control">
+          <input type="text" class="arxiv-daily-settings__llm-input" aria-label="LLM API key" value="sk-real-secret-value">
+          <button type="button" class="arxiv-daily-settings__reveal-key" aria-label="Show LLM API key"></button>
+        </div></div>
+      <div class="setting-item"><div class="setting-item-info"><div class="setting-item-name">Password</div></div>
+        <div class="setting-item-control"><input type="password" value="hunter2"></div></div>
+      <div class="setting-item"><div class="setting-item-info"><div class="setting-item-name">Daily paper limit</div></div>
+        <div class="setting-item-control"><input type="number" value="20"></div></div>
+    </div>
+  </div>
+`;
+
+test("driver.capture() masks the revealed API-key input and the password input before the screenshot, and removes both masks afterward; the ordinary field is never covered", async () => {
+  await withTempArtifactDir(async root => {
+    const { window, trace, session } = buildCaptureSession(driverCaptureFixture);
+    const workspace = window.document.querySelector(".workspace");
+    stubRect(workspace, { x: 0, y: 0, width: 800, height: 600 });
+    for (const selector of [".arxiv-daily-settings__llm-input", 'input[type="password"]', 'input[type="number"]']) {
+      stubRect(window.document.querySelector(selector), { x: 10, y: 10, width: 100, height: 20 });
+    }
+    const fixture = { vaultRoot: path.join(root, "vault"), server: { url: "http://127.0.0.1:1" } };
+    const artifactDir = path.join(root, "artifacts");
+    const driver = await createObsidianExplorationDriver({ session, fixture, artifactDir });
+    const pngPath = await driver.capture("settings-with-secret");
+    assert.match(pngPath, /settings-with-secret\.png$/);
+    const screenshotCall = trace.find(entry => entry.method === "Page.captureScreenshot");
+    assert.ok(screenshotCall, "the screenshot must still be taken");
+    assert.equal(screenshotCall.maskedBefore, 2, "both secret fields must already be masked by the time the screenshot is taken");
+    assert.equal(window.document.querySelectorAll('[data-exploration-mask="1"]').length, 0, "masks must be removed after a successful capture");
+  });
+});
+
+test("driver.capture() still removes the mask when the screenshot itself throws (no '.workspace' element to capture)", async () => {
+  await withTempArtifactDir(async root => {
+    const { window, trace, session } = buildCaptureSession('<div class="arxiv-daily-settings"><input type="password" value="hunter2"></div>');
+    stubRect(window.document.querySelector('input[type="password"]'), { x: 10, y: 10, width: 100, height: 20 });
+    const fixture = { vaultRoot: path.join(root, "vault"), server: { url: "http://127.0.0.1:1" } };
+    const artifactDir = path.join(root, "artifacts");
+    const driver = await createObsidianExplorationDriver({ session, fixture, artifactDir });
+    await assert.rejects(() => driver.capture("no-workspace"), /nothing matched/);
+    assert.ok(!trace.some(entry => entry.method === "Page.captureScreenshot"), "the screenshot itself must never have been reached");
+    assert.ok(trace.some(entry => entry.maskedBefore === 1), "the mask must have been applied before the refusal");
+    assert.equal(window.document.querySelectorAll('[data-exploration-mask="1"]').length, 0, "the mask must be removed even though capture() threw");
+  });
 });

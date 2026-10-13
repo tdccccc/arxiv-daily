@@ -410,6 +410,66 @@ export function obsidianFocusedControlExpression(testMode = false) {
   return `(() => { ${shared}\n  return (${obsidianFocusedControl})(${asCode(Boolean(testMode))});\n})()`;
 }
 
+/**
+ * P1 Chunk 3 (review Finding 1 "Compounding" fix): Obsidian screenshots had no secret masking at
+ * all, unlike the workbench driver's `mask:` list (exploration-browser.mjs:234) — a revealed
+ * ("Show ... API key") or plain password input would be captured verbatim into a PNG artifact by
+ * `capture()` below. Kept byte-for-byte identical to `describeControl`'s own `sensitive`
+ * computation above (same three conditions, same name source) rather than a second, divergent
+ * rule; defined as its own function instead of folding into `describeControl` so the already-
+ * accepted observation/press-revalidation paths and their `shared` serialization bundles (lines
+ * 305, 328, 409) stay untouched. `hasRevealSibling` is what covers a *revealed* key input: the
+ * reveal button's sibling class is there regardless of whether the input's own `type` is currently
+ * "password" or "text".
+ */
+function isSecretField(node) {
+  const name = resolveName(node).slice(0, 180);
+  const hasRevealSibling = Boolean(node.parentElement?.querySelector(".arxiv-daily-settings__reveal-key"));
+  return node.type === "password" || hasRevealSibling || /api.?key|password|secret|token|verification code/i.test(name);
+}
+
+/**
+ * Covers every secret `<input>` in the whole document — not only the model's current plugin
+ * surface — with an opaque, non-interactive overlay positioned over its live rect, each tagged
+ * `data-exploration-mask` so `obsidianUnmaskSecretFields` can find and remove exactly these and
+ * nothing else. The whole document, not just the current surface: a screenshot's pixels are
+ * whatever is visually on top of the photographed region (e.g. Obsidian's own settings window),
+ * regardless of which element the model's own observation happens to scope to. Returns the count
+ * masked, mainly so a caller (or a test) can tell something happened.
+ */
+function obsidianMaskSecretFields() {
+  let count = 0;
+  for (const node of document.querySelectorAll("input")) {
+    if (!isSecretField(node)) continue;
+    const rect = node.getBoundingClientRect();
+    if (rect.width <= 0 || rect.height <= 0) continue; // nothing to cover if it is not laid out/visible
+    const overlay = document.createElement("div");
+    overlay.setAttribute("data-exploration-mask", "1");
+    overlay.style.cssText = `position:fixed;left:${rect.left}px;top:${rect.top}px;width:${rect.width}px;height:${rect.height}px;background:#000;z-index:2147483647;pointer-events:none;`;
+    document.body.appendChild(overlay);
+    count += 1;
+  }
+  return count;
+}
+
+/** Builds the CDP `Runtime.evaluate` expression for `obsidianMaskSecretFields`, for use via `helper.read(...)` right before `capture()`'s screenshot. */
+export function obsidianMaskSecretFieldsExpression() {
+  const shared = [resolveName, isSecretField].map(fn => fn.toString()).join("\n");
+  return `(() => { ${shared}\n  return (${obsidianMaskSecretFields})(); })()`;
+}
+
+/** Removes every overlay `obsidianMaskSecretFields` added, identified solely by its own marker attribute — never anything it did not add itself. */
+function obsidianUnmaskSecretFields() {
+  const nodes = document.querySelectorAll('[data-exploration-mask="1"]');
+  nodes.forEach(node => node.remove());
+  return nodes.length;
+}
+
+/** Builds the CDP `Runtime.evaluate` expression for `obsidianUnmaskSecretFields`, for use via `helper.read(...)` right after `capture()`'s screenshot (including when it throws). */
+export function obsidianUnmaskSecretFieldsExpression() {
+  return `(() => { return (${obsidianUnmaskSecretFields})(); })()`;
+}
+
 // Keys that only move focus or cancel, rather than activating the focused control's own
 // handler or mutating its value the way native Enter/Space button-activation and native
 // <select>/listbox Arrow/Home/End/Page navigation do — sent regardless of the focused
@@ -831,7 +891,17 @@ export async function createObsidianExplorationDriver({ session, fixture, artifa
 
   async function capture(name) {
     if (!/^[a-z0-9-]+$/.test(name)) throw new Error("Invalid exploration artifact name");
-    await helper.screenshots.capture(name, { selector: ".workspace" });
+    // P1 Chunk 3 (review Finding 1 "Compounding" fix): no secret field — plain password or revealed
+    // via the "Show ... API key" button — may be captured, so every one is covered right before the
+    // screenshot and always restored right after, including when the capture itself throws (e.g. the
+    // subject is not currently visible), so a secret field's live state is never left different from
+    // how this call found it.
+    await helper.read(obsidianMaskSecretFieldsExpression());
+    try {
+      await helper.screenshots.capture(name, { selector: ".workspace" });
+    } finally {
+      await helper.read(obsidianUnmaskSecretFieldsExpression());
+    }
     return path.join(artifactDir, `${name}.png`);
   }
 
