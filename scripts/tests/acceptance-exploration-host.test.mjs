@@ -112,6 +112,7 @@ test("host=workbench (the default) still selects the workbench session/driver, n
     createObsidianExplorationDriver: async () => { seen.push("obsidian-driver"); },
     startWorkbenchSession: async () => { seen.push("workbench-session"); return {}; },
     createExplorationDriver: async () => { seen.push("workbench-driver"); return fakeDriver; },
+    libraryRuntimeCache: { seedWorkbenchLibraryRuntime: async () => {}, npmOfflineEnv: env => env },
   });
   assert.ok(seen.includes("workbench-session"));
   assert.ok(seen.includes("workbench-driver"));
@@ -131,6 +132,7 @@ test("--release runs every persona alongside the default goal tasks when --perso
     goalTasks: [goalTask], personaTasks: [personaTask], release: true, model: fakeModel('{"type":"done"}'),
   }, {
     startWorkbenchSession: async () => ({}), createExplorationDriver: async () => fakeDriver,
+    libraryRuntimeCache: { seedWorkbenchLibraryRuntime: async () => {}, npmOfflineEnv: env => env },
   });
   assert.deepEqual(result.scenarios.map(s => s.id), ["goal-a", "persona-a"]);
   assert.equal(result.scenarios[1].status, "explored");
@@ -149,6 +151,7 @@ test("an explicit --persona still wins over --release (release only fills the de
     goalTasks: [goalTask], personaTasks: [personaA, personaB], personaIds: ["persona-b"], release: true, model: fakeModel('{"type":"done"}'),
   }, {
     startWorkbenchSession: async () => ({}), createExplorationDriver: async () => fakeDriver,
+    libraryRuntimeCache: { seedWorkbenchLibraryRuntime: async () => {}, npmOfflineEnv: env => env },
   });
   assert.deepEqual(result.scenarios.map(s => s.id), ["goal-a", "persona-b"]);
 });
