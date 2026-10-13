@@ -60,7 +60,7 @@
     "globals": "^17.7.0",
     "happy-dom": "^20.10.6",
     "linkedom": "^0.18.12",
-    "obsidian": "^1.13.1",
+    "obsidian": "^1.14.4",
     "playwright": "1.60.0",
     "typescript": "^5.8.3",
     "typescript-eslint": "^8.64.0",
