@@ -27,3 +27,10 @@
 - change: success criterion 3 checked; P2 done, P3 started.
 - disposition: keep.
 - next: P3 — Obsidian personal-library goal tasks.
+
+## 2026-10-13 — note (workbench library scope decided)
+
+- evidence: research.md — workbench `library-build` always runs `npm ci` for the pinned PDF runtime against the real registry, so index-dependent library flows cannot run under the fixture as-is.
+- change: user decision (2026-10-13): option B — the harness may pre-install the PDF runtime into a test-only cache before the model acts (network on first run only); model-time requests stay on fixtures. Recorded as a constraint; the open question is removed.
+- disposition: no code yet; applies to P4.
+- next: continue P3 Chunk 1.

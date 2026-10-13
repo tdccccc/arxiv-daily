@@ -2,8 +2,8 @@
 
 status: active
 created: 2026-10-13T10:05:00+08:00
-updated: 2026-10-13T12:40:00+08:00
-revision: 4
+updated: 2026-10-13T13:05:00+08:00
+revision: 5
 owner: main-session-3a9f449b
 
 ## Intent
@@ -32,6 +32,7 @@ owner: main-session-3a9f449b
 - 分支 `fix/exploration-safety-coverage`，worktree `/home/tiandc/Documents/code/arxiv-daily-exploration-coverage`。
 - 复用 `scripts/acceptance/exploration*.mjs`、`exploration-tasks/*`、`scripts/desktop-acceptance/*` 现有的循环、动作校验、受限控件分类、夹具与重置；不复制平行实现。
 - 普通固定验收和 CI 不调用模型 API、不读取真实密钥；文献库夹具只在临时目录中构造。
+- Reading workbench 文献库任务允许测试工具在模型开始操作之前，把 PDF 运行时预装进测试专用缓存（首次需联网）；模型操作期间的请求仍全部走固定响应。
 - 真实模型运行会产生费用，每次运行前先征得用户同意。
 - 实现块尽量交给 subagent；owner 验收后按独立意图提交；不推送，推送与 PR 需用户逐次同意。
 - 起因与证据：2026-10-13 审查报告（harness / task library / offline run），要点记录在 journal。
@@ -47,6 +48,5 @@ owner: main-session-3a9f449b
 
 ## Open questions
 
-- Reading workbench 文献库任务的范围：建索引会运行 `npm ci` 访问真实 npm 仓库（见 research.md）；待用户在 P4 开始前决定是否让测试工具预装 PDF 运行时。
 - Obsidian 打开设置后键盘焦点不进入设置页，只用键盘的角色需先点击一次才能按键（P1 验证中发现）；P5 真实运行后再决定是否处理。
 - 审查中"只要有一个非等待动作即可通过"的门槛是否可能借前一任务残留状态误判通过（未找到具体实例）；P2 或 P3 补任务时顺带确认，确认无实例则在 journal 记录后关闭。
