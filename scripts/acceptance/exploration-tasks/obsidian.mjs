@@ -24,7 +24,7 @@ export const GOAL_TASK_IDS = [
   // P3 Chunk 4: reading tasks.
   "dashboard-tabs-paging", "mark-to-read", "create-paper-note", "summarize-by-id", "open-today-report",
   // Exploration safety and coverage P3: personal literature library tasks.
-  "library-revoke-consent",
+  "library-revoke-consent", "library-remote-consent",
 ];
 
 /** P3 Chunk 5: re-exports the shared persona id list (exploration-tasks/personas.mjs) so `--list`/selection keep reading it from each host's own module, unchanged from before chunk 5 wired it up. */
@@ -176,6 +176,14 @@ const DAILY_REPORTS_LABEL = "Daily reports";
 // own answer button (plugin/src/library/modal.ts's `confirmLibraryRevocation`, `text: "Revoke"`) — the
 // same string by construction, so one declared label covers both.
 const REVOKE_LABEL = "Revoke";
+// New-P3 Chunk 1 (the other half): the Embedding mode dropdown's own accessible name (both the legacy
+// display() path, plugin/src/settings/tab.ts's `.setName("Embedding")`, and the declarative row,
+// declarative-rows.ts's `renderEmbeddingModeRow`, name it identically — see the anchored restriction
+// policy's own comment on why this bare name is deliberately not restricted) and the consent
+// disclosure's confirm button, whose text is fixed regardless of processing depth
+// (plugin/src/library/modal.ts's `libraryAuthorizationCopy`, `confirm: "Send titles and abstracts"`).
+const EMBEDDING_MODE_LABEL = "Embedding";
+const SEND_TITLES_AND_ABSTRACTS_LABEL = "Send titles and abstracts";
 
 /** Parses the real run-history.jsonl (append-only, never truncated by clearDateState) into records. */
 async function readHistory(driver) {
@@ -827,6 +835,46 @@ export function goalTasks() {
           checkResult(`在确认对话框中再次点击 ${REVOKE_LABEL} 确认撤销`, true),
           checkResult("个人文献库的处理授权已从设置中撤销", revoked, onDisk?.libraryConnection),
           checkResult("Embedding 模式已随撤销改回 local", switchedToLocal, onDisk?.settings?.embedding?.mode),
+        ]);
+      },
+    },
+    {
+      id: "library-remote-consent", title: "将 Embedding 切换为远程并确认处理授权披露",
+      goal: `打开插件设置页，个人文献库目前已连接，但尚未获得处理授权，Embedding 模式为 Local（本地）。在“Personal library”区域找到 ${EMBEDDING_MODE_LABEL} 下拉选择框，将其切换为 Remote。切换后会弹出一个披露对话框，说明切换为远程后标题和摘要会发送到已配置的 Embedding 端点；请阅读该说明，然后点击对话框中的 “${SEND_TITLES_AND_ABSTRACTS_LABEL}” 按钮确认同意。不要点击 Cancel，也不要修改其他设置。`,
+      uiLabels: [EMBEDDING_MODE_LABEL, SEND_TITLES_AND_ABSTRACTS_LABEL],
+      // Starts connected but unauthorized, still in local Embedding mode (never remote/authorized
+      // through the model — the one thing this task actually tests is the model finding and completing
+      // the switch-then-consent flow itself). startLibraryFixture already points the embedding baseUrl
+      // and dimension at the fixture server even while local, so the fixture's own /embeddings handler
+      // answers the moment the model switches to remote — no separate setup step needed here.
+      async prepare({ driver }) {
+        await startLibraryFixture(driver, { embeddingMode: "local" });
+      },
+      async verify({ driver, actions }) {
+        const switchedToRemote = actions.some(action => action.type === "select"
+          && exactLabelPattern(EMBEDDING_MODE_LABEL).test((action.control?.name || "").trim())
+          && action.value === "remote");
+        if (!switchedToRemote) return taskResult([checkResult(`将 ${EMBEDDING_MODE_LABEL} 下拉框切换为 remote`, false)]);
+        const confirmed = actions.some(action => action.type === "click" && exactLabelPattern(SEND_TITLES_AND_ABSTRACTS_LABEL).test((action.control?.name || "").trim()));
+        if (!confirmed) {
+          return taskResult([
+            checkResult(`将 ${EMBEDDING_MODE_LABEL} 下拉框切换为 remote`, true),
+            checkResult(`在披露对话框中点击 “${SEND_TITLES_AND_ABSTRACTS_LABEL}” 确认`, false),
+          ]);
+        }
+        const onDisk = await pollJsonFile(
+          () => driver.jsonFile(SETTINGS_FILE),
+          value => value?.settings?.embedding?.mode === "remote" && Boolean(value?.libraryConnection?.authorization),
+          "remote Embedding mode and library authorization on disk",
+          { timeoutMs: 5000 },
+        ).catch(() => null);
+        const modeRemote = onDisk?.settings?.embedding?.mode === "remote";
+        const authorized = Boolean(onDisk?.libraryConnection?.authorization);
+        return taskResult([
+          checkResult(`将 ${EMBEDDING_MODE_LABEL} 下拉框切换为 remote`, true),
+          checkResult(`在披露对话框中点击 “${SEND_TITLES_AND_ABSTRACTS_LABEL}” 确认`, true),
+          checkResult("Embedding 模式已保存为 remote", modeRemote, onDisk?.settings?.embedding?.mode),
+          checkResult("个人文献库的处理授权已写入设置", authorized, onDisk?.libraryConnection?.authorization),
         ]);
       },
     },

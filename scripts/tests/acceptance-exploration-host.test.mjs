@@ -298,13 +298,13 @@ test("the default Obsidian goal tasks have ids, titles, Chinese goals and a prog
   // Chunk 2 appends topic/direction/category tasks after the original two, P3 Chunk 3 appends the
   // four run tasks after those, P3 Chunk 4 appends the five reading tasks, and New-P3 Chunk 1 (personal
   // library tasks, docs/helm/2026-10-13-exploration-safety-and-coverage) appends library-revoke-consent,
-  // keeping every earlier id stable.
+  // then library-remote-consent (same phase, Chunk 1's other half), keeping every earlier id stable.
   assert.deepEqual(obsidianTaskLibrary.GOAL_TASK_IDS, [
     "daily-paper-limit", "star-paper-from-report",
     "add-topic-direction", "remove-topic-direction", "add-arxiv-category",
     "run-for-date", "cancel-then-rerun", "auth-failure-retry", "completed-date-idempotent",
     "dashboard-tabs-paging", "mark-to-read", "create-paper-note", "summarize-by-id", "open-today-report",
-    "library-revoke-consent",
+    "library-revoke-consent", "library-remote-consent",
   ]);
   for (const t of tasks) {
     assert.equal(typeof t.title, "string");
@@ -971,6 +971,7 @@ function createFakeRunDriver({ state = {}, index = {}, historyLines = [], report
 
 function fillDate(value) { return { type: "fill", control: { name: "Date" }, value }; }
 function clickNamed(name) { return { type: "click", control: { name } }; }
+function selectNamed(name, value) { return { type: "select", control: { name }, value }; }
 
 function indexWithReports(date) {
   return { papers: Object.fromEntries(PAPERS.map((paper, i) => [`p${i}`, { arxivId: paper.id, dailyReports: [dailyReportFile(date)] }])) };
@@ -1553,6 +1554,94 @@ test("library-revoke-consent: prepare() starts the library connected, remote and
 
     const written = JSON.parse(await (await import("node:fs/promises")).readFile(dataPath, "utf8"));
     assert.equal(written.settings.embedding.mode, "remote");
+    assert.ok(written.libraryConnection?.selectedRoot, "a library must be connected before prepare() returns");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// New-P3 Chunk 1 (docs/helm/2026-10-13-exploration-safety-and-coverage/phases/03-obsidian-library-
+// tasks.md), the other half: library-remote-consent. Starts connected, local embedding and
+// unauthorized; the model must switch the Embedding select to remote and confirm the disclosure modal
+// that opens, never through a shortcut.
+// ---------------------------------------------------------------------------
+
+function unauthorizedLocalLibraryDisk() {
+  return {
+    settings: { embedding: { mode: "local", provider: "", baseUrl: "http://127.0.0.1:1/v1", apiKey: "", model: "nomic-embed-text", dimension: LIBRARY_EMBEDDING_DIMENSION, initialChoiceDone: true } },
+    libraryConnection: {
+      schemaVersion: 1, selectedRoot: "/fake/vault/library", rootIdentity: "1:2",
+      eligibleExtensions: [".pdf"], processingDepth: "metadata-and-abstracts",
+    },
+  };
+}
+
+test("library-remote-consent: verify fails on the untouched state (local, unauthorized, nothing done)", async () => {
+  const task = (await obsidianTaskLibrary.goalTasks()).find(t => t.id === "library-remote-consent");
+  assert.ok(task, "library-remote-consent must exist in the Obsidian goal task library");
+  const driver = createFakeLibraryDriver(unauthorizedLocalLibraryDisk());
+  const untouched = await task.verify({ driver, actions: [] });
+  assert.equal(untouched.passed, false, "verify must not pass before the model touches the Embedding select at all");
+});
+
+test("library-remote-consent: verify fails after only switching Embedding to remote, before confirming the disclosure", async () => {
+  const task = (await obsidianTaskLibrary.goalTasks()).find(t => t.id === "library-remote-consent");
+  const driver = createFakeLibraryDriver(unauthorizedLocalLibraryDisk());
+  const result = await task.verify({ driver, actions: [selectNamed("Embedding", "remote")] });
+  assert.equal(result.passed, false, "verify must not pass on the select alone — switching to remote only opens the disclosure, it does not grant consent by itself");
+  assert.equal(driver.disk().settings.embedding.mode, "local", "a select action observed by the harness must not itself have changed the underlying (fake) disk state");
+});
+
+test("library-remote-consent: verify fails if the on-disk state already looks like a granted remote consent but the model's actions never show the select or the confirm click (disk state alone must not be enough)", async () => {
+  const task = (await obsidianTaskLibrary.goalTasks()).find(t => t.id === "library-remote-consent");
+  const driver = createFakeLibraryDriver(unauthorizedLocalLibraryDisk());
+  await driver.applySettingsPatch(current => {
+    current.settings.embedding.mode = "remote";
+    current.libraryConnection.authorization = { fingerprint: "fake-fingerprint", grantedAt: new Date().toISOString() };
+  });
+  const result = await task.verify({ driver, actions: [] });
+  assert.equal(result.passed, false, "verify must not pass from disk state alone without the program-observed select and confirm actions");
+});
+
+test("library-remote-consent: verify fails if the select and a confirm-shaped click are both observed but the on-disk authorization never actually landed (a plausible wrong outcome: the model clicked Cancel, or the dialog never actually submitted)", async () => {
+  const task = (await obsidianTaskLibrary.goalTasks()).find(t => t.id === "library-remote-consent");
+  const driver = createFakeLibraryDriver(unauthorizedLocalLibraryDisk());
+  const result = await task.verify({ driver, actions: [selectNamed("Embedding", "remote"), clickNamed("Send titles and abstracts")] });
+  assert.equal(result.passed, false, "verify must not pass merely because the actions look right; the on-disk mode and authorization must actually agree");
+});
+
+test("library-remote-consent: verify passes once the Embedding select to remote and the disclosure confirm click are both observed and the on-disk settings actually show remote mode and a granted authorization", async () => {
+  const task = (await obsidianTaskLibrary.goalTasks()).find(t => t.id === "library-remote-consent");
+  const driver = createFakeLibraryDriver(unauthorizedLocalLibraryDisk());
+  // Simulates the real product effect of the model's select + confirm — never through the model's own
+  // claim of success.
+  await driver.applySettingsPatch(current => {
+    current.settings.embedding.mode = "remote";
+    current.libraryConnection.authorization = { fingerprint: "fake-fingerprint", grantedAt: new Date().toISOString() };
+  });
+  const result = await task.verify({ driver, actions: [selectNamed("Embedding", "remote"), clickNamed("Send titles and abstracts")] });
+  assert.equal(result.passed, true, `verify should pass once both the observed actions and the on-disk state agree: ${JSON.stringify(result)}`);
+});
+
+test("library-remote-consent: prepare() starts the library connected, local embedding and unauthorized (startLibraryFixture), with remote baseUrl/dimension already pointed at the fixture so the model's switch hits it immediately", async () => {
+  await withTempFixture(async ({ fixture, artifactDir }) => {
+    const libraryDir = path.join(fixture.vaultRoot, "library");
+    await mkdir(libraryDir, { recursive: true });
+    await writeFile(path.join(libraryDir, "2610.10001.pdf"), "%PDF-1.4\n%%EOF\n");
+    const dataPath = path.join(fixture.vaultRoot, SETTINGS_FILE);
+    await mkdir(path.dirname(dataPath), { recursive: true });
+    await writeFile(dataPath, JSON.stringify(createObsidianSettings({ endpoint: `${fixture.server.url}/v1` })));
+
+    const { authorizeCalls, session } = buildFakeObsidianSession();
+    const driver = await createObsidianExplorationDriver({ session, fixture, artifactDir });
+    const task = (await obsidianTaskLibrary.goalTasks()).find(t => t.id === "library-remote-consent");
+    await task.prepare({ driver });
+    assert.equal(authorizeCalls.length, 0, "prepare() must start the task unauthorized — granting consent is the model's job, not the fixture's");
+
+    const written = JSON.parse(await (await import("node:fs/promises")).readFile(dataPath, "utf8"));
+    assert.equal(written.settings.embedding.mode, "local", "the task starts in local Embedding mode; the model must switch it");
+    assert.equal(written.libraryConnection.authorization, undefined);
+    assert.equal(written.settings.embedding.baseUrl, `${fixture.server.url}/v1`, "even while local, the embedding endpoint must already point at the fixture so switching to remote hits it, not a real endpoint");
+    assert.equal(written.settings.embedding.dimension, LIBRARY_EMBEDDING_DIMENSION, "dimension must already match the fixture's 3-dimensional vectors");
     assert.ok(written.libraryConnection?.selectedRoot, "a library must be connected before prepare() returns");
   });
 });
