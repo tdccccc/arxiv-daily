@@ -27,7 +27,7 @@ Change `uiLabels` entries from plain strings to `{ text, source }` (source = one
 - Red / baseline signal: new tests show the current check passes when "Run History" is renamed only in `hub-modal.ts` (because "Run history" survives in `commands.ts`) and when a label survives only inside a comment.
 - Green check: both cases fail with host, task, label and source file; all 21 Obsidian and 6 workbench goal tasks pass with source-scoped labels; exceptions are listed with reasons.
 - regression checks: `node --test scripts/tests/acceptance-exploration*.test.mjs`; `npm run test:release-tools`.
-- [ ] implementation and tests accepted
+- [x] implementation and tests accepted
 
 ## Phase verification
 

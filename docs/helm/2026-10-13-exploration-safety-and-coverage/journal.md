@@ -83,3 +83,10 @@
 - change: P3 done (Obsidian half of success criterion 4; the workbench half is P4). P6 started.
 - disposition: keep all P3 work.
 - next: P6 — label check by source file and exact string.
+
+## 2026-10-14 — note (P6 done)
+
+- evidence: 575b7be. Labels are `{ text, source }`; each source must contain the text as a complete, case-sensitive string literal. Owner widened each host's allowed sources to include `packages/core/src/`, which removed the "Retry preparation" exception and lets "Revoke" and "Embedding" check both their plugin and core sources. One exception remains: the workbench `sidebar-toggle` purpose tag (a test hook inside a longer className, not display text). The old check passed a hub-modal-only rename, a comment-only label and a substring-only label; the new one fails all three. "Reading Dashboard" corrected to the product's "Reading dashboard". acceptance-exploration* 274/274; release tools 761/761.
+- change: P6 done; P4 started.
+- disposition: keep.
+- next: P4 intake — workbench library flows, PDF runtime pre-install, and whether every workbench server request goes through the fixture.

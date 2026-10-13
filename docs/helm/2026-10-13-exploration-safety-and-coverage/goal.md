@@ -2,8 +2,8 @@
 
 status: active
 created: 2026-10-13T10:05:00+08:00
-updated: 2026-10-13T22:30:00+08:00
-revision: 7
+updated: 2026-10-14T00:30:00+08:00
+revision: 8
 owner: main-session-3a9f449b
 
 ## Intent
@@ -43,9 +43,9 @@ owner: main-session-3a9f449b
 1. P1 — 两端按键动作受与点击相同的受限/敏感/范围拦截，Obsidian 截图遮住密钥字段 — status: done
 2. P2 — 一项普通固定测试核对所有目标任务依赖的界面文字仍存在于产品中，改名时指出需更新的任务 — status: done
 3. P3 — Plugin product 上的个人文献库目标任务就绪，起点由夹具确定性准备 — status: done
-4. P4 — Reading workbench 上的个人文献库目标任务就绪 — status: pending
+4. P4 — Reading workbench 上的个人文献库目标任务就绪 — status: active
 5. P5 — 真实模型完整运行、疑点复核与处置、发版说明更新 — status: pending
-6. P6 — 界面文字检查按出处文件、区分大小写的完整字符串核对，同一文字在别处残留时改名也能发现（在 P3 之后、P4 之前执行） — status: active
+6. P6 — 界面文字检查按出处文件、区分大小写的完整字符串核对，同一文字在别处残留时改名也能发现（在 P3 之后、P4 之前执行） — status: done
 
 ## Open questions
 
