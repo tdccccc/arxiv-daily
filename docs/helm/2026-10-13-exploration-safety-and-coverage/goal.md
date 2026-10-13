@@ -2,8 +2,8 @@
 
 status: active
 created: 2026-10-13T10:05:00+08:00
-updated: 2026-10-14T00:30:00+08:00
-revision: 8
+updated: 2026-10-14T01:00:00+08:00
+revision: 9
 owner: main-session-3a9f449b
 
 ## Intent
@@ -23,6 +23,7 @@ owner: main-session-3a9f449b
 - 为 Dashboard "More" 菜单的批量操作 "Retry failed dates"、"Run pending" 增加目标任务：单日重跑已由日历点击与 Force run 任务覆盖，批量选日期属于程序逻辑，更适合普通测试。
 - 调整用户角色的步数预算，或新增程序侧的疑点自动发现机制。
 - 让模型能使用 Obsidian 命令面板；仅能从命令面板触达的命令不在本次范围。
+- 让模型在 Reading workbench 上通过输入路径连接文献库：路径字段保持受限，避免模型连接真实目录；连接状态由夹具准备。
 - 为 `scripts/` 新增常驻 lint / typecheck。
 - 作为自动发版门槛；普通固定验收和 CI 仍不调用模型 API。
 - 修改其他 Helm 计划的状态。
