@@ -1,4 +1,4 @@
-import { mkdir, readFile, realpath, stat, writeFile } from "node:fs/promises";
+import { mkdir, readdir, readFile, realpath, rm, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
@@ -126,9 +126,72 @@ function browserObservation(id) {
       sidebarCollapsed: root?.classList.contains("sidebar-collapsed") === true, viewport: { width: innerWidth, height: innerHeight } } };
 }
 
+/**
+ * P4 Chunk 2 Fix 1 (see reset()'s own comment): reads the workbench server's currently-held config
+ * revision through its own GET /api/settings and, when settings exist at all, performs one real, no-op
+ * settings save (empty `values`, current `revision`) through its own POST /api/settings — syncing the
+ * server's in-memory config to whatever is on disk right now, without reverting disk to any earlier
+ * baseline. Factored out of reset() so `startWorkbenchLibraryFixture` (exploration-tasks/
+ * workbench-library.mjs) can call the exact same resync after its own out-of-band CLI writes, through
+ * the driver's own `resyncSettings()` below, instead of a second copy of this GET/POST dance.
+ */
+async function resyncConfigRevision(page, url) {
+  const current = await page.request.get(new URL("api/settings", url).href, { timeout: 5000 });
+  if (!current.ok()) throw new Error(`Could not read workbench settings to resync the config revision: ${current.status()}`);
+  const { revision } = await current.json();
+  if (revision !== null) {
+    const saved = await page.request.post(new URL("api/settings", url).href, { data: { revision, values: {} }, timeout: 5000 });
+    if (!saved.ok()) throw new Error(`Could not resync the workbench config revision: ${saved.status()}`);
+  }
+}
+
+/**
+ * P4 Chunk 2 (docs/helm/2026-10-13-exploration-safety-and-coverage/phases/04-workbench-library-tasks.md):
+ * restores the fixture's own personal-library state to its baseline — no `[library]`/`[embedding]` TOML
+ * table (the fixture never ships either; only `startWorkbenchLibraryFixture` or a model's own
+ * library-build/remote-embedding flow ever adds them), no `origin: "library"` direction under
+ * `arxiv.topics[].directions` (a manually-set direction, e.g. the fixture's own baseline one, is left
+ * alone — this is a surgical restore, not a revert-to-snapshot, so a legitimately saved setting from an
+ * earlier task, e.g. settings-persistence's own `max_daily_papers`, survives exactly like reset()'s own
+ * comment above already guarantees for the config resync), no leftover `.index/personal-library-*`
+ * catalog/search-index/profile state (same derivation exploration-obsidian.mjs's `clearLibraryState` uses
+ * for Obsidian, and the same directory the real CLI itself writes to — confirmed by library-runtime-
+ * cache.mjs's real-host probe), and no library PDF beyond whatever was already under `vault/library` when
+ * this driver was built (`baselineLibraryFiles`, e.g. `startWorkbenchLibraryFixture`'s own extra
+ * clusterable PDF). Skips the TOML rewrite entirely when there is nothing to remove, so the vast majority
+ * of non-library tasks' reset() calls never touch the config file at all.
+ */
+async function clearFixtureLibraryState(fixture, baselineLibraryFiles) {
+  const { parse } = cliRequire("smol-toml");
+  const table = parse(await readFile(fixture.configPath, "utf8"));
+  const hasLibraryOriginDirection = (table.arxiv?.topics ?? []).some(topic => (topic.directions ?? []).some(direction => direction.origin === "library"));
+  if (table.library || table.embedding || hasLibraryOriginDirection) {
+    await writeConfigPatch(fixture, current => {
+      delete current.library;
+      delete current.embedding;
+      for (const topic of current.arxiv?.topics ?? []) {
+        if (Array.isArray(topic.directions)) topic.directions = topic.directions.filter(direction => direction.origin !== "library");
+      }
+    });
+  }
+  const dailyDir = table.output?.daily_dir;
+  if (typeof dailyDir === "string") {
+    const indexDir = path.join(fixture.vaultRoot, path.dirname(dailyDir), ".index");
+    const indexEntries = await readdir(indexDir).catch(() => []);
+    await Promise.all(indexEntries.filter(entry => entry.startsWith("personal-library-")).map(entry => rm(path.join(indexDir, entry), { recursive: true, force: true })));
+  }
+  const libraryDir = path.join(fixture.vaultRoot, "library");
+  const currentLibraryFiles = await readdir(libraryDir).catch(() => []);
+  await Promise.all(currentLibraryFiles.filter(entry => !baselineLibraryFiles.has(entry)).map(entry => rm(path.join(libraryDir, entry), { recursive: true, force: true })));
+}
+
 export async function createExplorationDriver({ page, context, url, fixture, artifactDir, diagnostics, redact = createExplorationRedactor(), signal }) {
   await assertFixture(fixture);
   await mkdir(artifactDir, { recursive: true, mode: 0o700 });
+  // P4 Chunk 2: captured once, at driver creation, so reset()'s own library-PDF cleanup (below) can tell
+  // "already there when this task library started" apart from "a task's own prepare() added this" —
+  // mirrors exploration-obsidian.mjs's own `baselineLibraryFiles`.
+  const baselineLibraryFiles = new Set(await readdir(path.join(fixture.vaultRoot, "library")).catch(() => []));
   await page.locator(".workbench").waitFor({ state: "visible", timeout: 12000 });
   const base = new URL(url), pageErrors = [], boundaryEvents = [];
   let version = 0, latest;
@@ -240,14 +303,17 @@ export async function createExplorationDriver({ page, context, url, fixture, art
       // baseline: the latter would also discard a legitimate settings change an earlier task already made
       // and verified (e.g. settings-persistence's maxDailyPapers) through the real save path, which must
       // survive into later tasks. Cost measured on a real host: ~10-20ms for the two same-origin HTTP
-      // calls, negligible next to the rest of reset()'s own page navigation.
-      const current = await page.request.get(new URL("api/settings", url).href, { timeout: 5000 });
-      if (!current.ok()) throw new Error(`Could not read workbench settings to resync the config revision: ${current.status()}`);
-      const { revision } = await current.json();
-      if (revision !== null) {
-        const saved = await page.request.post(new URL("api/settings", url).href, { data: { revision, values: {} }, timeout: 5000 });
-        if (!saved.ok()) throw new Error(`Could not resync the workbench config revision: ${saved.status()}`);
-      }
+      // calls, negligible next to the rest of reset()'s own page navigation. Factored into
+      // resyncConfigRevision() (above) so startWorkbenchLibraryFixture's own out-of-band CLI seed can
+      // reuse exactly this, through resyncSettings() below.
+      //
+      // P4 Chunk 2: library state is restored to the fixture baseline (clearFixtureLibraryState, above)
+      // BEFORE this resync, not after — the clean-up itself is a direct, out-of-band disk write (like
+      // the external-config-conflict task's own writeConfigPatch), so the resync must run last to pick
+      // up the now-cleaned disk content; doing it the other way round would resync the server to a disk
+      // state this call is about to change again, reintroducing the exact mismatch this guards against.
+      await clearFixtureLibraryState(fixture, baselineLibraryFiles);
+      await resyncConfigRevision(page, url);
       resetSignal?.throwIfAborted();
       await page.goto(url, { waitUntil: "domcontentloaded", timeout: 15000 });
       const dialog = page.locator("dialog[open]");
@@ -329,6 +395,12 @@ export async function createExplorationDriver({ page, context, url, fixture, art
       const reset = await page.request.post(new URL("api/paper/mark", url).href, { data: { key, action: "star", value: false, expected: paper.priority } });
       if (!reset.ok()) throw new Error(`Could not reset the star mark for ${key}: ${reset.status()}`);
     },
+    // P4 Chunk 2: exposed so exploration-tasks/workbench-library.mjs's `startWorkbenchLibraryFixture`
+    // can read the same fixture paths/env this driver already validated (assertFixture, above) without a
+    // second copy of them, and resync the server after its own out-of-band CLI writes through the exact
+    // same path reset() uses (resyncConfigRevision) rather than a second implementation of it.
+    fixture,
+    async resyncSettings() { assertScope(); await resyncConfigRevision(page, url); },
     async dispose() { page.off("pageerror", onError); context.off("page", onPage); await context.unroute("**/*", guard); },
   };
 }
