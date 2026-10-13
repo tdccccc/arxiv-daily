@@ -243,6 +243,30 @@ test("a passing preflight starts the session, hands back the renderer session, a
   assert.equal(teardown, "teardown-complete");
 });
 
+// ---------------------------------------------------------------------------
+// P3 Chunk 4 (exploration-safety-and-coverage): the Chromium-layer network guard
+// is threaded from the exploration session start down to runDesktopSession/
+// buildLaunchCommand. The fixed `obsidian` acceptance suite never goes through
+// startObsidianExplorationSession at all (it calls runDesktopSession directly,
+// see scripts/desktop-acceptance/acceptance.mjs and smoke.mjs), so its launch
+// args are unaffected by this default.
+// ---------------------------------------------------------------------------
+
+test("starting an Obsidian exploration session asks runDesktopSession for the network guard by default", async () => {
+  let receivedNetworkGuard;
+  const result = await startObsidianExplorationSession({
+    fixture: { vaultRoot: "/tmp/vault", server: { url: "http://127.0.0.1:1" } },
+    check: async () => ({ ok: true }),
+    runSession: async ({ networkGuard, body }) => {
+      receivedNetworkGuard = networkGuard;
+      await body({ session: { evaluate: async () => {}, client: {} } });
+      return "teardown-complete";
+    },
+  });
+  assert.equal(receivedNetworkGuard, true, "exploration must ask for the network guard, unlike the fixed acceptance suite's direct runDesktopSession calls");
+  await result.stop();
+});
+
 test("an abort signal releases a held-open Obsidian session so its own teardown still runs", async () => {
   const controller = new AbortController();
   let released = false;

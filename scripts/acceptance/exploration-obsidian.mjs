@@ -764,6 +764,12 @@ export async function startObsidianExplorationSession({
   fixture, artifactDir, signal,
   obsidianPath = process.env.OBSIDIAN_BINARY ?? "/opt/Obsidian/obsidian",
   virtualDisplay = true,
+  // Exploration-only network guard (P3 Chunk 4 of docs/helm/2026-10-13-exploration-safety-and-coverage):
+  // on by default here, so an unscripted model cannot reach the real internet through any process
+  // (e.g. transformers.js's own fetch for a local embedding model download, which the harness's
+  // HttpClient proxy never sees). The fixed `obsidian` acceptance suite calls `runDesktopSession`
+  // directly and never sets this, so its launch args are unaffected.
+  networkGuard = true,
   runSession = runDesktopSession,
   check = preflight,
 } = {}) {
@@ -782,7 +788,7 @@ export async function startObsidianExplorationSession({
   const bodyReleased = new Promise(resolve => { releaseBody = resolve; });
 
   const overall = runSession({
-    vaultPath: fixture.vaultRoot, pluginId: "arxiv-daily", sourceDir, obsidianPath, virtualDisplay,
+    vaultPath: fixture.vaultRoot, pluginId: "arxiv-daily", sourceDir, obsidianPath, virtualDisplay, networkGuard,
     beforeLaunch: ({ vaultPath, pluginId, fs: storage }) => installSettingsFixture({
       vaultPath, pluginId, fs: storage, data: createObsidianSettings({ endpoint: `${fixture.server.url}/v1` }),
     }),

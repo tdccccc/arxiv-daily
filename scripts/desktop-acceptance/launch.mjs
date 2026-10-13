@@ -12,11 +12,35 @@ export function buildLaunchCommand({
   port,
   virtualDisplay = true,
   screen = "1400x900x24",
+  // Exploration-only, opt-in Chromium-layer network guard (P3 Chunk 4 of
+  // docs/helm/2026-10-13-exploration-safety-and-coverage): routing every request
+  // through a proxy that nothing is listening on makes every non-loopback request
+  // fail at the network layer, in every process (renderer, workers, Electron main),
+  // not only the plugin's own HttpClient (which the harness already proxies via
+  // installHttpProxyExpression and is unaffected by this — its requests go to the
+  // fixture server on loopback). `<-loopback>` in the bypass list cancels Chromium's
+  // implicit "always bypass the proxy for loopback" rule, so only the two loopback
+  // forms the harness actually uses (127.0.0.1, localhost) are re-added explicitly —
+  // not the whole 127.0.0.0/8 block. Omitted entirely (the default), this adds no
+  // switches at all, so every existing caller (the fixed acceptance suite) gets
+  // byte-for-byte the same launch args as before this option existed.
+  networkGuardProxyPort,
 }) {
   if (typeof port !== "number" || !Number.isInteger(port) || port < EPHEMERAL_MIN || port > EPHEMERAL_MAX) {
     throw new TypeError(`debugging port must be an integer in [${EPHEMERAL_MIN}, ${EPHEMERAL_MAX}], received ${JSON.stringify(port)}`);
   }
+  if (networkGuardProxyPort !== undefined) {
+    if (typeof networkGuardProxyPort !== "number" || !Number.isInteger(networkGuardProxyPort) || networkGuardProxyPort < 1 || networkGuardProxyPort > 65535) {
+      throw new TypeError(`networkGuardProxyPort must be an integer in [1, 65535], received ${JSON.stringify(networkGuardProxyPort)}`);
+    }
+  }
   const obsidianArgs = [`--remote-debugging-port=${port}`, "--no-sandbox"];
+  if (networkGuardProxyPort !== undefined) {
+    obsidianArgs.push(
+      `--proxy-server=127.0.0.1:${networkGuardProxyPort}`,
+      "--proxy-bypass-list=<-loopback>;127.0.0.1;localhost",
+    );
+  }
   if (!virtualDisplay) return { command: obsidianPath, args: obsidianArgs };
   return {
     command: "xvfb-run",

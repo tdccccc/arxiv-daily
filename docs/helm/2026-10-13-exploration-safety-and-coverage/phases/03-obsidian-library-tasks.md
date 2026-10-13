@@ -40,7 +40,7 @@ First build a small library fixture helper for the exploration host that reuses 
 - Red / baseline signal: with a connected library in local Embedding mode, clicking "Retry preparation" in the isolated Obsidian sends `https://huggingface.co/Xenova/multilingual-e5-small/resolve/main/config.json` straight to the internet (observed 2026-10-13 with CDP `Network.requestWillBeSent`; the HttpClient proxy and fixture-requests.json never see it). A fixed test shows the exploration launch has no network guard.
 - Green check: exploration Obsidian sessions launch with a guard that fails every request not addressed to loopback (fixture server, CDP) at the Chromium network layer for all processes, opt-in so the fixed acceptance suite is unchanged; the same real-host probe shows the Hugging Face request failing without any CDP blocklist, and ordinary fixture traffic (runs, remote embeddings) still works.
 - regression checks: `node --test scripts/tests/acceptance-exploration*.test.mjs`; `npm run test:acceptance:tools`; scripted real-host run of `library-revoke-consent` still passes.
-- [ ] implementation and tests accepted
+- [x] implementation and tests accepted
 
 ### Chunk 2 — index build, library search and similar-paper tasks
 
