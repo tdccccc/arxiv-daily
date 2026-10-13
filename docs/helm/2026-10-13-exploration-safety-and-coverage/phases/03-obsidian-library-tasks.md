@@ -2,8 +2,8 @@
 
 goal_ref: ../goal.md
 created: 2026-10-13T12:40:00+08:00
-updated: 2026-10-13T12:40:00+08:00
-revision: 1
+updated: 2026-10-13T14:40:00+08:00
+revision: 2
 
 ## Outcome
 
@@ -31,6 +31,15 @@ First build a small library fixture helper for the exploration host that reuses 
 - Green check: focused task tests pass, including "verify fails on untouched state"; label test passes.
 - regression checks: `node --test scripts/tests/acceptance-exploration*.test.mjs`; `npm run test:acceptance:tools`.
 - exception: the fixture start runs inside a real Obsidian; compensating check is a scripted fake-model run of both tasks on the real host (pass when the scripted steps are done, not passed when the model only waits/finishes).
+- [ ] implementation and tests accepted
+
+### Chunk 4 — block non-fixture network in Obsidian exploration (runs before Chunk 1's consent task and Chunk 2)
+
+- change kind: bug fix (safety)
+- strategy: strict Red-Green-Refactor
+- Red / baseline signal: with a connected library in local Embedding mode, clicking "Retry preparation" in the isolated Obsidian sends `https://huggingface.co/Xenova/multilingual-e5-small/resolve/main/config.json` straight to the internet (observed 2026-10-13 with CDP `Network.requestWillBeSent`; the HttpClient proxy and fixture-requests.json never see it). A fixed test shows the exploration launch has no network guard.
+- Green check: exploration Obsidian sessions launch with a guard that fails every request not addressed to loopback (fixture server, CDP) at the Chromium network layer for all processes, opt-in so the fixed acceptance suite is unchanged; the same real-host probe shows the Hugging Face request failing without any CDP blocklist, and ordinary fixture traffic (runs, remote embeddings) still works.
+- regression checks: `node --test scripts/tests/acceptance-exploration*.test.mjs`; `npm run test:acceptance:tools`; scripted real-host run of `library-revoke-consent` still passes.
 - [ ] implementation and tests accepted
 
 ### Chunk 2 — index build, library search and similar-paper tasks

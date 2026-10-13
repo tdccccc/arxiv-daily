@@ -41,3 +41,10 @@
 - change: user decision (2026-10-13): tighten it after P3 so P3's new tasks are covered in one pass. New P6: each label declares its source file and must appear there as a complete, case-sensitive string literal; runtime-built text is listed as an explicit exception. P2 stays done (its outcome holds; P6 is incremental).
 - disposition: no code yet.
 - next: continue P3 Chunk 1 (embedding-mode policy, local-embedding network question).
+
+## 2026-10-13 — L1 adjust (P3 network guard before more library tasks)
+
+- evidence: 525a7c5 landed the library fixture start, `library-revoke-consent`, and the anchored embedding policy (the bare "Embedding" mode select was swept up by an unanchored `embedding` rule; sub-fields stay restricted). Probe on the real isolated host: a connected library in local Embedding mode plus "Retry preparation" requests `https://huggingface.co/Xenova/multilingual-e5-small/resolve/main/config.json` directly; transformers.js uses its own fetch, not the plugin HttpClient the harness proxies, so fixture-requests.json cannot see it. The probe blocked it with a CDP blocklist and stopped the session; nothing was downloaded. Any library task that leaves local mode reachable (including revoke, which ends in local mode) is exposed under an unscripted model.
+- change: owner decision: add P3 Chunk 4 — exploration-only network guard at the Chromium layer (non-loopback requests fail), opt-in so fixed acceptance is unchanged — and finish it before adding `library-remote-consent` and the Chunk 2 tasks. The goal's constraint "外部请求全部走固定响应" already requires this; no goal change.
+- disposition: keep 525a7c5; no real-model run of library tasks until Chunk 4 is accepted.
+- next: P3 Chunk 4.
