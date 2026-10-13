@@ -76,3 +76,10 @@
 - change: Chunk 7 checked; new Chunk 8 finds the root cause first — a harness leak, or a plugin bug where a paper added after an earlier index is not picked up — then fixes it.
 - disposition: keep bfb09e6. No new library tasks until Chunk 8 is accepted.
 - next: P3 Chunk 8.
+
+## 2026-10-13 — note (P3 done)
+
+- evidence: d0e3fdc. Root cause of the leak was the harness: "Retry preparation" scans a library folder only the first time a catalog exists (plugin/main.ts ~1547-1554, intentional), and library catalog/index/profile state lives under `arxiv-daily/.index/personal-library-*` keyed by the library root, not data.json, so later tasks reused the earlier catalog and the seeded third paper never reached clustering. Users pick up new papers through "Scan library" in the review dialog, so this is not a product bug (possible UX note for P5: "Retry preparation" alone does not rescan). `reset()` now clears personal-library state and non-fixture library files inside the fixture vault. Phase verification on real Obsidian: the 21-task always-blocked run ends every task by the model's own blocked action; the 7 library tasks with scripted plans pass back to back twice; no unexpected network requests; release tools 753/753.
+- change: P3 done (Obsidian half of success criterion 4; the workbench half is P4). P6 started.
+- disposition: keep all P3 work.
+- next: P6 — label check by source file and exact string.
