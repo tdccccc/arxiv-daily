@@ -42,6 +42,10 @@ permissions:
 
 jobs:
   verify:
+    strategy:
+      fail-fast: false
+      matrix:
+        dsh_version: ["0.2.0-rc.2", "0.2.1-alpha.2"]
     runs-on: ubuntu-latest
     steps:
       - name: Check out repository
@@ -61,7 +65,7 @@ jobs:
       - name: Install plugin test dependencies
         run: npm ci --prefix extensions/dsh-arxiv-daily --ignore-scripts
       - name: Install verified DSH baseline
-        run: npm install --prefix "$RUNNER_TEMP/dsh-host" --ignore-scripts @deepseek-ai/dsh@0.1.7-alpha.1
+        run: npm install --prefix "$RUNNER_TEMP/dsh-host" --ignore-scripts @deepseek-ai/dsh@${{ matrix.dsh_version }}
       - name: Install pnpm for DSH plugin installs
         # `dsh plugin add` installs packed plugins with pnpm, which hosted
         # runners don't provide.

@@ -96,7 +96,7 @@ jobs:
         # runners don't provide.
         run: npm install --global pnpm@11.7.0
       - name: Install verified DSH baseline
-        run: npm install --prefix "$RUNNER_TEMP/dsh-host" --ignore-scripts @deepseek-ai/dsh@0.1.7-alpha.1
+        run: npm install --prefix "$RUNNER_TEMP/dsh-host" --ignore-scripts @deepseek-ai/dsh@0.2.1-alpha.2
       - name: Verify plugin and authenticated Host workflows against the release build
         run: DSH_CLI="$RUNNER_TEMP/dsh-host/node_modules/@deepseek-ai/dsh/lib/bin.js" node --test extensions/dsh-arxiv-daily/tests/*.test.mjs
       - name: Verify packed contents before publish
