@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -758,6 +758,66 @@ test("reset() clears a libraryConnection an earlier task's prepare() wrote, so l
     const written = JSON.parse(await (await import("node:fs/promises")).readFile(path.join(fixture.vaultRoot, SETTINGS_FILE), "utf8"));
     assert.equal(written.libraryConnection, undefined, "reset() must restore the fixture baseline, which has no libraryConnection, for the next task");
     assert.equal(written.settings.embedding.mode, "local", "reset() must also restore the baseline Embedding mode, not leave the previous task's remote choice in place");
+  });
+});
+
+// New-P3 Chunk 8 (phases/03-obsidian-library-tasks.md "library state does not leak between tasks"):
+// reset() above only rewrites data.json — it leaves the real personal-library catalog/search-index/
+// knowledge-base/profile state under `arxiv-daily/.index` and any extra PDF a library task's prepare()
+// wrote into `vault/library` (seedClusterableLibraryPaper, exploration-tasks/library.mjs) untouched. On a
+// real host this is exactly the "library state leaks … through reset()" bug: a later task that adds one
+// more paper and rebuilds the index finds the catalog already marked scanned and never re-walks the
+// folder, so the new paper never reaches the clusterer (/tmp/p3verify, 2026-10-13, "no-evidence:
+// clustering produced no evidence groups; every paper fell into the outlier pool"). Simulates what two
+// library tasks running back to back actually leave on disk, directly against the real reset() (never a
+// fake one), with no real CDP/plugin call involved.
+test("reset() removes personal-library-* state under arxiv-daily/.index and any library PDF added after the driver started, but keeps the fixture's own baseline library PDFs", async () => {
+  await withTempFixture(async ({ fixture, artifactDir }) => {
+    const libraryDir = path.join(fixture.vaultRoot, "library");
+    await mkdir(libraryDir, { recursive: true });
+    // The fixture's own baseline library PDFs (createFixtureEnvironment writes these before any driver
+    // exists) — content does not matter for this test, only that reset() leaves them alone.
+    await writeFile(path.join(libraryDir, "2610.10001.pdf"), "baseline-pdf-1");
+    await writeFile(path.join(libraryDir, "2610.10002.pdf"), "baseline-pdf-2");
+
+    const { session } = buildFakeObsidianSession();
+    const driver = await createObsidianExplorationDriver({ session, fixture, artifactDir });
+
+    // Simulates what an earlier library task's prepare() left behind: seedClusterableLibraryPaper's own
+    // extra PDF, plus the real on-disk personal-library state indexPersonalLibraryFullText()/
+    // generatePersonalLibraryDirections() would have written (catalog, search-index, knowledge-base,
+    // profiles — real hex directory names do not matter, only the `personal-library-` prefix does).
+    await writeFile(path.join(libraryDir, "9912.00099.pdf"), "seeded-clusterable-pdf");
+    const indexDir = path.join(fixture.vaultRoot, "arxiv-daily", ".index");
+    await mkdir(path.join(indexDir, "personal-library-search-index", "scope1", "id1"), { recursive: true });
+    await writeFile(path.join(indexDir, "personal-library-search-index", "scope1", "id1", "current.json"), "{}");
+    await mkdir(path.join(indexDir, "personal-library-knowledge-base", "scope1", "id1"), { recursive: true });
+    await writeFile(path.join(indexDir, "personal-library-knowledge-base", "scope1", "id1", "manifest.json"), "{}");
+    await mkdir(path.join(indexDir, "personal-library-profiles", "scope1", "id1"), { recursive: true });
+    await writeFile(path.join(indexDir, "personal-library-profiles", "scope1", "id1", "direction-proposal.json"), "{}");
+    await writeFile(path.join(indexDir, "personal-library-catalog.json"), JSON.stringify({ lastScan: { at: new Date().toISOString() } }));
+    await writeFile(path.join(indexDir, "personal-library-catalog.json.backup"), "{}");
+    // A file reset() must NOT touch: not personal-library-* state, unrelated to the library at all.
+    await mkdir(indexDir, { recursive: true });
+    await writeFile(path.join(indexDir, "papers.json"), "{}");
+
+    await driver.reset();
+
+    const remainingLibraryFiles = new Set(await readdir(libraryDir));
+    assert.deepEqual(remainingLibraryFiles, new Set(["2610.10001.pdf", "2610.10002.pdf"]),
+      "reset() must delete the seeded extra PDF but keep the fixture's own baseline library PDFs");
+    const remainingIndexEntries = await readdir(indexDir);
+    assert.ok(!remainingIndexEntries.some(entry => entry.startsWith("personal-library-")),
+      `reset() must delete every personal-library-* entry under arxiv-daily/.index, found: ${remainingIndexEntries.join(", ")}`);
+    assert.ok(remainingIndexEntries.includes("papers.json"), "reset() must leave unrelated .index files alone");
+  });
+});
+
+test("reset() tolerates a vault that has never had any personal-library state or library folder at all (the first task to run)", async () => {
+  await withTempFixture(async ({ fixture, artifactDir }) => {
+    const { session } = buildFakeObsidianSession();
+    const driver = await createObsidianExplorationDriver({ session, fixture, artifactDir });
+    await assert.doesNotReject(() => driver.reset());
   });
 });
 

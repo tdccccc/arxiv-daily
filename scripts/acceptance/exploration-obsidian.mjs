@@ -864,6 +864,14 @@ export async function createObsidianExplorationDriver({ session, fixture, artifa
   const helper = await createObsidianDriver({ session, fixture, artifactDir });
   const executor = createObsidianActionExecutor({ client: session.client, evaluate: session.evaluate, redact });
   let version = 0, latest, diagnosticsSeen = 0;
+  // P3 Chunk 8 (docs/helm/2026-10-13-exploration-safety-and-coverage/phases/03-obsidian-library-tasks.md
+  // "library state leaks … through reset()"): the fixture's own baseline library PDFs
+  // (createFixtureEnvironment's PAPERS, fixtures.mjs) are already on disk under `vault/library` by the
+  // time the driver is constructed (the first task's prepare() has not run yet) — snapshotting their
+  // names here, once, lets reset() below tell them apart from a file a library task's own prepare() wrote
+  // (seedClusterableLibraryPaper, exploration-tasks/library.mjs) without hardcoding any fixture paper id.
+  const libraryDir = path.join(fixture.vaultRoot, "library");
+  const baselineLibraryFiles = new Set(await fs.readdir(libraryDir).catch(() => []));
   // P3 Chunk 3: the auth-failure-retry goal task deliberately drives the product into the fixed suite's
   // own "controlled authentication failure" path (paper-filter.ts's `logger.error("paper-filter: LLM
   // call failed", e)` on a 401), which without a carve-out would otherwise be classified as an
@@ -934,6 +942,33 @@ export async function createObsidianExplorationDriver({ session, fixture, artifa
   }
 
   /**
+   * P3 Chunk 8: removes every on-disk trace an earlier library task's `prepare()` could have left in the
+   * fixture vault — the real personal-library catalog/search-index/knowledge-base/profile/incremental-
+   * suggestions state under `arxiv-daily/.index` (every one of them lives in a directory or file named
+   * `personal-library-*`, generation-index-format.ts/knowledge-base.ts/personal-library-proposal-store.ts/
+   * suggestions-store.ts/personal-library-catalog.ts — all derived from `derivePaperInboxPaths`'s own
+   * `indexDir`, never hand-duplicated here), and any PDF under `vault/library` that was not already there
+   * when this driver was built (`baselineLibraryFiles`, e.g. `seedClusterableLibraryPaper`'s own extra
+   * fixture PDF). Tolerates a vault that never had any of this yet (`{ recursive: true, force: true }` /
+   * ENOENT-tolerant readdir), since the very first task to run reset() has nothing to clear.
+   */
+  async function clearLibraryState() {
+    const indexDir = path.join(fixture.vaultRoot, "arxiv-daily", ".index");
+    const indexEntries = await fs.readdir(indexDir).catch(() => []);
+    await Promise.all(
+      indexEntries
+        .filter(entry => entry.startsWith("personal-library-"))
+        .map(entry => fs.rm(path.join(indexDir, entry), { recursive: true, force: true })),
+    );
+    const currentLibraryFiles = await fs.readdir(libraryDir).catch(() => []);
+    await Promise.all(
+      currentLibraryFiles
+        .filter(entry => !baselineLibraryFiles.has(entry))
+        .map(entry => fs.rm(path.join(libraryDir, entry), { recursive: true, force: true })),
+    );
+  }
+
+  /**
    * Deterministic start for every task (contract step 3): close any plugin modal (real Escape, reusing the
    * Chunk-3 `back` action so there is exactly one place that knows how to do this), close Obsidian's own
    * settings window, restore the plugin's settings store to the fixture baseline, and reload it the cheapest
@@ -944,8 +979,18 @@ export async function createObsidianExplorationDriver({ session, fixture, artifa
    * names here — no `mangleProps` is configured), so the method stays callable from the renderer the same way
    * obsidian-ui.mjs's own `reloadPlugin()` already reaches into plugin internals. Vault content written by
    * earlier tasks (daily reports, star marks) is deliberately left alone: resetting it on every task would
-   * cost a real Obsidian re-scan of the vault and is not needed for the two tasks in this chunk, each of which
+   * cost a real Obsidian re-scan of the vault and is not needed for the tasks that read it, each of which
    * reads real, independent state rather than assuming a pristine vault (see exploration-tasks/obsidian.mjs's `goalTasks`).
+   * The one exception (P3 Chunk 8) is personal-library state: an earlier library task's prepare() can leave
+   * a real, already-scanned catalog and its own extra fixture PDF under `vault/library` behind, and
+   * `indexPersonalLibraryFullText()` deliberately never re-walks a catalog that has already been scanned
+   * once (plugin/main.ts, "no surprise network rescan on every build") — so a later task that adds one more
+   * paper and rebuilds the index never has it reach the catalog, the knowledge base, or the direction
+   * proposer's clustering at all (real-host evidence, 2026-10-13: "no-evidence: clustering produced no
+   * evidence groups; every paper fell into the outlier pool", confirmed to be this exact leak because the
+   * same task passes when run alone, i.e. against a library that was never scanned before). `clearLibraryState()`
+   * below removes that leftover state so every task starts from a fresh, never-scanned catalog of exactly
+   * its own fixture library contents — the same starting point a lone run gets.
    * Finally the Reading Dashboard is opened so every task starts observing the same view.
    */
   async function reset({ signal: resetSignal } = {}) {
@@ -955,6 +1000,7 @@ export async function createObsidianExplorationDriver({ session, fixture, artifa
     await executor.execute({ type: "back" }, null, { signal: resetSignal }).catch(() => {});
     await helper.closeSettings();
     resetSignal?.throwIfAborted();
+    await clearLibraryState();
     const settingsPath = path.join(fixture.vaultRoot, SETTINGS_FILE);
     await fs.mkdir(path.dirname(settingsPath), { recursive: true });
     await fs.writeFile(settingsPath, JSON.stringify(createObsidianSettings({ endpoint: `${fixture.server.url}/v1` }), null, 2));
