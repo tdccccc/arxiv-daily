@@ -818,6 +818,101 @@ test("reset() skips the config resync when settings have never been configured (
 });
 
 // ---------------------------------------------------------------------------
+// P1 Chunk 2 (docs/helm/2026-10-13-exploration-safety-and-coverage): `press` must refuse to dispatch a
+// key when the live document.activeElement is restricted/sensitive/disabled or has drifted outside the
+// workbench surface — the same policy click/fill/select already re-check against the live DOM (lines
+// 162-167 above) before acting, which `press` previously skipped entirely (scripts/acceptance/
+// exploration-browser.mjs:183 before this chunk: a bare `page.keyboard.press(action.key)`, no checks of
+// any kind). `page`/`context` here are hand-built fakes, same convention as `fakeResetPage` above — no
+// real browser — so `evaluate()` just hands back whatever focus descriptor the scenario wants to pretend
+// is currently focused, keyed off the evaluated function's own name (`browserObservation` for the
+// observe() this test drives first, `liveControlDescriptor` for the focus check under test).
+// ---------------------------------------------------------------------------
+
+function fakePressPage(url, { focus, dialogOpen = false } = {}) {
+  const calls = [];
+  return {
+    calls,
+    url: () => url,
+    on() {}, off() {},
+    locator(selector) {
+      if (selector === "dialog[open]") return { count: async () => (dialogOpen ? 1 : 0), waitFor: async () => {}, locator: () => ({ first: () => ({ click: async () => {} }) }) };
+      return { waitFor: async () => {} };
+    },
+    async evaluate(fn) {
+      calls.push(["evaluate", fn.name]);
+      if (fn.name === "browserObservation") {
+        return { id: "s1", title: "Workbench", text: "", controls: [],
+          layout: { rootMounted: true, view: "list", dialogOpen, sidebarCollapsed: false, viewport: { width: 1024, height: 768 } } };
+      }
+      if (fn.name === "liveControlDescriptor") return focus;
+      throw new Error(`Unhandled fake evaluate(): ${fn.name}`);
+    },
+    keyboard: { press: async key => calls.push(["press", key]) },
+  };
+}
+
+async function makePressDriver(t, { focus, dialogOpen } = {}) {
+  const root = await mkdtemp(path.join(tmpdir(), 'exploration-press-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const fixture = { root, vaultRoot: path.join(root, 'vault'), configPath: path.join(root, 'config.toml') };
+  await mkdir(fixture.vaultRoot);
+  await writeFile(fixture.configPath, `vault_root = ${JSON.stringify(fixture.vaultRoot)}\n`);
+  const url = 'http://127.0.0.1:3102/session/';
+  const page = fakePressPage(url, { focus, dialogOpen });
+  const context = { on() {}, off() {}, route: async () => {}, unroute: async () => {} };
+  const driver = await createExplorationDriver({ page, context, url, fixture, artifactDir: path.join(root, 'artifacts') });
+  t.after(() => driver.dispose());
+  const observation = await driver.observe();
+  return { driver, page, observation };
+}
+
+const notFocused = { tag: 'body', type: '', field: '', name: '', href: '', dataAction: '', disabled: false, readOnly: false, outsideDialog: false, outsideWorkbench: false };
+
+test('press Space is refused when focus is on the schedule.enabled switch, and no key is sent', async t => {
+  const { driver, page, observation } = await makePressDriver(t, { focus: { ...notFocused, tag: 'input', type: 'checkbox', field: 'schedule.enabled', name: '启用定时任务' } });
+  await assert.rejects(driver.execute({ type: 'press', key: 'Space' }, observation), /ExplorationActionError/);
+  assert.ok(!page.calls.some(call => call[0] === 'press'), 'the scheduler switch must never receive the key event');
+});
+
+test('press Enter is refused when focus is on the email.enabled switch, and no key is sent', async t => {
+  const { driver, page, observation } = await makePressDriver(t, { focus: { ...notFocused, tag: 'input', type: 'checkbox', field: 'email.enabled', name: '发送邮件' } });
+  await assert.rejects(driver.execute({ type: 'press', key: 'Enter' }, observation), /ExplorationActionError/);
+  assert.ok(!page.calls.some(call => call[0] === 'press'), 'the email switch must never receive the key event');
+});
+
+test('press is refused when the focused credential field is sensitive, and no key is sent', async t => {
+  const { driver, page, observation } = await makePressDriver(t, { focus: { ...notFocused, tag: 'input', type: 'password', field: 'apiKey', name: 'LLM API Key' } });
+  await assert.rejects(driver.execute({ type: 'press', key: 'Space' }, observation), /ExplorationActionError/);
+  assert.ok(!page.calls.some(call => call[0] === 'press'), 'a credential field must never receive the key event');
+});
+
+test('Tab, Shift+Tab and Escape still move away from a restricted focused control', async t => {
+  const { driver, page, observation } = await makePressDriver(t, { focus: { ...notFocused, tag: 'input', type: 'checkbox', field: 'schedule.enabled', name: '启用定时任务' } });
+  for (const key of ['Tab', 'Shift+Tab', 'Escape']) assert.deepEqual(await driver.execute({ type: 'press', key }, observation), { ok: true });
+  assert.deepEqual(page.calls.filter(call => call[0] === 'press'), [['press', 'Tab'], ['press', 'Shift+Tab'], ['press', 'Escape']]);
+});
+
+test('Tab is still refused when focus has left the workbench surface', async t => {
+  const { driver, page, observation } = await makePressDriver(t, { focus: { ...notFocused, tag: 'a', name: 'External', href: 'https://example.com/', outsideWorkbench: true } });
+  await assert.rejects(driver.execute({ type: 'press', key: 'Tab' }, observation), /ExplorationActionError/);
+  assert.ok(!page.calls.some(call => call[0] === 'press'));
+});
+
+test('press Enter is refused when focus has drifted outside the workbench surface, and no key is sent', async t => {
+  const { driver, page, observation } = await makePressDriver(t, { focus: { ...notFocused, tag: 'a', name: 'External', href: 'https://example.com/', outsideWorkbench: true } });
+  await assert.rejects(driver.execute({ type: 'press', key: 'Enter' }, observation), /ExplorationActionError/);
+  assert.ok(!page.calls.some(call => call[0] === 'press'), 'focus outside the workbench must never receive the key event');
+});
+
+test('an ordinary press on an unrestricted, in-scope, enabled control still dispatches the key', async t => {
+  const { driver, page, observation } = await makePressDriver(t, { focus: notFocused });
+  const result = await driver.execute({ type: 'press', key: 'ArrowDown' }, observation);
+  assert.deepEqual(result, { ok: true });
+  assert.deepEqual(page.calls.filter(call => call[0] === 'press'), [['press', 'ArrowDown']], 'ordinary keyboard navigation must still work');
+});
+
+// ---------------------------------------------------------------------------
 // P3 Chunk 5: workbench reading-journey and settings-conflict goal tasks.
 // Same convention as the tests above: a real temporary fixture directory
 // (vaultRoot + configPath on disk), task.verify()/task.prepare() called

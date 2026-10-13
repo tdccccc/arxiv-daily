@@ -24,6 +24,12 @@ const browserActions = new Set(["click", "fill", "select", "back", "reload", "wa
  * shortcuts (no Ctrl/Alt combinations, no function keys).
  */
 export const PRESS_KEYS = new Set(["Enter", "Escape", "Tab", "Shift+Tab", "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", "Space", "Home", "End", "PageUp", "PageDown"]);
+/**
+ * Keys that only move focus or cancel, never activating or changing the focused control. Hosts still
+ * refuse them outside the explorable scope, but send them even when the focused control is restricted,
+ * so a keyboard-only persona that lands on one can always Tab past it or Escape away.
+ */
+export const PRESS_NAVIGATION_KEYS = new Set(["Tab", "Shift+Tab", "Escape"]);
 /** Persona tasks explore freely for findings only; they never carry a program verifier. */
 const isPersonaTask = task => task?.kind === "persona";
 

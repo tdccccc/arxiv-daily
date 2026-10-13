@@ -2,7 +2,7 @@ import { mkdir, readFile, realpath, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
-import { collapseOptionSets, createExplorationRedactor, ExplorationActionError, parseExplorationAction } from "./exploration.mjs";
+import { collapseOptionSets, createExplorationRedactor, ExplorationActionError, parseExplorationAction, PRESS_NAVIGATION_KEYS } from "./exploration.mjs";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const cliRequire = createRequire(path.resolve(here, "../../apps/cli/package.json"));
@@ -24,6 +24,27 @@ export function classifyControlRestriction(control, allowedUrl) {
     } catch { return "link is not a permitted local address"; }
   }
   return undefined;
+}
+
+/**
+ * Describes one live DOM node the same way for every caller that needs to re-check it against
+ * `classifyControlRestriction` right before an effect fires: the ref-based live re-validation that
+ * click/fill/select already did (previously an inline arrow function here) and, since P1 Chunk 2 of
+ * docs/helm/2026-10-13-exploration-safety-and-coverage, `press`'s own focus check below — `press` has
+ * no ref to resolve a target from (it goes to whatever has focus), so it calls this with no argument and
+ * gets `document.activeElement` instead. One shape, one place it's built, so the two call sites can never
+ * drift into checking different things. `outsideWorkbench` additionally flags focus that has left the
+ * app's own root entirely (not just left the currently open dialog, which `outsideDialog` already
+ * covers) — `document.body` itself is exempted because that is also the page's neutral "nothing is
+ * explicitly focused yet" state (e.g. right after a fresh load/reload, before the model's first action),
+ * not an escape, and a keyboard-only persona's very first `press` (typically Tab) must still work from it.
+ */
+function liveControlDescriptor(node = document.activeElement) {
+  return { tag: node.tagName.toLowerCase(), type: node.getAttribute("type") || "", field: node.getAttribute("name") || "",
+    name: node.getAttribute("aria-label") || node.textContent || "", href: node.getAttribute("href") || "",
+    dataAction: node.getAttribute("data-settings-action") || node.getAttribute("data-settings") || node.getAttribute("data-action") || "", disabled: node.disabled === true,
+    readOnly: node.readOnly === true, outsideDialog: Boolean(document.querySelector("dialog[open]") && !node.closest("dialog[open]")),
+    outsideWorkbench: node !== document.body && !node.closest(".workbench") };
 }
 
 function contained(root, file) {
@@ -159,10 +180,7 @@ export async function createExplorationDriver({ page, context, url, fixture, art
         if (action.ref) {
           target = page.locator(`[data-acceptance-ref="${action.ref}"]`);
           if (await target.count() !== 1 || !await target.isVisible()) throw new ExplorationActionError("Ref disappeared or is no longer visible; re-observe the page");
-          const live = await target.evaluate(node => ({ tag: node.tagName.toLowerCase(), type: node.getAttribute("type") || "", field: node.getAttribute("name") || "",
-            name: node.getAttribute("aria-label") || node.textContent || "", href: node.getAttribute("href") || "",
-            dataAction: node.getAttribute("data-settings-action") || node.getAttribute("data-settings") || node.getAttribute("data-action") || "", disabled: node.disabled === true,
-            readOnly: node.readOnly === true, outsideDialog: Boolean(document.querySelector("dialog[open]") && !node.closest("dialog[open]")) }));
+          const live = await target.evaluate(liveControlDescriptor);
           const restriction = classifyControlRestriction(live, url);
           if (restriction || live.disabled || live.outsideDialog) throw new ExplorationActionError(restriction || "The control is no longer interactive");
           // optionSets is carried through from the latest observation (not rebuilt here) so a select's
@@ -180,7 +198,21 @@ export async function createExplorationDriver({ page, context, url, fixture, art
         // same-document reload.
         else if (action.type === "home") { await page.goto(url, { waitUntil: "domcontentloaded", timeout: 8000 }); await page.locator(".workbench").waitFor({ state: "visible", timeout: 6000 }); }
         else if (action.type === "wait") await new Promise(resolve => setTimeout(resolve, action.milliseconds));
-        else if (action.type === "press") await page.keyboard.press(action.key);
+        // P1 Chunk 2 (docs/helm/2026-10-13-exploration-safety-and-coverage): `press` has no ref, so unlike
+        // click/fill/select above it was never re-checking the live focused element against
+        // classifyControlRestriction before acting — Tab-to-focus + Space/Enter could flip the
+        // schedule.enabled/email.enabled switch or activate a restricted control with zero checks. Apply
+        // the exact same policy here, against whatever document.activeElement currently is, before
+        // sending any key event. Navigation keys skip the control policy (see PRESS_NAVIGATION_KEYS).
+        else if (action.type === "press") {
+          const focused = await page.evaluate(liveControlDescriptor);
+          if (focused.outsideWorkbench) throw new ExplorationActionError("Focus left the isolated workbench; the key was not sent");
+          if (!PRESS_NAVIGATION_KEYS.has(action.key)) {
+            const restriction = classifyControlRestriction(focused, url);
+            if (restriction || focused.disabled || focused.outsideDialog) throw new ExplorationActionError(restriction || "The focused control is no longer interactive; the key was not sent");
+          }
+          await page.keyboard.press(action.key);
+        }
         else if (action.type === "scroll") {
           if (target) await target.hover({ timeout: 6000 });
           else { const region = page.locator("dialog[open] .settings-content, .reading-pane").last(); if (await region.isVisible()) await region.hover(); }
