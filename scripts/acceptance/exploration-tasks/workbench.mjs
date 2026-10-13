@@ -12,7 +12,7 @@ import { readFile, rm } from "node:fs/promises";
 import path from "node:path";
 import { ACCEPTANCE_DATE, PAPERS } from "../fixtures.mjs";
 import { assertFixture, settings, writeConfigPatch } from "../exploration-browser.mjs";
-import { checkResult, exactLabelPattern, taskResult } from "./checks.mjs";
+import { checkResult, exactLabelPattern, taskResult, uiLabel, uiLabelException } from "./checks.mjs";
 import { PERSONA_TASK_IDS, personaTasks as sharedPersonaTasks } from "./personas.mjs";
 
 /** Single source of truth for the default workbench goal-task ids, usable without a fixture (e.g. --list). */
@@ -45,14 +45,19 @@ const NOTE_KEY = `arxiv:${NOTE_PAPER.id}`;
 const EXTERNAL_CONFLICT_DRAFT_MODEL = "workbench-conflict-draft-model";
 const EXTERNAL_CONFLICT_EXTERNAL_MODEL = "workbench-conflict-external-model";
 
-// ─── P2: declared UI labels ──────────────────────────────────────────────────
-// scripts/tests/acceptance-exploration-labels.test.mjs asserts every task's own `uiLabels` array (every
-// product UI label its goal text names or its verify() matches on) is still literally present somewhere
-// in apps/cli/src/workbench/**, so a rename shows up as a failing fixed test instead of only a blocked,
-// paid real-model run. Every verify() that matches one of these reads the exact constant below, never a
-// second, independently-typed copy of the same string, so the goal text, the verifier and the declared
-// label cannot drift apart.
+// ─── P2/P6: declared UI labels ────────────────────────────────────────────────
+// scripts/tests/acceptance-exploration-labels.test.mjs asserts every task's own `uiLabels` entry (every
+// product UI label its goal text names or its verify() matches on) is still present, as a complete,
+// case-sensitive string literal, in the specific product source file(s) named by its own `uiLabel(text,
+// source)` wrapper (P6; P2 originally searched all of apps/cli/src/workbench/** case-insensitively).
+// Every verify() that matches one of these reads the exact constant below, never a second,
+// independently-typed copy of the same string, so the goal text, the verifier and the declared label
+// cannot drift apart. `uiLabelException` marks the one entry below that cannot be checked this way.
 const MAX_DAILY_PAPERS_FIELD_LABEL = "maxDailyPapers";
+// The driver's own `purpose` tag (exploration-browser.mjs) is derived from this CSS class name, but the
+// product (web/sidebar.ts) only ever writes it as part of a longer className literal
+// (`"quiet-button sidebar-toggle"`), never as a standalone complete string literal — so a source-scoped
+// exact-literal check cannot anchor on it (P6 exception below).
 const SIDEBAR_TOGGLE_PURPOSE_LABEL = "sidebar-toggle";
 const GENERATE_ACTION_LABEL = "generate";
 const STAR_FILTER_TAB_LABEL = "收藏";
@@ -107,7 +112,7 @@ export async function goalTasks(fixture) {
     {
       id: GOAL_TASK_IDS[0], title: "设置自动保存并刷新复查",
       goal: `打开设置，把每日论文数量上限 ${MAX_DAILY_PAPERS_FIELD_LABEL} 改为 ${target}。移开焦点并等待保存完成，关闭设置，刷新页面，再打开设置，确认上限仍为 ${target}。不要修改路径、模型连接或密钥。`,
-      uiLabels: [MAX_DAILY_PAPERS_FIELD_LABEL],
+      uiLabels: [uiLabel(MAX_DAILY_PAPERS_FIELD_LABEL, "apps/cli/src/workbench/web/settings.ts")],
       async verify({ driver, observation, actions }) {
         const changed = actions.find(action => action.type === "fill" && (action.control?.field || action.control?.name) === MAX_DAILY_PAPERS_FIELD_LABEL && action.value === String(target));
         const refreshed = changed && actions.some(action => action.type === "reload" && action.step > changed.step);
@@ -123,7 +128,7 @@ export async function goalTasks(fixture) {
     {
       id: GOAL_TASK_IDS[1], title: "侧栏折叠和展开状态持久化",
       goal: "关闭设置（如果仍打开）。收起侧栏，刷新页面确认侧栏仍收起；再展开侧栏，再次刷新，确认侧栏仍展开。等待偏好保存后再刷新。",
-      uiLabels: [SIDEBAR_TOGGLE_PURPOSE_LABEL],
+      uiLabels: [uiLabelException(SIDEBAR_TOGGLE_PURPOSE_LABEL, "test-only driver hook: only a substring of the longer className literal \"quiet-button sidebar-toggle\" in apps/cli/src/workbench/web/sidebar.ts, never a standalone literal or display text")],
       async verify({ driver, observation, actions }) {
         const state = await driver.inspect();
         const last = actions.findLast(action => action.type === "reload");
@@ -139,7 +144,7 @@ export async function goalTasks(fixture) {
     {
       id: GOAL_TASK_IDS[2], title: "生成固定日期日报并打开论文",
       goal: "通过生成按钮生成 2026-10-01 日报（选择指定日期，不要生成今天）。等待成功，再从列表打开 arXiv 2610.10001 论文，确认阅读内容出现。无需判断论文内容质量。",
-      uiLabels: [GENERATE_ACTION_LABEL],
+      uiLabels: [uiLabel(GENERATE_ACTION_LABEL, "apps/cli/src/workbench/web/app.ts")],
       async verify({ driver, observation, actions, startedAt }) {
         const state = await driver.dailyEvidence("2026-10-01");
         const generated = actions.some(action => action.type === "click" && action.control?.dataAction === GENERATE_ACTION_LABEL);
@@ -160,7 +165,10 @@ export async function goalTasks(fixture) {
     {
       id: GOAL_TASK_IDS[3], title: "收藏后切换筛选并恢复阅读",
       goal: `打开阅读面板。找到标题为“${STAR_FILTER_PAPER.title}”的论文，点击它的收藏按钮将其标记为收藏。点击顶部的“${STAR_FILTER_TAB_LABEL}”筛选，确认这篇论文仍显示在列表里。点击它的标题进入阅读概览，再点击“${BACK_TO_LIST_LABEL}”返回列表。确认返回后仍停留在“${STAR_FILTER_TAB_LABEL}”筛选，并且仍能看到这篇论文。`,
-      uiLabels: [STAR_FILTER_TAB_LABEL, BACK_TO_LIST_LABEL],
+      uiLabels: [
+        uiLabel(STAR_FILTER_TAB_LABEL, "apps/cli/src/workbench/web/papers.ts"),
+        uiLabel(BACK_TO_LIST_LABEL, "apps/cli/src/workbench/web/papers.ts"),
+      ],
       async prepare({ driver }) {
         await driver.ensureDailyReport(ACCEPTANCE_DATE);
         await driver.ensurePaperUnstarred(STAR_FILTER_KEY);
@@ -197,7 +205,11 @@ export async function goalTasks(fixture) {
     {
       id: GOAL_TASK_IDS[4], title: "为单篇论文生成详细总结",
       goal: `打开阅读面板，点击标题为“${NOTE_PAPER.title}”的论文进入概览。点击“${GENERATE_DETAIL_SUMMARY_LABEL}”按钮，在弹出的对话框里直接点击“${START_GENERATION_LABEL}”，等待生成完成（概览里出现“${READ_DETAIL_SUMMARY_LABEL}”链接即代表完成）。`,
-      uiLabels: [GENERATE_DETAIL_SUMMARY_LABEL, START_GENERATION_LABEL, READ_DETAIL_SUMMARY_LABEL],
+      uiLabels: [
+        uiLabel(GENERATE_DETAIL_SUMMARY_LABEL, "apps/cli/src/workbench/web/papers.ts"),
+        uiLabel(START_GENERATION_LABEL, "apps/cli/src/workbench/web/app.ts"),
+        uiLabel(READ_DETAIL_SUMMARY_LABEL, "apps/cli/src/workbench/web/papers.ts"),
+      ],
       async prepare({ driver }) {
         await driver.ensureDailyReport(ACCEPTANCE_DATE);
         await rm(await paperNotePath(fixture, NOTE_PAPER.id), { force: true });
@@ -230,7 +242,13 @@ export async function goalTasks(fixture) {
     {
       id: GOAL_TASK_IDS[5], title: "设置冲突后放弃草稿并重新打开",
       goal: `打开设置，把 ${MODEL_FIELD_LABEL} 字段改为“${EXTERNAL_CONFLICT_DRAFT_MODEL}”。测试环境会在设置加载完成后立刻在磁盘上修改配置文件，这会让自动保存因“配置已改变”失败，界面上会出现“${DISCARD_UNSAVED_AND_CLOSE_LABEL}”按钮。不要点击“${RETRY_SAVE_LABEL}”：点击“${DISCARD_UNSAVED_AND_CLOSE_LABEL}”，再点击随后出现的确认按钮“${CONFIRM_DISCARD_AND_CLOSE_LABEL}”，设置会关闭。关闭后重新点击“${SETTINGS_BUTTON_LABEL}”打开设置，确认 ${MODEL_FIELD_LABEL} 字段显示的是磁盘上的最新值，而不是你刚才填写的草稿。`,
-      uiLabels: [MODEL_FIELD_LABEL, DISCARD_UNSAVED_AND_CLOSE_LABEL, CONFIRM_DISCARD_AND_CLOSE_LABEL, SETTINGS_BUTTON_LABEL, RETRY_SAVE_LABEL],
+      uiLabels: [
+        uiLabel(MODEL_FIELD_LABEL, "apps/cli/src/workbench/web/model-combobox.ts"),
+        uiLabel(DISCARD_UNSAVED_AND_CLOSE_LABEL, "apps/cli/src/workbench/web/settings.ts"),
+        uiLabel(CONFIRM_DISCARD_AND_CLOSE_LABEL, "apps/cli/src/workbench/web/settings.ts"),
+        uiLabel(SETTINGS_BUTTON_LABEL, "apps/cli/src/workbench/web/app.ts"),
+        uiLabel(RETRY_SAVE_LABEL, "apps/cli/src/workbench/web/settings.ts"),
+      ],
       async prepare() {
         externalConflictWritten = false;
       },
