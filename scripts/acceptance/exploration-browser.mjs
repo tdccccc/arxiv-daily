@@ -173,6 +173,19 @@ async function resyncConfigRevision(page, url) {
  * this driver was built (`baselineLibraryFiles`, e.g. `startWorkbenchLibraryFixture`'s own extra
  * clusterable PDF). Skips the TOML rewrite entirely when there is nothing to remove, so the vast majority
  * of non-library tasks' reset() calls never touch the config file at all.
+ *
+ * P4 Chunk 4 fix: a topic that `library-accept-direction` auto-creates (acceptProposedTopics,
+ * packages/core/src/settings/accept-proposed-topics.ts — a new topic only when no existing one shares
+ * its name) holds only library-origin directions, so filtering those out above can leave it with zero
+ * directions. Unlike the product's own proposal-side `removePersonalLibraryDirectionCandidate`, which
+ * drops an emptied topic, this filter used to leave the empty shell behind — found on the real host
+ * running `library-accept-direction` then `library-edit-candidate` in one pass: the leftover topic's
+ * own name ("Research evidence 1") collided with the next real `library propose` call's own freshly
+ * generated topic of the same name, which `decodeOrganizedTopics` (personal-library-topic-
+ * organization.ts) rejects as "reference-out-of-scope" (a new topic may not share an existing one's
+ * name). Splicing out only a topic this filter emptied — never one that still has its own manual
+ * direction, like the fixture's baseline "Research" topic, nor one that had no directions to begin
+ * with — closes this the same way the product does.
  */
 async function clearFixtureLibraryState(fixture, baselineLibraryFiles) {
   const { parse } = cliRequire("smol-toml");
@@ -182,9 +195,14 @@ async function clearFixtureLibraryState(fixture, baselineLibraryFiles) {
     await writeConfigPatch(fixture, current => {
       delete current.library;
       delete current.embedding;
+      const emptied = new Set();
       for (const topic of current.arxiv?.topics ?? []) {
-        if (Array.isArray(topic.directions)) topic.directions = topic.directions.filter(direction => direction.origin !== "library");
+        if (!Array.isArray(topic.directions)) continue;
+        const kept = topic.directions.filter(direction => direction.origin !== "library");
+        if (kept.length === 0 && topic.directions.length > 0) emptied.add(topic);
+        topic.directions = kept;
       }
+      if (Array.isArray(current.arxiv?.topics)) current.arxiv.topics = current.arxiv.topics.filter(topic => !emptied.has(topic));
     });
   }
   const dailyDir = table.output?.daily_dir;

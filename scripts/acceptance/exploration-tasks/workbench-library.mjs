@@ -65,8 +65,12 @@ export async function runWorkbenchLibraryCli({ args, env, cliPath = DEFAULT_CLI_
  * keys on the substring "measurement") — so a real clustering run groups it with the fixture's own
  * PAPERS[0] into a real two-member group instead of every paper landing in its own singleton outlier
  * (the same no-evidence failure P3 Chunk 3's real-host run hit with only two dissimilar fixture papers).
+ *
+ * Exported (P4 Chunk 4) so a task's own `prepare()` can call it a second time with content that holds
+ * no "measurement" substring, pairing with PAPERS[1]'s own vector instead of PAPERS[0]'s — giving the
+ * real clustering run two separate two-member groups (and so two proposed topics) instead of one.
  */
-async function seedClusterableWorkbenchLibraryPaper(fixture, {
+export async function seedClusterableWorkbenchLibraryPaper(fixture, {
   id = "9912.00099",
   title = "Repeated measurement protocols for controlled research",
   abstract = "This study repeats the same controlled measurement protocol to validate a reliable research measurement outcome.",

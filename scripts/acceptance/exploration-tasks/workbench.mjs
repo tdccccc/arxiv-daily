@@ -12,7 +12,7 @@ import { readdir, readFile, rm } from "node:fs/promises";
 import path from "node:path";
 import { ACCEPTANCE_DATE, PAPERS } from "../fixtures.mjs";
 import { assertFixture, settings, writeConfigPatch } from "../exploration-browser.mjs";
-import { startWorkbenchLibraryFixture } from "./workbench-library.mjs";
+import { runWorkbenchLibraryCli, seedClusterableWorkbenchLibraryPaper, startWorkbenchLibraryFixture } from "./workbench-library.mjs";
 import { checkResult, exactLabelPattern, taskResult, uiLabel, uiLabelException } from "./checks.mjs";
 import { PERSONA_TASK_IDS, personaTasks as sharedPersonaTasks } from "./personas.mjs";
 
@@ -27,6 +27,11 @@ export const GOAL_TASK_IDS = [
   // filter starts scanned (connect+status+prepare+scan), index search starts authorized and indexed
   // (the most expensive precondition: connect+status+authorize+prepare+scan+index).
   "library-build-index", "library-revoke", "library-catalog-filter", "library-index-search",
+  // P4 Chunk 4: Direction candidate review tasks (same ids as the Obsidian equivalents in
+  // exploration-tasks/obsidian.mjs, different hosts never collide). accept-direction starts authorized
+  // and indexed with no proposal yet (the model generates one); edit-candidate starts from a proposal
+  // already generated through the real CLI (prepare()'s own seeding, never the model).
+  "library-accept-direction", "library-edit-candidate",
 ];
 
 /** P3 Chunk 5: re-exports the shared persona id list (exploration-tasks/personas.mjs) so `--list`/selection keep reading it from each host's own module, unchanged from before chunk 5 wired it up. */
@@ -97,6 +102,24 @@ const LIBRARY_SEARCH_BUTTON_LABEL = "检索索引";
 // highest possible relevance score. Reuses the same query exploration-tasks/obsidian.mjs's own
 // `library-search` task already proved against this exact fixture.
 const LIBRARY_SEARCH_QUERY = "measurement";
+// P4 Chunk 4: Direction candidate review labels, all literal Chinese text in library-review.ts itself
+// (its `button()`/`h("label", ...)` helpers pass the Chinese string directly, unlike the English-source-
+// key pattern LIBRARY_CONFIRM_BUILD_LABEL's own comment above describes for settings.ts).
+const DIRECTION_REVIEW_NAV_LABEL = "方向审核";
+const GENERATE_PROPOSED_DIRECTIONS_LABEL = "生成候选方向";
+const ACCEPT_SELECTED_DIRECTIONS_LABEL = "接受所选方向";
+const CONFIRM_LABEL = "确认";
+const SUGGESTED_TOPIC_NAME_FIELD_LABEL = "建议主题名称";
+const SAVE_TOPIC_NAME_LABEL = "保存主题名称";
+const REMOVE_CANDIDATE_LABEL = "删除候选";
+// library-edit-candidate's own second clusterable paper (P4 Chunk 4): no "measurement" substring, so
+// fixtures.mjs's `/embeddings` handler gives it the same vector as PAPERS[1] — a real second two-member
+// cluster (PAPERS[1] + this paper) distinct from the first (PAPERS[0] + startWorkbenchLibraryFixture's
+// own `clusterable` paper), so a real proposal has two separate topics to rename and discard.
+const SECOND_CLUSTER_PAPER_ID = "9912.00098";
+const SECOND_CLUSTER_PAPER_TITLE = "Reproducible workflow comparisons across repeated trials";
+const SECOND_CLUSTER_PAPER_ABSTRACT = "This study compares reproducible workflow baselines across repeated controlled trials and validates reliability across trials.";
+const LIBRARY_EDIT_NEW_TOPIC_NAME = "工作台候选主题（已重命名）";
 
 async function paperIndexPath(fixture) {
   const config = await settings(fixture);
@@ -125,6 +148,24 @@ async function findLibrarySearchIndexFile(fixture) {
   catch (error) { if (error.code === "ENOENT") return null; throw error; }
   const match = entries.find(entry => entry.endsWith("current.json"));
   return match ? path.join(base, match) : null;
+}
+/**
+ * P4 Chunk 4: the real proposal store (packages/core's `personal-library-proposal-store.ts`) writes
+ * `direction-proposal.json` under `<daily_dir's own parent>/.index/personal-library-profiles/<scope
+ * hex>/<identification hex>/` — the same fingerprint-derived-hex-directory convention
+ * `findLibrarySearchIndexFile` above already walks instead of hardcoding, mirroring exploration-
+ * obsidian.mjs's own `readLibraryDirectionProposal`. `null` before any proposal has ever been generated.
+ */
+async function readLibraryDirectionProposal(fixture) {
+  const config = await settings(fixture);
+  const base = path.join(fixture.vaultRoot, path.dirname(config.output.daily_dir), ".index", "personal-library-profiles");
+  let entries;
+  try { entries = await readdir(base, { recursive: true }); }
+  catch (error) { if (error.code === "ENOENT") return null; throw error; }
+  const match = entries.find(entry => entry.endsWith("direction-proposal.json"));
+  if (!match) return null;
+  try { return JSON.parse(await readFile(path.join(base, match), "utf8")); }
+  catch { return null; }
 }
 /** Bounded like every other goal task's own polling (pollJsonFile's 5000ms default in the Obsidian task
  * library): long enough for a real but fast fixture write to land, short enough to stay under verify()'s
@@ -158,6 +199,10 @@ export async function goalTasks(fixture) {
   // seeding or an earlier task in the same pass (mirrors exploration-tasks/obsidian.mjs's own
   // `libraryBuildIndexBaseline`).
   let libraryBuildIndexBaseline, libraryIndexSearchBaseline;
+  // P4 Chunk 4: library-accept-direction's own baseline — the fixture's request count at the moment
+  // prepare() finishes seeding (never the model's claim), so verify() can tell a fresh "proposal" kind
+  // fixture request apart from one left over from an earlier task.
+  let libraryAcceptDirectionBaseline;
   return [
     {
       id: GOAL_TASK_IDS[0], title: "设置自动保存并刷新复查",
@@ -482,6 +527,121 @@ export async function goalTasks(fixture) {
           checkResult(`点击“${LIBRARY_SEARCH_BUTTON_LABEL}”按钮`, true),
           checkResult("检索结果区域显示至少一条匹配结果", count >= 1, count),
           checkResult("任务开始后夹具收到了 embeddings 请求", embeddingsRequested),
+        ]);
+      },
+    },
+    // ─── Exploration safety and coverage P4 Chunk 4: Direction candidate review tasks
+    // (docs/helm/2026-10-13-exploration-safety-and-coverage/phases/04-workbench-library-tasks.md) ───
+    {
+      id: GOAL_TASK_IDS[10], title: "生成并采纳一个来自个人文献库的候选研究方向",
+      goal: `点击左下角“${DIRECTION_REVIEW_NAV_LABEL}”进入候选方向审核页面（个人文献库已连接、已获得处理授权，并且已经完成过一次索引构建，但还没有生成过候选方向）。点击“${GENERATE_PROPOSED_DIRECTIONS_LABEL}”按钮，在随后弹出的确认框中点击“${CONFIRM_LABEL}”，等待生成完成。生成的候选方向默认已勾选；如果没有勾选，先勾选其中一个，再点击“${ACCEPT_SELECTED_DIRECTIONS_LABEL}”按钮，并在弹出的确认框中再次点击“${CONFIRM_LABEL}”完成采纳。`,
+      uiLabels: [
+        uiLabel(DIRECTION_REVIEW_NAV_LABEL, "apps/cli/src/workbench/web/app.ts"),
+        uiLabel(GENERATE_PROPOSED_DIRECTIONS_LABEL, "apps/cli/src/workbench/web/library-review.ts"),
+        uiLabel(CONFIRM_LABEL, "apps/cli/src/workbench/web/library-review.ts"),
+        uiLabel(ACCEPT_SELECTED_DIRECTIONS_LABEL, "apps/cli/src/workbench/web/library-review.ts"),
+      ],
+      // Starts connected, authorized and indexed with no proposal yet (never through the model — same
+      // reasoning as every other library task's own prepare()): the one flow this task actually tests
+      // is generating, selecting and accepting a real proposed direction. `clusterable: true` gives the
+      // real clustering run one real two-member group (PAPERS[0] plus the extra fixture paper) so
+      // "Generate proposed directions" always has real evidence to propose from.
+      async prepare({ driver }) {
+        await startWorkbenchLibraryFixture(driver, { authorized: true, indexed: true, clusterable: true });
+        libraryAcceptDirectionBaseline = { requestCount: driver.fixture.server.requests.length };
+      },
+      async verify({ driver, actions }) {
+        const navIndex = actions.findIndex(action => action.type === "click" && exactLabelPattern(DIRECTION_REVIEW_NAV_LABEL).test((action.control?.name || "").trim()));
+        if (navIndex === -1) return taskResult([checkResult(`点击“${DIRECTION_REVIEW_NAV_LABEL}”进入候选方向审核页面`, false)]);
+        const proposeIndex = actions.findIndex((action, index) => index > navIndex && action.type === "click" && exactLabelPattern(GENERATE_PROPOSED_DIRECTIONS_LABEL).test((action.control?.name || "").trim()));
+        if (proposeIndex === -1) {
+          return taskResult([checkResult(`点击“${DIRECTION_REVIEW_NAV_LABEL}”进入候选方向审核页面`, true), checkResult(`点击“${GENERATE_PROPOSED_DIRECTIONS_LABEL}”按钮`, false)]);
+        }
+        const confirmGenerateIndex = actions.findIndex((action, index) => index > proposeIndex && action.type === "click" && exactLabelPattern(CONFIRM_LABEL).test((action.control?.name || "").trim()));
+        if (confirmGenerateIndex === -1) {
+          return taskResult([checkResult(`点击“${DIRECTION_REVIEW_NAV_LABEL}”进入候选方向审核页面`, true), checkResult(`点击“${GENERATE_PROPOSED_DIRECTIONS_LABEL}”按钮`, true), checkResult(`在确认框中点击“${CONFIRM_LABEL}”开始生成`, false)]);
+        }
+        const acceptIndex = actions.findIndex((action, index) => index > confirmGenerateIndex && action.type === "click" && exactLabelPattern(ACCEPT_SELECTED_DIRECTIONS_LABEL).test((action.control?.name || "").trim()));
+        if (acceptIndex === -1) {
+          return taskResult([
+            checkResult(`点击“${DIRECTION_REVIEW_NAV_LABEL}”进入候选方向审核页面`, true), checkResult(`点击“${GENERATE_PROPOSED_DIRECTIONS_LABEL}”按钮`, true),
+            checkResult(`在确认框中点击“${CONFIRM_LABEL}”开始生成`, true), checkResult(`点击“${ACCEPT_SELECTED_DIRECTIONS_LABEL}”按钮`, false),
+          ]);
+        }
+        const confirmAcceptIndex = actions.findIndex((action, index) => index > acceptIndex && action.type === "click" && exactLabelPattern(CONFIRM_LABEL).test((action.control?.name || "").trim()));
+        if (confirmAcceptIndex === -1) {
+          return taskResult([
+            checkResult(`点击“${DIRECTION_REVIEW_NAV_LABEL}”进入候选方向审核页面`, true), checkResult(`点击“${GENERATE_PROPOSED_DIRECTIONS_LABEL}”按钮`, true),
+            checkResult(`在确认框中点击“${CONFIRM_LABEL}”开始生成`, true), checkResult(`点击“${ACCEPT_SELECTED_DIRECTIONS_LABEL}”按钮`, true),
+            checkResult(`在确认框中再次点击“${CONFIRM_LABEL}”完成采纳`, false),
+          ]);
+        }
+        const config = await pollFile(() => settings(fixture), value => (value?.arxiv?.topics ?? []).some(topic => (topic.directions ?? []).some(direction => direction.origin === "library"))).catch(() => null);
+        const addedDirection = (config?.arxiv?.topics ?? []).some(topic => (topic.directions ?? []).some(direction => direction.origin === "library"));
+        const baseline = libraryAcceptDirectionBaseline?.requestCount ?? 0;
+        const proposalRequested = driver.fixture.server.requests.slice(baseline).some(request => request.kind === "proposal");
+        return taskResult([
+          checkResult(`点击“${DIRECTION_REVIEW_NAV_LABEL}”进入候选方向审核页面`, true),
+          checkResult(`点击“${GENERATE_PROPOSED_DIRECTIONS_LABEL}”按钮`, true),
+          checkResult(`在确认框中点击“${CONFIRM_LABEL}”开始生成`, true),
+          checkResult(`点击“${ACCEPT_SELECTED_DIRECTIONS_LABEL}”按钮`, true),
+          checkResult(`在确认框中再次点击“${CONFIRM_LABEL}”完成采纳`, true),
+          checkResult("任务开始后夹具收到了一次候选方向生成请求", proposalRequested),
+          checkResult("研究主题中新增了一个来源为 library 的方向", addedDirection, config?.arxiv?.topics),
+        ]);
+      },
+    },
+    {
+      id: GOAL_TASK_IDS[11], title: "重命名并丢弃个人文献库的候选研究方向",
+      goal: `点击左下角“${DIRECTION_REVIEW_NAV_LABEL}”进入候选方向审核页面（个人文献库已连接、已获得处理授权、已完成索引构建，并且已经生成好一份候选方向，不需要重新生成）。页面上会列出两个候选主题，每个主题下恰好有一个候选方向。任选其中一个主题，把它的“${SUGGESTED_TOPIC_NAME_FIELD_LABEL}”改为“${LIBRARY_EDIT_NEW_TOPIC_NAME}”，再点击该主题自己的“${SAVE_TOPIC_NAME_LABEL}”按钮确认重命名。然后在另一个主题下，点击它唯一的候选方向的“${REMOVE_CANDIDATE_LABEL}”按钮，并在随后弹出的确认框中点击“${CONFIRM_LABEL}”，丢弃这个候选方向。`,
+      uiLabels: [
+        uiLabel(DIRECTION_REVIEW_NAV_LABEL, "apps/cli/src/workbench/web/app.ts"),
+        uiLabel(SUGGESTED_TOPIC_NAME_FIELD_LABEL, "apps/cli/src/workbench/web/library-review.ts"),
+        uiLabel(SAVE_TOPIC_NAME_LABEL, "apps/cli/src/workbench/web/library-review.ts"),
+        uiLabel(REMOVE_CANDIDATE_LABEL, "apps/cli/src/workbench/web/library-review.ts"),
+        uiLabel(CONFIRM_LABEL, "apps/cli/src/workbench/web/library-review.ts"),
+      ],
+      // Starts connected, authorized and indexed like library-accept-direction, but additionally seeds a
+      // second clusterable paper (no "measurement" substring, pairing with PAPERS[1]'s own vector) and
+      // generates a real proposal through the real CLI's own `library propose` (never a hand-written
+      // direction-proposal.json, the phase's own approach) so the real clustering run produces two
+      // separate topics, each with exactly one candidate direction — one to rename, the other's own lone
+      // candidate to discard (removePersonalLibraryDirectionCandidate, packages/core, drops a topic
+      // entirely once its last direction is gone). Which of the two the model picks for which action is
+      // deliberately left open (the goal says "either"), so verify() checks the resulting *shape* —
+      // exactly one topic left, renamed — rather than a specific id captured only by this real CLI call,
+      // keeping the check exercisable by a hand-written two-topic fixture proposal in a fast unit test.
+      async prepare({ driver }) {
+        await seedClusterableWorkbenchLibraryPaper(fixture, { id: SECOND_CLUSTER_PAPER_ID, title: SECOND_CLUSTER_PAPER_TITLE, abstract: SECOND_CLUSTER_PAPER_ABSTRACT });
+        await startWorkbenchLibraryFixture(driver, { authorized: true, indexed: true, clusterable: true });
+        const proposal = await runWorkbenchLibraryCli({ args: ["library", "propose"], env: fixture.env });
+        if ((proposal?.topics ?? []).length < 2) {
+          throw new Error("library-edit-candidate: prepare()'s real generation did not produce two proposed topics to rename/discard");
+        }
+      },
+      async verify({ actions }) {
+        const navIndex = actions.findIndex(action => action.type === "click" && exactLabelPattern(DIRECTION_REVIEW_NAV_LABEL).test((action.control?.name || "").trim()));
+        if (navIndex === -1) return taskResult([checkResult(`点击“${DIRECTION_REVIEW_NAV_LABEL}”进入候选方向审核页面`, false)]);
+        const filledIndex = actions.findIndex((action, index) => index > navIndex && action.type === "fill" && exactLabelPattern(SUGGESTED_TOPIC_NAME_FIELD_LABEL).test((action.control?.name || "").trim()) && action.value === LIBRARY_EDIT_NEW_TOPIC_NAME);
+        const renameClickIndex = filledIndex === -1 ? -1 : actions.findIndex((action, index) => index > filledIndex && action.type === "click" && exactLabelPattern(SAVE_TOPIC_NAME_LABEL).test((action.control?.name || "").trim()));
+        const removeClickIndex = actions.findIndex((action, index) => index > navIndex && action.type === "click" && exactLabelPattern(REMOVE_CANDIDATE_LABEL).test((action.control?.name || "").trim()));
+        const confirmDiscardIndex = removeClickIndex === -1 ? -1 : actions.findIndex((action, index) => index > removeClickIndex && action.type === "click" && exactLabelPattern(CONFIRM_LABEL).test((action.control?.name || "").trim()));
+        const checks = [
+          checkResult(`点击“${DIRECTION_REVIEW_NAV_LABEL}”进入候选方向审核页面`, true),
+          checkResult(`把一个候选主题的“${SUGGESTED_TOPIC_NAME_FIELD_LABEL}”改为“${LIBRARY_EDIT_NEW_TOPIC_NAME}”`, filledIndex !== -1),
+          checkResult(`点击该主题的“${SAVE_TOPIC_NAME_LABEL}”按钮`, renameClickIndex !== -1),
+          checkResult(`点击另一个候选主题的候选方向上的“${REMOVE_CANDIDATE_LABEL}”按钮`, removeClickIndex !== -1),
+          checkResult(`在确认框中点击“${CONFIRM_LABEL}”丢弃该候选方向`, confirmDiscardIndex !== -1),
+        ];
+        if (renameClickIndex === -1 || confirmDiscardIndex === -1) return taskResult(checks);
+        const proposal = await pollFile(() => readLibraryDirectionProposal(fixture),
+          value => value?.topics?.length === 1 && value.topics[0]?.suggestedName === LIBRARY_EDIT_NEW_TOPIC_NAME).catch(() => null);
+        const onlyOneTopicLeft = proposal?.topics?.length === 1;
+        const renamed = onlyOneTopicLeft && proposal.topics[0].suggestedName === LIBRARY_EDIT_NEW_TOPIC_NAME;
+        return taskResult([
+          ...checks,
+          checkResult("候选方向文件里只剩一个主题（另一个主题唯一的候选方向已被丢弃，随之移除）", onlyOneTopicLeft, proposal?.topics),
+          checkResult("剩下的主题名称已更新为新名称", renamed, proposal?.topics?.[0]?.suggestedName),
         ]);
       },
     },

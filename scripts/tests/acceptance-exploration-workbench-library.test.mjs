@@ -91,6 +91,30 @@ test("reset() removes library-origin directions but keeps the fixture's own manu
   );
 });
 
+test("reset() removes a topic auto-created by library-accept-direction once its only (library-origin) direction is gone, but keeps a topic that still has a direction of its own", async t => {
+  const fixture = await createFixtureEnvironment();
+  t.after(() => fixture.dispose());
+  await writeConfigPatch(fixture, table => {
+    // Mirrors what acceptProposedTopics (packages/core/src/settings/accept-proposed-topics.ts) actually
+    // writes for a brand-new proposed topic: it holds only the one library-origin direction it was
+    // created for, unlike the fixture's own baseline "Research" topic (one manual direction, left alone).
+    table.arxiv.topics.push({ id: "auto-created-topic", name: "Research evidence 1", tag: "research-evidence-1", detail: false,
+      directions: [{ id: "library-direction-1", text: "Accepted from the library", origin: "library" }] });
+    // A topic that never had directions is not reset()'s to remove.
+    table.arxiv.topics.push({ id: "empty-manual-topic", name: "Empty manual", tag: "empty-manual", detail: false, directions: [] });
+  });
+  const before = await settings(fixture);
+  assert.equal(before.arxiv.topics.length, 3, "precondition: library-accept-direction auto-created a second topic");
+
+  const driver = await makeDriver(fixture);
+  t.after(() => driver.dispose());
+  await driver.reset();
+
+  const after = await settings(fixture);
+  assert.deepEqual(after.arxiv.topics.map(topic => topic.id), ["acceptance-topic", "empty-manual-topic"],
+    "reset() must remove the auto-created topic entirely once its only direction is gone (never leave an empty shell whose name could collide with the next real `library propose` call)");
+});
+
 test("reset() leaves settings-persistence's own saved value alone (only library state is restored to baseline)", async t => {
   const fixture = await createFixtureEnvironment();
   t.after(() => fixture.dispose());
@@ -523,4 +547,165 @@ test("library-index-search: verify passes once the mode select, keyword fill and
   const reordered = [actions[2], actions[0], actions[1]];
   const reorderedResult = await task.verify({ driver: fakeServerDriver([{ kind: "embeddings" }]), observation, actions: reordered });
   assert.equal(reorderedResult.passed, false, "a search click before the mode select and keyword fill must not count");
+});
+
+// ---------------------------------------------------------------------------
+// P4 Chunk 4 (docs/helm/2026-10-13-exploration-safety-and-coverage/phases/04-workbench-library-tasks.md):
+// Direction candidate review tasks — same untouched/partial/leftover/full-pass convention as the Chunk 3
+// tests above, hand-writing TOML/`direction-proposal.json` state directly rather than running the real
+// CLI's `library propose` (prepare()'s own job, exercised separately by the real-host run).
+// ---------------------------------------------------------------------------
+
+const NEW_TOPIC_NAME = "工作台候选主题（已重命名）";
+
+/** Writes a minimal two-topic, one-candidate-each `direction-proposal.json` at the real derived path
+ * (any hash subdirectories work: readLibraryDirectionProposal() finds the file by its own name, never
+ * by a predicted hash), matching the shape library-edit-candidate's own verify() reads. */
+async function writeLibraryDirectionProposalFile(fixture, topics) {
+  const dir = path.join(fixture.vaultRoot, "arxiv-daily", ".index", "personal-library-profiles", "ab", "cd");
+  await mkdir(dir, { recursive: true });
+  await writeFile(path.join(dir, "direction-proposal.json"), JSON.stringify({ topics }));
+}
+const twoFixtureTopics = () => [
+  { id: "topic-0", suggestedName: "Research evidence 1", directions: [{ id: "candidate-0" }] },
+  { id: "topic-1", suggestedName: "Research evidence 2", directions: [{ id: "candidate-1" }] },
+];
+
+test("library-accept-direction: verify fails on the untouched state (no click at all)", async t => {
+  const fixture = await createFixtureEnvironment();
+  t.after(() => fixture.dispose());
+  const task = await findWorkbenchTask(fixture, "library-accept-direction");
+  const result = await task.verify({ driver: fakeServerDriver(), actions: [] });
+  assert.equal(result.passed, false);
+  assert.equal(result.checks[0].passed, false, "must not pass without an observed click on 方向审核");
+});
+
+test("library-accept-direction: verify fails after the nav/generate/confirm clicks alone, before accepting", async t => {
+  const fixture = await createFixtureEnvironment();
+  t.after(() => fixture.dispose());
+  const task = await findWorkbenchTask(fixture, "library-accept-direction");
+  const actions = [
+    { type: "click", control: { name: "方向审核" } },
+    { type: "click", control: { name: "生成候选方向" } },
+    { type: "click", control: { name: "确认" } },
+  ];
+  const result = await task.verify({ driver: fakeServerDriver(), actions });
+  assert.equal(result.passed, false);
+  assert.equal(result.checks[2].passed, true);
+  assert.equal(result.checks[3].passed, false, "must not pass without an observed click on 接受所选方向");
+});
+
+test("library-accept-direction: verify fails on leftover state alone (direction and proposal request already present) when no action is observed", async t => {
+  const fixture = await createFixtureEnvironment();
+  t.after(() => fixture.dispose());
+  await writeConfigPatch(fixture, table => { table.arxiv.topics[0].directions.push({ id: "library-direction-1", text: "Accepted from the library", origin: "library" }); });
+  const task = await findWorkbenchTask(fixture, "library-accept-direction");
+  const result = await task.verify({ driver: fakeServerDriver([{ kind: "proposal" }]), actions: [] });
+  assert.equal(result.passed, false, "leftover state with no observed click must not pass");
+  assert.equal(result.checks[0].passed, false);
+});
+
+test("library-accept-direction: verify passes once the full nav/generate/confirm/accept/confirm sequence is observed and TOML/fixture state agree; fails if the direction or the proposal request is missing", async t => {
+  const fixture = await createFixtureEnvironment();
+  t.after(() => fixture.dispose());
+  const task = await findWorkbenchTask(fixture, "library-accept-direction");
+  const actions = [
+    { type: "click", control: { name: "方向审核" } },
+    { type: "click", control: { name: "生成候选方向" } },
+    { type: "click", control: { name: "确认" } },
+    { type: "click", control: { name: "接受所选方向" } },
+    { type: "click", control: { name: "确认" } },
+  ];
+  const driverWithProposal = fakeServerDriver([{ kind: "proposal" }]);
+
+  // Mutation 1: neither the direction nor the proposal request exist yet.
+  const beforeAnyState = await task.verify({ driver: driverWithProposal, actions });
+  assert.equal(beforeAnyState.passed, false);
+
+  // Mutation 2: the fixture never actually saw a "proposal" kind request after this task started.
+  const withoutProposalRequest = await task.verify({ driver: fakeServerDriver([]), actions });
+  assert.equal(withoutProposalRequest.passed, false);
+
+  await writeConfigPatch(fixture, table => { table.arxiv.topics[0].directions.push({ id: "library-direction-1", text: "Accepted from the library", origin: "library" }); });
+  const result = await task.verify({ driver: driverWithProposal, actions });
+  assert.equal(result.passed, true, JSON.stringify(result));
+});
+
+test("library-edit-candidate: verify fails on the untouched state (no click at all)", async t => {
+  const fixture = await createFixtureEnvironment();
+  t.after(() => fixture.dispose());
+  await writeLibraryDirectionProposalFile(fixture, twoFixtureTopics());
+  const task = await findWorkbenchTask(fixture, "library-edit-candidate");
+  const result = await task.verify({ actions: [] });
+  assert.equal(result.passed, false);
+  assert.equal(result.checks[0].passed, false, "must not pass without an observed click on 方向审核");
+});
+
+test("library-edit-candidate: verify fails after renaming alone, before discarding the other topic's candidate", async t => {
+  const fixture = await createFixtureEnvironment();
+  t.after(() => fixture.dispose());
+  await writeLibraryDirectionProposalFile(fixture, twoFixtureTopics());
+  const task = await findWorkbenchTask(fixture, "library-edit-candidate");
+  const actions = [
+    { type: "click", control: { name: "方向审核" } },
+    { type: "fill", control: { name: "建议主题名称" }, value: NEW_TOPIC_NAME },
+    { type: "click", control: { name: "保存主题名称" } },
+  ];
+  const result = await task.verify({ actions });
+  assert.equal(result.passed, false);
+  assert.equal(result.checks[2].passed, true, "the rename click must be observed");
+  assert.equal(result.checks[3].passed, false, "must not pass without an observed click on 删除候选");
+});
+
+test("library-edit-candidate: verify fails after clicking 删除候选 alone, before confirming the discard", async t => {
+  const fixture = await createFixtureEnvironment();
+  t.after(() => fixture.dispose());
+  await writeLibraryDirectionProposalFile(fixture, twoFixtureTopics());
+  const task = await findWorkbenchTask(fixture, "library-edit-candidate");
+  const actions = [
+    { type: "click", control: { name: "方向审核" } },
+    { type: "click", control: { name: "删除候选" } },
+  ];
+  const result = await task.verify({ actions });
+  assert.equal(result.passed, false);
+  assert.equal(result.checks[3].passed, true);
+  assert.equal(result.checks[4].passed, false, "must not pass without an observed confirm click on the discard dialog");
+});
+
+test("library-edit-candidate: verify fails on leftover state alone (file already shows one renamed topic) when no action is observed", async t => {
+  const fixture = await createFixtureEnvironment();
+  t.after(() => fixture.dispose());
+  await writeLibraryDirectionProposalFile(fixture, [{ id: "topic-0", suggestedName: NEW_TOPIC_NAME, directions: [{ id: "candidate-0" }] }]);
+  const task = await findWorkbenchTask(fixture, "library-edit-candidate");
+  const result = await task.verify({ actions: [] });
+  assert.equal(result.passed, false, "leftover state with no observed click must not pass");
+  assert.equal(result.checks[0].passed, false);
+});
+
+test("library-edit-candidate: verify passes once the full rename-and-discard action sequence is observed and the proposal file agrees (one topic left, renamed); fails if the file still shows two topics or the wrong name", async t => {
+  const fixture = await createFixtureEnvironment();
+  t.after(() => fixture.dispose());
+  const task = await findWorkbenchTask(fixture, "library-edit-candidate");
+  const actions = [
+    { type: "click", control: { name: "方向审核" } },
+    { type: "fill", control: { name: "建议主题名称" }, value: NEW_TOPIC_NAME },
+    { type: "click", control: { name: "保存主题名称" } },
+    { type: "click", control: { name: "删除候选" } },
+    { type: "click", control: { name: "确认" } },
+  ];
+
+  // Mutation 1: the file still shows both original topics (neither rename nor discard actually landed).
+  await writeLibraryDirectionProposalFile(fixture, twoFixtureTopics());
+  const beforeAnyState = await task.verify({ actions });
+  assert.equal(beforeAnyState.passed, false);
+
+  // Mutation 2: the discard landed (one topic left) but it was never actually renamed.
+  await writeLibraryDirectionProposalFile(fixture, [{ id: "topic-0", suggestedName: "Research evidence 1", directions: [{ id: "candidate-0" }] }]);
+  const withoutRename = await task.verify({ actions });
+  assert.equal(withoutRename.passed, false);
+
+  // Mutation 3: fully correct — one topic left, renamed.
+  await writeLibraryDirectionProposalFile(fixture, [{ id: "topic-0", suggestedName: NEW_TOPIC_NAME, directions: [{ id: "candidate-0" }] }]);
+  const result = await task.verify({ actions });
+  assert.equal(result.passed, true, JSON.stringify(result));
 });
