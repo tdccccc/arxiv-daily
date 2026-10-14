@@ -174,3 +174,10 @@
 - change: P7 Chunk 1 checked; P7 done; goal done again. Success criteria unchanged and all ticked.
 - disposition: keep 822912c.
 - next: none; branch fix/exploration-safety-coverage is unpushed, pushing and a PR need the user's approval.
+
+## 2026-10-14 — follow-up (open question 2 closed)
+
+- evidence: fa3ebf2 on branch test/obsidian-leftover-state, done after the goal closed and without a new phase (one-session, well-scoped). An audit of the original 14 Obsidian goal tasks found 3 at risk of passing on an earlier pass's state: mark-to-read (papers.json keeps to_read), cancel-then-rerun and auth-failure-retry (append-only run-history.jsonl). Fixed in the harness: mark-to-read's prepare restores inbox/normal, and the other two count only history lines after their prepare. reset() also restores the fixture LLM mode to normal; a leftover unauthorized mode had made library-edit-candidate fail on a 401 in the full always-blocked run. The other 11 tasks are protected by reset/prepare or after-prepare evidence; add-topic-direction, add-arxiv-category and remove-topic-direction have no task-specific action gate and rely on reset/prepare alone, now pinned by guard tests. 16 leftover tests, 4 observed Red then Green. Owner re-run: acceptance-exploration* 354/354, test:acceptance:tools 419/419, test:release-tools 841/841, 0 skipped. Delegate real-host runs without a model: /tmp/leftover-mark3-1791985164492 (scripted mark-to-read passed, then a one-click pass on its leftover ended blocked) and /tmp/leftover-all21b-1791985181364 (21 tasks all blocked). Not run on a real host: scripted positive runs of cancel-then-rerun and auth-failure-retry (covered by unit tests).
+- change: open question 2 closed in goal.md; goal stays done.
+- disposition: keep fa3ebf2.
+- next: none.
