@@ -97,3 +97,10 @@
 - change: owner main-session-3a9f449b → claude-code-session-2026-10-14; P4 Chunks 1 and 2 checked.
 - disposition: keep 65f3ce2 and 9d79ba6.
 - next: P4 Chunk 3 — build, revoke, catalog filter and index search tasks.
+
+## 2026-10-14 — note (user approves the P5 real-model run)
+
+- evidence: user decision (2026-10-14): approve the P5 real-model full run, on condition that a small sample first estimates the token cost and the estimate is not excessive. Reference from the last release runs (2026-10-12, README "实测成本与耗时"): workbench ≈575k input tokens for 6 goal tasks + 3 personas, Obsidian ≈514k for 14 goal tasks + 3 personas; per goal task ≈38k (workbench) / ≈20k (Obsidian), per persona 55k–160k. The 7 P3 library tasks and the P4 workbench library tasks have no real-model data yet.
+- change: none to goal or phases; the cost-consent constraint is satisfied for P5, subject to the sample estimate.
+- disposition: sample = Obsidian `library-build-index`, `library-search`, `library-accept-direction` with the real model, run while P4 Chunk 3 is in progress (Obsidian side only); a workbench library sample follows once P4 tasks exist.
+- next: report the sample-based estimate to the user; continue P4.
