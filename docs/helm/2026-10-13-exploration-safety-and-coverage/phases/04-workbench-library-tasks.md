@@ -2,8 +2,8 @@
 
 goal_ref: ../goal.md
 created: 2026-10-14T01:00:00+08:00
-updated: 2026-10-14T12:44:41+08:00
-revision: 3
+updated: 2026-10-14T14:26:11+08:00
+revision: 4
 
 ## Outcome
 
@@ -56,7 +56,7 @@ First make library work safe and offline at model time (runtime pre-install, npm
 - Red / baseline signal: verifier tests for generate-and-accept and rename/discard fail before they exist.
 - Green check: as Chunk 3.
 - regression checks: as Chunk 1; label test.
-- [ ] implementation and tests accepted
+- [x] implementation and tests accepted
 
 ## Phase verification
 
