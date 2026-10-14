@@ -27,6 +27,46 @@ test("the launch command refuses a port outside the ephemeral range", () => {
   }
 });
 
+// ---------------------------------------------------------------------------
+// P3 Chunk 4 (exploration-safety-and-coverage): a Chromium-layer network guard,
+// opt-in via `networkGuardProxyPort`, so exploration-only Obsidian sessions fail
+// every non-loopback request (e.g. transformers.js's direct Hugging Face fetch,
+// which the harness's HttpClient proxy never sees) while fixed acceptance callers
+// that never pass this option get byte-for-byte the same launch args as today.
+// ---------------------------------------------------------------------------
+
+test("the launch command adds no network-guard switches by default (fixed acceptance's launch args stay exactly as today)", () => {
+  const { args } = buildLaunchCommand({ obsidianPath, port: 9333 });
+  assert.ok(!args.some(a => a.startsWith("--proxy-server")), "no --proxy-server switch without an opt-in");
+  assert.ok(!args.some(a => a.startsWith("--proxy-bypass-list")), "no --proxy-bypass-list switch without an opt-in");
+  const { args: realDisplayArgs } = buildLaunchCommand({ obsidianPath, port: 9333, virtualDisplay: false });
+  assert.deepEqual(realDisplayArgs, ["--remote-debugging-port=9333", "--no-sandbox"]);
+});
+
+test("a network-guard proxy port routes every non-loopback request through a dead proxy while loopback stays direct", () => {
+  const { args } = buildLaunchCommand({ obsidianPath, port: 9333, networkGuardProxyPort: 4 });
+  assert.ok(args.includes("--proxy-server=127.0.0.1:4"), `expected a --proxy-server switch, got ${JSON.stringify(args)}`);
+  assert.ok(
+    args.includes("--proxy-bypass-list=<-loopback>;127.0.0.1;localhost"),
+    `expected an explicit loopback-only bypass list, got ${JSON.stringify(args)}`,
+  );
+});
+
+test("the network-guard switches apply with and without the virtual display (both launch shapes)", () => {
+  const withDisplay = buildLaunchCommand({ obsidianPath, port: 9333, networkGuardProxyPort: 4 });
+  const withoutDisplay = buildLaunchCommand({ obsidianPath, port: 9333, networkGuardProxyPort: 4, virtualDisplay: false });
+  for (const { args } of [withDisplay, withoutDisplay]) {
+    assert.ok(args.includes("--proxy-server=127.0.0.1:4"));
+    assert.ok(args.includes("--proxy-bypass-list=<-loopback>;127.0.0.1;localhost"));
+  }
+});
+
+test("the network-guard proxy port must be a valid ephemeral port when given", () => {
+  for (const bad of [0, -1, 1.5, "9222"]) {
+    assert.throws(() => buildLaunchCommand({ obsidianPath, port: 9333, networkGuardProxyPort: bad }), /networkGuardProxyPort/i);
+  }
+});
+
 test("the isolated environment redirects every XDG directory into the sandbox", () => {
   const env = buildIsolatedEnv({
     configHome: "/tmp/h/config",

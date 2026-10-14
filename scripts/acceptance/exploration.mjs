@@ -24,6 +24,12 @@ const browserActions = new Set(["click", "fill", "select", "back", "reload", "wa
  * shortcuts (no Ctrl/Alt combinations, no function keys).
  */
 export const PRESS_KEYS = new Set(["Enter", "Escape", "Tab", "Shift+Tab", "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", "Space", "Home", "End", "PageUp", "PageDown"]);
+/**
+ * Keys that only move focus or cancel, never activating or changing the focused control. Hosts still
+ * refuse them outside the explorable scope, but send them even when the focused control is restricted,
+ * so a keyboard-only persona that lands on one can always Tab past it or Escape away.
+ */
+export const PRESS_NAVIGATION_KEYS = new Set(["Tab", "Shift+Tab", "Escape"]);
 /** Persona tasks explore freely for findings only; they never carry a program verifier. */
 const isPersonaTask = task => task?.kind === "persona";
 
@@ -581,8 +587,17 @@ export async function runExploration({ fixture, artifactDir, configPath, maxStep
       session = await startSession({ fixture, artifactDir: directory, signal });
       driver = await createDriver({ session: session.session, fixture, artifactDir: directory, redact: configured.redact, signal });
     } else {
-      session = await startSession({ fixture, artifactDir: directory, executablePath, headless, signal });
-      driver = await createDriver({ ...session, fixture, artifactDir: directory, redact: configured.redact, signal });
+      // P4 Chunk 1: before the workbench server starts, make sure its fixture already has a
+      // prepared pdfjs runtime (so a model's `library-build` never spawns `npm ci` against the real
+      // registry) and force npm offline in its environment as a fail-fast backstop. The obsidian
+      // host and the fixed workbench.mjs suite never call `library-build`, so only this branch opts
+      // in. `dependencies.libraryRuntimeCache` is the test seam: the real module reaches the network
+      // only on a persistent-cache miss (see library-runtime-cache.mjs for the full contract).
+      const runtimeCache = dependencies.libraryRuntimeCache ?? (await import("./library-runtime-cache.mjs"));
+      await runtimeCache.seedWorkbenchLibraryRuntime(fixture, { signal });
+      const workbenchFixture = { ...fixture, env: runtimeCache.npmOfflineEnv(fixture.env) };
+      session = await startSession({ fixture: workbenchFixture, artifactDir: directory, executablePath, headless, signal });
+      driver = await createDriver({ ...session, fixture: workbenchFixture, artifactDir: directory, redact: configured.redact, signal });
     }
     result = await runExplorationLoop({ driver, model: configured, tasks: selected, artifactDir: directory, maxSteps, maxDurationMs, modelCallTimeoutMs, taskMaxSteps, taskMaxApiCalls, signal });
     result.artifacts.push(...(session.artifacts || []));

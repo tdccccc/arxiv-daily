@@ -8,11 +8,12 @@
  * `assertFixture`/`settings` stay defined once in exploration-browser.mjs (the driver also uses them for
  * `inspect()`/`dailyEvidence()`) and are imported here, not duplicated.
  */
-import { readFile, rm } from "node:fs/promises";
+import { readdir, readFile, rm } from "node:fs/promises";
 import path from "node:path";
 import { ACCEPTANCE_DATE, PAPERS } from "../fixtures.mjs";
 import { assertFixture, settings, writeConfigPatch } from "../exploration-browser.mjs";
-import { checkResult, taskResult } from "./checks.mjs";
+import { runWorkbenchLibraryCli, seedClusterableWorkbenchLibraryPaper, startWorkbenchLibraryFixture } from "./workbench-library.mjs";
+import { checkResult, exactLabelPattern, taskResult, uiLabel, uiLabelException } from "./checks.mjs";
 import { PERSONA_TASK_IDS, personaTasks as sharedPersonaTasks } from "./personas.mjs";
 
 /** Single source of truth for the default workbench goal-task ids, usable without a fixture (e.g. --list). */
@@ -20,6 +21,17 @@ export const GOAL_TASK_IDS = [
   "settings-persistence", "sidebar-persistence", "generate-and-read",
   // P3 Chunk 5: reading-journey and settings-conflict tasks.
   "star-filter-restore", "generate-paper-note", "external-config-conflict",
+  // Exploration safety and coverage P4 Chunk 3 (docs/helm/2026-10-13-exploration-safety-and-coverage/
+  // phases/04-workbench-library-tasks.md): personal-library tasks, in order of fixture setup cost —
+  // build-index starts unauthorized (cheapest: connect+status only), revoke starts authorized, catalog
+  // filter starts scanned (connect+status+prepare+scan), index search starts authorized and indexed
+  // (the most expensive precondition: connect+status+authorize+prepare+scan+index).
+  "library-build-index", "library-revoke", "library-catalog-filter", "library-index-search",
+  // P4 Chunk 4: Direction candidate review tasks (same ids as the Obsidian equivalents in
+  // exploration-tasks/obsidian.mjs, different hosts never collide). accept-direction starts authorized
+  // and indexed with no proposal yet (the model generates one); edit-candidate starts from a proposal
+  // already generated through the real CLI (prepare()'s own seeding, never the model).
+  "library-accept-direction", "library-edit-candidate",
 ];
 
 /** P3 Chunk 5: re-exports the shared persona id list (exploration-tasks/personas.mjs) so `--list`/selection keep reading it from each host's own module, unchanged from before chunk 5 wired it up. */
@@ -45,6 +57,70 @@ const NOTE_KEY = `arxiv:${NOTE_PAPER.id}`;
 const EXTERNAL_CONFLICT_DRAFT_MODEL = "workbench-conflict-draft-model";
 const EXTERNAL_CONFLICT_EXTERNAL_MODEL = "workbench-conflict-external-model";
 
+// ─── P2/P6: declared UI labels ────────────────────────────────────────────────
+// scripts/tests/acceptance-exploration-labels.test.mjs asserts every task's own `uiLabels` entry (every
+// product UI label its goal text names or its verify() matches on) is still present, as a complete,
+// case-sensitive string literal, in the specific product source file(s) named by its own `uiLabel(text,
+// source)` wrapper (P6; P2 originally searched all of apps/cli/src/workbench/** case-insensitively).
+// Every verify() that matches one of these reads the exact constant below, never a second,
+// independently-typed copy of the same string, so the goal text, the verifier and the declared label
+// cannot drift apart. `uiLabelException` marks the one entry below that cannot be checked this way.
+const MAX_DAILY_PAPERS_FIELD_LABEL = "maxDailyPapers";
+// The driver's own `purpose` tag (exploration-browser.mjs) is derived from this CSS class name, but the
+// product (web/sidebar.ts) only ever writes it as part of a longer className literal
+// (`"quiet-button sidebar-toggle"`), never as a standalone complete string literal — so a source-scoped
+// exact-literal check cannot anchor on it (P6 exception below).
+const SIDEBAR_TOGGLE_PURPOSE_LABEL = "sidebar-toggle";
+const GENERATE_ACTION_LABEL = "generate";
+const STAR_FILTER_TAB_LABEL = "收藏";
+const BACK_TO_LIST_LABEL = "← 返回列表";
+const GENERATE_DETAIL_SUMMARY_LABEL = "生成详细总结";
+const START_GENERATION_LABEL = "开始生成";
+const READ_DETAIL_SUMMARY_LABEL = "阅读详细总结";
+const MODEL_FIELD_LABEL = "Model";
+const DISCARD_UNSAVED_AND_CLOSE_LABEL = "放弃未保存修改并关闭";
+const CONFIRM_DISCARD_AND_CLOSE_LABEL = "放弃修改并关闭";
+const SETTINGS_BUTTON_LABEL = "设置";
+const RETRY_SAVE_LABEL = "重试保存";
+// P4 Chunk 3: personal-library labels. "Retry preparation" has no translation entry
+// (packages/core/src/presentation/settings-translations.ts), so it renders verbatim in the zh-CN
+// workbench — unlike "确认并建立索引"/"撤销授权", which that same translation table maps from their
+// English source keys ("Confirm and build index"/"Revoke" in settings.ts/library-connection.ts).
+const PERSONAL_LIBRARY_NAV_LABEL = "个人文献库";
+const LIBRARY_BUILD_BUTTON_LABEL = "Retry preparation";
+const LIBRARY_CONFIRM_BUILD_LABEL = "确认并建立索引";
+const LIBRARY_REVOKE_BUTTON_LABEL = "撤销授权";
+const LIBRARY_KEYWORD_FIELD_LABEL = "文献库关键词";
+const LIBRARY_BROWSE_BUTTON_LABEL = "筛选目录";
+const LIBRARY_SEARCH_MODE_FIELD_LABEL = "索引检索方式";
+const LIBRARY_SEARCH_MODE_DENSE_OPTION_LABEL = "语义检索";
+const LIBRARY_SEARCH_BUTTON_LABEL = "检索索引";
+// Both fixture library PDFs (fixtures.mjs's PAPERS) carry "measurement"/"measurements" in their own
+// title or abstract, but only PAPERS[0]'s does — PAPERS[1]'s abstract says "measures", a different
+// word, so this query matches exactly one paper in the catalog filter and embeds to fixtures.mjs's
+// own exact-match embedding vector ([1, 0, 0]) for the index search, matching PAPERS[0] with the
+// highest possible relevance score. Reuses the same query exploration-tasks/obsidian.mjs's own
+// `library-search` task already proved against this exact fixture.
+const LIBRARY_SEARCH_QUERY = "measurement";
+// P4 Chunk 4: Direction candidate review labels, all literal Chinese text in library-review.ts itself
+// (its `button()`/`h("label", ...)` helpers pass the Chinese string directly, unlike the English-source-
+// key pattern LIBRARY_CONFIRM_BUILD_LABEL's own comment above describes for settings.ts).
+const DIRECTION_REVIEW_NAV_LABEL = "方向审核";
+const GENERATE_PROPOSED_DIRECTIONS_LABEL = "生成候选方向";
+const ACCEPT_SELECTED_DIRECTIONS_LABEL = "接受所选方向";
+const CONFIRM_LABEL = "确认";
+const SUGGESTED_TOPIC_NAME_FIELD_LABEL = "建议主题名称";
+const SAVE_TOPIC_NAME_LABEL = "保存主题名称";
+const REMOVE_CANDIDATE_LABEL = "删除候选";
+// library-edit-candidate's own second clusterable paper (P4 Chunk 4): no "measurement" substring, so
+// fixtures.mjs's `/embeddings` handler gives it the same vector as PAPERS[1] — a real second two-member
+// cluster (PAPERS[1] + this paper) distinct from the first (PAPERS[0] + startWorkbenchLibraryFixture's
+// own `clusterable` paper), so a real proposal has two separate topics to rename and discard.
+const SECOND_CLUSTER_PAPER_ID = "9912.00098";
+const SECOND_CLUSTER_PAPER_TITLE = "Reproducible workflow comparisons across repeated trials";
+const SECOND_CLUSTER_PAPER_ABSTRACT = "This study compares reproducible workflow baselines across repeated controlled trials and validates reliability across trials.";
+const LIBRARY_EDIT_NEW_TOPIC_NAME = "工作台候选主题（已重命名）";
+
 async function paperIndexPath(fixture) {
   const config = await settings(fixture);
   return path.join(fixture.vaultRoot, path.dirname(config.output.daily_dir), ".index", "papers.json");
@@ -56,6 +132,40 @@ async function readPaperIndex(fixture) {
 async function paperNotePath(fixture, arxivId) {
   const config = await settings(fixture);
   return path.resolve(fixture.vaultRoot, config.output.papers_dir, `${arxivId}.md`);
+}
+/**
+ * P4 Chunk 3: the real library runtime (packages/node-runtime, via the CLI's own index step) writes the
+ * built search index's `current.json` under `<daily_dir's own parent>/.index/personal-library-search-
+ * index/<hash>/<hash>/current.json` — a derived, content-hashed path this driver never predicts, only
+ * discovers (mirrors exploration-obsidian.mjs's own `findLibrarySearchIndexFile`, confirmed identical on
+ * the real workbench host in this chunk's own research). `null` before any index has ever been built.
+ */
+async function findLibrarySearchIndexFile(fixture) {
+  const config = await settings(fixture);
+  const base = path.join(fixture.vaultRoot, path.dirname(config.output.daily_dir), ".index", "personal-library-search-index");
+  let entries;
+  try { entries = await readdir(base, { recursive: true }); }
+  catch (error) { if (error.code === "ENOENT") return null; throw error; }
+  const match = entries.find(entry => entry.endsWith("current.json"));
+  return match ? path.join(base, match) : null;
+}
+/**
+ * P4 Chunk 4: the real proposal store (packages/core's `personal-library-proposal-store.ts`) writes
+ * `direction-proposal.json` under `<daily_dir's own parent>/.index/personal-library-profiles/<scope
+ * hex>/<identification hex>/` — the same fingerprint-derived-hex-directory convention
+ * `findLibrarySearchIndexFile` above already walks instead of hardcoding, mirroring exploration-
+ * obsidian.mjs's own `readLibraryDirectionProposal`. `null` before any proposal has ever been generated.
+ */
+async function readLibraryDirectionProposal(fixture) {
+  const config = await settings(fixture);
+  const base = path.join(fixture.vaultRoot, path.dirname(config.output.daily_dir), ".index", "personal-library-profiles");
+  let entries;
+  try { entries = await readdir(base, { recursive: true }); }
+  catch (error) { if (error.code === "ENOENT") return null; throw error; }
+  const match = entries.find(entry => entry.endsWith("direction-proposal.json"));
+  if (!match) return null;
+  try { return JSON.parse(await readFile(path.join(base, match), "utf8")); }
+  catch { return null; }
 }
 /** Bounded like every other goal task's own polling (pollJsonFile's 5000ms default in the Obsidian task
  * library): long enough for a real but fast fixture write to land, short enough to stay under verify()'s
@@ -82,30 +192,43 @@ export async function goalTasks(fixture) {
   // tasks' memoized flags (e.g. cancelReleaseDone in exploration-tasks/obsidian.mjs) — the external write
   // must happen exactly once, the first time settings are observed loaded, never on every later poll.
   let externalConflictWritten = false;
+  // P4 Chunk 3: each library task's own fixture-request baseline, captured at the end of its own
+  // prepare() (after startWorkbenchLibraryFixture's own seeding — build-index/index-search's own
+  // authorize-and-index precondition — has already sent its own embeddings requests), so verify() can
+  // tell a fresh embeddings request the model's own action actually drove apart from one left over from
+  // seeding or an earlier task in the same pass (mirrors exploration-tasks/obsidian.mjs's own
+  // `libraryBuildIndexBaseline`).
+  let libraryBuildIndexBaseline, libraryIndexSearchBaseline;
+  // P4 Chunk 4: library-accept-direction's own baseline — the fixture's request count at the moment
+  // prepare() finishes seeding (never the model's claim), so verify() can tell a fresh "proposal" kind
+  // fixture request apart from one left over from an earlier task.
+  let libraryAcceptDirectionBaseline;
   return [
     {
       id: GOAL_TASK_IDS[0], title: "设置自动保存并刷新复查",
-      goal: `打开设置，把每日论文数量上限 maxDailyPapers 改为 ${target}。移开焦点并等待保存完成，关闭设置，刷新页面，再打开设置，确认上限仍为 ${target}。不要修改路径、模型连接或密钥。`,
+      goal: `打开设置，把每日论文数量上限 ${MAX_DAILY_PAPERS_FIELD_LABEL} 改为 ${target}。移开焦点并等待保存完成，关闭设置，刷新页面，再打开设置，确认上限仍为 ${target}。不要修改路径、模型连接或密钥。`,
+      uiLabels: [uiLabel(MAX_DAILY_PAPERS_FIELD_LABEL, "apps/cli/src/workbench/web/settings.ts")],
       async verify({ driver, observation, actions }) {
-        const changed = actions.find(action => action.type === "fill" && (action.control?.field || action.control?.name) === "maxDailyPapers" && action.value === String(target));
+        const changed = actions.find(action => action.type === "fill" && (action.control?.field || action.control?.name) === MAX_DAILY_PAPERS_FIELD_LABEL && action.value === String(target));
         const refreshed = changed && actions.some(action => action.type === "reload" && action.step > changed.step);
         const state = await driver.inspect();
         return taskResult([
           checkResult("通过界面修改每日论文数量上限", changed),
           checkResult("修改后刷新了页面", refreshed),
           checkResult("隔离配置文件保存了新上限", state.maxDailyPapers === target, state.maxDailyPapers),
-          checkResult("刷新后重新打开设置仍显示新上限", refreshed && observation.controls.some(control => control.field === "maxDailyPapers" && control.value === String(target))),
+          checkResult("刷新后重新打开设置仍显示新上限", refreshed && observation.controls.some(control => control.field === MAX_DAILY_PAPERS_FIELD_LABEL && control.value === String(target))),
         ]);
       },
     },
     {
       id: GOAL_TASK_IDS[1], title: "侧栏折叠和展开状态持久化",
       goal: "关闭设置（如果仍打开）。收起侧栏，刷新页面确认侧栏仍收起；再展开侧栏，再次刷新，确认侧栏仍展开。等待偏好保存后再刷新。",
+      uiLabels: [uiLabelException(SIDEBAR_TOGGLE_PURPOSE_LABEL, "test-only driver hook: only a substring of the longer className literal \"quiet-button sidebar-toggle\" in apps/cli/src/workbench/web/sidebar.ts, never a standalone literal or display text")],
       async verify({ driver, observation, actions }) {
         const state = await driver.inspect();
         const last = actions.findLast(action => action.type === "reload");
-        const lastToggle = actions.findLast(action => action.type === "click" && action.control?.purpose === "sidebar-toggle");
-        const clicked = actions.some(action => action.type === "click" && action.control?.purpose === "sidebar-toggle");
+        const lastToggle = actions.findLast(action => action.type === "click" && action.control?.purpose === SIDEBAR_TOGGLE_PURPOSE_LABEL);
+        const clicked = actions.some(action => action.type === "click" && action.control?.purpose === SIDEBAR_TOGGLE_PURPOSE_LABEL);
         if (clicked && last && lastToggle && last.step > lastToggle.step && state.preferences.sidebarCollapsed === true && observation.layout.sidebarCollapsed) {
           collapsedAfterReload = true; collapseReloadStep = last.step;
         }
@@ -116,9 +239,10 @@ export async function goalTasks(fixture) {
     {
       id: GOAL_TASK_IDS[2], title: "生成固定日期日报并打开论文",
       goal: "通过生成按钮生成 2026-10-01 日报（选择指定日期，不要生成今天）。等待成功，再从列表打开 arXiv 2610.10001 论文，确认阅读内容出现。无需判断论文内容质量。",
+      uiLabels: [uiLabel(GENERATE_ACTION_LABEL, "apps/cli/src/workbench/web/app.ts")],
       async verify({ driver, observation, actions, startedAt }) {
         const state = await driver.dailyEvidence("2026-10-01");
-        const generated = actions.some(action => action.type === "click" && action.control?.dataAction === "generate");
+        const generated = actions.some(action => action.type === "click" && action.control?.dataAction === GENERATE_ACTION_LABEL);
         const run = state.run;
         const checks = [
           checkResult("通过生成入口启动任务", generated),
@@ -135,24 +259,28 @@ export async function goalTasks(fixture) {
     // ─── P3 Chunk 5: reading-journey and settings-conflict tasks ────────────
     {
       id: GOAL_TASK_IDS[3], title: "收藏后切换筛选并恢复阅读",
-      goal: `打开阅读面板。找到标题为“${STAR_FILTER_PAPER.title}”的论文，点击它的收藏按钮（Star paper）将其标记为收藏。点击顶部的“收藏”筛选，确认这篇论文仍显示在列表里。点击它的标题进入阅读概览，再点击“← 返回列表”返回列表。确认返回后仍停留在“收藏”筛选，并且仍能看到这篇论文。`,
+      goal: `打开阅读面板。找到标题为“${STAR_FILTER_PAPER.title}”的论文，点击它的收藏按钮将其标记为收藏。点击顶部的“${STAR_FILTER_TAB_LABEL}”筛选，确认这篇论文仍显示在列表里。点击它的标题进入阅读概览，再点击“${BACK_TO_LIST_LABEL}”返回列表。确认返回后仍停留在“${STAR_FILTER_TAB_LABEL}”筛选，并且仍能看到这篇论文。`,
+      uiLabels: [
+        uiLabel(STAR_FILTER_TAB_LABEL, "apps/cli/src/workbench/web/papers.ts"),
+        uiLabel(BACK_TO_LIST_LABEL, "apps/cli/src/workbench/web/papers.ts"),
+      ],
       async prepare({ driver }) {
         await driver.ensureDailyReport(ACCEPTANCE_DATE);
         await driver.ensurePaperUnstarred(STAR_FILTER_KEY);
       },
       async verify({ observation, actions }) {
-        const starName = control => (control?.name || "").includes("收藏") && (control?.name || "").includes(STAR_FILTER_PAPER.title);
+        const starName = control => (control?.name || "").includes(STAR_FILTER_TAB_LABEL) && (control?.name || "").includes(STAR_FILTER_PAPER.title);
         const starClickIndex = actions.findIndex(action => action.type === "click" && starName(action.control));
         if (starClickIndex === -1) return taskResult([checkResult(`点击“${STAR_FILTER_PAPER.title}”的收藏按钮`, false)]);
         // The scope filter button's own accessible name is just "收藏" plus a live count ("收藏12"), never
         // " · <title>" — distinct from the star button's aria-label by construction, not just by luck.
-        const filterClickIndex = actions.findIndex((action, index) => index > starClickIndex && action.type === "click" && /^收藏[\d—]*$/.test((action.control?.name || "").trim()));
+        const filterClickIndex = actions.findIndex((action, index) => index > starClickIndex && action.type === "click" && new RegExp(`^${STAR_FILTER_TAB_LABEL}[\\d—]*$`).test((action.control?.name || "").trim()));
         if (filterClickIndex === -1) return taskResult([checkResult(`点击“${STAR_FILTER_PAPER.title}”的收藏按钮`, true), checkResult("切换到顶部“收藏”筛选", false)]);
         const openClickIndex = actions.findIndex((action, index) => index > filterClickIndex && action.type === "click" && action.control?.paperKey === STAR_FILTER_KEY);
         if (openClickIndex === -1) {
           return taskResult([checkResult(`点击“${STAR_FILTER_PAPER.title}”的收藏按钮`, true), checkResult("切换到顶部“收藏”筛选", true), checkResult("点击该论文标题进入阅读概览", false)]);
         }
-        const backClicked = actions.slice(openClickIndex + 1).some(action => action.type === "click" && (action.control?.name || "").trim() === "← 返回列表");
+        const backClicked = actions.slice(openClickIndex + 1).some(action => action.type === "click" && (action.control?.name || "").trim() === BACK_TO_LIST_LABEL);
         if (!backClicked) {
           return taskResult([checkResult(`点击“${STAR_FILTER_PAPER.title}”的收藏按钮`, true), checkResult("切换到顶部“收藏”筛选", true), checkResult("点击该论文标题进入阅读概览", true), checkResult("点击“← 返回列表”返回", false)]);
         }
@@ -171,7 +299,12 @@ export async function goalTasks(fixture) {
     },
     {
       id: GOAL_TASK_IDS[4], title: "为单篇论文生成详细总结",
-      goal: `打开阅读面板，点击标题为“${NOTE_PAPER.title}”的论文进入概览。点击“生成详细总结”按钮，在弹出的对话框里直接点击“开始生成”，等待生成完成（概览里出现“阅读详细总结”链接即代表完成）。`,
+      goal: `打开阅读面板，点击标题为“${NOTE_PAPER.title}”的论文进入概览。点击“${GENERATE_DETAIL_SUMMARY_LABEL}”按钮，在弹出的对话框里直接点击“${START_GENERATION_LABEL}”，等待生成完成（概览里出现“${READ_DETAIL_SUMMARY_LABEL}”链接即代表完成）。`,
+      uiLabels: [
+        uiLabel(GENERATE_DETAIL_SUMMARY_LABEL, "apps/cli/src/workbench/web/papers.ts"),
+        uiLabel(START_GENERATION_LABEL, "apps/cli/src/workbench/web/app.ts"),
+        uiLabel(READ_DETAIL_SUMMARY_LABEL, "apps/cli/src/workbench/web/papers.ts"),
+      ],
       async prepare({ driver }) {
         await driver.ensureDailyReport(ACCEPTANCE_DATE);
         await rm(await paperNotePath(fixture, NOTE_PAPER.id), { force: true });
@@ -179,9 +312,9 @@ export async function goalTasks(fixture) {
       async verify({ observation, actions }) {
         const openedOverview = actions.some(action => action.type === "click" && action.control?.paperKey === NOTE_KEY);
         if (!openedOverview) return taskResult([checkResult(`点击“${NOTE_PAPER.title}”进入概览`, false)]);
-        const clickedGenerate = actions.some(action => action.type === "click" && (action.control?.name || "").trim() === "生成详细总结");
+        const clickedGenerate = actions.some(action => action.type === "click" && (action.control?.name || "").trim() === GENERATE_DETAIL_SUMMARY_LABEL);
         if (!clickedGenerate) return taskResult([checkResult(`点击“${NOTE_PAPER.title}”进入概览`, true), checkResult("点击“生成详细总结”按钮", false)]);
-        const submitted = actions.some(action => action.type === "click" && (action.control?.name || "").trim() === "开始生成");
+        const submitted = actions.some(action => action.type === "click" && (action.control?.name || "").trim() === START_GENERATION_LABEL);
         if (!submitted) {
           return taskResult([checkResult(`点击“${NOTE_PAPER.title}”进入概览`, true), checkResult("点击“生成详细总结”按钮", true), checkResult("在弹出的对话框里点击“开始生成”", false)]);
         }
@@ -190,7 +323,7 @@ export async function goalTasks(fixture) {
         const index = await pollFile(() => readPaperIndex(fixture), value => value?.papers?.[NOTE_KEY]?.detail === true);
         const entry = index?.papers?.[NOTE_KEY];
         const indexed = entry?.detail === true && typeof entry.paperPath === "string";
-        const shownInUi = observation.controls.some(control => (control.name || "").trim() === "阅读详细总结");
+        const shownInUi = observation.controls.some(control => (control.name || "").trim() === READ_DETAIL_SUMMARY_LABEL);
         return taskResult([
           checkResult(`点击“${NOTE_PAPER.title}”进入概览`, true),
           checkResult("点击“生成详细总结”按钮", true),
@@ -203,7 +336,14 @@ export async function goalTasks(fixture) {
     },
     {
       id: GOAL_TASK_IDS[5], title: "设置冲突后放弃草稿并重新打开",
-      goal: `打开设置，把 Model 字段改为“${EXTERNAL_CONFLICT_DRAFT_MODEL}”。测试环境会在设置加载完成后立刻在磁盘上修改配置文件，这会让自动保存因“配置已改变”失败，界面上会出现“放弃未保存修改并关闭”按钮。不要点击“重试保存”：点击“放弃未保存修改并关闭”，再点击随后出现的确认按钮“放弃修改并关闭”，设置会关闭。关闭后重新点击“设置”打开设置，确认 Model 字段显示的是磁盘上的最新值，而不是你刚才填写的草稿。`,
+      goal: `打开设置，把 ${MODEL_FIELD_LABEL} 字段改为“${EXTERNAL_CONFLICT_DRAFT_MODEL}”。测试环境会在设置加载完成后立刻在磁盘上修改配置文件，这会让自动保存因“配置已改变”失败，界面上会出现“${DISCARD_UNSAVED_AND_CLOSE_LABEL}”按钮。不要点击“${RETRY_SAVE_LABEL}”：点击“${DISCARD_UNSAVED_AND_CLOSE_LABEL}”，再点击随后出现的确认按钮“${CONFIRM_DISCARD_AND_CLOSE_LABEL}”，设置会关闭。关闭后重新点击“${SETTINGS_BUTTON_LABEL}”打开设置，确认 ${MODEL_FIELD_LABEL} 字段显示的是磁盘上的最新值，而不是你刚才填写的草稿。`,
+      uiLabels: [
+        uiLabel(MODEL_FIELD_LABEL, "apps/cli/src/workbench/web/model-combobox.ts"),
+        uiLabel(DISCARD_UNSAVED_AND_CLOSE_LABEL, "apps/cli/src/workbench/web/settings.ts"),
+        uiLabel(CONFIRM_DISCARD_AND_CLOSE_LABEL, "apps/cli/src/workbench/web/settings.ts"),
+        uiLabel(SETTINGS_BUTTON_LABEL, "apps/cli/src/workbench/web/app.ts"),
+        uiLabel(RETRY_SAVE_LABEL, "apps/cli/src/workbench/web/settings.ts"),
+      ],
       async prepare() {
         externalConflictWritten = false;
       },
@@ -217,29 +357,291 @@ export async function goalTasks(fixture) {
           await writeConfigPatch(fixture, table => { table.llm = { ...table.llm, model: EXTERNAL_CONFLICT_EXTERNAL_MODEL }; });
         }
         const filledDraft = actions.some(action => action.type === "fill" && action.control?.field === "model" && action.value === EXTERNAL_CONFLICT_DRAFT_MODEL);
-        if (!filledDraft) return taskResult([checkResult(`把 Model 字段改为“${EXTERNAL_CONFLICT_DRAFT_MODEL}”`, false)]);
-        const discardClicked = actions.some(action => action.type === "click" && (action.control?.name || "").trim() === "放弃未保存修改并关闭");
+        if (!filledDraft) return taskResult([checkResult(`把 ${MODEL_FIELD_LABEL} 字段改为“${EXTERNAL_CONFLICT_DRAFT_MODEL}”`, false)]);
+        const discardClicked = actions.some(action => action.type === "click" && (action.control?.name || "").trim() === DISCARD_UNSAVED_AND_CLOSE_LABEL);
         if (!discardClicked) {
-          return taskResult([checkResult(`把 Model 字段改为“${EXTERNAL_CONFLICT_DRAFT_MODEL}”`, true), checkResult("看到保存失败后点击“放弃未保存修改并关闭”", false)]);
+          return taskResult([checkResult(`把 ${MODEL_FIELD_LABEL} 字段改为“${EXTERNAL_CONFLICT_DRAFT_MODEL}”`, true), checkResult("看到保存失败后点击“放弃未保存修改并关闭”", false)]);
         }
-        const confirmIndex = actions.findIndex(action => action.type === "click" && (action.control?.name || "").trim() === "放弃修改并关闭");
+        const confirmIndex = actions.findIndex(action => action.type === "click" && (action.control?.name || "").trim() === CONFIRM_DISCARD_AND_CLOSE_LABEL);
         if (confirmIndex === -1) {
-          return taskResult([checkResult(`把 Model 字段改为“${EXTERNAL_CONFLICT_DRAFT_MODEL}”`, true), checkResult("看到保存失败后点击“放弃未保存修改并关闭”", true), checkResult("点击确认按钮“放弃修改并关闭”", false)]);
+          return taskResult([checkResult(`把 ${MODEL_FIELD_LABEL} 字段改为“${EXTERNAL_CONFLICT_DRAFT_MODEL}”`, true), checkResult("看到保存失败后点击“放弃未保存修改并关闭”", true), checkResult("点击确认按钮“放弃修改并关闭”", false)]);
         }
-        const reopened = actions.slice(confirmIndex + 1).some(action => action.type === "click" && (action.control?.name || "").trim() === "设置");
+        const reopened = actions.slice(confirmIndex + 1).some(action => action.type === "click" && (action.control?.name || "").trim() === SETTINGS_BUTTON_LABEL);
         if (!reopened) {
-          return taskResult([checkResult(`把 Model 字段改为“${EXTERNAL_CONFLICT_DRAFT_MODEL}”`, true), checkResult("看到保存失败后点击“放弃未保存修改并关闭”", true), checkResult("点击确认按钮“放弃修改并关闭”", true), checkResult("重新点击“设置”打开设置", false)]);
+          return taskResult([checkResult(`把 ${MODEL_FIELD_LABEL} 字段改为“${EXTERNAL_CONFLICT_DRAFT_MODEL}”`, true), checkResult("看到保存失败后点击“放弃未保存修改并关闭”", true), checkResult("点击确认按钮“放弃修改并关闭”", true), checkResult("重新点击“设置”打开设置", false)]);
         }
         const config = await settings(fixture);
         const onDisk = config.llm?.model === EXTERNAL_CONFLICT_EXTERNAL_MODEL;
         const shownValue = observation.controls.find(control => control.field === "model")?.value;
         return taskResult([
-          checkResult(`把 Model 字段改为“${EXTERNAL_CONFLICT_DRAFT_MODEL}”`, true),
+          checkResult(`把 ${MODEL_FIELD_LABEL} 字段改为“${EXTERNAL_CONFLICT_DRAFT_MODEL}”`, true),
           checkResult("看到保存失败后点击“放弃未保存修改并关闭”", true),
           checkResult("点击确认按钮“放弃修改并关闭”", true),
           checkResult("重新点击“设置”打开设置", true),
           checkResult("磁盘上的配置仍是外部修改后的值，模型的草稿没有被保存", onDisk, config.llm?.model),
           checkResult("重新打开后界面显示的是外部修改后的值", shownValue === EXTERNAL_CONFLICT_EXTERNAL_MODEL, shownValue),
+        ]);
+      },
+    },
+    // ─── Exploration safety and coverage P4 Chunk 3: personal literature library tasks
+    // (docs/helm/2026-10-13-exploration-safety-and-coverage/phases/04-workbench-library-tasks.md) ───────
+    {
+      id: GOAL_TASK_IDS[6], title: "构建个人文献库搜索索引",
+      goal: `打开设置，个人文献库目前已连接，但尚未获得处理授权，也没有搜索索引。在“${PERSONAL_LIBRARY_NAV_LABEL}”区域点击“${LIBRARY_BUILD_BUTTON_LABEL}”按钮；页面会弹出处理披露说明，阅读后点击“${LIBRARY_CONFIRM_BUILD_LABEL}”按钮完成授权并开始建立索引，等待构建完成即可，不需要关闭设置。不要修改嵌入或连接设置。`,
+      uiLabels: [
+        uiLabel(PERSONAL_LIBRARY_NAV_LABEL, "apps/cli/src/workbench/web/app.ts"),
+        uiLabel(LIBRARY_BUILD_BUTTON_LABEL, "packages/core/src/library/library-connection.ts"),
+        uiLabel(LIBRARY_CONFIRM_BUILD_LABEL, "packages/core/src/presentation/settings-translations.ts"),
+      ],
+      // Starts connected but unauthorized, with no index yet (never through the model —
+      // startWorkbenchLibraryFixture seeds it through the real CLI, exactly like every other task's
+      // prepare() seeds its own deterministic starting state directly), so the only thing left for the
+      // model to do is the one flow this task actually tests: find "Retry preparation", read the
+      // disclosure, and confirm it. Records the fixture's own request count at this exact moment so
+      // verify() can tell a fresh embeddings request (driven by this task's own click) apart from one
+      // left over from an earlier task in the same pass.
+      async prepare({ driver }) {
+        await startWorkbenchLibraryFixture(driver, { authorized: false });
+        libraryBuildIndexBaseline = { requestCount: driver.fixture.server.requests.length };
+      },
+      async verify({ driver, actions }) {
+        const clicked = actions.some(action => action.type === "click" && action.control?.dataAction === "library-build");
+        if (!clicked) return taskResult([checkResult(`点击“${LIBRARY_BUILD_BUTTON_LABEL}”按钮`, false)]);
+        const confirmed = actions.some(action => action.type === "click" && action.control?.dataAction === "confirm-library-build");
+        if (!confirmed) {
+          return taskResult([checkResult(`点击“${LIBRARY_BUILD_BUTTON_LABEL}”按钮`, true), checkResult(`在披露对话框中点击“${LIBRARY_CONFIRM_BUILD_LABEL}”确认`, false)]);
+        }
+        const config = await pollFile(() => settings(fixture), value => Boolean(value?.library?.authorization)).catch(() => null);
+        const authorized = Boolean(config?.library?.authorization);
+        const indexFile = await pollFile(() => findLibrarySearchIndexFile(fixture), value => value !== null).catch(() => null);
+        const baseline = libraryBuildIndexBaseline?.requestCount ?? 0;
+        const embeddingsRequested = driver.fixture.server.requests.slice(baseline).some(request => request.kind === "embeddings");
+        return taskResult([
+          checkResult(`点击“${LIBRARY_BUILD_BUTTON_LABEL}”按钮`, true),
+          checkResult(`在披露对话框中点击“${LIBRARY_CONFIRM_BUILD_LABEL}”确认`, true),
+          checkResult("设置中记录了个人文献库的处理授权", authorized, config?.library),
+          checkResult("磁盘上生成了个人文献库搜索索引的 current.json", Boolean(indexFile), indexFile),
+          checkResult("任务开始后夹具收到了 embeddings 请求", embeddingsRequested),
+        ]);
+      },
+    },
+    {
+      id: GOAL_TASK_IDS[7], title: "撤销个人文献库的处理授权",
+      goal: `打开设置，个人文献库目前已连接并已获得处理授权。在“${PERSONAL_LIBRARY_NAV_LABEL}”区域点击“${LIBRARY_REVOKE_BUTTON_LABEL}”按钮；撤销会立即生效，不会再弹出确认对话框。不需要重新连接或重新授权，也不要修改嵌入设置。`,
+      uiLabels: [
+        uiLabel(PERSONAL_LIBRARY_NAV_LABEL, "apps/cli/src/workbench/web/app.ts"),
+        uiLabel(LIBRARY_REVOKE_BUTTON_LABEL, "packages/core/src/presentation/settings-translations.ts"),
+      ],
+      // Starts already connected and authorized (never through the model), so the only thing left for
+      // the model to do is the one UI action this task actually tests: find and click Revoke. Unlike
+      // the Obsidian plugin, the workbench's own `library-revoke` settings action needs no second
+      // confirmation click (apps/cli/src/workbench/web/settings.ts has no special-case handler for it,
+      // so it falls straight through to the generic `action(name)` call).
+      async prepare({ driver }) {
+        await startWorkbenchLibraryFixture(driver, { authorized: true });
+      },
+      async verify({ actions }) {
+        const revoked = actions.some(action => action.type === "click" && action.control?.dataAction === "library-revoke");
+        if (!revoked) return taskResult([checkResult(`点击“${LIBRARY_REVOKE_BUTTON_LABEL}”按钮`, false)]);
+        const config = await pollFile(() => settings(fixture), value => !value?.library?.authorization).catch(() => null);
+        const stillAuthorized = Boolean(config?.library?.authorization);
+        return taskResult([
+          checkResult(`点击“${LIBRARY_REVOKE_BUTTON_LABEL}”按钮`, true),
+          checkResult("个人文献库的处理授权已从设置中撤销", !stillAuthorized, config?.library),
+        ]);
+      },
+    },
+    {
+      id: GOAL_TASK_IDS[8], title: "筛选个人文献库目录",
+      goal: `点击“${PERSONAL_LIBRARY_NAV_LABEL}”进入文献库页面（个人文献库已连接，但还没有建立搜索索引）。在“${LIBRARY_KEYWORD_FIELD_LABEL}”输入框中填写“${LIBRARY_SEARCH_QUERY}”，点击“${LIBRARY_BROWSE_BUTTON_LABEL}”按钮，等待结果加载完成，确认下方只显示一篇标题或摘要中包含“${LIBRARY_SEARCH_QUERY}”的论文。不要修改“${LIBRARY_SEARCH_MODE_FIELD_LABEL}”，也不要点击“${LIBRARY_SEARCH_BUTTON_LABEL}”。`,
+      uiLabels: [
+        uiLabel(PERSONAL_LIBRARY_NAV_LABEL, "apps/cli/src/workbench/web/app.ts"),
+        uiLabel(LIBRARY_KEYWORD_FIELD_LABEL, "apps/cli/src/workbench/web/library.ts"),
+        uiLabel(LIBRARY_BROWSE_BUTTON_LABEL, "apps/cli/src/workbench/web/library.ts"),
+      ],
+      // Starts connected and scanned, deliberately NOT authorized (startWorkbenchLibraryFixture's own
+      // `scanned` option, P4 Chunk 3): browsing the catalog is the one personal-library action the
+      // product itself documents as never calling the model ("浏览目录不调用模型"), so this task's
+      // precondition exercises exactly that unrestricted, unauthorized path — never through the model.
+      async prepare({ driver }) {
+        await startWorkbenchLibraryFixture(driver, { scanned: true });
+      },
+      async verify({ observation, actions }) {
+        const filledIndex = actions.findIndex(action => action.type === "fill" && (action.control?.name || "").trim() === LIBRARY_KEYWORD_FIELD_LABEL && action.value.toLowerCase().includes(LIBRARY_SEARCH_QUERY));
+        if (filledIndex === -1) return taskResult([checkResult(`在“${LIBRARY_KEYWORD_FIELD_LABEL}”输入框中填写“${LIBRARY_SEARCH_QUERY}”`, false)]);
+        const browsedIndex = actions.findIndex((action, index) => index > filledIndex && action.type === "click" && exactLabelPattern(LIBRARY_BROWSE_BUTTON_LABEL).test((action.control?.name || "").trim()));
+        if (browsedIndex === -1) {
+          return taskResult([checkResult(`在“${LIBRARY_KEYWORD_FIELD_LABEL}”输入框中填写“${LIBRARY_SEARCH_QUERY}”`, true), checkResult(`点击“${LIBRARY_BROWSE_BUTTON_LABEL}”按钮`, false)]);
+        }
+        const match = /目录 · (\d+) 篇论文/.exec(observation.text || "");
+        const count = match ? Number(match[1]) : 0;
+        const matchedOnlyPaper = count === 1 && (observation.text || "").includes(PAPERS[0].title);
+        return taskResult([
+          checkResult(`在“${LIBRARY_KEYWORD_FIELD_LABEL}”输入框中填写“${LIBRARY_SEARCH_QUERY}”`, true),
+          checkResult(`点击“${LIBRARY_BROWSE_BUTTON_LABEL}”按钮`, true),
+          checkResult("目录筛选结果只显示标题或摘要包含该关键词的那一篇论文", matchedOnlyPaper, { count, snippet: (observation.text || "").slice(0, 200) }),
+        ]);
+      },
+    },
+    {
+      id: GOAL_TASK_IDS[9], title: "在索引检索方式下检索个人文献库",
+      goal: `点击“${PERSONAL_LIBRARY_NAV_LABEL}”进入文献库页面（个人文献库已连接、已获得处理授权，并且已经完成过一次索引构建）。把“${LIBRARY_SEARCH_MODE_FIELD_LABEL}”切换为“${LIBRARY_SEARCH_MODE_DENSE_OPTION_LABEL}”，在“${LIBRARY_KEYWORD_FIELD_LABEL}”输入框中填写“${LIBRARY_SEARCH_QUERY}”，点击“${LIBRARY_SEARCH_BUTTON_LABEL}”按钮，等待检索结果出现。`,
+      uiLabels: [
+        uiLabel(PERSONAL_LIBRARY_NAV_LABEL, "apps/cli/src/workbench/web/app.ts"),
+        uiLabel(LIBRARY_SEARCH_MODE_FIELD_LABEL, "apps/cli/src/workbench/web/library.ts"),
+        uiLabel(LIBRARY_SEARCH_MODE_DENSE_OPTION_LABEL, "apps/cli/src/workbench/web/library.ts"),
+        uiLabel(LIBRARY_KEYWORD_FIELD_LABEL, "apps/cli/src/workbench/web/library.ts"),
+        uiLabel(LIBRARY_SEARCH_BUTTON_LABEL, "apps/cli/src/workbench/web/library.ts"),
+      ],
+      // Starts connected, authorized and already indexed (never through the model — see
+      // library-revoke's own prepare() comment): the one thing this task actually tests is switching
+      // to a mode that calls the embedding endpoint, searching and seeing a real matched result.
+      // Records the fixture's own request count at the end of its own seeding, same reasoning as
+      // library-build-index's own baseline.
+      async prepare({ driver }) {
+        await startWorkbenchLibraryFixture(driver, { authorized: true, indexed: true });
+        libraryIndexSearchBaseline = { requestCount: driver.fixture.server.requests.length };
+      },
+      async verify({ driver, observation, actions }) {
+        const selectedIndex = actions.findIndex(action => action.type === "select" && exactLabelPattern(LIBRARY_SEARCH_MODE_FIELD_LABEL).test((action.control?.name || "").trim()) && action.value === "dense");
+        if (selectedIndex === -1) return taskResult([checkResult(`把“${LIBRARY_SEARCH_MODE_FIELD_LABEL}”切换为“${LIBRARY_SEARCH_MODE_DENSE_OPTION_LABEL}”`, false)]);
+        const filledIndex = actions.findIndex(action => action.type === "fill" && (action.control?.name || "").trim() === LIBRARY_KEYWORD_FIELD_LABEL && action.value.toLowerCase().includes(LIBRARY_SEARCH_QUERY));
+        if (filledIndex === -1) {
+          return taskResult([checkResult(`把“${LIBRARY_SEARCH_MODE_FIELD_LABEL}”切换为“${LIBRARY_SEARCH_MODE_DENSE_OPTION_LABEL}”`, true), checkResult(`在“${LIBRARY_KEYWORD_FIELD_LABEL}”输入框中填写“${LIBRARY_SEARCH_QUERY}”`, false)]);
+        }
+        const searchedIndex = actions.findIndex((action, index) => index > Math.max(selectedIndex, filledIndex) && action.type === "click" && exactLabelPattern(LIBRARY_SEARCH_BUTTON_LABEL).test((action.control?.name || "").trim()));
+        if (searchedIndex === -1) {
+          return taskResult([
+            checkResult(`把“${LIBRARY_SEARCH_MODE_FIELD_LABEL}”切换为“${LIBRARY_SEARCH_MODE_DENSE_OPTION_LABEL}”`, true),
+            checkResult(`在“${LIBRARY_KEYWORD_FIELD_LABEL}”输入框中填写“${LIBRARY_SEARCH_QUERY}”`, true),
+            checkResult(`点击“${LIBRARY_SEARCH_BUTTON_LABEL}”按钮`, false),
+          ]);
+        }
+        const match = /检索结果 · (\d+) 篇论文/.exec(observation.text || "");
+        const count = match ? Number(match[1]) : 0;
+        const baseline = libraryIndexSearchBaseline?.requestCount ?? 0;
+        const embeddingsRequested = driver.fixture.server.requests.slice(baseline).some(request => request.kind === "embeddings");
+        return taskResult([
+          checkResult(`把“${LIBRARY_SEARCH_MODE_FIELD_LABEL}”切换为“${LIBRARY_SEARCH_MODE_DENSE_OPTION_LABEL}”`, true),
+          checkResult(`在“${LIBRARY_KEYWORD_FIELD_LABEL}”输入框中填写“${LIBRARY_SEARCH_QUERY}”`, true),
+          checkResult(`点击“${LIBRARY_SEARCH_BUTTON_LABEL}”按钮`, true),
+          checkResult("检索结果区域显示至少一条匹配结果", count >= 1, count),
+          checkResult("任务开始后夹具收到了 embeddings 请求", embeddingsRequested),
+        ]);
+      },
+    },
+    // ─── Exploration safety and coverage P4 Chunk 4: Direction candidate review tasks
+    // (docs/helm/2026-10-13-exploration-safety-and-coverage/phases/04-workbench-library-tasks.md) ───
+    {
+      id: GOAL_TASK_IDS[10], title: "生成并采纳一个来自个人文献库的候选研究方向",
+      goal: `点击左下角“${DIRECTION_REVIEW_NAV_LABEL}”进入候选方向审核页面（个人文献库已连接、已获得处理授权，并且已经完成过一次索引构建，但还没有生成过候选方向）。点击“${GENERATE_PROPOSED_DIRECTIONS_LABEL}”按钮，在随后弹出的确认框中点击“${CONFIRM_LABEL}”，等待生成完成。生成的候选方向默认已勾选；如果没有勾选，先勾选其中一个，再点击“${ACCEPT_SELECTED_DIRECTIONS_LABEL}”按钮，并在弹出的确认框中再次点击“${CONFIRM_LABEL}”完成采纳。`,
+      uiLabels: [
+        uiLabel(DIRECTION_REVIEW_NAV_LABEL, "apps/cli/src/workbench/web/app.ts"),
+        uiLabel(GENERATE_PROPOSED_DIRECTIONS_LABEL, "apps/cli/src/workbench/web/library-review.ts"),
+        uiLabel(CONFIRM_LABEL, "apps/cli/src/workbench/web/library-review.ts"),
+        uiLabel(ACCEPT_SELECTED_DIRECTIONS_LABEL, "apps/cli/src/workbench/web/library-review.ts"),
+      ],
+      // Starts connected, authorized and indexed with no proposal yet (never through the model — same
+      // reasoning as every other library task's own prepare()): the one flow this task actually tests
+      // is generating, selecting and accepting a real proposed direction. `clusterable: true` gives the
+      // real clustering run one real two-member group (PAPERS[0] plus the extra fixture paper) so
+      // "Generate proposed directions" always has real evidence to propose from.
+      async prepare({ driver }) {
+        await startWorkbenchLibraryFixture(driver, { authorized: true, indexed: true, clusterable: true });
+        libraryAcceptDirectionBaseline = { requestCount: driver.fixture.server.requests.length };
+      },
+      async verify({ driver, actions }) {
+        const navIndex = actions.findIndex(action => action.type === "click" && exactLabelPattern(DIRECTION_REVIEW_NAV_LABEL).test((action.control?.name || "").trim()));
+        if (navIndex === -1) return taskResult([checkResult(`点击“${DIRECTION_REVIEW_NAV_LABEL}”进入候选方向审核页面`, false)]);
+        const proposeIndex = actions.findIndex((action, index) => index > navIndex && action.type === "click" && exactLabelPattern(GENERATE_PROPOSED_DIRECTIONS_LABEL).test((action.control?.name || "").trim()));
+        if (proposeIndex === -1) {
+          return taskResult([checkResult(`点击“${DIRECTION_REVIEW_NAV_LABEL}”进入候选方向审核页面`, true), checkResult(`点击“${GENERATE_PROPOSED_DIRECTIONS_LABEL}”按钮`, false)]);
+        }
+        const confirmGenerateIndex = actions.findIndex((action, index) => index > proposeIndex && action.type === "click" && exactLabelPattern(CONFIRM_LABEL).test((action.control?.name || "").trim()));
+        if (confirmGenerateIndex === -1) {
+          return taskResult([checkResult(`点击“${DIRECTION_REVIEW_NAV_LABEL}”进入候选方向审核页面`, true), checkResult(`点击“${GENERATE_PROPOSED_DIRECTIONS_LABEL}”按钮`, true), checkResult(`在确认框中点击“${CONFIRM_LABEL}”开始生成`, false)]);
+        }
+        const acceptIndex = actions.findIndex((action, index) => index > confirmGenerateIndex && action.type === "click" && exactLabelPattern(ACCEPT_SELECTED_DIRECTIONS_LABEL).test((action.control?.name || "").trim()));
+        if (acceptIndex === -1) {
+          return taskResult([
+            checkResult(`点击“${DIRECTION_REVIEW_NAV_LABEL}”进入候选方向审核页面`, true), checkResult(`点击“${GENERATE_PROPOSED_DIRECTIONS_LABEL}”按钮`, true),
+            checkResult(`在确认框中点击“${CONFIRM_LABEL}”开始生成`, true), checkResult(`点击“${ACCEPT_SELECTED_DIRECTIONS_LABEL}”按钮`, false),
+          ]);
+        }
+        const confirmAcceptIndex = actions.findIndex((action, index) => index > acceptIndex && action.type === "click" && exactLabelPattern(CONFIRM_LABEL).test((action.control?.name || "").trim()));
+        if (confirmAcceptIndex === -1) {
+          return taskResult([
+            checkResult(`点击“${DIRECTION_REVIEW_NAV_LABEL}”进入候选方向审核页面`, true), checkResult(`点击“${GENERATE_PROPOSED_DIRECTIONS_LABEL}”按钮`, true),
+            checkResult(`在确认框中点击“${CONFIRM_LABEL}”开始生成`, true), checkResult(`点击“${ACCEPT_SELECTED_DIRECTIONS_LABEL}”按钮`, true),
+            checkResult(`在确认框中再次点击“${CONFIRM_LABEL}”完成采纳`, false),
+          ]);
+        }
+        const config = await pollFile(() => settings(fixture), value => (value?.arxiv?.topics ?? []).some(topic => (topic.directions ?? []).some(direction => direction.origin === "library"))).catch(() => null);
+        const addedDirection = (config?.arxiv?.topics ?? []).some(topic => (topic.directions ?? []).some(direction => direction.origin === "library"));
+        const baseline = libraryAcceptDirectionBaseline?.requestCount ?? 0;
+        const proposalRequested = driver.fixture.server.requests.slice(baseline).some(request => request.kind === "proposal");
+        return taskResult([
+          checkResult(`点击“${DIRECTION_REVIEW_NAV_LABEL}”进入候选方向审核页面`, true),
+          checkResult(`点击“${GENERATE_PROPOSED_DIRECTIONS_LABEL}”按钮`, true),
+          checkResult(`在确认框中点击“${CONFIRM_LABEL}”开始生成`, true),
+          checkResult(`点击“${ACCEPT_SELECTED_DIRECTIONS_LABEL}”按钮`, true),
+          checkResult(`在确认框中再次点击“${CONFIRM_LABEL}”完成采纳`, true),
+          checkResult("任务开始后夹具收到了一次候选方向生成请求", proposalRequested),
+          checkResult("研究主题中新增了一个来源为 library 的方向", addedDirection, config?.arxiv?.topics),
+        ]);
+      },
+    },
+    {
+      id: GOAL_TASK_IDS[11], title: "重命名并丢弃个人文献库的候选研究方向",
+      goal: `点击左下角“${DIRECTION_REVIEW_NAV_LABEL}”进入候选方向审核页面（个人文献库已连接、已获得处理授权、已完成索引构建，并且已经生成好一份候选方向，不需要重新生成）。页面上会列出两个候选主题，每个主题下恰好有一个候选方向。任选其中一个主题，把它的“${SUGGESTED_TOPIC_NAME_FIELD_LABEL}”改为“${LIBRARY_EDIT_NEW_TOPIC_NAME}”，再点击该主题自己的“${SAVE_TOPIC_NAME_LABEL}”按钮确认重命名。然后在另一个主题下，点击它唯一的候选方向的“${REMOVE_CANDIDATE_LABEL}”按钮，并在随后弹出的确认框中点击“${CONFIRM_LABEL}”，丢弃这个候选方向。`,
+      uiLabels: [
+        uiLabel(DIRECTION_REVIEW_NAV_LABEL, "apps/cli/src/workbench/web/app.ts"),
+        uiLabel(SUGGESTED_TOPIC_NAME_FIELD_LABEL, "apps/cli/src/workbench/web/library-review.ts"),
+        uiLabel(SAVE_TOPIC_NAME_LABEL, "apps/cli/src/workbench/web/library-review.ts"),
+        uiLabel(REMOVE_CANDIDATE_LABEL, "apps/cli/src/workbench/web/library-review.ts"),
+        uiLabel(CONFIRM_LABEL, "apps/cli/src/workbench/web/library-review.ts"),
+      ],
+      // Starts connected, authorized and indexed like library-accept-direction, but additionally seeds a
+      // second clusterable paper (no "measurement" substring, pairing with PAPERS[1]'s own vector) and
+      // generates a real proposal through the real CLI's own `library propose` (never a hand-written
+      // direction-proposal.json, the phase's own approach) so the real clustering run produces two
+      // separate topics, each with exactly one candidate direction — one to rename, the other's own lone
+      // candidate to discard (removePersonalLibraryDirectionCandidate, packages/core, drops a topic
+      // entirely once its last direction is gone). Which of the two the model picks for which action is
+      // deliberately left open (the goal says "either"), so verify() checks the resulting *shape* —
+      // exactly one topic left, renamed — rather than a specific id captured only by this real CLI call,
+      // keeping the check exercisable by a hand-written two-topic fixture proposal in a fast unit test.
+      async prepare({ driver }) {
+        await seedClusterableWorkbenchLibraryPaper(fixture, { id: SECOND_CLUSTER_PAPER_ID, title: SECOND_CLUSTER_PAPER_TITLE, abstract: SECOND_CLUSTER_PAPER_ABSTRACT });
+        await startWorkbenchLibraryFixture(driver, { authorized: true, indexed: true, clusterable: true });
+        const proposal = await runWorkbenchLibraryCli({ args: ["library", "propose"], env: fixture.env });
+        if ((proposal?.topics ?? []).length < 2) {
+          throw new Error("library-edit-candidate: prepare()'s real generation did not produce two proposed topics to rename/discard");
+        }
+      },
+      async verify({ actions }) {
+        const navIndex = actions.findIndex(action => action.type === "click" && exactLabelPattern(DIRECTION_REVIEW_NAV_LABEL).test((action.control?.name || "").trim()));
+        if (navIndex === -1) return taskResult([checkResult(`点击“${DIRECTION_REVIEW_NAV_LABEL}”进入候选方向审核页面`, false)]);
+        const filledIndex = actions.findIndex((action, index) => index > navIndex && action.type === "fill" && exactLabelPattern(SUGGESTED_TOPIC_NAME_FIELD_LABEL).test((action.control?.name || "").trim()) && action.value === LIBRARY_EDIT_NEW_TOPIC_NAME);
+        const renameClickIndex = filledIndex === -1 ? -1 : actions.findIndex((action, index) => index > filledIndex && action.type === "click" && exactLabelPattern(SAVE_TOPIC_NAME_LABEL).test((action.control?.name || "").trim()));
+        const removeClickIndex = actions.findIndex((action, index) => index > navIndex && action.type === "click" && exactLabelPattern(REMOVE_CANDIDATE_LABEL).test((action.control?.name || "").trim()));
+        const confirmDiscardIndex = removeClickIndex === -1 ? -1 : actions.findIndex((action, index) => index > removeClickIndex && action.type === "click" && exactLabelPattern(CONFIRM_LABEL).test((action.control?.name || "").trim()));
+        const checks = [
+          checkResult(`点击“${DIRECTION_REVIEW_NAV_LABEL}”进入候选方向审核页面`, true),
+          checkResult(`把一个候选主题的“${SUGGESTED_TOPIC_NAME_FIELD_LABEL}”改为“${LIBRARY_EDIT_NEW_TOPIC_NAME}”`, filledIndex !== -1),
+          checkResult(`点击该主题的“${SAVE_TOPIC_NAME_LABEL}”按钮`, renameClickIndex !== -1),
+          checkResult(`点击另一个候选主题的候选方向上的“${REMOVE_CANDIDATE_LABEL}”按钮`, removeClickIndex !== -1),
+          checkResult(`在确认框中点击“${CONFIRM_LABEL}”丢弃该候选方向`, confirmDiscardIndex !== -1),
+        ];
+        if (renameClickIndex === -1 || confirmDiscardIndex === -1) return taskResult(checks);
+        const proposal = await pollFile(() => readLibraryDirectionProposal(fixture),
+          value => value?.topics?.length === 1 && value.topics[0]?.suggestedName === LIBRARY_EDIT_NEW_TOPIC_NAME).catch(() => null);
+        const onlyOneTopicLeft = proposal?.topics?.length === 1;
+        const renamed = onlyOneTopicLeft && proposal.topics[0].suggestedName === LIBRARY_EDIT_NEW_TOPIC_NAME;
+        return taskResult([
+          ...checks,
+          checkResult("候选方向文件里只剩一个主题（另一个主题唯一的候选方向已被丢弃，随之移除）", onlyOneTopicLeft, proposal?.topics),
+          checkResult("剩下的主题名称已更新为新名称", renamed, proposal?.topics?.[0]?.suggestedName),
         ]);
       },
     },

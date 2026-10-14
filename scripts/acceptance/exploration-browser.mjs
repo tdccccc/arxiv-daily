@@ -1,8 +1,8 @@
-import { mkdir, readFile, realpath, stat, writeFile } from "node:fs/promises";
+import { mkdir, readdir, readFile, realpath, rm, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
-import { collapseOptionSets, createExplorationRedactor, ExplorationActionError, parseExplorationAction } from "./exploration.mjs";
+import { collapseOptionSets, createExplorationRedactor, ExplorationActionError, parseExplorationAction, PRESS_NAVIGATION_KEYS } from "./exploration.mjs";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const cliRequire = createRequire(path.resolve(here, "../../apps/cli/package.json"));
@@ -24,6 +24,27 @@ export function classifyControlRestriction(control, allowedUrl) {
     } catch { return "link is not a permitted local address"; }
   }
   return undefined;
+}
+
+/**
+ * Describes one live DOM node the same way for every caller that needs to re-check it against
+ * `classifyControlRestriction` right before an effect fires: the ref-based live re-validation that
+ * click/fill/select already did (previously an inline arrow function here) and, since P1 Chunk 2 of
+ * docs/helm/2026-10-13-exploration-safety-and-coverage, `press`'s own focus check below — `press` has
+ * no ref to resolve a target from (it goes to whatever has focus), so it calls this with no argument and
+ * gets `document.activeElement` instead. One shape, one place it's built, so the two call sites can never
+ * drift into checking different things. `outsideWorkbench` additionally flags focus that has left the
+ * app's own root entirely (not just left the currently open dialog, which `outsideDialog` already
+ * covers) — `document.body` itself is exempted because that is also the page's neutral "nothing is
+ * explicitly focused yet" state (e.g. right after a fresh load/reload, before the model's first action),
+ * not an escape, and a keyboard-only persona's very first `press` (typically Tab) must still work from it.
+ */
+function liveControlDescriptor(node = document.activeElement) {
+  return { tag: node.tagName.toLowerCase(), type: node.getAttribute("type") || "", field: node.getAttribute("name") || "",
+    name: node.getAttribute("aria-label") || node.textContent || "", href: node.getAttribute("href") || "",
+    dataAction: node.getAttribute("data-settings-action") || node.getAttribute("data-settings") || node.getAttribute("data-action") || "", disabled: node.disabled === true,
+    readOnly: node.readOnly === true, outsideDialog: Boolean(document.querySelector("dialog[open]") && !node.closest("dialog[open]")),
+    outsideWorkbench: node !== document.body && !node.closest(".workbench") };
 }
 
 function contained(root, file) {
@@ -79,8 +100,26 @@ function browserObservation(id) {
     const rect = node.getBoundingClientRect();
     const field = node.getAttribute("name") || "";
     const labelIds = (node.getAttribute("aria-labelledby") || "").split(/\s+/).filter(Boolean);
+    // P4 Chunk 3 (docs/helm/2026-10-13-exploration-safety-and-coverage/phases/04-workbench-library-tasks.md):
+    // a plain button's own rendered text (e.g. settings.ts's `button(action, label)` helper, which sets
+    // no aria-label of its own) must win over the `[data-setting-name]` ancestor fallback below, not lose
+    // to it. Found on the real host while wiring the library-build task: every button inside the "Personal
+    // library" settings row ("Choose folder"/"Retry preparation"/"Revoke"/...) reported the row's own name
+    // ("Library") instead of its own text, because the row fallback used to be checked first — so a model
+    // (or a goal task's verify()) could never tell those buttons apart by name. The same bug hit every
+    // other settings row with more than one plain-text button (e.g. a research topic's "Add direction" /
+    // "Remove direction" / "Delete" all reporting the topic's own name). `[data-setting-name]` still
+    // applies afterward, for a control that truly has no name of its own (an input/select the product
+    // forgot to label).
+    // P7 Chunk 1 (phases/07-workbench-observer-parity.md, mirroring Obsidian's d600a2e): a summary's own
+    // rendered text wins under the same rule as a button. A link's own text wins over its `title` tooltip
+    // but not over its settings row: the external-link rows render a generic "Open" link, and the row name
+    // is what tells them apart.
+    const ownButtonText = /^(BUTTON|SUMMARY)$/.test(node.tagName) ? node.textContent.trim() : "";
+    const ownLinkText = node.tagName === "A" ? node.textContent.trim() : "";
     const label = node.getAttribute("aria-label") || labelIds.map(labelId => document.getElementById(labelId)?.textContent || "").join(" ") ||
-      Array.from(node.labels || []).map(item => item.textContent).join(" ") || node.closest("[data-setting-name]")?.getAttribute("data-setting-name") || node.getAttribute("title") || field || node.textContent;
+      Array.from(node.labels || []).map(item => item.textContent).join(" ") || ownButtonText ||
+      node.closest("[data-setting-name]")?.getAttribute("data-setting-name") || ownLinkText || node.getAttribute("title") || field || node.textContent;
     const sensitive = node.type === "password" || /api.?key|password|secret|token/i.test(field);
     const ref = `${id}-${controls.length + 1}`;
     node.setAttribute("data-acceptance-ref", ref);
@@ -90,6 +129,10 @@ function browserObservation(id) {
       ...(sensitive ? { sensitive: true } : {}),
       ...(typeof node.value === "string" ? { value: sensitive ? "" : node.value.slice(0, 1000) } : {}),
       ...(typeof node.checked === "boolean" ? { checked: node.checked } : {}),
+      // P7 Chunk 1 (mirroring Obsidian's d600a2e): a <summary> has no open state of its own; report its parent
+      // <details>' `open` next to `checked`, so an already-open section is not collapsed again. Only the direct
+      // parent is read; a summary inside a closed outer details is hidden and never reaches this point.
+      ...(node.tagName === "SUMMARY" && node.parentElement?.tagName === "DETAILS" ? { expanded: node.parentElement.open === true } : {}),
       ...(node.hasAttribute("href") ? { href: node.getAttribute("href").slice(0, 1000) } : {}),
       ...(node.tagName === "SELECT" ? { options: Array.from(node.options).slice(0, 60).map(option => ({ value: option.value.slice(0, 256), label: option.text.slice(0, 96), disabled: option.disabled })) } : {}),
       dataAction: node.getAttribute("data-settings-action") || node.getAttribute("data-settings") || node.getAttribute("data-action") || "",
@@ -105,9 +148,90 @@ function browserObservation(id) {
       sidebarCollapsed: root?.classList.contains("sidebar-collapsed") === true, viewport: { width: innerWidth, height: innerHeight } } };
 }
 
+/**
+ * P4 Chunk 2 Fix 1 (see reset()'s own comment): reads the workbench server's currently-held config
+ * revision through its own GET /api/settings and, when settings exist at all, performs one real, no-op
+ * settings save (empty `values`, current `revision`) through its own POST /api/settings — syncing the
+ * server's in-memory config to whatever is on disk right now, without reverting disk to any earlier
+ * baseline. Factored out of reset() so `startWorkbenchLibraryFixture` (exploration-tasks/
+ * workbench-library.mjs) can call the exact same resync after its own out-of-band CLI writes, through
+ * the driver's own `resyncSettings()` below, instead of a second copy of this GET/POST dance.
+ */
+async function resyncConfigRevision(page, url) {
+  const current = await page.request.get(new URL("api/settings", url).href, { timeout: 5000 });
+  if (!current.ok()) throw new Error(`Could not read workbench settings to resync the config revision: ${current.status()}`);
+  const { revision } = await current.json();
+  if (revision !== null) {
+    const saved = await page.request.post(new URL("api/settings", url).href, { data: { revision, values: {} }, timeout: 5000 });
+    if (!saved.ok()) throw new Error(`Could not resync the workbench config revision: ${saved.status()}`);
+  }
+}
+
+/**
+ * P4 Chunk 2 (docs/helm/2026-10-13-exploration-safety-and-coverage/phases/04-workbench-library-tasks.md):
+ * restores the fixture's own personal-library state to its baseline — no `[library]`/`[embedding]` TOML
+ * table (the fixture never ships either; only `startWorkbenchLibraryFixture` or a model's own
+ * library-build/remote-embedding flow ever adds them), no `origin: "library"` direction under
+ * `arxiv.topics[].directions` (a manually-set direction, e.g. the fixture's own baseline one, is left
+ * alone — this is a surgical restore, not a revert-to-snapshot, so a legitimately saved setting from an
+ * earlier task, e.g. settings-persistence's own `max_daily_papers`, survives exactly like reset()'s own
+ * comment above already guarantees for the config resync), no leftover `.index/personal-library-*`
+ * catalog/search-index/profile state (same derivation exploration-obsidian.mjs's `clearLibraryState` uses
+ * for Obsidian, and the same directory the real CLI itself writes to — confirmed by library-runtime-
+ * cache.mjs's real-host probe), and no library PDF beyond whatever was already under `vault/library` when
+ * this driver was built (`baselineLibraryFiles`, e.g. `startWorkbenchLibraryFixture`'s own extra
+ * clusterable PDF). Skips the TOML rewrite entirely when there is nothing to remove, so the vast majority
+ * of non-library tasks' reset() calls never touch the config file at all.
+ *
+ * P4 Chunk 4 fix: a topic that `library-accept-direction` auto-creates (acceptProposedTopics,
+ * packages/core/src/settings/accept-proposed-topics.ts — a new topic only when no existing one shares
+ * its name) holds only library-origin directions, so filtering those out above can leave it with zero
+ * directions. Unlike the product's own proposal-side `removePersonalLibraryDirectionCandidate`, which
+ * drops an emptied topic, this filter used to leave the empty shell behind — found on the real host
+ * running `library-accept-direction` then `library-edit-candidate` in one pass: the leftover topic's
+ * own name ("Research evidence 1") collided with the next real `library propose` call's own freshly
+ * generated topic of the same name, which `decodeOrganizedTopics` (personal-library-topic-
+ * organization.ts) rejects as "reference-out-of-scope" (a new topic may not share an existing one's
+ * name). Splicing out only a topic this filter emptied — never one that still has its own manual
+ * direction, like the fixture's baseline "Research" topic, nor one that had no directions to begin
+ * with — closes this the same way the product does.
+ */
+async function clearFixtureLibraryState(fixture, baselineLibraryFiles) {
+  const { parse } = cliRequire("smol-toml");
+  const table = parse(await readFile(fixture.configPath, "utf8"));
+  const hasLibraryOriginDirection = (table.arxiv?.topics ?? []).some(topic => (topic.directions ?? []).some(direction => direction.origin === "library"));
+  if (table.library || table.embedding || hasLibraryOriginDirection) {
+    await writeConfigPatch(fixture, current => {
+      delete current.library;
+      delete current.embedding;
+      const emptied = new Set();
+      for (const topic of current.arxiv?.topics ?? []) {
+        if (!Array.isArray(topic.directions)) continue;
+        const kept = topic.directions.filter(direction => direction.origin !== "library");
+        if (kept.length === 0 && topic.directions.length > 0) emptied.add(topic);
+        topic.directions = kept;
+      }
+      if (Array.isArray(current.arxiv?.topics)) current.arxiv.topics = current.arxiv.topics.filter(topic => !emptied.has(topic));
+    });
+  }
+  const dailyDir = table.output?.daily_dir;
+  if (typeof dailyDir === "string") {
+    const indexDir = path.join(fixture.vaultRoot, path.dirname(dailyDir), ".index");
+    const indexEntries = await readdir(indexDir).catch(() => []);
+    await Promise.all(indexEntries.filter(entry => entry.startsWith("personal-library-")).map(entry => rm(path.join(indexDir, entry), { recursive: true, force: true })));
+  }
+  const libraryDir = path.join(fixture.vaultRoot, "library");
+  const currentLibraryFiles = await readdir(libraryDir).catch(() => []);
+  await Promise.all(currentLibraryFiles.filter(entry => !baselineLibraryFiles.has(entry)).map(entry => rm(path.join(libraryDir, entry), { recursive: true, force: true })));
+}
+
 export async function createExplorationDriver({ page, context, url, fixture, artifactDir, diagnostics, redact = createExplorationRedactor(), signal }) {
   await assertFixture(fixture);
   await mkdir(artifactDir, { recursive: true, mode: 0o700 });
+  // P4 Chunk 2: captured once, at driver creation, so reset()'s own library-PDF cleanup (below) can tell
+  // "already there when this task library started" apart from "a task's own prepare() added this" —
+  // mirrors exploration-obsidian.mjs's own `baselineLibraryFiles`.
+  const baselineLibraryFiles = new Set(await readdir(path.join(fixture.vaultRoot, "library")).catch(() => []));
   await page.locator(".workbench").waitFor({ state: "visible", timeout: 12000 });
   const base = new URL(url), pageErrors = [], boundaryEvents = [];
   let version = 0, latest;
@@ -159,10 +283,7 @@ export async function createExplorationDriver({ page, context, url, fixture, art
         if (action.ref) {
           target = page.locator(`[data-acceptance-ref="${action.ref}"]`);
           if (await target.count() !== 1 || !await target.isVisible()) throw new ExplorationActionError("Ref disappeared or is no longer visible; re-observe the page");
-          const live = await target.evaluate(node => ({ tag: node.tagName.toLowerCase(), type: node.getAttribute("type") || "", field: node.getAttribute("name") || "",
-            name: node.getAttribute("aria-label") || node.textContent || "", href: node.getAttribute("href") || "",
-            dataAction: node.getAttribute("data-settings-action") || node.getAttribute("data-settings") || node.getAttribute("data-action") || "", disabled: node.disabled === true,
-            readOnly: node.readOnly === true, outsideDialog: Boolean(document.querySelector("dialog[open]") && !node.closest("dialog[open]")) }));
+          const live = await target.evaluate(liveControlDescriptor);
           const restriction = classifyControlRestriction(live, url);
           if (restriction || live.disabled || live.outsideDialog) throw new ExplorationActionError(restriction || "The control is no longer interactive");
           // optionSets is carried through from the latest observation (not rebuilt here) so a select's
@@ -180,7 +301,21 @@ export async function createExplorationDriver({ page, context, url, fixture, art
         // same-document reload.
         else if (action.type === "home") { await page.goto(url, { waitUntil: "domcontentloaded", timeout: 8000 }); await page.locator(".workbench").waitFor({ state: "visible", timeout: 6000 }); }
         else if (action.type === "wait") await new Promise(resolve => setTimeout(resolve, action.milliseconds));
-        else if (action.type === "press") await page.keyboard.press(action.key);
+        // P1 Chunk 2 (docs/helm/2026-10-13-exploration-safety-and-coverage): `press` has no ref, so unlike
+        // click/fill/select above it was never re-checking the live focused element against
+        // classifyControlRestriction before acting — Tab-to-focus + Space/Enter could flip the
+        // schedule.enabled/email.enabled switch or activate a restricted control with zero checks. Apply
+        // the exact same policy here, against whatever document.activeElement currently is, before
+        // sending any key event. Navigation keys skip the control policy (see PRESS_NAVIGATION_KEYS).
+        else if (action.type === "press") {
+          const focused = await page.evaluate(liveControlDescriptor);
+          if (focused.outsideWorkbench) throw new ExplorationActionError("Focus left the isolated workbench; the key was not sent");
+          if (!PRESS_NAVIGATION_KEYS.has(action.key)) {
+            const restriction = classifyControlRestriction(focused, url);
+            if (restriction || focused.disabled || focused.outsideDialog) throw new ExplorationActionError(restriction || "The focused control is no longer interactive; the key was not sent");
+          }
+          await page.keyboard.press(action.key);
+        }
         else if (action.type === "scroll") {
           if (target) await target.hover({ timeout: 6000 });
           else { const region = page.locator("dialog[open] .settings-content, .reading-pane").last(); if (await region.isVisible()) await region.hover(); }
@@ -208,14 +343,17 @@ export async function createExplorationDriver({ page, context, url, fixture, art
       // baseline: the latter would also discard a legitimate settings change an earlier task already made
       // and verified (e.g. settings-persistence's maxDailyPapers) through the real save path, which must
       // survive into later tasks. Cost measured on a real host: ~10-20ms for the two same-origin HTTP
-      // calls, negligible next to the rest of reset()'s own page navigation.
-      const current = await page.request.get(new URL("api/settings", url).href, { timeout: 5000 });
-      if (!current.ok()) throw new Error(`Could not read workbench settings to resync the config revision: ${current.status()}`);
-      const { revision } = await current.json();
-      if (revision !== null) {
-        const saved = await page.request.post(new URL("api/settings", url).href, { data: { revision, values: {} }, timeout: 5000 });
-        if (!saved.ok()) throw new Error(`Could not resync the workbench config revision: ${saved.status()}`);
-      }
+      // calls, negligible next to the rest of reset()'s own page navigation. Factored into
+      // resyncConfigRevision() (above) so startWorkbenchLibraryFixture's own out-of-band CLI seed can
+      // reuse exactly this, through resyncSettings() below.
+      //
+      // P4 Chunk 2: library state is restored to the fixture baseline (clearFixtureLibraryState, above)
+      // BEFORE this resync, not after — the clean-up itself is a direct, out-of-band disk write (like
+      // the external-config-conflict task's own writeConfigPatch), so the resync must run last to pick
+      // up the now-cleaned disk content; doing it the other way round would resync the server to a disk
+      // state this call is about to change again, reintroducing the exact mismatch this guards against.
+      await clearFixtureLibraryState(fixture, baselineLibraryFiles);
+      await resyncConfigRevision(page, url);
       resetSignal?.throwIfAborted();
       await page.goto(url, { waitUntil: "domcontentloaded", timeout: 15000 });
       const dialog = page.locator("dialog[open]");
@@ -297,6 +435,12 @@ export async function createExplorationDriver({ page, context, url, fixture, art
       const reset = await page.request.post(new URL("api/paper/mark", url).href, { data: { key, action: "star", value: false, expected: paper.priority } });
       if (!reset.ok()) throw new Error(`Could not reset the star mark for ${key}: ${reset.status()}`);
     },
+    // P4 Chunk 2: exposed so exploration-tasks/workbench-library.mjs's `startWorkbenchLibraryFixture`
+    // can read the same fixture paths/env this driver already validated (assertFixture, above) without a
+    // second copy of them, and resync the server after its own out-of-band CLI writes through the exact
+    // same path reset() uses (resyncConfigRevision) rather than a second implementation of it.
+    fixture,
+    async resyncSettings() { assertScope(); await resyncConfigRevision(page, url); },
     async dispose() { page.off("pageerror", onError); context.off("page", onPage); await context.unroute("**/*", guard); },
   };
 }

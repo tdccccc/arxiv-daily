@@ -84,8 +84,25 @@
  *   specific ref — there is no hover region to target, unlike the workbench.
  * - press (the shared, host-agnostic keyboard action from exploration.mjs)
  *   is rejected without sending anything when `document.activeElement` is
- *   outside the current plugin surface, then sent as a real
- *   `Input.dispatchKeyEvent` keyDown/keyUp pair.
+ *   outside the current plugin surface. P1 Chunk 1 (review Finding 1): the
+ *   scope check alone used to be the only guard — it never classified the
+ *   focused element itself, so Tab-focusing a restricted/sensitive control
+ *   (an external-link settings button, the scheduler toggle, "Clear run
+ *   state…", an API-key reveal button) and pressing Enter/Space activated it
+ *   with zero interception. `press` now also describes
+ *   `document.activeElement` with the same `describeControl` the observation
+ *   uses (`obsidianFocusedControlExpression`) and runs it through the same
+ *   `classifyControlRestriction`/sensitive/disabled policy `revalidateRef()`
+ *   applies to click/fill/select — for every key except Tab/Shift+Tab/Escape
+ *   (`PRESS_NAVIGATION_KEYS`), which never activate or mutate
+ *   the focused control and so stay available even on a restricted control,
+ *   keeping a keyboard-only persona from being stranded on one. Only then is
+ *   a real `Input.dispatchKeyEvent` keyDown/keyUp pair sent. Native `<form>`
+ *   submission on Enter is not reachable here: the plugin's settings/modals
+ *   are built with Obsidian's own `Setting` API (plain divs), which never
+ *   renders an actual `<form>` element (confirmed by reading
+ *   plugin/src/settings/tab.ts and plugin/src/plugin-modal.ts) — unlike the
+ *   workbench host, which does use real `<form>`s.
  * - back presses Escape only when a plugin modal (`.arxiv-daily-modal`) or
  *   the plugin's own menu (`.arxiv-daily-menu`, P3 Chunk 1) is open, closing
  *   whichever is open — Obsidian's own `Menu` registers Escape on its
@@ -111,7 +128,7 @@ import { blockersFromError } from "../desktop-acceptance/app-state.mjs";
 import { preflight } from "../desktop-acceptance/preflight.mjs";
 import { runDesktopSession } from "../desktop-acceptance/session.mjs";
 import { installSettingsFixture } from "../desktop-acceptance/settings-fixture.mjs";
-import { collapseOptionSets, ExplorationActionError, PRESS_KEYS } from "./exploration.mjs";
+import { collapseOptionSets, ExplorationActionError, PRESS_KEYS, PRESS_NAVIGATION_KEYS } from "./exploration.mjs";
 import { classifyObsidianDiagnostics, createObsidianSettings } from "./obsidian.mjs";
 import { createObsidianDriver, PLUGIN, pollJsonFile, waitForStableTarget } from "./obsidian-ui.mjs";
 
@@ -155,18 +172,40 @@ function resolveName(node) {
   if (labelledBy) return labelledBy;
   const labelled = Array.from(node.labels || []).map(item => item.textContent || "").join(" ").trim();
   if (labelled) return labelled;
-  if (node.getAttribute("title")) return node.getAttribute("title");
+  // P5 Chunk 2 (phases/05-real-model-release-run.md, real-host finding on library-edit-candidate): a
+  // button's own rendered text now comes before its `title` tooltip, mirroring the workbench's cf2c8ad
+  // fix. Obsidian's "Add"/"Generate" buttons carry tooltips that differ from their visible text, so the
+  // tooltip used to win and the model could not tell such buttons apart. aria-label stays first.
   if (/^(BUTTON|A|SUMMARY)$/.test(node.tagName) && own()) return own();
+  if (node.getAttribute("title")) return node.getAttribute("title");
   const settingName = node.closest(".setting-item")?.querySelector(".setting-item-name")?.textContent?.trim();
   if (settingName) return settingName;
   return (node.getAttribute("name") || own() || "").trim();
+}
+
+/**
+ * P3 Chunk 7 (phases/03-obsidian-library-tasks.md): a closed `<details>` hides every descendant except
+ * its own direct `<summary>` child (native browser behaviour) — `controlVisible()` never checked this, so
+ * a still-collapsed section (e.g. the personal-library review dialog's per-topic/per-candidate
+ * `<details>`) reported its hidden content as present and clickable; a real-host run confirmed clicking
+ * one safely times out hit-testing instead of ever being offered. Walks every ancestor `<details>` (not
+ * only the nearest), so a control nested inside an open details that itself sits inside a closed outer
+ * details still correctly stays hidden.
+ */
+function hiddenByClosedDetails(node) {
+  for (let ancestor = node.parentElement; ancestor; ancestor = ancestor.parentElement) {
+    if (ancestor.tagName !== "DETAILS" || ancestor.open) continue;
+    const summary = Array.from(ancestor.children).find(child => child.tagName === "SUMMARY");
+    if (!(node === summary || summary?.contains(node))) return true;
+  }
+  return false;
 }
 
 function controlVisible(node, testMode) {
   const rect = node.getBoundingClientRect();
   const style = getComputedStyle(node);
   const sized = testMode ? true : rect.width > 0 && rect.height > 0;
-  return sized && style.display !== "none" && style.visibility !== "hidden" && style.opacity !== "0" && !node.closest("[hidden],[inert]");
+  return sized && style.display !== "none" && style.visibility !== "hidden" && style.opacity !== "0" && !node.closest("[hidden],[inert]") && !hiddenByClosedDetails(node);
 }
 
 /**
@@ -189,7 +228,14 @@ function resolveSurface() {
   const markedMenu = document.querySelector(".arxiv-daily-menu");
   if (markedMenu) { surface = markedMenu; view = "menu"; menuOpen = true; }
   if (!surface) {
-    const markedModal = document.querySelector(".arxiv-daily-modal");
+    // P3 Chunk 7: a confirmation modal (e.g. `chooseModal`) can open stacked on top of an already-open
+    // plugin modal (e.g. the personal-library review dialog). Obsidian's `Modal.open()` appends a newly
+    // opened modal's container as the last child of `document.body`, so the topmost (most recently
+    // opened, currently visible) modal is the LAST `.arxiv-daily-modal` in DOM order — picking the first
+    // one (as before) always resolved the older, now-covered modal underneath, so the newer modal's own
+    // buttons (e.g. a discard confirmation's "Confirm"/"Cancel") were never observed at all.
+    const markedModals = document.querySelectorAll(".arxiv-daily-modal");
+    const markedModal = markedModals[markedModals.length - 1];
     if (markedModal) { surface = markedModal.closest(".modal") || markedModal; view = "modal"; modalOpen = true; }
   }
   if (!surface) {
@@ -212,8 +258,7 @@ function describeControl(node, ref) {
   const rect = node.getBoundingClientRect();
   const name = resolveName(node).slice(0, 180);
   const field = node.id || node.getAttribute("name") || "";
-  const hasRevealSibling = Boolean(node.parentElement?.querySelector(".arxiv-daily-settings__reveal-key"));
-  const sensitive = node.type === "password" || hasRevealSibling || /api.?key|password|secret|token|verification code/i.test(name);
+  const sensitive = isSecretField(node);
   return {
     ref, tag: node.tagName.toLowerCase(), type: node.getAttribute("type") || "", role: node.getAttribute("role") || "",
     name, field,
@@ -224,6 +269,12 @@ function describeControl(node, ref) {
     ...(sensitive ? { sensitive: true } : {}),
     ...(typeof node.value === "string" ? { value: sensitive ? "" : node.value.slice(0, 1000) } : {}),
     ...(typeof node.checked === "boolean" ? { checked: node.checked } : {}),
+    // P5 Chunk 2 (real-host finding on library-edit-candidate): a <summary> carries no open/closed state of
+    // its own, so the model could not tell an already-open review section from a closed one and kept
+    // collapsing sections it had just opened. Report the parent <details>' own `open` attribute here instead,
+    // alongside `checked`. Only the direct parent is read: a summary inside a closed outer details is already
+    // hidden by controlVisible()/hiddenByClosedDetails() and never reaches this point.
+    ...(node.tagName === "SUMMARY" && node.parentElement?.tagName === "DETAILS" ? { expanded: node.parentElement.open === true } : {}),
     ...(node.hasAttribute("href") ? { href: node.getAttribute("href").slice(0, 1000) } : {}),
     ...(node.tagName === "SELECT" ? { options: Array.from(node.options).slice(0, 60).map(option => ({ value: option.value.slice(0, 256), label: option.text.slice(0, 96), disabled: option.disabled })) } : {}),
     dataAction: node.getAttribute("data-settings-action") || node.getAttribute("data-settings") || node.getAttribute("data-action") || "",
@@ -285,7 +336,7 @@ export function obsidianObservation(id, testMode) {
 
 /** Builds the CDP `Runtime.evaluate` expression string for `obsidianObservation`, matching obsidian-ui.mjs's `read(expression)` convention (the caller wraps with `JSON.stringify(...)`). */
 export function obsidianObservationExpression(id, testMode = false) {
-  const shared = [resolveName, controlVisible, resolveSurface, describeControl].map(fn => fn.toString()).join("\n");
+  const shared = [resolveName, isSecretField, hiddenByClosedDetails, controlVisible, resolveSurface, describeControl].map(fn => fn.toString()).join("\n");
   return `(() => { ${shared}\n  const CONTROL_SELECTOR = ${asCode(CONTROL_SELECTOR)};\n  return (${obsidianObservation})(${asCode(id)}, ${asCode(Boolean(testMode))});\n})()`;
 }
 
@@ -308,7 +359,7 @@ function obsidianLiveControl(ref, testMode) {
 }
 
 export function obsidianLiveControlExpression(ref, testMode = false) {
-  const shared = [resolveName, controlVisible, resolveSurface, describeControl].map(fn => fn.toString()).join("\n");
+  const shared = [resolveName, isSecretField, hiddenByClosedDetails, controlVisible, resolveSurface, describeControl].map(fn => fn.toString()).join("\n");
   return `(() => { ${shared}\n  return (${obsidianLiveControl})(${asCode(ref)}, ${asCode(Boolean(testMode))});\n})()`;
 }
 
@@ -368,6 +419,85 @@ export function obsidianFocusInScopeExpression() {
 }
 
 /**
+ * P1 Chunk 1 (review Finding 1 fix): `obsidianFocusInScope` above only answers "is focus
+ * somewhere inside the plugin surface" — it never describes/classifies the focused element
+ * itself, unlike every ref-bearing action's `revalidateRef()`. That gap let a Tab-focused
+ * restricted or sensitive control (an external-link settings button, the scheduler toggle,
+ * "Clear run state…", an API-key reveal button) be activated by `press Enter`/`press Space`
+ * with no interception. This reuses the SAME `describeControl` the observation and
+ * `obsidianLiveControl` already build — not a second, divergent describer — so `press`'s
+ * executor can run it through the identical `classifyControlRestriction`/sensitive/disabled
+ * policy `revalidateRef()` applies to click/fill/select.
+ */
+function obsidianFocusedControl(testMode) {
+  const { surface } = resolveSurface();
+  const active = document.activeElement;
+  if (!surface || !active) return { ok: false, reason: "scope" };
+  if (!(active === surface || surface.contains(active))) return { ok: false, reason: "scope" };
+  if (!controlVisible(active, testMode)) return { ok: false, reason: "hidden" };
+  return { ok: true, control: describeControl(active, null) };
+}
+
+/** Describes the currently focused element (scope + the shared control descriptor), for `press`. */
+export function obsidianFocusedControlExpression(testMode = false) {
+  const shared = [resolveName, isSecretField, hiddenByClosedDetails, controlVisible, resolveSurface, describeControl].map(fn => fn.toString()).join("\n");
+  return `(() => { ${shared}\n  return (${obsidianFocusedControl})(${asCode(Boolean(testMode))});\n})()`;
+}
+
+/**
+ * The one secret-field rule, used by `describeControl` (observation, live re-validation, press) and by
+ * the screenshot mask below. The reveal button's sibling class stays in place whether the plugin
+ * currently shows the key as "password" or "text", so a revealed key still counts as secret.
+ */
+function isSecretField(node) {
+  const name = resolveName(node).slice(0, 180);
+  const hasRevealSibling = Boolean(node.parentElement?.querySelector(".arxiv-daily-settings__reveal-key"));
+  return node.type === "password" || hasRevealSibling || /api.?key|password|secret|token|verification code/i.test(name);
+}
+
+/**
+ * Covers every secret `<input>` in the whole document — not only the model's current plugin
+ * surface — with an opaque, non-interactive overlay positioned over its live rect, each tagged
+ * `data-exploration-mask` so `obsidianUnmaskSecretFields` can find and remove exactly these and
+ * nothing else. The whole document, not just the current surface: a screenshot's pixels are
+ * whatever is visually on top of the photographed region (e.g. Obsidian's own settings window),
+ * regardless of which element the model's own observation happens to scope to. Returns the count
+ * masked, mainly so a caller (or a test) can tell something happened.
+ */
+function obsidianMaskSecretFields() {
+  let count = 0;
+  for (const node of document.querySelectorAll("input")) {
+    if (!isSecretField(node)) continue;
+    const rect = node.getBoundingClientRect();
+    if (rect.width <= 0 || rect.height <= 0) continue; // nothing to cover if it is not laid out/visible
+    const overlay = document.createElement("div");
+    overlay.setAttribute("data-exploration-mask", "1");
+    overlay.style.cssText = `position:fixed;left:${rect.left}px;top:${rect.top}px;width:${rect.width}px;height:${rect.height}px;background:#000;z-index:2147483647;pointer-events:none;`;
+    document.body.appendChild(overlay);
+    count += 1;
+  }
+  return count;
+}
+
+/** Builds the CDP `Runtime.evaluate` expression for `obsidianMaskSecretFields`, for use via `helper.read(...)` right before `capture()`'s screenshot. */
+export function obsidianMaskSecretFieldsExpression() {
+  const shared = [resolveName, isSecretField].map(fn => fn.toString()).join("\n");
+  return `(() => { ${shared}\n  return (${obsidianMaskSecretFields})(); })()`;
+}
+
+/** Removes every overlay `obsidianMaskSecretFields` added, identified solely by its own marker attribute — never anything it did not add itself. */
+function obsidianUnmaskSecretFields() {
+  const nodes = document.querySelectorAll('[data-exploration-mask="1"]');
+  nodes.forEach(node => node.remove());
+  return nodes.length;
+}
+
+/** Builds the CDP `Runtime.evaluate` expression for `obsidianUnmaskSecretFields`, for use via `helper.read(...)` right after `capture()`'s screenshot (including when it throws). */
+export function obsidianUnmaskSecretFieldsExpression() {
+  return `(() => { return (${obsidianUnmaskSecretFields})(); })()`;
+}
+
+/**
  * Obsidian capability restrictions. Pure, like the browser's
  * `classifyControlRestriction` — operates on the already-resolved control
  * (name/field/type/href), no DOM access, so it is unit-testable standalone.
@@ -395,7 +525,20 @@ export function classifyControlRestriction(control, allowedUrl) {
   // toggle itself ("Enable scheduler"/"Disable scheduler") is restricted here, same policy as the
   // settings tab's own schedule toggle just above.
   if (/^arxiv-daily-run-window-/.test(field) || /^enable\s*·/i.test(name) || /check every \(minutes\)/i.test(name) || /^(enable|disable) scheduler$/i.test(name)) return "scheduling settings are fixed by the fixture";
-  if (/^api base url$|^better pdf parser$|embedding|sidecar/i.test(name)) return "external service and embedding/parser settings are fixed by the fixture";
+  // New-P3 Chunk 1 (docs/helm/2026-10-13-exploration-safety-and-coverage/phases/03-obsidian-library-
+  // tasks.md), owner steer: this used to match any name containing "embedding" or "sidecar" unanchored,
+  // which also caught the bare Embedding mode <select> (name: "Embedding", packages/core/src/settings/
+  // schema.ts's embeddingMode business setting, mirrored verbatim by the legacy display() path at
+  // plugin/src/settings/tab.ts:1889) — the one control a library goal task needs the model to actually
+  // switch. Anchored to the closed, exhaustive set of sub-field names this rule is actually meant to
+  // fix (read verbatim from schema.ts's `fields` map and tab.ts's own display(), which render the
+  // identical literal strings): the four embedding endpoint/credential/model/dimension fields
+  // (tab.ts:1912,1932,1944,1963) and the two sidecar endpoint fields (tab.ts:1994,2014). The mode
+  // choice itself ("Embedding") and the sidecar on/off toggle ("Better PDF parser", already anchored
+  // exactly just above) are deliberately left out. "Embedding API key"'s own reveal button ("Show
+  // Embedding API key") stays restricted independently, via the credentials rule above (an "API key"
+  // substring), not through this clause.
+  if (/^api base url$|^better pdf parser$|^embedding (api base url|api key|model|dimension)$|^sidecar (capability|parse) url$/i.test(name)) return "external service and embedding/parser settings are fixed by the fixture";
   if (/send test|how to send|your email|send verification email|from email|from name|daily auto-send|resend api key|verification code/i.test(name)) return "email delivery is excluded from exploration";
   // "Clear run state…" (the More menu's command-backed item, commands.ts's clear-run-state): clearing
   // run state is explicitly out of scope for exploration (goal.md), independent of the generic
@@ -563,8 +706,19 @@ export function createObsidianActionExecutor({ client, evaluate, redact = value 
         });
       } else if (action.type === "press") {
         if (!PRESS_KEYS.has(action.key)) throw new ExplorationActionError("Press is limited to a small keyboard-navigation allowlist");
-        const scoped = await read(obsidianFocusInScopeExpression());
-        if (!scoped) throw new ExplorationActionError("The focused element is outside the plugin's scope; the key press was not sent");
+        const focused = await read(obsidianFocusedControlExpression(testMode));
+        if (!focused?.ok) throw new ExplorationActionError("The focused element is outside the plugin's scope; the key press was not sent");
+        // P1 Chunk 1: everything except pure navigation/cancel keys (see
+        // PRESS_NAVIGATION_KEYS in exploration.mjs) is checked against the same
+        // restricted/sensitive/disabled policy revalidateRef() already applies to
+        // click/fill/select, before any Input.* event is sent.
+        if (!PRESS_NAVIGATION_KEYS.has(action.key)) {
+          const control = focused.control;
+          const restriction = classifyControlRestriction(control);
+          if (restriction) throw new ExplorationActionError(`This control is restricted: ${restriction}`);
+          if (control.sensitive) throw new ExplorationActionError("This control is restricted: secret");
+          if (control.disabled) throw new ExplorationActionError("This control is no longer interactive (disabled)");
+        }
         await dispatchKey(action.key);
       } else if (action.type === "back") {
         // Obsidian's own Menu registers Escape on its keyboard Scope to close itself
@@ -645,6 +799,12 @@ export async function startObsidianExplorationSession({
   fixture, artifactDir, signal,
   obsidianPath = process.env.OBSIDIAN_BINARY ?? "/opt/Obsidian/obsidian",
   virtualDisplay = true,
+  // Exploration-only network guard (P3 Chunk 4 of docs/helm/2026-10-13-exploration-safety-and-coverage):
+  // on by default here, so an unscripted model cannot reach the real internet through any process
+  // (e.g. transformers.js's own fetch for a local embedding model download, which the harness's
+  // HttpClient proxy never sees). The fixed `obsidian` acceptance suite calls `runDesktopSession`
+  // directly and never sets this, so its launch args are unaffected.
+  networkGuard = true,
   runSession = runDesktopSession,
   check = preflight,
 } = {}) {
@@ -663,7 +823,7 @@ export async function startObsidianExplorationSession({
   const bodyReleased = new Promise(resolve => { releaseBody = resolve; });
 
   const overall = runSession({
-    vaultPath: fixture.vaultRoot, pluginId: "arxiv-daily", sourceDir, obsidianPath, virtualDisplay,
+    vaultPath: fixture.vaultRoot, pluginId: "arxiv-daily", sourceDir, obsidianPath, virtualDisplay, networkGuard,
     beforeLaunch: ({ vaultPath, pluginId, fs: storage }) => installSettingsFixture({
       vaultPath, pluginId, fs: storage, data: createObsidianSettings({ endpoint: `${fixture.server.url}/v1` }),
     }),
@@ -714,6 +874,14 @@ export async function createObsidianExplorationDriver({ session, fixture, artifa
   const helper = await createObsidianDriver({ session, fixture, artifactDir });
   const executor = createObsidianActionExecutor({ client: session.client, evaluate: session.evaluate, redact });
   let version = 0, latest, diagnosticsSeen = 0;
+  // P3 Chunk 8 (docs/helm/2026-10-13-exploration-safety-and-coverage/phases/03-obsidian-library-tasks.md
+  // "library state leaks … through reset()"): the fixture's own baseline library PDFs
+  // (createFixtureEnvironment's PAPERS, fixtures.mjs) are already on disk under `vault/library` by the
+  // time the driver is constructed (the first task's prepare() has not run yet) — snapshotting their
+  // names here, once, lets reset() below tell them apart from a file a library task's own prepare() wrote
+  // (seedClusterableLibraryPaper, exploration-tasks/library.mjs) without hardcoding any fixture paper id.
+  const libraryDir = path.join(fixture.vaultRoot, "library");
+  const baselineLibraryFiles = new Set(await fs.readdir(libraryDir).catch(() => []));
   // P3 Chunk 3: the auth-failure-retry goal task deliberately drives the product into the fixed suite's
   // own "controlled authentication failure" path (paper-filter.ts's `logger.error("paper-filter: LLM
   // call failed", e)` on a 401), which without a carve-out would otherwise be classified as an
@@ -760,8 +928,25 @@ export async function createObsidianExplorationDriver({ session, fixture, artifa
     // zero controls) — it goes straight through the driver's own existing openDashboard path (the same
     // one reset() already uses), never through createObsidianActionExecutor's generic CDP click/back/fill
     // machinery, which has no ref or CDP input event to drive for this.
+    // P5 Chunk 2 (real-host finding on library-edit-candidate): openDashboard() only closes Obsidian's own
+    // settings window. A plugin modal (`.arxiv-daily-modal`) or the plugin's own menu (`.arxiv-daily-menu`)
+    // is a separate overlay that stays on top, so `home` used to open the dashboard BEHIND an open review
+    // modal and report success — the model then repeated `home` five times. Close the plugin's own open
+    // overlay first, with the same real Escape `back` uses (one place for the mechanism, reusing the
+    // executor), and only open the dashboard once none is left. Only marked plugin overlays are targeted;
+    // an unmarked Obsidian overlay is never touched by this path.
     if (action.type === "home") {
-      try { await helper.openDashboard(); return { ok: true }; }
+      try {
+        const pluginOverlayOpen = () => helper.read(`Boolean(document.querySelector(".arxiv-daily-modal, .arxiv-daily-menu"))`);
+        if (await pluginOverlayOpen()) {
+          await executor.execute({ type: "back" }, observation, options);
+          // Obsidian removes a closed modal asynchronously, so poll briefly before deciding it could not be closed.
+          const closed = await helper.wait(`!document.querySelector(".arxiv-daily-modal, .arxiv-daily-menu")`, value => value === true, "plugin dialog to close", { timeoutMs: 2000, intervalMs: 100 }).then(() => true, () => false);
+          if (!closed) return { ok: false, error: "A plugin dialog is still open and could not be closed, so the dashboard was not opened; close it first (back) or finish the dialog's own step." };
+        }
+        await helper.openDashboard();
+        return { ok: true };
+      }
       catch (error) { return { ok: false, error: redact(error.message) }; }
     }
     return executor.execute(action, observation, options);
@@ -769,8 +954,45 @@ export async function createObsidianExplorationDriver({ session, fixture, artifa
 
   async function capture(name) {
     if (!/^[a-z0-9-]+$/.test(name)) throw new Error("Invalid exploration artifact name");
-    await helper.screenshots.capture(name, { selector: ".workspace" });
+    // P1 Chunk 3 (review Finding 1 "Compounding" fix): no secret field — plain password or revealed
+    // via the "Show ... API key" button — may be captured, so every one is covered right before the
+    // screenshot and always restored right after, including when the capture itself throws (e.g. the
+    // subject is not currently visible), so a secret field's live state is never left different from
+    // how this call found it.
+    await helper.read(obsidianMaskSecretFieldsExpression());
+    try {
+      await helper.screenshots.capture(name, { selector: ".workspace" });
+    } finally {
+      await helper.read(obsidianUnmaskSecretFieldsExpression());
+    }
     return path.join(artifactDir, `${name}.png`);
+  }
+
+  /**
+   * P3 Chunk 8: removes every on-disk trace an earlier library task's `prepare()` could have left in the
+   * fixture vault — the real personal-library catalog/search-index/knowledge-base/profile/incremental-
+   * suggestions state under `arxiv-daily/.index` (every one of them lives in a directory or file named
+   * `personal-library-*`, generation-index-format.ts/knowledge-base.ts/personal-library-proposal-store.ts/
+   * suggestions-store.ts/personal-library-catalog.ts — all derived from `derivePaperInboxPaths`'s own
+   * `indexDir`, never hand-duplicated here), and any PDF under `vault/library` that was not already there
+   * when this driver was built (`baselineLibraryFiles`, e.g. `seedClusterableLibraryPaper`'s own extra
+   * fixture PDF). Tolerates a vault that never had any of this yet (`{ recursive: true, force: true }` /
+   * ENOENT-tolerant readdir), since the very first task to run reset() has nothing to clear.
+   */
+  async function clearLibraryState() {
+    const indexDir = path.join(fixture.vaultRoot, "arxiv-daily", ".index");
+    const indexEntries = await fs.readdir(indexDir).catch(() => []);
+    await Promise.all(
+      indexEntries
+        .filter(entry => entry.startsWith("personal-library-"))
+        .map(entry => fs.rm(path.join(indexDir, entry), { recursive: true, force: true })),
+    );
+    const currentLibraryFiles = await fs.readdir(libraryDir).catch(() => []);
+    await Promise.all(
+      currentLibraryFiles
+        .filter(entry => !baselineLibraryFiles.has(entry))
+        .map(entry => fs.rm(path.join(libraryDir, entry), { recursive: true, force: true })),
+    );
   }
 
   /**
@@ -784,8 +1006,18 @@ export async function createObsidianExplorationDriver({ session, fixture, artifa
    * names here — no `mangleProps` is configured), so the method stays callable from the renderer the same way
    * obsidian-ui.mjs's own `reloadPlugin()` already reaches into plugin internals. Vault content written by
    * earlier tasks (daily reports, star marks) is deliberately left alone: resetting it on every task would
-   * cost a real Obsidian re-scan of the vault and is not needed for the two tasks in this chunk, each of which
+   * cost a real Obsidian re-scan of the vault and is not needed for the tasks that read it, each of which
    * reads real, independent state rather than assuming a pristine vault (see exploration-tasks/obsidian.mjs's `goalTasks`).
+   * The one exception (P3 Chunk 8) is personal-library state: an earlier library task's prepare() can leave
+   * a real, already-scanned catalog and its own extra fixture PDF under `vault/library` behind, and
+   * `indexPersonalLibraryFullText()` deliberately never re-walks a catalog that has already been scanned
+   * once (plugin/main.ts, "no surprise network rescan on every build") — so a later task that adds one more
+   * paper and rebuilds the index never has it reach the catalog, the knowledge base, or the direction
+   * proposer's clustering at all (real-host evidence, 2026-10-13: "no-evidence: clustering produced no
+   * evidence groups; every paper fell into the outlier pool", confirmed to be this exact leak because the
+   * same task passes when run alone, i.e. against a library that was never scanned before). `clearLibraryState()`
+   * below removes that leftover state so every task starts from a fresh, never-scanned catalog of exactly
+   * its own fixture library contents — the same starting point a lone run gets.
    * Finally the Reading Dashboard is opened so every task starts observing the same view.
    */
   async function reset({ signal: resetSignal } = {}) {
@@ -795,6 +1027,7 @@ export async function createObsidianExplorationDriver({ session, fixture, artifa
     await executor.execute({ type: "back" }, null, { signal: resetSignal }).catch(() => {});
     await helper.closeSettings();
     resetSignal?.throwIfAborted();
+    await clearLibraryState();
     const settingsPath = path.join(fixture.vaultRoot, SETTINGS_FILE);
     await fs.mkdir(path.dirname(settingsPath), { recursive: true });
     await fs.writeFile(settingsPath, JSON.stringify(createObsidianSettings({ endpoint: `${fixture.server.url}/v1` }), null, 2));
@@ -830,6 +1063,85 @@ export async function createObsidianExplorationDriver({ session, fixture, artifa
     // unauthorized/normal) as a program-only side effect, exactly like the fixed suite's obsidian-
     // scenarios.mjs (`d.fixture.server.setMode(...)`) — never something the model itself can reach.
     fixture,
+    // P3 Chunk 1 (personal library tasks): a task's `prepare()` calls this (never the model) to grant
+    // library-processing consent directly through the plugin's own `authorizeLibraryProcessing()` — the
+    // real fingerprint computation, never a hand-written one — so a task that needs to start already
+    // authorized (e.g. the revoke task) does not have to drive the consent dialog itself first. Uses
+    // `helper.evaluate` directly (not `helper.read`, which wraps the expression in an outer
+    // `JSON.stringify(...)` and would stringify the pending Promise instead of awaiting it — the same
+    // reason `reloadPlugin` above evaluates its async IIFE directly instead of through `read`).
+    async authorizeLibraryProcessing() {
+      const ok = await helper.evaluate(`(async () => { await ${PLUGIN}.authorizeLibraryProcessing(); return true; })()`);
+      if (ok !== true) throw new Error("authorizeLibraryProcessing() did not resolve true");
+    },
+    // P3 Chunk 2 (index build/search/similarity tasks): a task's deterministic `prepare()` calls this
+    // (never the model) to build the real personal-library search index through the plugin's own
+    // `indexPersonalLibraryFullText()` — the real scan/extract/embed/generation-index pipeline, never a
+    // hand-written index file (phases/03-obsidian-library-tasks.md's own approach: "states that need an
+    // index are produced by running the plugin's real scan and index in prepare(), not by hand-writing
+    // index files"). Uses `helper.evaluate` directly, for the same reason `authorizeLibraryProcessing`
+    // above does (awaiting the real async call and reading a snapshot after it resolves, not stringifying
+    // a pending Promise through `helper.read`).
+    async buildLibraryIndex() {
+      const raw = await helper.evaluate(`(async () => {
+        await ${PLUGIN}.indexPersonalLibraryFullText();
+        const snapshot = ${PLUGIN}.libraryIndexStatus.snapshot();
+        return JSON.stringify({ papers: snapshot.lastRun?.papers ?? null, preparationError: snapshot.preparationError ?? null });
+      })()`);
+      if (typeof raw !== "string") throw new Error("indexPersonalLibraryFullText() did not resolve to a reportable summary");
+      return JSON.parse(raw);
+    },
+    // P3 Chunk 2: locates the real personal-library search index's `current.json` under the vault's
+    // `arxiv-daily/.index/personal-library-search-index/<scopeHex>/<idHex>/` (research.md: the hex
+    // segments are fingerprint-derived, produced only by the plugin's own real indexing, never
+    // hand-written, so this walks the directory instead of hardcoding a path — generation-index-
+    // format.ts). Returns null when the directory tree does not exist yet (the untouched "no index"
+    // state), mirroring `file`/`jsonFile`'s own ENOENT-tolerant callers, so a task's verify() can poll it
+    // the same way `pollJsonFile` polls `data.json`.
+    async findLibrarySearchIndexFile() {
+      const base = path.join(fixture.vaultRoot, "arxiv-daily", ".index", "personal-library-search-index");
+      let entries;
+      try { entries = await fs.readdir(base, { recursive: true }); }
+      catch (error) { if (error.code === "ENOENT") return null; throw error; }
+      const match = entries.find(entry => entry.endsWith("current.json"));
+      return match ? path.join(base, match) : null;
+    },
+    // Exploration safety and coverage P3 Chunk 3 (Direction candidate review tasks): a task's
+    // deterministic `prepare()` calls this (never the model) to produce a real direction proposal
+    // through the plugin's own `generatePersonalLibraryDirections()` — the real clustering/LLM-generation
+    // pipeline (hits the fixture's own "proposal"-kind model response), never a hand-written
+    // `direction-proposal.json` (the phase's own approach, reused from Chunk 2's `buildLibraryIndex`:
+    // "states that need an index/proposal are produced by running the plugin's real scan and generation
+    // in prepare(), not by hand-writing files"). Needs library-processing consent and a built index
+    // already in place (same preconditions the "Review suggestions" button's own auto-generation checks),
+    // so callers run this after `startLibraryFixture({ authorized: true })` and `buildLibraryIndex()`.
+    // Uses `helper.evaluate` directly, for the same reason `buildLibraryIndex` above does.
+    async generatePersonalLibraryDirections() {
+      const raw = await helper.evaluate(`(async () => {
+        const proposal = await ${PLUGIN}.generatePersonalLibraryDirections();
+        return JSON.stringify(proposal);
+      })()`);
+      if (typeof raw !== "string") throw new Error("generatePersonalLibraryDirections() did not resolve to a reportable proposal");
+      return JSON.parse(raw);
+    },
+    // Exploration safety and coverage P3 Chunk 3: reads the real `direction-proposal.json` the plugin's
+    // own proposal store writes under the vault's `arxiv-daily/.index/personal-library-profiles/
+    // <scopeHex>/<identificationHex>/` (research.md; personal-library-proposal-store.ts's
+    // `derivePersonalLibraryInterestProfileStorePaths`, the same fingerprint-derived-hex-directory
+    // convention `findLibrarySearchIndexFile` above already walks instead of hardcoding). Returns the
+    // parsed document (never null-coalesced into a default shape — a task's verify() tells "no proposal
+    // yet" apart from "proposal exists but edited" by checking for null itself), or null before any
+    // proposal has ever been generated, mirroring `findLibrarySearchIndexFile`'s own ENOENT tolerance.
+    async readLibraryDirectionProposal() {
+      const base = path.join(fixture.vaultRoot, "arxiv-daily", ".index", "personal-library-profiles");
+      let entries;
+      try { entries = await fs.readdir(base, { recursive: true }); }
+      catch (error) { if (error.code === "ENOENT") return null; throw error; }
+      const match = entries.find(entry => entry.endsWith("direction-proposal.json"));
+      if (!match) return null;
+      const raw = await fs.readFile(path.join(base, match), "utf8");
+      return JSON.parse(raw);
+    },
     // P3 Chunk 3: opts the current task's observe() into the fixed suite's existing "expected
     // authentication failure" carve-out (see observe()'s own comment above); only auth-failure-retry's
     // prepare() calls this, and reset() clears it before every task.

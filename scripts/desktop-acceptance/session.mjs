@@ -39,6 +39,10 @@ export async function runDesktopSession({
   sourceDir,
   obsidianPath = "/opt/Obsidian/obsidian",
   virtualDisplay = true,
+  // Exploration-only, opt-in (P3 Chunk 4 of docs/helm/2026-10-13-exploration-safety-and-coverage):
+  // every fixed-acceptance caller (acceptance.mjs, smoke.mjs) leaves this false, so their launch args
+  // are unaffected. See buildLaunchCommand's `networkGuardProxyPort` for the blocking mechanism.
+  networkGuard = false,
   ignoreDiagnostics = [],
   beforeLaunch,
   body,
@@ -84,7 +88,12 @@ export async function runDesktopSession({
       if (beforeLaunch) await beforeLaunch({ vaultPath, pluginId, fs });
 
       const port = await pickFreePort();
-      const { command, args } = buildLaunchCommand({ obsidianPath, port, virtualDisplay });
+      // The guard's proxy port is picked the same way the CDP port is (ask the OS for a free
+      // loopback port, then never bind it) — nothing ever listens there, so Chromium's attempt to
+      // reach it for any non-loopback request fails immediately (ERR_PROXY_CONNECTION_FAILED),
+      // without this harness running a real sinkhole server.
+      const networkGuardProxyPort = networkGuard ? await pickFreePort() : undefined;
+      const { command, args } = buildLaunchCommand({ obsidianPath, port, virtualDisplay, networkGuardProxyPort });
       const env = buildIsolatedEnv({
         configHome,
         dataHome: path.join(sandbox, "data"),

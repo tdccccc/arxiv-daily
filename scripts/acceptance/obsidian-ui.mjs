@@ -140,7 +140,15 @@ export async function createObsidianDriver({ session, fixture, artifactDir }) {
       await saveInteractions();
     }
   };
-  const reloadPlugin = async () => {
+  // Two overlapping disable/enable cycles leave two live plugin instances ("Attempting to register an
+  // existing view type"). Every reload on this session queues behind the previous one, including a reload
+  // whose caller stopped waiting (exploration.mjs's withDeadline does not cancel the work it abandons).
+  let reloadQueue = Promise.resolve();
+  const doReload = async () => {
+    // Undocumented: Obsidian's PluginManager sets `loadingPluginId` for the whole enablePlugin() call,
+    // including Obsidian's own startup enable. Waiting for it keeps the first reset from racing that load.
+    // If a future Obsidian drops the field, this check passes at once and only the queue remains.
+    await wait('app.plugins.loadingPluginId !== "arxiv-daily"', value => value === true, "plugin load in progress to finish", { timeoutMs: 15000 });
     await closeSettings();
     await evaluate(`(async () => {
       await app.plugins.disablePlugin("arxiv-daily");
@@ -148,6 +156,12 @@ export async function createObsidianDriver({ session, fixture, artifactDir }) {
       return Boolean(${PLUGIN});
     })()`);
     await evaluate(installHttpProxyExpression(fixture.server.url));
+  };
+  const reloadPlugin = () => {
+    const settled = reloadQueue.catch(() => {});
+    const current = settled.then(doReload);
+    reloadQueue = current.catch(() => {});
+    return current;
   };
   const screenshot = async (name, t) => {
     await screenshots.capture(name, { selector: ".workspace" });
