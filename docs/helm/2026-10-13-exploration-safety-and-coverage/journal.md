@@ -139,3 +139,17 @@
 - change: finding (3) closed as a false positive. User asked to pause after this stage because quota use is high.
 - disposition: no code from either delegate is kept.
 - next: P5 Chunk 2 remaining item — Obsidian observer fixes from the 2026-10-14 triage entry: (a) observed `<summary>` controls report their `<details>` open state; (b) `home` with a plugin modal open must close it before opening the dashboard (now it reports success while the modal stays on top); (c) a button's own text before its `title` as the observed name (keep `aria-label` first), mirroring cf2c8ad. Then Chunk 3: confirmation release run on both hosts (≈1.5M input tokens; user already approved the cost of P5 runs) and README task tables/cost table.
+
+## 2026-10-14 — handoff (resumed after the quota pause)
+
+- evidence: worktree clean at 1da8869; the last helm edit was 14:57 and the user asked to continue the latest initiative at 16:33, so no other session is active.
+- change: owner claude-code-session-2026-10-14 → claude-code-session-2026-10-14b.
+- disposition: keep all P1–P5 work so far.
+- next: P5 Chunk 2 — Obsidian observer fixes (a) summary open state, (b) `home` closes a plugin modal first, (c) own text before `title`.
+
+## 2026-10-14 — note (P5 chunk 2 accepted)
+
+- evidence: d600a2e fixes the three Obsidian observer gaps from the chunk 1 triage: (a) a `<summary>` reports `expanded` from its parent `<details>`; (b) `home` closes an open plugin modal or menu with the same Escape `back` uses and returns `ok:false` if it stays open, instead of opening the dashboard behind it; (c) a button's own text before `title`, `aria-label` still first. 7 new fixed tests with observed Red then Green. The existing host test that expected no input on `home` encoded the bug and now expects exactly one Escape and no mouse input. Delegate real-host runs without a model: scripted `library-edit-candidate` passed in 6 steps (/tmp/p5c2-obsidian-edit-scripted-1791970602); a home-with-modal probe went from view=modal to view=dashboard with no dialog (/tmp/p5c2-obsidian-edit-home-probe-1791970761); all 7 scripted library tasks passed (/tmp/p5c2-obsidian-library-all-scripted-1791970915); always-blocked and wait-only runs ended blocked. Owner re-run: acceptance-exploration* 331/331, test:release-tools 818/818. Not covered: the menu branch of (b) on a real host (fixed tests only). The delegate's first session dropped after writing the tests; it was resumed and finished.
+- change: P5 Chunk 2 checked; every chunk 1 failure and finding now has a disposition (1 transient timeout, 2 false positives, 1 harness fix).
+- disposition: keep d600a2e. The workbench observer has the same `<summary>` gap, and `<a>`/`<summary>` still put title before their own text there (buttons already fixed in cf2c8ad); it was not seen in a run, so it is left alone unless the confirmation run shows it.
+- next: P5 Chunk 3 — confirmation release run on both hosts, then README task tables and cost table.

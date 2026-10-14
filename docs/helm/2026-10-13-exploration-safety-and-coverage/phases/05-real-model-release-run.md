@@ -2,8 +2,8 @@
 
 goal_ref: ../goal.md
 created: 2026-10-14T14:26:11+08:00
-updated: 2026-10-14T14:46:57+08:00
-revision: 2
+updated: 2026-10-14T17:50:00+08:00
+revision: 3
 
 ## Outcome
 
@@ -35,7 +35,7 @@ Run both hosts once in release mode and keep the evidence; triage every failure 
 - kind: bug fix / test tooling (per finding)
 - first signal: a reproduction (test or scripted run) fails before each fix.
 - checks: acceptance-exploration*; test:acceptance:tools; related workspace tests; fixed workbench and Obsidian acceptance as affected.
-- [ ] accepted on observed evidence
+- [x] accepted on observed evidence — see journal 2026-10-14 (P5 chunk 2 accepted).
 
 ### Chunk 3 — confirmation run and release documentation
 
