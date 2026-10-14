@@ -2,8 +2,8 @@
 
 goal_ref: ../goal.md
 created: 2026-10-14T14:26:11+08:00
-updated: 2026-10-14T17:50:00+08:00
-revision: 3
+updated: 2026-10-14T18:30:00+08:00
+revision: 4
 
 ## Outcome
 
@@ -43,7 +43,7 @@ Run both hosts once in release mode and keep the evidence; triage every failure 
 - kind: documentation (+ behavior change if defaults move: Red-Green on the argument parsing test)
 - first signal: n/a for docs; a failing parse test if defaults change.
 - checks: `--list` matches the README tables; test:acceptance:tools.
-- [ ] accepted on observed evidence
+- [x] accepted on observed evidence — see journal 2026-10-14 (close).
 
 ## Phase verification
 
