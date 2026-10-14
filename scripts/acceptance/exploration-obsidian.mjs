@@ -1024,6 +1024,13 @@ export async function createObsidianExplorationDriver({ session, fixture, artifa
     const start = Date.now();
     resetSignal?.throwIfAborted();
     authFailureExpected = false; // P3 Chunk 3: never carries over into the next task.
+    // Leftover-state audit: the fixture server's LLM mode is shared across tasks and was never reset. A task
+    // can leave it "unauthorized" (auth-failure-retry, until its model reviews Run History) or "hold"
+    // (cancel-then-rerun, until its model clicks Cancel), so the next task's own model call would get a 401
+    // or hang. Every task starts from a normal LLM endpoint. A request an earlier run left held is not
+    // released here: reloadPlugin() below unloads the plugin, whose onunload() cancels that run's operations
+    // (plugin/main.ts), and every new request is served normally.
+    fixture.server.setMode?.({ llm: "normal" });
     await executor.execute({ type: "back" }, null, { signal: resetSignal }).catch(() => {});
     await helper.closeSettings();
     resetSignal?.throwIfAborted();

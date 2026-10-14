@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, mkdir, readdir, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -19,7 +19,7 @@ import {
   STATE_FILE,
   startObsidianExplorationSession,
 } from "../acceptance/exploration-obsidian.mjs";
-import { ACCEPTANCE_DATE, PAPERS } from "../acceptance/fixtures.mjs";
+import { ACCEPTANCE_DATE, PAPERS, startFixtureServer } from "../acceptance/fixtures.mjs";
 import { createObsidianSettings } from "../acceptance/obsidian.mjs";
 import * as obsidianTaskLibrary from "../acceptance/exploration-tasks/obsidian.mjs";
 import { LIBRARY_EMBEDDING_DIMENSION, startLibraryFixture } from "../acceptance/exploration-tasks/library.mjs";
@@ -2131,4 +2131,274 @@ test("library-edit-candidate: prepare() throws when real generation produces no 
     const driver = createFakeLibraryTaskDriver(minimalLibraryDisk(), { vaultRoot, requests: [], proposal: { topics: [] } });
     await assert.rejects(() => task.prepare({ driver }), /did not produce any proposed topic\/direction/);
   });
+});
+
+// ---------------------------------------------------------------------------
+// Leftover-state audit of the original 14 Obsidian goal tasks (docs/helm/2026-10-13-exploration-safety-
+// and-coverage, open question 2): could a task pass on state an earlier task, or an earlier pass of the
+// same task, left behind? Each test fakes that leftover and asserts that reset()/prepare() clears it, or
+// that verify() fails on it. Guard tests pass on the code as it was. The three AT-RISK tests (cancel-then-
+// rerun, mark-to-read, auth-failure-retry) were observed Red first (verify passed on the leftover), then
+// the harness was fixed (prepare() baseline / status reset, verify counting only post-prepare history).
+// ---------------------------------------------------------------------------
+
+function findObsidianTask(tasks, id) {
+  const task = tasks.find(item => item.id === id);
+  assert.ok(task, `${id} must exist in the Obsidian goal task library`);
+  return task;
+}
+
+async function writeFixtureSettings(fixture, mutate = () => {}) {
+  const settings = createObsidianSettings({ endpoint: `${fixture.server.url}/v1` });
+  mutate(settings);
+  const dataPath = path.join(fixture.vaultRoot, SETTINGS_FILE);
+  await mkdir(path.dirname(dataPath), { recursive: true });
+  await writeFile(dataPath, JSON.stringify(settings));
+}
+
+async function readFixtureJson(fixture, relative) {
+  return JSON.parse(await readFile(path.join(fixture.vaultRoot, relative), "utf8"));
+}
+
+test("leftover: daily-paper-limit: reset() restores a maxDailyPapers an earlier pass left at 7, and verify fails on a non-fill action", async () => {
+  await withTempFixture(async ({ fixture, artifactDir }) => {
+    await writeFixtureSettings(fixture, settings => { settings.settings.output.maxDailyPapers = 7; });
+    const { session } = buildFakeObsidianSession();
+    const driver = await createObsidianExplorationDriver({ session, fixture, artifactDir });
+    await driver.reset();
+    assert.equal((await readFixtureJson(fixture, SETTINGS_FILE)).settings.output.maxDailyPapers, 20, "reset() must restore the baseline limit");
+    const task = findObsidianTask(await obsidianTaskLibrary.goalTasks(), "daily-paper-limit");
+    const result = await task.verify({ driver, actions: [clickNamed("Settings")] });
+    assert.equal(result.passed, false, "verify must not pass on a non-fill action");
+  });
+});
+
+test("leftover: star-paper-from-report: prepare() asks for the target paper to be unstarred before the model acts, and verify fails on a non-star action", async () => {
+  const task = findObsidianTask(await obsidianTaskLibrary.goalTasks(), "star-paper-from-report");
+  const driver = createFakeRunDriver({ index: { papers: { p0: { arxivId: PAPERS[0].id, priority: "high" } } } });
+  const unstarred = [];
+  driver.ensurePaperUnstarred = async id => { unstarred.push(id); };
+  await task.prepare({ driver });
+  assert.deepEqual(unstarred, [PAPERS[0].id], "prepare() must restore the target's unstarred baseline, whatever an earlier pass left");
+  const result = await task.verify({ driver, actions: [clickNamed("All")] });
+  assert.equal(result.passed, false, "verify must not pass without a star click on the target row");
+});
+
+test("leftover: add-topic-direction: a direction an earlier pass saved is removed by reset(), and verify fails on a non-add action", async () => {
+  await withTempFixture(async ({ fixture, artifactDir }) => {
+    await writeFixtureSettings(fixture, settings => {
+      settings.settings.arxiv.topics[0].directions.push({ id: "leftover-new", text: obsidianTaskLibrary.NEW_DIRECTION_TEXT, origin: "manual" });
+    });
+    const { session } = buildFakeObsidianSession();
+    const driver = await createObsidianExplorationDriver({ session, fixture, artifactDir });
+    const before = await readFixtureJson(fixture, SETTINGS_FILE);
+    assert.ok(before.settings.arxiv.topics[0].directions.some(d => d.text === obsidianTaskLibrary.NEW_DIRECTION_TEXT), "sanity: the leftover is on disk before reset()");
+    await driver.reset();
+    const texts = (await readFixtureJson(fixture, SETTINGS_FILE)).settings.arxiv.topics[0].directions.map(d => d.text);
+    assert.deepEqual(texts, [obsidianTaskLibrary.FIXTURE_DIRECTION_TEXT], "reset() must restore the one-direction baseline");
+    const task = findObsidianTask(await obsidianTaskLibrary.goalTasks(), "add-topic-direction");
+    const result = await task.verify({ driver, actions: [clickNamed("Settings")] });
+    assert.equal(result.passed, false, "verify must not pass on a non-add action after reset()");
+  });
+});
+
+test("leftover: add-arxiv-category: a category an earlier pass saved is removed by reset(), and verify fails on a non-add action", async () => {
+  await withTempFixture(async ({ fixture, artifactDir }) => {
+    await writeFixtureSettings(fixture, settings => { settings.settings.arxiv.categories = ["cs.AI", obsidianTaskLibrary.TARGET_CATEGORY_ID]; });
+    const { session } = buildFakeObsidianSession();
+    const driver = await createObsidianExplorationDriver({ session, fixture, artifactDir });
+    await driver.reset();
+    assert.deepEqual((await readFixtureJson(fixture, SETTINGS_FILE)).settings.arxiv.categories, ["cs.AI"], "reset() must restore the baseline categories");
+    const task = findObsidianTask(await obsidianTaskLibrary.goalTasks(), "add-arxiv-category");
+    const result = await task.verify({ driver, actions: [clickNamed("Settings")] });
+    assert.equal(result.passed, false, "verify must not pass on a non-add action after reset()");
+  });
+});
+
+test("leftover: remove-topic-direction: a pass that already removed the seeded direction leaves the baseline; prepare() re-seeds it, so verify fails on a non-remove action", async () => {
+  await withTempFixture(async ({ fixture, artifactDir }) => {
+    await writeFixtureSettings(fixture);
+    const { session } = buildFakeObsidianSession();
+    const driver = await createObsidianExplorationDriver({ session, fixture, artifactDir });
+    await driver.reset();
+    const task = findObsidianTask(await obsidianTaskLibrary.goalTasks(), "remove-topic-direction");
+    await task.prepare({ driver });
+    const texts = (await readFixtureJson(fixture, SETTINGS_FILE)).settings.arxiv.topics[0].directions.map(d => d.text);
+    assert.ok(texts.includes(obsidianTaskLibrary.SEEDED_DIRECTION_TEXT), "prepare() must seed the direction to remove before the model acts");
+    const result = await task.verify({ driver, actions: [clickNamed("Settings")] });
+    assert.equal(result.passed, false, "verify must not pass while the seeded direction is still present");
+  });
+});
+
+test("leftover: run-for-date: a completed run-state, report and index link an earlier pass left for the date are cleared by prepare(), and verify fails on a submit with no new run", async () => {
+  await withTempFixture(async ({ fixture, artifactDir }) => {
+    await writeFixtureSettings(fixture);
+    const date = obsidianTaskLibrary.RUN_FOR_DATE_DATE;
+    const indexPath = path.join(fixture.vaultRoot, INDEX_FILE);
+    await mkdir(path.dirname(indexPath), { recursive: true });
+    await writeFile(indexPath, JSON.stringify(indexWithReports(date)));
+    await writeFile(path.join(fixture.vaultRoot, STATE_FILE), JSON.stringify({ runState: { [date]: { status: "completed" } } }));
+    await mkdir(path.dirname(path.join(fixture.vaultRoot, dailyReportFile(date))), { recursive: true });
+    await writeFile(path.join(fixture.vaultRoot, dailyReportFile(date)), reportMarkdown(date));
+
+    const { session } = buildFakeObsidianSession();
+    const driver = await createObsidianExplorationDriver({ session, fixture, artifactDir });
+    const task = findObsidianTask(await obsidianTaskLibrary.goalTasks(), "run-for-date");
+    await task.prepare({ driver });
+
+    assert.equal((await readFixtureJson(fixture, STATE_FILE)).runState[date], undefined, "prepare() must clear the earlier completed run-state");
+    await assert.rejects(() => readFile(path.join(fixture.vaultRoot, dailyReportFile(date)), "utf8"), { code: "ENOENT" }, "prepare() must remove the earlier report");
+    const index = await readFixtureJson(fixture, INDEX_FILE);
+    assert.ok(Object.values(index.papers).every(entry => (entry.dailyReports ?? []).every(p => !p.endsWith(`${date}.md`))), "prepare() must unlink the earlier report from the index");
+    const result = await task.verify({ driver, actions: [fillDate(date)] });
+    assert.equal(result.passed, false, "verify must not pass when the submit started no new run");
+  });
+});
+
+test("leftover: completed-date-idempotent: a 'already done' skip recorded before prepare() does not count as this pass's skip", async () => {
+  const task = findObsidianTask(await obsidianTaskLibrary.goalTasks(), "completed-date-idempotent");
+  const date = ACCEPTANCE_DATE;
+  const driver = createFakeRunDriver({
+    reports: { [date]: reportMarkdown(date) },
+    index: indexWithReports(date),
+    historyLines: [{ date, event: "skipped", resultKind: "skipped", reason: "already done" }],
+  });
+  await task.prepare({ driver });
+  const result = await task.verify({ driver, actions: [fillDate(date)] });
+  assert.equal(result.passed, false, "verify must not pass on a skip record that predates this task's prepare()");
+});
+
+test("leftover: dashboard-tabs-paging: a dashboard left on All page 2 does not pass without a Next page click, and prepare() reloads the plugin so the view starts fresh", async () => {
+  const task = findObsidianTask(await obsidianTaskLibrary.goalTasks(), "dashboard-tabs-paging");
+  const driver = createFakeReadingDriver({ dom: { activeTab: "true", pageLabel: "Page 2 / 2", tableText: obsidianTaskLibrary.PAGINATION_LAST_PAPER_ID } });
+  const result = await task.verify({ driver, actions: [clickNamed("All")] });
+  assert.equal(result.passed, false, "a leftover page-2 DOM must not satisfy the task without the Next page click");
+  await task.prepare({ driver });
+  assert.equal(driver.calls.reloadPlugin, 1, "prepare() reloads the plugin, which rebuilds the dashboard view from its default state");
+});
+
+test("leftover: mark-to-read: a to_read status an earlier pass left on the target is reset by prepare(), so a submit that changes nothing does not pass", async () => {
+  const task = findObsidianTask(await obsidianTaskLibrary.goalTasks(), "mark-to-read");
+  const id = obsidianTaskLibrary.MARK_TO_READ_ID;
+  const driver = createFakeReadingDriver({ index: { papers: { p0: { arxivId: id, status: "to_read", priority: "normal" } } } });
+  await task.prepare({ driver });
+  const noChange = await task.verify({ driver, actions: [fillNamed("Paper ID or URL", id), clickNamed("Set mark")] });
+  assert.equal(noChange.passed, false, "verify must not pass on the leftover to_read status when the submit did not change anything");
+  driver.disk.index.papers.p0.status = "to_read";
+  const done = await task.verify({ driver, actions: [fillNamed("Paper ID or URL", id), clickNamed("Set mark")] });
+  assert.equal(done.passed, true, `verify should pass once this pass's submit actually sets to_read: ${JSON.stringify(done)}`);
+});
+
+test("leftover: create-paper-note: a note an earlier pass wrote for the target is removed by prepare(), so a click that writes nothing does not pass", async () => {
+  const task = findObsidianTask(await obsidianTaskLibrary.goalTasks(), "create-paper-note");
+  const target = obsidianTaskLibrary.CREATE_PAPER_NOTE_ID;
+  const driver = createFakeReadingDriver({
+    notes: { [paperNoteFile(target)]: detailNoteMarkdown(target) },
+    index: { papers: { p0: { arxivId: target, detail: true, paperPath: paperNoteFile(target) } } },
+    reports: { [ACCEPTANCE_DATE]: reportMarkdown(ACCEPTANCE_DATE) },
+  });
+  await task.prepare({ driver });
+  assert.equal(driver.disk.notes[paperNoteFile(target)], undefined, "prepare() must remove the earlier note");
+  const result = await task.verify({ driver, actions: [clickNamed("Summarize by arXiv ID")] });
+  assert.equal(result.passed, false, "verify must not pass when the click wrote no note file");
+});
+
+test("leftover: summarize-by-id: a note and index entry an earlier pass left for the target id are cleared by prepare(), so a submit that writes nothing does not pass", async () => {
+  const task = findObsidianTask(await obsidianTaskLibrary.goalTasks(), "summarize-by-id");
+  const target = obsidianTaskLibrary.SUMMARIZE_BY_ID_TARGET;
+  const driver = createFakeReadingDriver({
+    notes: { [paperNoteFile(target)]: detailNoteMarkdown(target) },
+    index: { papers: { [`arxiv:${target}`]: { arxivId: target, detail: true, paperPath: paperNoteFile(target) } } },
+  });
+  await task.prepare({ driver });
+  assert.equal(driver.disk.notes[paperNoteFile(target)], undefined, "prepare() must remove the earlier note");
+  assert.equal(driver.disk.index.papers[`arxiv:${target}`], undefined, "prepare() must remove the earlier index entry");
+  const result = await task.verify({ driver, actions: [fillNamed("Paper ID or URL", target), clickNamed("Summarize")] });
+  assert.equal(result.passed, false, "verify must not pass when the submit wrote no note file");
+});
+
+test("leftover: open-today-report: a daily report left as the active file is no longer active once prepare() opens the dashboard, so a click that opens nothing does not pass", async () => {
+  const task = findObsidianTask(await obsidianTaskLibrary.goalTasks(), "open-today-report");
+  const label = `${ACCEPTANCE_DATE}: open daily report, 2 indexed papers`;
+  const driver = createFakeReadingDriver({ dom: { activeFile: dailyReportFile(ACCEPTANCE_DATE) } });
+  // Models plugin/src/dashboard/view.ts's openDashboardView(): it activates the dashboard leaf, so the
+  // workspace's active file is no longer the report an earlier task left open.
+  driver.openDashboard = async () => { driver.disk.dom.activeFile = null; };
+  await task.prepare({ driver });
+  const result = await task.verify({ driver, actions: [clickNamed(label)] });
+  assert.equal(result.passed, false, "verify must not pass on the report an earlier task left active");
+});
+
+test("leftover: library-accept-direction: a library-origin direction and acceptance receipt an earlier pass saved are cleared by reset(), so the two clicks alone do not pass", async () => {
+  await withTempFixture(async ({ fixture, artifactDir }) => {
+    await writeFixtureSettings(fixture, settings => {
+      settings.settings.arxiv.topics[0].directions.push({ id: "library-leftover", text: "Leftover library direction", origin: "library" });
+    });
+    const dataPath = path.join(fixture.vaultRoot, SETTINGS_FILE);
+    const withReceipt = JSON.parse(await readFile(dataPath, "utf8"));
+    withReceipt.libraryProposalAcceptances = [{ proposalId: "leftover" }];
+    await writeFile(dataPath, JSON.stringify(withReceipt));
+    const { session } = buildFakeObsidianSession();
+    const driver = await createObsidianExplorationDriver({ session, fixture, artifactDir });
+    await driver.reset();
+    const disk = await readFixtureJson(fixture, SETTINGS_FILE);
+    assert.equal(disk.libraryProposalAcceptances, undefined, "reset() must drop the earlier receipt");
+    assert.ok(!disk.settings.arxiv.topics.some(topic => topic.directions?.some(d => d.origin === "library")), "reset() must drop the earlier library-origin direction");
+    const task = findObsidianTask(await obsidianTaskLibrary.goalTasks(), "library-accept-direction");
+    const result = await task.verify({ driver, actions: [clickNamed("Review suggestions"), clickNamed("Add to research topics")] });
+    assert.equal(result.passed, false, "verify must not pass on the two clicks alone once reset() has cleared the earlier state");
+  });
+});
+
+test("leftover: cancel-then-rerun: a cancelled run-history record from an earlier pass does not count as this pass's cancellation; a fresh one after prepare() does", async () => {
+  const task = findObsidianTask(await obsidianTaskLibrary.goalTasks(), "cancel-then-rerun");
+  const date = obsidianTaskLibrary.CANCEL_THEN_RERUN_DATE;
+  const driver = createFakeRunDriver({ historyLines: [{ date, resultKind: "cancelled" }] });
+  await task.prepare({ driver });
+  // What a rerun that completes would leave on disk, with no cancellation recorded during this pass.
+  driver.disk.state.runState[date] = { status: "completed" };
+  driver.disk.index = indexWithReports(date);
+  driver.disk.reports[date] = reportMarkdown(date);
+  const actions = [fillDate(date), clickNamed("Cancel active tasks"), fillDate(date)];
+  const noCancel = await task.verify({ driver, actions });
+  assert.equal(noCancel.passed, false, "verify must not pass on a cancellation recorded before this pass's prepare()");
+  driver.disk.historyLines.push({ date, resultKind: "cancelled" });
+  const done = await task.verify({ driver, actions });
+  assert.equal(done.passed, true, `verify should pass once this pass's cancellation is recorded: ${JSON.stringify(done)}`);
+});
+
+test("leftover: auth-failure-retry: a force-run completion recorded before prepare() does not count as this pass's forced retry", async () => {
+  const task = findObsidianTask(await obsidianTaskLibrary.goalTasks(), "auth-failure-retry");
+  const date = obsidianTaskLibrary.AUTH_FAILURE_RETRY_DATE;
+  const driver = createFakeRunDriver({ historyLines: [{ date, event: "completed", trigger: "force" }] });
+  await task.prepare({ driver });
+  driver.disk.state.runState[date] = { status: "failed_permanent" };
+  await task.verify({ driver, actions: [fillDate(date), clickNamed("Run History")] });
+  driver.disk.state.runState[date] = { status: "completed" };
+  driver.disk.reports[date] = reportMarkdown(date);
+  const actions = [fillDate(date), clickNamed("Run History"), clickNamed("Force run for date…"), fillDate(date)];
+  const noForceRecord = await task.verify({ driver, actions });
+  assert.equal(noForceRecord.passed, false, "verify must not pass on a force-run completion recorded before this pass's prepare()");
+  driver.disk.historyLines.push({ date, event: "completed", trigger: "force" });
+  const done = await task.verify({ driver, actions });
+  assert.equal(done.passed, true, `verify should pass once this pass's forced completion is recorded: ${JSON.stringify(done)}`);
+});
+
+test("leftover: reset() puts the fixture LLM back to normal, so an unauthorized or hold mode an earlier task left (auth-failure-retry, cancel-then-rerun) cannot reach the next task", async () => {
+  const server = await startFixtureServer();
+  try {
+    await withTempFixture(async ({ fixture, artifactDir }) => {
+      fixture.server = server;
+      const { session } = buildFakeObsidianSession();
+      const driver = await createObsidianExplorationDriver({ session, fixture, artifactDir });
+      server.setMode({ llm: "unauthorized" });
+      await driver.reset();
+      assert.equal(server.mode.llm, "normal", "reset() must clear the unauthorized mode auth-failure-retry leaves when its model never reviews the failure");
+      server.setMode({ llm: "hold" });
+      await driver.reset();
+      assert.equal(server.mode.llm, "normal", "reset() must clear the hold mode cancel-then-rerun leaves when its model never cancels");
+    });
+  } finally {
+    await server.close();
+  }
 });
