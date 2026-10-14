@@ -349,10 +349,13 @@ test("ids are unique across goal tasks and personas combined, per host", async (
 });
 
 test("the workbench goal task ids are unchanged by the move and match goalTasks()'s actual ids", async () => {
-  // P3 Chunk 5 appends three more ids after the original three, keeping every earlier id stable.
+  // P3 Chunk 5 appends three more ids after the original three; P4 Chunk 3 (docs/helm/2026-10-13-
+  // exploration-safety-and-coverage/phases/04-workbench-library-tasks.md) appends four personal-library
+  // ids after those, keeping every earlier id stable.
   assert.deepEqual(workbenchTaskLibrary.GOAL_TASK_IDS, [
     "settings-persistence", "sidebar-persistence", "generate-and-read",
     "star-filter-restore", "generate-paper-note", "external-config-conflict",
+    "library-build-index", "library-revoke", "library-catalog-filter", "library-index-search",
   ]);
   const root = await mkdtemp(path.join(tmpdir(), "exploration-task-library-workbench-"));
   try {

@@ -8,10 +8,11 @@
  * `assertFixture`/`settings` stay defined once in exploration-browser.mjs (the driver also uses them for
  * `inspect()`/`dailyEvidence()`) and are imported here, not duplicated.
  */
-import { readFile, rm } from "node:fs/promises";
+import { readdir, readFile, rm } from "node:fs/promises";
 import path from "node:path";
 import { ACCEPTANCE_DATE, PAPERS } from "../fixtures.mjs";
 import { assertFixture, settings, writeConfigPatch } from "../exploration-browser.mjs";
+import { startWorkbenchLibraryFixture } from "./workbench-library.mjs";
 import { checkResult, exactLabelPattern, taskResult, uiLabel, uiLabelException } from "./checks.mjs";
 import { PERSONA_TASK_IDS, personaTasks as sharedPersonaTasks } from "./personas.mjs";
 
@@ -20,6 +21,12 @@ export const GOAL_TASK_IDS = [
   "settings-persistence", "sidebar-persistence", "generate-and-read",
   // P3 Chunk 5: reading-journey and settings-conflict tasks.
   "star-filter-restore", "generate-paper-note", "external-config-conflict",
+  // Exploration safety and coverage P4 Chunk 3 (docs/helm/2026-10-13-exploration-safety-and-coverage/
+  // phases/04-workbench-library-tasks.md): personal-library tasks, in order of fixture setup cost —
+  // build-index starts unauthorized (cheapest: connect+status only), revoke starts authorized, catalog
+  // filter starts scanned (connect+status+prepare+scan), index search starts authorized and indexed
+  // (the most expensive precondition: connect+status+authorize+prepare+scan+index).
+  "library-build-index", "library-revoke", "library-catalog-filter", "library-index-search",
 ];
 
 /** P3 Chunk 5: re-exports the shared persona id list (exploration-tasks/personas.mjs) so `--list`/selection keep reading it from each host's own module, unchanged from before chunk 5 wired it up. */
@@ -70,6 +77,26 @@ const DISCARD_UNSAVED_AND_CLOSE_LABEL = "放弃未保存修改并关闭";
 const CONFIRM_DISCARD_AND_CLOSE_LABEL = "放弃修改并关闭";
 const SETTINGS_BUTTON_LABEL = "设置";
 const RETRY_SAVE_LABEL = "重试保存";
+// P4 Chunk 3: personal-library labels. "Retry preparation" has no translation entry
+// (packages/core/src/presentation/settings-translations.ts), so it renders verbatim in the zh-CN
+// workbench — unlike "确认并建立索引"/"撤销授权", which that same translation table maps from their
+// English source keys ("Confirm and build index"/"Revoke" in settings.ts/library-connection.ts).
+const PERSONAL_LIBRARY_NAV_LABEL = "个人文献库";
+const LIBRARY_BUILD_BUTTON_LABEL = "Retry preparation";
+const LIBRARY_CONFIRM_BUILD_LABEL = "确认并建立索引";
+const LIBRARY_REVOKE_BUTTON_LABEL = "撤销授权";
+const LIBRARY_KEYWORD_FIELD_LABEL = "文献库关键词";
+const LIBRARY_BROWSE_BUTTON_LABEL = "筛选目录";
+const LIBRARY_SEARCH_MODE_FIELD_LABEL = "索引检索方式";
+const LIBRARY_SEARCH_MODE_DENSE_OPTION_LABEL = "语义检索";
+const LIBRARY_SEARCH_BUTTON_LABEL = "检索索引";
+// Both fixture library PDFs (fixtures.mjs's PAPERS) carry "measurement"/"measurements" in their own
+// title or abstract, but only PAPERS[0]'s does — PAPERS[1]'s abstract says "measures", a different
+// word, so this query matches exactly one paper in the catalog filter and embeds to fixtures.mjs's
+// own exact-match embedding vector ([1, 0, 0]) for the index search, matching PAPERS[0] with the
+// highest possible relevance score. Reuses the same query exploration-tasks/obsidian.mjs's own
+// `library-search` task already proved against this exact fixture.
+const LIBRARY_SEARCH_QUERY = "measurement";
 
 async function paperIndexPath(fixture) {
   const config = await settings(fixture);
@@ -82,6 +109,22 @@ async function readPaperIndex(fixture) {
 async function paperNotePath(fixture, arxivId) {
   const config = await settings(fixture);
   return path.resolve(fixture.vaultRoot, config.output.papers_dir, `${arxivId}.md`);
+}
+/**
+ * P4 Chunk 3: the real library runtime (packages/node-runtime, via the CLI's own index step) writes the
+ * built search index's `current.json` under `<daily_dir's own parent>/.index/personal-library-search-
+ * index/<hash>/<hash>/current.json` — a derived, content-hashed path this driver never predicts, only
+ * discovers (mirrors exploration-obsidian.mjs's own `findLibrarySearchIndexFile`, confirmed identical on
+ * the real workbench host in this chunk's own research). `null` before any index has ever been built.
+ */
+async function findLibrarySearchIndexFile(fixture) {
+  const config = await settings(fixture);
+  const base = path.join(fixture.vaultRoot, path.dirname(config.output.daily_dir), ".index", "personal-library-search-index");
+  let entries;
+  try { entries = await readdir(base, { recursive: true }); }
+  catch (error) { if (error.code === "ENOENT") return null; throw error; }
+  const match = entries.find(entry => entry.endsWith("current.json"));
+  return match ? path.join(base, match) : null;
 }
 /** Bounded like every other goal task's own polling (pollJsonFile's 5000ms default in the Obsidian task
  * library): long enough for a real but fast fixture write to land, short enough to stay under verify()'s
@@ -108,6 +151,13 @@ export async function goalTasks(fixture) {
   // tasks' memoized flags (e.g. cancelReleaseDone in exploration-tasks/obsidian.mjs) — the external write
   // must happen exactly once, the first time settings are observed loaded, never on every later poll.
   let externalConflictWritten = false;
+  // P4 Chunk 3: each library task's own fixture-request baseline, captured at the end of its own
+  // prepare() (after startWorkbenchLibraryFixture's own seeding — build-index/index-search's own
+  // authorize-and-index precondition — has already sent its own embeddings requests), so verify() can
+  // tell a fresh embeddings request the model's own action actually drove apart from one left over from
+  // seeding or an earlier task in the same pass (mirrors exploration-tasks/obsidian.mjs's own
+  // `libraryBuildIndexBaseline`).
+  let libraryBuildIndexBaseline, libraryIndexSearchBaseline;
   return [
     {
       id: GOAL_TASK_IDS[0], title: "设置自动保存并刷新复查",
@@ -285,6 +335,153 @@ export async function goalTasks(fixture) {
           checkResult("重新点击“设置”打开设置", true),
           checkResult("磁盘上的配置仍是外部修改后的值，模型的草稿没有被保存", onDisk, config.llm?.model),
           checkResult("重新打开后界面显示的是外部修改后的值", shownValue === EXTERNAL_CONFLICT_EXTERNAL_MODEL, shownValue),
+        ]);
+      },
+    },
+    // ─── Exploration safety and coverage P4 Chunk 3: personal literature library tasks
+    // (docs/helm/2026-10-13-exploration-safety-and-coverage/phases/04-workbench-library-tasks.md) ───────
+    {
+      id: GOAL_TASK_IDS[6], title: "构建个人文献库搜索索引",
+      goal: `打开设置，个人文献库目前已连接，但尚未获得处理授权，也没有搜索索引。在“${PERSONAL_LIBRARY_NAV_LABEL}”区域点击“${LIBRARY_BUILD_BUTTON_LABEL}”按钮；页面会弹出处理披露说明，阅读后点击“${LIBRARY_CONFIRM_BUILD_LABEL}”按钮完成授权并开始建立索引，等待构建完成即可，不需要关闭设置。不要修改嵌入或连接设置。`,
+      uiLabels: [
+        uiLabel(PERSONAL_LIBRARY_NAV_LABEL, "apps/cli/src/workbench/web/app.ts"),
+        uiLabel(LIBRARY_BUILD_BUTTON_LABEL, "packages/core/src/library/library-connection.ts"),
+        uiLabel(LIBRARY_CONFIRM_BUILD_LABEL, "packages/core/src/presentation/settings-translations.ts"),
+      ],
+      // Starts connected but unauthorized, with no index yet (never through the model —
+      // startWorkbenchLibraryFixture seeds it through the real CLI, exactly like every other task's
+      // prepare() seeds its own deterministic starting state directly), so the only thing left for the
+      // model to do is the one flow this task actually tests: find "Retry preparation", read the
+      // disclosure, and confirm it. Records the fixture's own request count at this exact moment so
+      // verify() can tell a fresh embeddings request (driven by this task's own click) apart from one
+      // left over from an earlier task in the same pass.
+      async prepare({ driver }) {
+        await startWorkbenchLibraryFixture(driver, { authorized: false });
+        libraryBuildIndexBaseline = { requestCount: driver.fixture.server.requests.length };
+      },
+      async verify({ driver, actions }) {
+        const clicked = actions.some(action => action.type === "click" && action.control?.dataAction === "library-build");
+        if (!clicked) return taskResult([checkResult(`点击“${LIBRARY_BUILD_BUTTON_LABEL}”按钮`, false)]);
+        const confirmed = actions.some(action => action.type === "click" && action.control?.dataAction === "confirm-library-build");
+        if (!confirmed) {
+          return taskResult([checkResult(`点击“${LIBRARY_BUILD_BUTTON_LABEL}”按钮`, true), checkResult(`在披露对话框中点击“${LIBRARY_CONFIRM_BUILD_LABEL}”确认`, false)]);
+        }
+        const config = await pollFile(() => settings(fixture), value => Boolean(value?.library?.authorization)).catch(() => null);
+        const authorized = Boolean(config?.library?.authorization);
+        const indexFile = await pollFile(() => findLibrarySearchIndexFile(fixture), value => value !== null).catch(() => null);
+        const baseline = libraryBuildIndexBaseline?.requestCount ?? 0;
+        const embeddingsRequested = driver.fixture.server.requests.slice(baseline).some(request => request.kind === "embeddings");
+        return taskResult([
+          checkResult(`点击“${LIBRARY_BUILD_BUTTON_LABEL}”按钮`, true),
+          checkResult(`在披露对话框中点击“${LIBRARY_CONFIRM_BUILD_LABEL}”确认`, true),
+          checkResult("设置中记录了个人文献库的处理授权", authorized, config?.library),
+          checkResult("磁盘上生成了个人文献库搜索索引的 current.json", Boolean(indexFile), indexFile),
+          checkResult("任务开始后夹具收到了 embeddings 请求", embeddingsRequested),
+        ]);
+      },
+    },
+    {
+      id: GOAL_TASK_IDS[7], title: "撤销个人文献库的处理授权",
+      goal: `打开设置，个人文献库目前已连接并已获得处理授权。在“${PERSONAL_LIBRARY_NAV_LABEL}”区域点击“${LIBRARY_REVOKE_BUTTON_LABEL}”按钮；撤销会立即生效，不会再弹出确认对话框。不需要重新连接或重新授权，也不要修改嵌入设置。`,
+      uiLabels: [
+        uiLabel(PERSONAL_LIBRARY_NAV_LABEL, "apps/cli/src/workbench/web/app.ts"),
+        uiLabel(LIBRARY_REVOKE_BUTTON_LABEL, "packages/core/src/presentation/settings-translations.ts"),
+      ],
+      // Starts already connected and authorized (never through the model), so the only thing left for
+      // the model to do is the one UI action this task actually tests: find and click Revoke. Unlike
+      // the Obsidian plugin, the workbench's own `library-revoke` settings action needs no second
+      // confirmation click (apps/cli/src/workbench/web/settings.ts has no special-case handler for it,
+      // so it falls straight through to the generic `action(name)` call).
+      async prepare({ driver }) {
+        await startWorkbenchLibraryFixture(driver, { authorized: true });
+      },
+      async verify({ actions }) {
+        const revoked = actions.some(action => action.type === "click" && action.control?.dataAction === "library-revoke");
+        if (!revoked) return taskResult([checkResult(`点击“${LIBRARY_REVOKE_BUTTON_LABEL}”按钮`, false)]);
+        const config = await pollFile(() => settings(fixture), value => !value?.library?.authorization).catch(() => null);
+        const stillAuthorized = Boolean(config?.library?.authorization);
+        return taskResult([
+          checkResult(`点击“${LIBRARY_REVOKE_BUTTON_LABEL}”按钮`, true),
+          checkResult("个人文献库的处理授权已从设置中撤销", !stillAuthorized, config?.library),
+        ]);
+      },
+    },
+    {
+      id: GOAL_TASK_IDS[8], title: "筛选个人文献库目录",
+      goal: `点击“${PERSONAL_LIBRARY_NAV_LABEL}”进入文献库页面（个人文献库已连接，但还没有建立搜索索引）。在“${LIBRARY_KEYWORD_FIELD_LABEL}”输入框中填写“${LIBRARY_SEARCH_QUERY}”，点击“${LIBRARY_BROWSE_BUTTON_LABEL}”按钮，等待结果加载完成，确认下方只显示一篇标题或摘要中包含“${LIBRARY_SEARCH_QUERY}”的论文。不要修改“${LIBRARY_SEARCH_MODE_FIELD_LABEL}”，也不要点击“${LIBRARY_SEARCH_BUTTON_LABEL}”。`,
+      uiLabels: [
+        uiLabel(PERSONAL_LIBRARY_NAV_LABEL, "apps/cli/src/workbench/web/app.ts"),
+        uiLabel(LIBRARY_KEYWORD_FIELD_LABEL, "apps/cli/src/workbench/web/library.ts"),
+        uiLabel(LIBRARY_BROWSE_BUTTON_LABEL, "apps/cli/src/workbench/web/library.ts"),
+      ],
+      // Starts connected and scanned, deliberately NOT authorized (startWorkbenchLibraryFixture's own
+      // `scanned` option, P4 Chunk 3): browsing the catalog is the one personal-library action the
+      // product itself documents as never calling the model ("浏览目录不调用模型"), so this task's
+      // precondition exercises exactly that unrestricted, unauthorized path — never through the model.
+      async prepare({ driver }) {
+        await startWorkbenchLibraryFixture(driver, { scanned: true });
+      },
+      async verify({ observation, actions }) {
+        const filledIndex = actions.findIndex(action => action.type === "fill" && (action.control?.name || "").trim() === LIBRARY_KEYWORD_FIELD_LABEL && action.value.toLowerCase().includes(LIBRARY_SEARCH_QUERY));
+        if (filledIndex === -1) return taskResult([checkResult(`在“${LIBRARY_KEYWORD_FIELD_LABEL}”输入框中填写“${LIBRARY_SEARCH_QUERY}”`, false)]);
+        const browsedIndex = actions.findIndex((action, index) => index > filledIndex && action.type === "click" && exactLabelPattern(LIBRARY_BROWSE_BUTTON_LABEL).test((action.control?.name || "").trim()));
+        if (browsedIndex === -1) {
+          return taskResult([checkResult(`在“${LIBRARY_KEYWORD_FIELD_LABEL}”输入框中填写“${LIBRARY_SEARCH_QUERY}”`, true), checkResult(`点击“${LIBRARY_BROWSE_BUTTON_LABEL}”按钮`, false)]);
+        }
+        const match = /目录 · (\d+) 篇论文/.exec(observation.text || "");
+        const count = match ? Number(match[1]) : 0;
+        const matchedOnlyPaper = count === 1 && (observation.text || "").includes(PAPERS[0].title);
+        return taskResult([
+          checkResult(`在“${LIBRARY_KEYWORD_FIELD_LABEL}”输入框中填写“${LIBRARY_SEARCH_QUERY}”`, true),
+          checkResult(`点击“${LIBRARY_BROWSE_BUTTON_LABEL}”按钮`, true),
+          checkResult("目录筛选结果只显示标题或摘要包含该关键词的那一篇论文", matchedOnlyPaper, { count, snippet: (observation.text || "").slice(0, 200) }),
+        ]);
+      },
+    },
+    {
+      id: GOAL_TASK_IDS[9], title: "在索引检索方式下检索个人文献库",
+      goal: `点击“${PERSONAL_LIBRARY_NAV_LABEL}”进入文献库页面（个人文献库已连接、已获得处理授权，并且已经完成过一次索引构建）。把“${LIBRARY_SEARCH_MODE_FIELD_LABEL}”切换为“${LIBRARY_SEARCH_MODE_DENSE_OPTION_LABEL}”，在“${LIBRARY_KEYWORD_FIELD_LABEL}”输入框中填写“${LIBRARY_SEARCH_QUERY}”，点击“${LIBRARY_SEARCH_BUTTON_LABEL}”按钮，等待检索结果出现。`,
+      uiLabels: [
+        uiLabel(PERSONAL_LIBRARY_NAV_LABEL, "apps/cli/src/workbench/web/app.ts"),
+        uiLabel(LIBRARY_SEARCH_MODE_FIELD_LABEL, "apps/cli/src/workbench/web/library.ts"),
+        uiLabel(LIBRARY_SEARCH_MODE_DENSE_OPTION_LABEL, "apps/cli/src/workbench/web/library.ts"),
+        uiLabel(LIBRARY_KEYWORD_FIELD_LABEL, "apps/cli/src/workbench/web/library.ts"),
+        uiLabel(LIBRARY_SEARCH_BUTTON_LABEL, "apps/cli/src/workbench/web/library.ts"),
+      ],
+      // Starts connected, authorized and already indexed (never through the model — see
+      // library-revoke's own prepare() comment): the one thing this task actually tests is switching
+      // to a mode that calls the embedding endpoint, searching and seeing a real matched result.
+      // Records the fixture's own request count at the end of its own seeding, same reasoning as
+      // library-build-index's own baseline.
+      async prepare({ driver }) {
+        await startWorkbenchLibraryFixture(driver, { authorized: true, indexed: true });
+        libraryIndexSearchBaseline = { requestCount: driver.fixture.server.requests.length };
+      },
+      async verify({ driver, observation, actions }) {
+        const selectedIndex = actions.findIndex(action => action.type === "select" && exactLabelPattern(LIBRARY_SEARCH_MODE_FIELD_LABEL).test((action.control?.name || "").trim()) && action.value === "dense");
+        if (selectedIndex === -1) return taskResult([checkResult(`把“${LIBRARY_SEARCH_MODE_FIELD_LABEL}”切换为“${LIBRARY_SEARCH_MODE_DENSE_OPTION_LABEL}”`, false)]);
+        const filledIndex = actions.findIndex(action => action.type === "fill" && (action.control?.name || "").trim() === LIBRARY_KEYWORD_FIELD_LABEL && action.value.toLowerCase().includes(LIBRARY_SEARCH_QUERY));
+        if (filledIndex === -1) {
+          return taskResult([checkResult(`把“${LIBRARY_SEARCH_MODE_FIELD_LABEL}”切换为“${LIBRARY_SEARCH_MODE_DENSE_OPTION_LABEL}”`, true), checkResult(`在“${LIBRARY_KEYWORD_FIELD_LABEL}”输入框中填写“${LIBRARY_SEARCH_QUERY}”`, false)]);
+        }
+        const searchedIndex = actions.findIndex((action, index) => index > Math.max(selectedIndex, filledIndex) && action.type === "click" && exactLabelPattern(LIBRARY_SEARCH_BUTTON_LABEL).test((action.control?.name || "").trim()));
+        if (searchedIndex === -1) {
+          return taskResult([
+            checkResult(`把“${LIBRARY_SEARCH_MODE_FIELD_LABEL}”切换为“${LIBRARY_SEARCH_MODE_DENSE_OPTION_LABEL}”`, true),
+            checkResult(`在“${LIBRARY_KEYWORD_FIELD_LABEL}”输入框中填写“${LIBRARY_SEARCH_QUERY}”`, true),
+            checkResult(`点击“${LIBRARY_SEARCH_BUTTON_LABEL}”按钮`, false),
+          ]);
+        }
+        const match = /检索结果 · (\d+) 篇论文/.exec(observation.text || "");
+        const count = match ? Number(match[1]) : 0;
+        const baseline = libraryIndexSearchBaseline?.requestCount ?? 0;
+        const embeddingsRequested = driver.fixture.server.requests.slice(baseline).some(request => request.kind === "embeddings");
+        return taskResult([
+          checkResult(`把“${LIBRARY_SEARCH_MODE_FIELD_LABEL}”切换为“${LIBRARY_SEARCH_MODE_DENSE_OPTION_LABEL}”`, true),
+          checkResult(`在“${LIBRARY_KEYWORD_FIELD_LABEL}”输入框中填写“${LIBRARY_SEARCH_QUERY}”`, true),
+          checkResult(`点击“${LIBRARY_SEARCH_BUTTON_LABEL}”按钮`, true),
+          checkResult("检索结果区域显示至少一条匹配结果", count >= 1, count),
+          checkResult("任务开始后夹具收到了 embeddings 请求", embeddingsRequested),
         ]);
       },
     },

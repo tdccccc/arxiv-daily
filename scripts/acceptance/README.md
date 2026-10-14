@@ -90,7 +90,7 @@ npm run test:acceptance -- --suite exploration --host obsidian
 
 跑 `npm run test:acceptance -- --list` 可以拿到当前实际生效的清单（和 `--task`/`--persona` 的合法取值一一对应）；下表是同一清单的中文说明，任务库增减后记得一起更新。
 
-workbench 目标任务（`--host workbench --task ...`，共 6 个）：
+workbench 目标任务（`--host workbench --task ...`，共 10 个）：
 
 | id | 内容 |
 |---|---|
@@ -100,6 +100,10 @@ workbench 目标任务（`--host workbench --task ...`，共 6 个）：
 | `star-filter-restore` | 收藏后切换筛选并恢复阅读 |
 | `generate-paper-note` | 为单篇论文生成详细总结 |
 | `external-config-conflict` | 设置冲突后放弃草稿并重新打开 |
+| `library-build-index` | 构建个人文献库搜索索引 |
+| `library-revoke` | 撤销个人文献库的处理授权 |
+| `library-catalog-filter` | 筛选个人文献库目录 |
+| `library-index-search` | 在索引检索方式下检索个人文献库 |
 
 obsidian 目标任务（`--host obsidian --task ...`，共 14 个）：
 

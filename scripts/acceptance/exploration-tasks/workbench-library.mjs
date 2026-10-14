@@ -78,19 +78,25 @@ async function seedClusterableWorkbenchLibraryPaper(fixture, {
 }
 
 /**
- * Seeds a connected (optionally authorized, optionally indexed) personal library on `driver`'s own
- * fixture, through the real CLI — never the model's own actions. Order: patch `[embedding]` to remote
- * (so the very first `library connect` already sees a valid, fingerprint-able scope), `library connect`
- * the fixture's own `vault/library` folder, `library status` for the real disclosure fingerprint, then
- * (when `authorized`) `library authorize --fingerprint` against that exact fingerprint, then (when
- * `indexed`, which requires `authorized` — remote-embedding indexing needs granted processing consent,
- * research.md) `library prepare`/`scan`/`index` with npm forced offline (the pre-installed-runtime
+ * Seeds a connected (optionally authorized, optionally scanned, optionally indexed) personal library on
+ * `driver`'s own fixture, through the real CLI — never the model's own actions. Order: patch `[embedding]`
+ * to remote (so the very first `library connect` already sees a valid, fingerprint-able scope), `library
+ * connect` the fixture's own `vault/library` folder, `library status` for the real disclosure fingerprint,
+ * then (when `authorized`) `library authorize --fingerprint` against that exact fingerprint, then (when
+ * `scanned` or `indexed`) `library prepare`/`scan` with npm forced offline (the pre-installed-runtime
  * contract Chunk 1 already sets up for the real exploration run; here it is only a fail-fast backstop,
- * since this helper never installs anything itself). Ends by resyncing the running workbench server's
- * in-memory config to the disk this just wrote out-of-band (`driver.resyncSettings()` — the same path
- * reset() itself uses), so the next real UI settings save does not 409 against a stale revision.
+ * since this helper never installs anything itself), then (when `indexed`, which requires `authorized` —
+ * remote-embedding indexing needs granted processing consent, research.md) `library index`. `scanned`
+ * deliberately does not require `authorized`: the real `library scan` CLI command never calls
+ * `assertAuthorized` (apps/cli/src/library-cmd.ts) — scanning a library's own folder for a catalog is the
+ * one personal-library action the workbench itself documents as not calling the model
+ * (apps/cli/src/workbench/web/library.ts's own "浏览目录不调用模型"), so P4 Chunk 3's catalog-filter task
+ * seeds a scanned-but-unauthorized library on purpose, to exercise that exact unrestricted path. Ends by
+ * resyncing the running workbench server's in-memory config to the disk this just wrote out-of-band
+ * (`driver.resyncSettings()` — the same path reset() itself uses), so the next real UI settings save does
+ * not 409 against a stale revision.
  */
-export async function startWorkbenchLibraryFixture(driver, { authorized = false, indexed = false, clusterable = false, runCli = runWorkbenchLibraryCli, signal } = {}) {
+export async function startWorkbenchLibraryFixture(driver, { authorized = false, scanned = false, indexed = false, clusterable = false, runCli = runWorkbenchLibraryCli, signal } = {}) {
   if (indexed && !authorized) throw new Error("startWorkbenchLibraryFixture: indexed requires authorized — remote-embedding indexing needs granted processing consent");
   const fixture = driver?.fixture;
   if (!fixture?.vaultRoot || !fixture?.configPath || !fixture?.env) throw new Error("startWorkbenchLibraryFixture: driver.fixture with vaultRoot/configPath/env is required");
@@ -113,12 +119,12 @@ export async function startWorkbenchLibraryFixture(driver, { authorized = false,
 
   if (authorized) {
     await runCli({ args: ["library", "authorize", "--fingerprint", fingerprint], env: fixture.env, signal });
-    if (indexed) {
-      const offlineEnv = npmOfflineEnv(fixture.env);
-      await runCli({ args: ["library", "prepare"], env: offlineEnv, signal });
-      await runCli({ args: ["library", "scan"], env: offlineEnv, signal });
-      await runCli({ args: ["library", "index"], env: offlineEnv, signal });
-    }
+  }
+  if (scanned || indexed) {
+    const offlineEnv = npmOfflineEnv(fixture.env);
+    await runCli({ args: ["library", "prepare"], env: offlineEnv, signal });
+    await runCli({ args: ["library", "scan"], env: offlineEnv, signal });
+    if (indexed) await runCli({ args: ["library", "index"], env: offlineEnv, signal });
   }
 
   await driver.resyncSettings();
