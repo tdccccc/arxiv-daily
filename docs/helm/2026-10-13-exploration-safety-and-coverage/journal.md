@@ -118,3 +118,10 @@
 - change: P4 Chunk 4 checked; P4 done; success criterion 4 ticked (both hosts); P5 active with its phase plan.
 - disposition: keep 36a4815.
 - next: P5 Chunk 1 — real-model release runs, workbench then Obsidian.
+
+## 2026-10-14 — note (P5 chunk 1 results and triage plan)
+
+- evidence: first release runs with the real model (same CLI `[llm]` config as 2026-10-12). Workbench (/tmp/p5c1-workbench-1791959177): 12/12 goal tasks passed, 3 personas explored, 105 calls, 764,905 input / 4,223 output tokens, 2 findings. Obsidian (/tmp/p5c1-obsidian-1791959177): 20/21 passed, 1 blocked, 3 personas explored, 138 calls, 751,721 input / 5,322 output tokens, 1 finding. Total ≈1.52M input tokens, inside the 1.4–1.6M estimate. All 13 library tasks passed on the first real-model run. Dispositions so far: (1) Obsidian `completed-date-idempotent` blocked on "Model API call timeout after 45000ms" before any action; rerun alone passed (/tmp/p5c1-obsidian-retry-1791960287) — transient provider latency, no change. (2) Obsidian `library-edit-candidate` passed but used 18 of 20 steps: observed `<summary>` controls carry no open/closed state, so the model collapsed already-open sections repeatedly; `home` opens the dashboard behind an open review modal and reports success, so the model repeated it 5 times; and the Add/Generate buttons are named by their tooltips (the P3 note "title wins over text"). Owner decision: harness fixes on the Obsidian observer (delegated). (3) Workbench first-time-user finding "reading status not kept after reopening the paper" (step 70) — under investigation (delegated) before classifying. (4) First-time-user finding on both hosts: the first-run settings page is long and does not point to where to generate a report or read papers — a product UX question, put to the user.
+- change: P5 Chunk 1 checked; Chunk 2 items as above.
+- disposition: keep run evidence in /tmp; no code yet.
+- next: P5 Chunk 2 — read-status classification, Obsidian observer fixes, user decision on the first-run guide.

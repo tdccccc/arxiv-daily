@@ -2,8 +2,8 @@
 
 goal_ref: ../goal.md
 created: 2026-10-14T14:26:11+08:00
-updated: 2026-10-14T14:26:11+08:00
-revision: 1
+updated: 2026-10-14T14:46:57+08:00
+revision: 2
 
 ## Outcome
 
@@ -27,7 +27,7 @@ Run both hosts once in release mode and keep the evidence; triage every failure 
 - kind: non-behavioral (evidence collection)
 - first signal: n/a
 - checks: `npm run test:acceptance -- --suite exploration --host workbench --release` and `--host obsidian --release`, each with a fresh `--output`.
-- [ ] accepted on observed evidence
+- [x] accepted on observed evidence — see journal 2026-10-14 (P5 chunk 1 results).
 
 ### Chunk 2 — triage and fixes
 
