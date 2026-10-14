@@ -90,3 +90,10 @@
 - change: P6 done; P4 started.
 - disposition: keep.
 - next: P4 intake — workbench library flows, PDF runtime pre-install, and whether every workbench server request goes through the fixture.
+
+## 2026-10-14 — handoff (P4 chunks 1 and 2 accepted)
+
+- evidence: 65f3ce2 (version-keyed PDF runtime cache copied into each fixture, npm forced offline; real CLI connect/authorize/prepare/scan/index spawned no npm and sent only the fixture embeddings request) and 9d79ba6 (library seed through the real CLI plus server resync; `reset()` restores library config, accepted library directions, index state and extra PDFs inside the fixture; older workbench tasks still pass after a seeded library). Both were committed by the previous session with their validation but not yet recorded as accepted. Re-run in this session: acceptance-exploration* 297/297, matching the commit record. The worktree was clean and the last edit was 2026-10-13 20:28, so no other session was active.
+- change: owner main-session-3a9f449b → claude-code-session-2026-10-14; P4 Chunks 1 and 2 checked.
+- disposition: keep 65f3ce2 and 9d79ba6.
+- next: P4 Chunk 3 — build, revoke, catalog filter and index search tasks.

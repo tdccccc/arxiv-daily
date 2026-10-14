@@ -2,8 +2,8 @@
 
 goal_ref: ../goal.md
 created: 2026-10-14T01:00:00+08:00
-updated: 2026-10-14T01:00:00+08:00
-revision: 1
+updated: 2026-10-14T10:43:43+08:00
+revision: 2
 
 ## Outcome
 
@@ -29,7 +29,7 @@ First make library work safe and offline at model time (runtime pre-install, npm
 - Red / baseline signal: a test shows the workbench fixture has no prepared runtime and its environment lets npm reach the registry; a real-host probe of `library-build` on a seeded library spawns `npm ci`.
 - Green check: before the server starts, the harness copies a version-keyed prepared runtime (prepared once with network, reused afterwards) into the fixture cache; the workbench environment sets npm offline so any accidental install fails fast; a real-host `library-build` completes with no npm spawn and only fixture requests.
 - regression checks: `node --test scripts/tests/acceptance-exploration*.test.mjs`; `npm run test:acceptance:tools`; the fixed workbench acceptance suite still passes (its launch is unchanged unless it opts in).
-- [ ] implementation and tests accepted
+- [x] implementation and tests accepted
 
 ### Chunk 2 — library seed and reset isolation
 
@@ -38,7 +38,7 @@ First make library work safe and offline at model time (runtime pre-install, npm
 - Red / baseline signal: tests show `reset()` leaves TOML `[library]`, `[embedding]`, library-accepted topics, `.index/personal-library-*` state and extra library PDFs.
 - Green check: a `startWorkbenchLibraryFixture` seeds connected (optionally authorized, optionally indexed) state through the real CLI plus a server resync; `reset()` restores library-related config and files to the baseline inside the fixture only; older workbench tasks still pass.
 - regression checks: as Chunk 1.
-- [ ] implementation and tests accepted
+- [x] implementation and tests accepted
 
 ### Chunk 3 — build, revoke, catalog filter and index search tasks
 
