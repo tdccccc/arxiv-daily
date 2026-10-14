@@ -160,3 +160,17 @@
 - change: P5 Chunk 3 checked; P5 done; success criterion 5 ticked; goal done. Open question 1 closed: in both release runs the keyboard-only persona's presses were never refused (Obsidian run: one invalid-JSON reply, no scope refusals). Open question 2 kept as a follow-up, not a success criterion: workbench goal tasks and the Obsidian library tasks have untouched/leftover-state verifier tests; the original 14 Obsidian tasks do not, and no instance was found.
 - disposition: keep all work. Branch fix/exploration-safety-coverage is unpushed; pushing and a PR need the user's approval. The workbench observer's `<summary>` state gap and title-before-text for `<a>`/`<summary>` remain unfixed (not seen in a run).
 - next: none in this initiative; ask the user about pushing and a PR.
+
+## 2026-10-14 — revisit (workbench observer parity)
+
+- evidence: the close entry left the workbench observer's `<summary>` state gap and its title-before-own-text naming for `<a>`/`<summary>` unfixed because no run showed them. The user questioned this. The reason does not hold: it is the same gap that cost Obsidian `library-edit-candidate` 11 extra steps, the workbench uses `<details>`/`<summary>` in the library review dialog, settings and the main app, and the fix is small and needs no model call.
+- change: goal reopened (done → active); P7 added as follow-up. P5 stays done (its accepted outcome holds). Intent and success criteria unchanged.
+- disposition: keep all P1–P6 work.
+- next: P7 Chunk 1 — workbench summary state and own-text naming, delegated.
+
+## 2026-10-14 — note (P7 done, goal closed again)
+
+- evidence: 822912c. A workbench `<summary>` reports `expanded` from its parent `<details>` and is named by its own text like a button; a link's own text now beats `title`. L1 during acceptance: the delegate's version also put a link's own text before its settings row, which renamed the four external-link rows ("Report a bug", "Documentation", "Repository", "Request a feature") to four identical "Open" names. No workbench `<a>` has a `title`, so that order fixed nothing there; the owner moved link own text after the row (Red: names were `['Open','Open']`, Green after the change). Restriction is by href, so safety was never affected. Delegate Red→Green for 6 tests (expanded true/false, titled link and summary, two guards); owner re-run: P7 tests 7/7, acceptance-exploration* 338/338, test:release-tools 825/825. Owner real-host runs without a model after the final change: 12 workbench goal tasks with scripted plans passed (/tmp/p7-runs/p7-owner-scripted-all12-1791979703710); always-blocked ended all 12 blocked (/tmp/p7-runs/p7-owner-blocked-all12-1791979745593); observations show `expanded` true on open review topics and false on "查看运行详情"/"Research", row names on the external links, and own text on paper links. The delegate's session dropped once (ECONNRESET) before any edit and was resumed. Its throwaway runner and scripted plans for all 12 workbench tasks live in /tmp/p7-run, outside the repo.
+- change: P7 Chunk 1 checked; P7 done; goal done again. Success criteria unchanged and all ticked.
+- disposition: keep 822912c.
+- next: none; branch fix/exploration-safety-coverage is unpushed, pushing and a PR need the user's approval.

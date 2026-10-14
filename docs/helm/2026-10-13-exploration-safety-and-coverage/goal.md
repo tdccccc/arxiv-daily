@@ -2,8 +2,8 @@
 
 status: done
 created: 2026-10-13T10:05:00+08:00
-updated: 2026-10-14T18:30:00+08:00
-revision: 13
+updated: 2026-10-14T19:55:00+08:00
+revision: 15
 owner: claude-code-session-2026-10-14b
 
 ## Intent
@@ -47,6 +47,7 @@ owner: claude-code-session-2026-10-14b
 4. P4 — Reading workbench 上的个人文献库目标任务就绪 — status: done
 5. P5 — 真实模型完整运行、疑点复核与处置、发版说明更新 — status: done
 6. P6 — 界面文字检查按出处文件、区分大小写的完整字符串核对，同一文字在别处残留时改名也能发现（在 P3 之后、P4 之前执行） — status: done
+7. P7 — workbench 观察器与 Obsidian 一致：折叠标题报告展开状态，链接与折叠标题先用自身文字命名 — status: done
 
 ## Open questions
 
