@@ -125,3 +125,10 @@
 - change: P5 Chunk 1 checked; Chunk 2 items as above.
 - disposition: keep run evidence in /tmp; no code yet.
 - next: P5 Chunk 2 — read-status classification, Obsidian observer fixes, user decision on the first-run guide.
+
+## 2026-10-14 — note (first-run settings finding closed as false positive)
+
+- evidence: screenshots /tmp/p5c1-workbench-1791959177/exploration/exploration-first-time-user-step-63.png and /tmp/p5c1-obsidian-1791959177/exploration/first-time-user-step-105.png. The persona's fixture is already configured with papers (not a true first run); the model opened settings itself late in the persona; the workbench "生成" button and the Obsidian dashboard stay available outside settings.
+- change: user decision (2026-10-14): option A — no product change; finding (4) of the P5 chunk 1 triage is a false positive.
+- disposition: no code.
+- next: remaining P5 Chunk 2 items — read-status classification, Obsidian observer fixes.
