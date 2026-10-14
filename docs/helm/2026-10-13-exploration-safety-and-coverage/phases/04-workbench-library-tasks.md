@@ -2,8 +2,8 @@
 
 goal_ref: ../goal.md
 created: 2026-10-14T01:00:00+08:00
-updated: 2026-10-14T10:43:43+08:00
-revision: 2
+updated: 2026-10-14T12:44:41+08:00
+revision: 3
 
 ## Outcome
 
@@ -47,7 +47,7 @@ First make library work safe and offline at model time (runtime pre-install, npm
 - Red / baseline signal: verifier tests for the new tasks fail before they exist (untouched state, partial actions, state without observed actions).
 - Green check: tests pass; scripted fake-model real-host runs pass, wait-only runs end not passed.
 - regression checks: as Chunk 1; label test.
-- [ ] implementation and tests accepted
+- [x] implementation and tests accepted
 
 ### Chunk 4 — Direction candidate review tasks
 
