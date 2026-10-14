@@ -100,8 +100,21 @@ function browserObservation(id) {
     const rect = node.getBoundingClientRect();
     const field = node.getAttribute("name") || "";
     const labelIds = (node.getAttribute("aria-labelledby") || "").split(/\s+/).filter(Boolean);
+    // P4 Chunk 3 (docs/helm/2026-10-13-exploration-safety-and-coverage/phases/04-workbench-library-tasks.md):
+    // a plain button's own rendered text (e.g. settings.ts's `button(action, label)` helper, which sets
+    // no aria-label of its own) must win over the `[data-setting-name]` ancestor fallback below, not lose
+    // to it. Found on the real host while wiring the library-build task: every button inside the "Personal
+    // library" settings row ("Choose folder"/"Retry preparation"/"Revoke"/...) reported the row's own name
+    // ("Library") instead of its own text, because the row fallback used to be checked first — so a model
+    // (or a goal task's verify()) could never tell those buttons apart by name. The same bug hit every
+    // other settings row with more than one plain-text button (e.g. a research topic's "Add direction" /
+    // "Remove direction" / "Delete" all reporting the topic's own name). `[data-setting-name]` still
+    // applies afterward, for a control that truly has no name of its own (an input/select the product
+    // forgot to label).
+    const ownButtonText = node.tagName === "BUTTON" ? node.textContent.trim() : "";
     const label = node.getAttribute("aria-label") || labelIds.map(labelId => document.getElementById(labelId)?.textContent || "").join(" ") ||
-      Array.from(node.labels || []).map(item => item.textContent).join(" ") || node.closest("[data-setting-name]")?.getAttribute("data-setting-name") || node.getAttribute("title") || field || node.textContent;
+      Array.from(node.labels || []).map(item => item.textContent).join(" ") || ownButtonText ||
+      node.closest("[data-setting-name]")?.getAttribute("data-setting-name") || node.getAttribute("title") || field || node.textContent;
     const sensitive = node.type === "password" || /api.?key|password|secret|token/i.test(field);
     const ref = `${id}-${controls.length + 1}`;
     node.setAttribute("data-acceptance-ref", ref);
