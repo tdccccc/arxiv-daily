@@ -4,6 +4,8 @@ import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
+import vm from "node:vm";
+import { Window } from "happy-dom";
 import { classifyControlRestriction, createExplorationDriver } from "../acceptance/exploration-browser.mjs";
 import { goalTasks as createDefaultExplorationTasks } from "../acceptance/exploration-tasks/workbench.mjs";
 import { collapseOptionSets, loadExplorationModel, parseExplorationAction, runExplorationLoop, selectExplorationTasks } from "../acceptance/exploration.mjs";
@@ -1118,4 +1120,87 @@ test('external-config-conflict: verify fails if "设置" is clicked again before
   ];
   const result = await task.verify({ observation: { controls: [{ field: 'model', value: 'fixture-model' }] }, actions });
   assert.equal(result.passed, false);
+});
+
+// ---------------------------------------------------------------------------
+// P7 Chunk 1 (docs/helm/2026-10-13-exploration-safety-and-coverage/phases/07-workbench-observer-parity.md):
+// the workbench observer must report a <summary>'s parent <details> open state as `expanded`, and name
+// links and summaries by their own text before their `title` tooltip, mirroring the Obsidian observer
+// after d600a2e. The real browserObservation (exploration-browser.mjs, not exported) runs here against a
+// happy-dom document: a fake page's evaluate() hands its own source to a vm context whose globals are that
+// document, through the real driver.observe() path. happy-dom's always-zero getBoundingClientRect is
+// replaced so the visibility gate lets the fixture's controls through.
+// ---------------------------------------------------------------------------
+
+async function observeWorkbenchFixture(t, bodyHtml) {
+  const root = await mkdtemp(path.join(tmpdir(), 'exploration-observer-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const fixture = { root, vaultRoot: path.join(root, 'vault'), configPath: path.join(root, 'config.toml') };
+  await mkdir(fixture.vaultRoot);
+  await writeFile(fixture.configPath, `vault_root = ${JSON.stringify(fixture.vaultRoot)}\n`);
+  const url = 'http://127.0.0.1:3102/session/';
+  const window = new Window();
+  window.document.body.innerHTML = `<div class="workbench" data-view="settings">${bodyHtml}</div>`;
+  window.Element.prototype.getBoundingClientRect = () => ({ x: 0, y: 0, width: 100, height: 20, top: 0, left: 0, right: 100, bottom: 20 });
+  const context = { document: window.document, getComputedStyle: (...args) => window.getComputedStyle(...args), innerWidth: 1200, innerHeight: 800 };
+  const page = {
+    url: () => url,
+    on() {}, off() {},
+    locator: () => ({ waitFor: async () => {} }),
+    async evaluate(fn, arg) { return JSON.parse(JSON.stringify(vm.runInNewContext(`(${fn.toString()})`, context)(arg))); },
+    keyboard: { press: async () => {} },
+  };
+  const browserContext = { on() {}, off() {}, route: async () => {}, unroute: async () => {} };
+  const driver = await createExplorationDriver({ page, context: browserContext, url, fixture, artifactDir: path.join(root, 'artifacts') });
+  t.after(() => driver.dispose());
+  return driver.observe();
+}
+
+test("P7 workbench observer: a <summary> inside an open <details> is reported expanded: true", async t => {
+  const observation = await observeWorkbenchFixture(t, '<details open><summary>Advanced</summary><p>body</p></details>');
+  const summary = observation.controls.find(control => control.tag === 'summary');
+  assert.ok(summary, 'the summary must be observed as a control');
+  assert.equal(summary.expanded, true);
+});
+
+test("P7 workbench observer: a <summary> inside a closed <details> is reported expanded: false", async t => {
+  const observation = await observeWorkbenchFixture(t, '<details><summary>Advanced</summary><p>body</p></details>');
+  const summary = observation.controls.find(control => control.tag === 'summary');
+  assert.ok(summary, 'the summary must be observed as a control');
+  assert.equal(summary.expanded, false);
+});
+
+test("P7 workbench observer: a titled link is named by its own text, not its title tooltip", async t => {
+  const observation = await observeWorkbenchFixture(t, '<a href="#report" title="Tooltip for the report">Full report</a>');
+  const link = observation.controls.find(control => control.tag === 'a');
+  assert.ok(link, 'the link must be observed as a control');
+  assert.equal(link.name, 'Full report');
+});
+
+test("P7 workbench observer: a titled summary is named by its own text, not its title tooltip", async t => {
+  const observation = await observeWorkbenchFixture(t, '<details><summary title="Tooltip for the section">Advanced options</summary><p>body</p></details>');
+  const summary = observation.controls.find(control => control.tag === 'summary');
+  assert.ok(summary, 'the summary must be observed as a control');
+  assert.equal(summary.name, 'Advanced options');
+});
+
+test("P7 workbench observer guard: aria-label still wins over own text and title for a button and a link", async t => {
+  const observation = await observeWorkbenchFixture(t, '<button aria-label="Explicit button label" title="Tooltip">Own button text</button><a href="#x" aria-label="Explicit link label" title="Tooltip">Own link text</a>');
+  assert.equal(observation.controls.find(control => control.tag === 'button').name, 'Explicit button label');
+  assert.equal(observation.controls.find(control => control.tag === 'a').name, 'Explicit link label');
+});
+
+test("P7 workbench observer guard: a textless titled button still falls back to its title", async t => {
+  const observation = await observeWorkbenchFixture(t, '<button title="Only a tooltip"></button>');
+  const button = observation.controls.find(control => control.tag === 'button');
+  assert.ok(button, 'the button must be observed as a control');
+  assert.equal(button.name, 'Only a tooltip');
+});
+
+// P7 Chunk 1 L1: the workbench settings rows that hold an external link ("Report a bug" and similar) render
+// a plain "Open" link. A link keeps its settings-row name before its own text, so those rows stay
+// distinguishable; its own text still wins over a title tooltip (test above).
+test("P7 workbench observer: a link inside a settings row keeps the row name instead of its generic own text", async t => {
+  const observation = await observeWorkbenchFixture(t, '<div data-setting-name="Report a bug"><a href="https://example.invalid/issues">Open</a></div><div data-setting-name="Documentation"><a href="https://example.invalid/docs">Open</a></div>');
+  assert.deepEqual(observation.controls.filter(control => control.tag === 'a').map(control => control.name), ['Report a bug', 'Documentation']);
 });

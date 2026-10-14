@@ -111,10 +111,15 @@ function browserObservation(id) {
     // "Remove direction" / "Delete" all reporting the topic's own name). `[data-setting-name]` still
     // applies afterward, for a control that truly has no name of its own (an input/select the product
     // forgot to label).
-    const ownButtonText = node.tagName === "BUTTON" ? node.textContent.trim() : "";
+    // P7 Chunk 1 (phases/07-workbench-observer-parity.md, mirroring Obsidian's d600a2e): a summary's own
+    // rendered text wins under the same rule as a button. A link's own text wins over its `title` tooltip
+    // but not over its settings row: the external-link rows render a generic "Open" link, and the row name
+    // is what tells them apart.
+    const ownButtonText = /^(BUTTON|SUMMARY)$/.test(node.tagName) ? node.textContent.trim() : "";
+    const ownLinkText = node.tagName === "A" ? node.textContent.trim() : "";
     const label = node.getAttribute("aria-label") || labelIds.map(labelId => document.getElementById(labelId)?.textContent || "").join(" ") ||
       Array.from(node.labels || []).map(item => item.textContent).join(" ") || ownButtonText ||
-      node.closest("[data-setting-name]")?.getAttribute("data-setting-name") || node.getAttribute("title") || field || node.textContent;
+      node.closest("[data-setting-name]")?.getAttribute("data-setting-name") || ownLinkText || node.getAttribute("title") || field || node.textContent;
     const sensitive = node.type === "password" || /api.?key|password|secret|token/i.test(field);
     const ref = `${id}-${controls.length + 1}`;
     node.setAttribute("data-acceptance-ref", ref);
@@ -124,6 +129,10 @@ function browserObservation(id) {
       ...(sensitive ? { sensitive: true } : {}),
       ...(typeof node.value === "string" ? { value: sensitive ? "" : node.value.slice(0, 1000) } : {}),
       ...(typeof node.checked === "boolean" ? { checked: node.checked } : {}),
+      // P7 Chunk 1 (mirroring Obsidian's d600a2e): a <summary> has no open state of its own; report its parent
+      // <details>' `open` next to `checked`, so an already-open section is not collapsed again. Only the direct
+      // parent is read; a summary inside a closed outer details is hidden and never reaches this point.
+      ...(node.tagName === "SUMMARY" && node.parentElement?.tagName === "DETAILS" ? { expanded: node.parentElement.open === true } : {}),
       ...(node.hasAttribute("href") ? { href: node.getAttribute("href").slice(0, 1000) } : {}),
       ...(node.tagName === "SELECT" ? { options: Array.from(node.options).slice(0, 60).map(option => ({ value: option.value.slice(0, 256), label: option.text.slice(0, 96), disabled: option.disabled })) } : {}),
       dataAction: node.getAttribute("data-settings-action") || node.getAttribute("data-settings") || node.getAttribute("data-action") || "",
