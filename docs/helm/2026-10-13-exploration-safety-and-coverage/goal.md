@@ -2,8 +2,8 @@
 
 status: done
 created: 2026-10-13T10:05:00+08:00
-updated: 2026-10-14T19:55:00+08:00
-revision: 15
+updated: 2026-10-14T23:30:00+08:00
+revision: 16
 owner: claude-code-session-2026-10-14b
 
 ## Intent
@@ -52,4 +52,4 @@ owner: claude-code-session-2026-10-14b
 ## Open questions
 
 - （已关闭，见 journal 2026-10-14 close）Obsidian 打开设置后键盘焦点不进入设置页：两次发版运行中 keyboard-only 角色的按键均未被拒绝，未影响探索，不处理。
-- （后续，非成功标准）"只要有一个非等待动作即可通过"是否可能借前一任务残留状态误判通过：workbench 全部目标任务与 Obsidian 文献库任务已有未操作/残留状态的固定测试；Obsidian 最初 14 个任务尚无同类检查，未找到具体实例。
+- （已关闭，见 journal 2026-10-14 follow-up）"只要有一个非等待动作即可通过"是否可能借前一任务残留状态误判通过：审计原 14 个 Obsidian 任务，3 个有风险（mark-to-read、cancel-then-rerun、auth-failure-retry）已在 fa3ebf2 修复，其余由复位/准备或只认准备之后的证据保护，均有固定测试。

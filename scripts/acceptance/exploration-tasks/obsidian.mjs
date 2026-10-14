@@ -278,6 +278,11 @@ export function goalTasks() {
   // time the model has actually reviewed the recorded failure) — never earlier than the action that
   // earns it, and never repeated on every polling pass of verify().
   let cancelReleaseDone = false, authFailureSeen = false, authFixtureRestored = false;
+  // Leftover-state audit (docs/helm/2026-10-13-exploration-safety-and-coverage open question 2): run-history.jsonl
+  // is append-only and survives reset() and clearDateState(), so a verify() that searches the whole file can
+  // count a cancellation or a forced completion that an earlier pass of this task recorded. Each task's
+  // prepare() records how many history lines already existed, and verify() counts only the lines after that.
+  let cancelHistoryBaseline = 0, authHistoryBaseline = 0;
   let idempotentBaseline;
   // Exploration safety and coverage P3 Chunk 2: library-build-index's own baseline — the fixture's
   // request count at the moment prepare() finishes connecting the library, so verify() can tell whether
@@ -551,6 +556,7 @@ export function goalTasks() {
       ],
       async prepare({ driver }) {
         await driver.clearDateState(CANCEL_THEN_RERUN_DATE);
+        cancelHistoryBaseline = (await readHistory(driver).catch(() => [])).length;
         // Program-only fixture control (mirrors obsidian-scenarios.mjs's cancelAndRepeat): holds the
         // model request open so there is a real window in which the model's cancel click matters,
         // instead of racing a run that could complete before the model ever reaches the menu.
@@ -577,7 +583,7 @@ export function goalTasks() {
             checkResult("点击 Cancel active tasks 取消正在运行的任务", false),
           ]);
         }
-        const cancelHistory = await pollHistory(driver, records => records.some(record => record.date === CANCEL_THEN_RERUN_DATE && record.resultKind === "cancelled"), "cancelled run-history record").catch(() => []);
+        const cancelHistory = await pollHistory(driver, records => records.slice(cancelHistoryBaseline).some(record => record.date === CANCEL_THEN_RERUN_DATE && record.resultKind === "cancelled"), "cancelled run-history record").then(records => records.slice(cancelHistoryBaseline)).catch(() => []);
         const cancelRecorded = cancelHistory.some(record => record.date === CANCEL_THEN_RERUN_DATE && record.resultKind === "cancelled");
         const rerunSubmitted = actions.slice(cancelClickIndex + 1).some(action => action.type === "fill" && action.control?.name === DATE_FIELD_LABEL && action.value === CANCEL_THEN_RERUN_DATE);
         if (!cancelRecorded || !rerunSubmitted) {
@@ -622,6 +628,7 @@ export function goalTasks() {
       // cannot pass without the model's specific review action; this is checked below, not assumed.
       async prepare({ driver }) {
         await driver.clearDateState(AUTH_FAILURE_RETRY_DATE);
+        authHistoryBaseline = (await readHistory(driver).catch(() => [])).length;
         driver.fixture.server.setMode({ llm: "unauthorized" });
         driver.expectAuthorizationFailure();
         await driver.openDashboard();
@@ -670,7 +677,7 @@ export function goalTasks() {
         }
         const completedState = await pollJsonFile(() => driver.jsonFile(STATE_FILE), value => value?.runState?.[AUTH_FAILURE_RETRY_DATE]?.status === "completed", "run-state completed after force retry", { timeoutMs: 5000 }).catch(() => null);
         const completed = completedState?.runState?.[AUTH_FAILURE_RETRY_DATE]?.status === "completed";
-        const history = await readHistory(driver).catch(() => []);
+        const history = (await readHistory(driver).catch(() => [])).slice(authHistoryBaseline);
         const forceCompletedRecorded = history.some(record => record.date === AUTH_FAILURE_RETRY_DATE && record.event === "completed" && record.trigger === "force");
         const reportPath = dailyReportFile(AUTH_FAILURE_RETRY_DATE);
         const content = await driver.file(reportPath).catch(() => "");
@@ -800,8 +807,15 @@ export function goalTasks() {
         uiLabel(WATCH_MARK_LABEL, "plugin/src/commands.ts"),
         uiLabel(SET_MARK_LABEL, "plugin/src/commands.ts"),
       ],
+      // Leftover-state audit: papers.json is not reset between tasks, so an earlier pass of this task
+      // leaves the target already marked to_read. Restore the untouched default first, so verify() below
+      // can only see to_read if this pass's own submit set it.
       async prepare({ driver }) {
         await driver.ensureDailyReport(ACCEPTANCE_DATE);
+        await driver.applyIndexPatch(current => {
+          const target = entryFor(current, MARK_TO_READ_ID);
+          if (target) { target.status = "inbox"; target.priority = "normal"; }
+        });
         await driver.openDashboard();
       },
       async verify({ driver, actions }) {
