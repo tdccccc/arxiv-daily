@@ -172,8 +172,12 @@ function resolveName(node) {
   if (labelledBy) return labelledBy;
   const labelled = Array.from(node.labels || []).map(item => item.textContent || "").join(" ").trim();
   if (labelled) return labelled;
-  if (node.getAttribute("title")) return node.getAttribute("title");
+  // P5 Chunk 2 (phases/05-real-model-release-run.md, real-host finding on library-edit-candidate): a
+  // button's own rendered text now comes before its `title` tooltip, mirroring the workbench's cf2c8ad
+  // fix. Obsidian's "Add"/"Generate" buttons carry tooltips that differ from their visible text, so the
+  // tooltip used to win and the model could not tell such buttons apart. aria-label stays first.
   if (/^(BUTTON|A|SUMMARY)$/.test(node.tagName) && own()) return own();
+  if (node.getAttribute("title")) return node.getAttribute("title");
   const settingName = node.closest(".setting-item")?.querySelector(".setting-item-name")?.textContent?.trim();
   if (settingName) return settingName;
   return (node.getAttribute("name") || own() || "").trim();
@@ -265,6 +269,12 @@ function describeControl(node, ref) {
     ...(sensitive ? { sensitive: true } : {}),
     ...(typeof node.value === "string" ? { value: sensitive ? "" : node.value.slice(0, 1000) } : {}),
     ...(typeof node.checked === "boolean" ? { checked: node.checked } : {}),
+    // P5 Chunk 2 (real-host finding on library-edit-candidate): a <summary> carries no open/closed state of
+    // its own, so the model could not tell an already-open review section from a closed one and kept
+    // collapsing sections it had just opened. Report the parent <details>' own `open` attribute here instead,
+    // alongside `checked`. Only the direct parent is read: a summary inside a closed outer details is already
+    // hidden by controlVisible()/hiddenByClosedDetails() and never reaches this point.
+    ...(node.tagName === "SUMMARY" && node.parentElement?.tagName === "DETAILS" ? { expanded: node.parentElement.open === true } : {}),
     ...(node.hasAttribute("href") ? { href: node.getAttribute("href").slice(0, 1000) } : {}),
     ...(node.tagName === "SELECT" ? { options: Array.from(node.options).slice(0, 60).map(option => ({ value: option.value.slice(0, 256), label: option.text.slice(0, 96), disabled: option.disabled })) } : {}),
     dataAction: node.getAttribute("data-settings-action") || node.getAttribute("data-settings") || node.getAttribute("data-action") || "",
@@ -918,8 +928,25 @@ export async function createObsidianExplorationDriver({ session, fixture, artifa
     // zero controls) — it goes straight through the driver's own existing openDashboard path (the same
     // one reset() already uses), never through createObsidianActionExecutor's generic CDP click/back/fill
     // machinery, which has no ref or CDP input event to drive for this.
+    // P5 Chunk 2 (real-host finding on library-edit-candidate): openDashboard() only closes Obsidian's own
+    // settings window. A plugin modal (`.arxiv-daily-modal`) or the plugin's own menu (`.arxiv-daily-menu`)
+    // is a separate overlay that stays on top, so `home` used to open the dashboard BEHIND an open review
+    // modal and report success — the model then repeated `home` five times. Close the plugin's own open
+    // overlay first, with the same real Escape `back` uses (one place for the mechanism, reusing the
+    // executor), and only open the dashboard once none is left. Only marked plugin overlays are targeted;
+    // an unmarked Obsidian overlay is never touched by this path.
     if (action.type === "home") {
-      try { await helper.openDashboard(); return { ok: true }; }
+      try {
+        const pluginOverlayOpen = () => helper.read(`Boolean(document.querySelector(".arxiv-daily-modal, .arxiv-daily-menu"))`);
+        if (await pluginOverlayOpen()) {
+          await executor.execute({ type: "back" }, observation, options);
+          // Obsidian removes a closed modal asynchronously, so poll briefly before deciding it could not be closed.
+          const closed = await helper.wait(`!document.querySelector(".arxiv-daily-modal, .arxiv-daily-menu")`, value => value === true, "plugin dialog to close", { timeoutMs: 2000, intervalMs: 100 }).then(() => true, () => false);
+          if (!closed) return { ok: false, error: "A plugin dialog is still open and could not be closed, so the dashboard was not opened; close it first (back) or finish the dialog's own step." };
+        }
+        await helper.openDashboard();
+        return { ok: true };
+      }
       catch (error) { return { ok: false, error: redact(error.message) }; }
     }
     return executor.execute(action, observation, options);

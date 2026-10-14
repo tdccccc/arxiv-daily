@@ -346,6 +346,32 @@ test("nested closed <details>: a control stays hidden if any ancestor details is
   assert.ok(!snapshot.controls.some(c => c.name === "Nested content"));
 });
 
+// P5 Chunk 2 (phases/05-real-model-release-run.md, real-model finding from library-edit-candidate):
+// an observed `<summary>` carried no open/closed state at all, so the model could not tell an
+// already-open review section from a closed one and repeatedly re-collapsed sections it had just
+// opened (wasting most of a 20-step budget). `describeControl` must report the parent `<details>`'s
+// own `open` state on its `<summary>` control, the same way `checked`/`value` are already reported
+// for other stateful controls.
+test("a <summary> control reports its parent <details> open state as `expanded`, so the model can tell an already-open section from a closed one", () => {
+  const html = `
+    <div class="arxiv-daily-dashboard">
+      <details open>
+        <summary>Open topic</summary>
+        <button type="button">Inside open</button>
+      </details>
+      <details>
+        <summary>Closed topic</summary>
+      </details>
+    </div>
+  `;
+  const { observe } = buildWindow(html);
+  const snapshot = observe();
+  const open = snapshot.controls.find(c => c.name === "Open topic");
+  const closed = snapshot.controls.find(c => c.name === "Closed topic");
+  assert.equal(open.expanded, true, "an already-open section's summary must report expanded:true");
+  assert.equal(closed.expanded, false, "a collapsed section's summary must report expanded:false");
+});
+
 test("closed <details>: live re-validation rejects a ref that was observed while open but has since collapsed", async () => {
   const { window, observe, execute, calls } = buildSession(`
     <div class="arxiv-daily-dashboard">
@@ -468,6 +494,46 @@ test("the Embedding mode select itself must not be restricted — only its endpo
   // A name that merely starts with "Embedding" but is not one of the four known sub-fields must not
   // become restricted by accident (guards against an overly broad fix, e.g. a bare prefix match).
   assert.equal(classifyControlRestriction({ type: "", name: "Embedding" }), undefined);
+});
+
+// P5 Chunk 2 (phases/05-real-model-release-run.md, real-model finding carried over from the P3/P4
+// "title wins over text" note): `resolveName`'s own title-before-own-text order meant an "Add"/
+// "Generate" button whose `title` tooltip ("Add paper to library"/"Generate daily report now")
+// differed from its rendered text was always named by the tooltip, so distinct buttons in the same
+// row were indistinguishable by name to the model. Mirrors the workbench's cf2c8ad fix: aria-label
+// first, then the element's own text, then title, then the existing row/field fallbacks.
+test("a button's own text wins over its title tooltip, matching the workbench's cf2c8ad fix", () => {
+  const html = `
+    <div class="view-content arxiv-daily-dashboard">
+      <button type="button" title="Generate daily report now">Generate</button>
+    </div>
+  `;
+  const { observe } = buildWindow(html);
+  const snapshot = observe();
+  assert.ok(snapshot.controls.some(c => c.name === "Generate"), "the button's own visible text must be the observed name");
+  assert.ok(!snapshot.controls.some(c => c.name === "Generate daily report now"), "the title tooltip must not win over the button's own text");
+});
+
+test("aria-label still wins over a button's own text and its title", () => {
+  const html = `
+    <div class="view-content arxiv-daily-dashboard">
+      <button type="button" aria-label="Add paper to library" title="Add">Add</button>
+    </div>
+  `;
+  const { observe } = buildWindow(html);
+  const snapshot = observe();
+  assert.ok(snapshot.controls.some(c => c.name === "Add paper to library"));
+});
+
+test("title is still used as a fallback name when a control has no own text (e.g. an icon-only button)", () => {
+  const html = `
+    <div class="view-content arxiv-daily-dashboard">
+      <button type="button" class="clickable-icon" title="Open PDF"></button>
+    </div>
+  `;
+  const { observe } = buildWindow(html);
+  const snapshot = observe();
+  assert.ok(snapshot.controls.some(c => c.name === "Open PDF"));
 });
 
 /**
@@ -1192,5 +1258,109 @@ test("driver.capture() still removes the mask when the screenshot itself throws 
     assert.ok(!trace.some(entry => entry.method === "Page.captureScreenshot"), "the screenshot itself must never have been reached");
     assert.ok(trace.some(entry => entry.maskedBefore === 1), "the mask must have been applied before the refusal");
     assert.equal(window.document.querySelectorAll('[data-exploration-mask="1"]').length, 0, "the mask must be removed even though capture() threw");
+  });
+});
+
+/**
+ * P5 Chunk 2 (phases/05-real-model-release-run.md, real-model finding): a fake session for
+ * createObsidianExplorationDriver's `home` action. Unlike `buildCaptureSession` (screenshots only),
+ * this also fakes `app.setting.close()`/`app.commands.executeCommandById()` so the real
+ * `createObsidianDriver`'s `openDashboard()`/`closeSettings()` helpers run unmodified against it, and
+ * optionally simulates Obsidian's own documented behaviour (see this file's header comment on `back`,
+ * confirmed by reading `resources/obsidian.asar`) that a real Escape keypress closes whichever plugin
+ * modal/menu is open — gated by `escapeCloses` so one test can also exercise the "closing is
+ * impossible" path without a second, divergent fake.
+ */
+function buildHomeSession(bodyHtml, { escapeCloses = true } = {}) {
+  const window = new Window();
+  window.document.body.innerHTML = bodyHtml;
+  const httpClient = { request: async () => ({}) };
+  const app = {
+    plugins: { plugins: { "arxiv-daily": { getHttpClient: () => httpClient } } },
+    setting: { close() {}, open() {}, openTabById() {}, isOpen: false, activeTab: undefined },
+    commands: { executeCommandById: () => true },
+  };
+  const context = { document: window.document, window, getComputedStyle: (...args) => window.getComputedStyle(...args), innerWidth: 1200, innerHeight: 800, app };
+  const client = {
+    async send(method, params = {}) {
+      if (method === "Runtime.evaluate") {
+        let value;
+        try { value = vm.runInNewContext(params.expression, context); }
+        catch (error) { return { result: {}, exceptionDetails: { text: "Uncaught", exception: { description: error.message } } }; }
+        return { result: { value } };
+      }
+      if (method === "Input.dispatchKeyEvent" && params.type === "keyUp" && params.key === "Escape" && escapeCloses) {
+        window.document.querySelectorAll(".arxiv-daily-modal, .arxiv-daily-menu").forEach(node => {
+          (node.closest(".modal-container") || node).remove();
+        });
+      }
+      return {};
+    },
+  };
+  const evaluate = expression => cdpEvaluate(client, expression);
+  return { window, session: { client, evaluate, diagnostics: { entries: () => [] } } };
+}
+
+const homeFixtureHtml = `
+  <div class="workspace">
+    <div class="view-content arxiv-daily-dashboard">
+      <div class="arxiv-daily-dashboard__tab is-active" role="tab" tabindex="0">All</div>
+    </div>
+  </div>
+  <div class="modal-container"><div class="modal arxiv-daily-modal">
+    <button type="button">Close</button>
+  </div></div>
+`;
+
+// Real-host finding (P5 chunk 1 triage, library-edit-candidate): `home` went straight through
+// `helper.openDashboard()`, which only closes Obsidian's own settings window — a plugin modal is a
+// separate overlay appended to document.body and is unaffected by which workspace leaf/view is shown.
+// `home` opened the dashboard BEHIND the still-open review modal and reported success, so the model
+// repeated `home` 5 times with the modal never actually going away.
+test("home closes an open plugin modal before opening the dashboard, and only then reports success", async () => {
+  await withTempArtifactDir(async root => {
+    const { window, session } = buildHomeSession(homeFixtureHtml, { escapeCloses: true });
+    const fixture = { vaultRoot: path.join(root, "vault"), server: { url: "http://127.0.0.1:1" } };
+    const artifactDir = path.join(root, "artifacts");
+    const driver = await createObsidianExplorationDriver({ session, fixture, artifactDir });
+    const observation = await driver.observe();
+    assert.equal(observation.layout.view, "modal", "the modal must be the observed surface before home runs");
+    const result = await driver.execute({ type: "home" }, observation);
+    assert.equal(result.ok, true);
+    // Boolean, not assert.equal(element, null): a failing deep-equal on a happy-dom element makes node's
+    // assertion diff walk the whole DOM object graph and hang instead of reporting the failure.
+    assert.ok(!window.document.querySelector(".arxiv-daily-modal"), "home must close the plugin modal, not just open the dashboard behind it");
+  });
+});
+
+test("home reports failure instead of success when an open plugin modal cannot be closed", async () => {
+  await withTempArtifactDir(async root => {
+    const { session } = buildHomeSession(homeFixtureHtml, { escapeCloses: false });
+    const fixture = { vaultRoot: path.join(root, "vault"), server: { url: "http://127.0.0.1:1" } };
+    const artifactDir = path.join(root, "artifacts");
+    const driver = await createObsidianExplorationDriver({ session, fixture, artifactDir });
+    const observation = await driver.observe();
+    const result = await driver.execute({ type: "home" }, observation);
+    assert.equal(result.ok, false, "home must not report success while the plugin modal is still open");
+    assert.match(result.error, /close/i);
+  });
+});
+
+test("home still opens the dashboard normally when no plugin modal or menu is open", async () => {
+  await withTempArtifactDir(async root => {
+    const { window, session } = buildHomeSession(`
+      <div class="workspace">
+        <div class="view-content arxiv-daily-dashboard">
+          <div class="arxiv-daily-dashboard__tab is-active" role="tab" tabindex="0">All</div>
+        </div>
+      </div>
+    `);
+    const fixture = { vaultRoot: path.join(root, "vault"), server: { url: "http://127.0.0.1:1" } };
+    const artifactDir = path.join(root, "artifacts");
+    const driver = await createObsidianExplorationDriver({ session, fixture, artifactDir });
+    const observation = await driver.observe();
+    const result = await driver.execute({ type: "home" }, observation);
+    assert.equal(result.ok, true);
+    assert.equal(window.document.activeElement?.className, "arxiv-daily-dashboard__tab is-active", "openDashboard()'s own focus seeding must still run");
   });
 });

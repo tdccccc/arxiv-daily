@@ -478,6 +478,11 @@ function buildFakeObsidianSession({ modalOpen = false, settingsMarker = false, d
       }
       calls.push({ method, params });
       if (method === "Input.dispatchMouseEvent" && params.type === "mousePressed") window.document.elementFromPoint(params.x, params.y)?.focus?.();
+      // Real Obsidian closes a plugin modal on Escape (the mechanism `back` relies on); mirror that for marked
+      // plugin modals only, so the fake matches what `home` and `back` see on a real host.
+      if (method === "Input.dispatchKeyEvent" && params.type === "keyUp" && params.key === "Escape") {
+        window.document.querySelectorAll(".arxiv-daily-modal").forEach(node => (node.closest(".modal-container") || node).remove());
+      }
       return {};
     },
   };
@@ -597,17 +602,24 @@ test("driver.observe() collapses several identical <select> option lists into on
 // the same one reset() already uses, close settings -> run the open-reading-dashboard command -> wait for
 // the dashboard), never through the generic CDP click/back input machinery createObsidianActionExecutor
 // drives every other action through.
-test("execute({type:'home'}) reopens the Reading Dashboard via the driver's own openDashboard path, not the generic CDP click/back machinery", async () => {
+// P5 Chunk 2 (real-host finding on library-edit-candidate): with a plugin modal open, `home` must close it
+// first (a single real Escape, the same mechanism `back` uses) and only then reopen the dashboard via the
+// driver's own openDashboard path. The earlier version of this test asserted no CDP input at all, which
+// encoded the bug (the dashboard opened behind the still-open modal). Mouse input stays forbidden, and the
+// dashboard itself still reopens through the command path, not the generic click/back machinery.
+test("execute({type:'home'}) with a plugin modal open closes it with one Escape, then reopens the Reading Dashboard via the driver's own openDashboard path", async () => {
   await withTempFixture(async ({ fixture, artifactDir }) => {
-    const { calls, session } = buildFakeObsidianSession({ modalOpen: true });
+    const { window, calls, session } = buildFakeObsidianSession({ modalOpen: true });
     const driver = await createObsidianExplorationDriver({ session, fixture, artifactDir });
     const observation = await driver.observe();
     const before = calls.length;
     const result = await driver.execute({ type: "home" }, observation);
     assert.deepEqual(result, { ok: true });
+    assert.equal(window.document.querySelectorAll(".arxiv-daily-modal").length, 0, "the plugin modal must be closed before home reports success");
     const after = calls.slice(before);
-    assert.ok(!after.some(c => c.method === "Input.dispatchKeyEvent" || c.method === "Input.dispatchMouseEvent"),
-      "home must not go through the generic CDP input machinery that click/back/fill use");
+    const keys = after.filter(c => c.method === "Input.dispatchKeyEvent");
+    assert.deepEqual(keys.map(c => `${c.params.type}:${c.params.key}`), ["keyDown:Escape", "keyUp:Escape"], "the only key input is the Escape that closes the modal");
+    assert.ok(!after.some(c => c.method === "Input.dispatchMouseEvent"), "home must not click: the dashboard reopens through the command path");
   });
 });
 
