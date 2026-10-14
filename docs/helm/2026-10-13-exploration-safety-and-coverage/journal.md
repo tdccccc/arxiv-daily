@@ -132,3 +132,10 @@
 - change: user decision (2026-10-14): option A — no product change; finding (4) of the P5 chunk 1 triage is a false positive.
 - disposition: no code.
 - next: remaining P5 Chunk 2 items — read-status classification, Obsidian observer fixes.
+
+## 2026-10-14 — handoff (paused by the user to save quota)
+
+- evidence: read-status finding (workbench first-time-user step 70) is a model misreading: step 67 set paper A ("Reproducible evidence…", arxiv:2610.10002) to read; in observation s81 the list already showed A's status select as `read` and B's as `inbox`, and step 69 opened paper B (arxiv:2610.10001), whose untouched `inbox` the model reported. The workbench saves the select on `change` immediately (apps/cli/src/workbench/web/app.ts saveMark) and the server writes synchronously (apps/cli/src/workbench/papers.ts mark); the harness `selectOption` fires the product's events. Existing coverage (apps/cli/tests/workbench-papers.test.ts "persists independent reading and star marks…") already covers persistence, so the delegate's extra passing test was discarded. The Obsidian observer-fix delegate dropped its connection (ECONNRESET) before editing any file; the worktree is clean.
+- change: finding (3) closed as a false positive. User asked to pause after this stage because quota use is high.
+- disposition: no code from either delegate is kept.
+- next: P5 Chunk 2 remaining item — Obsidian observer fixes from the 2026-10-14 triage entry: (a) observed `<summary>` controls report their `<details>` open state; (b) `home` with a plugin modal open must close it before opening the dashboard (now it reports success while the modal stays on top); (c) a button's own text before its `title` as the observed name (keep `aria-label` first), mirroring cf2c8ad. Then Chunk 3: confirmation release run on both hosts (≈1.5M input tokens; user already approved the cost of P5 runs) and README task tables/cost table.
