@@ -27,7 +27,8 @@ Backfill 2026-10-08, 09, 12, 13 into the trial vault that already holds 2026-10-
 - kind: non-behavioral (operation)
 - first signal: n/a
 - checks: each run completes; record count per day; sheet row count, non-empty abstracts, single direction snapshot.
-- [ ] accepted on observed evidence
+- L1: 2026-10-13 is not an announcement day in /recent (available: 10-08, 09, 12, 14, 15), so 10-15 replaced it.
+- [x] accepted on observed evidence — records: 10-08 40 (1 in report), 10-09 52 (2), 10-12 32 (1), 10-14 100 (2), 10-15 68 (2); 10-14 and 10-15 titles-only (API 429 / network failure), the others had abstracts. Sheet `/home/tiandc/quality-eval/2026-10-15-baseline/labels.csv`: 48 rows (8 selected + 40 of 284 skipped, seed `baseline-1`), 0 without abstract (abs-page fallback), one direction snapshot across all five days; source records copied beside it
 
 ### Chunk 2 — researcher labels
 
