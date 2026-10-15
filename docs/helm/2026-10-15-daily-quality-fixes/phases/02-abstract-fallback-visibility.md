@@ -2,8 +2,8 @@
 
 goal_ref: ../goal.md
 created: 2026-10-15T18:30:00+08:00
-updated: 2026-10-15T18:30:00+08:00
-revision: 1
+updated: 2026-10-15T21:20:00+08:00
+revision: 2
 
 ## Outcome
 
@@ -61,7 +61,14 @@ run-history (CLI and Obsidian) without failing the run.
   currently retried after ~2 s; header-less abs 429 retried after ~2 s.
 - checks: same tests Green; existing fetcher tests (Retry-After 5 s, long
   deferral, 503 shared cooldown — reinterpreted per host) Green; core suite.
-- [ ] accepted on observed evidence
+- [x] accepted on observed evidence — Red 6/44 for expected reasons
+  (cross-host wait/deferral, API header-less 429 retried, 2–4 s page retry;
+  one self-inflicted 503-guard assertion corrected); Green 44/44, core 2550,
+  root typecheck 0, export script 15/15, CLI runtime 7/7; no existing
+  expectation changed. Query-API header-less 429 → one request, plain
+  `ArxivHttpError(429)`, then 10 min in-process fail-fast
+  (`ArxivRetryDeferredError`, message still says "arXiv requested" — cosmetic).
+  Page header-less 429 → 30 s, 60 s.
 
 ### Chunk 2 — abs-page abstract fallback
 
