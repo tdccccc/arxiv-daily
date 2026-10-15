@@ -2,8 +2,8 @@
 
 goal_ref: ../goal.md
 created: 2026-10-15T16:46:40+08:00
-updated: 2026-10-15T16:58:00+08:00
-revision: 2
+updated: 2026-10-15T17:25:00+08:00
+revision: 3
 
 ## Outcome
 
@@ -76,7 +76,13 @@ kept. Prompt-file change is chunk 3 and depends on the user's decision.
   detail.
 - checks: same tests Green; existing correction-guidance and summarizer tests
   Green.
-- [ ] accepted on observed evidence
+- [x] accepted on observed evidence — Red 21 assertion failures in the two
+  target files; Green: core 2542 passed, `npm run test:workspaces` 0, root
+  typecheck 0. Fallback warn line gains `lastFailure=…` (one line per
+  fallback); retries carry a trusted cause category + offset only, never the
+  raw V8 message (anti-echo test); `DailyPaperResult` unchanged, nothing new
+  persisted. The anti-echo precondition relies on V8 quoting model text; CI
+  runs tests only on Node 22.17 (the Node 20 job does typecheck/build only).
 
 ### Chunk 3 — prompt hint and contract bump — dropped
 
@@ -91,8 +97,9 @@ kept. Prompt-file change is chunk 3 and depends on the user's decision.
   (audit, release-tools, boundaries, lint, typecheck, workspace tests,
   settings UI test, build, Obsidian submission, smoke build/install).
 - With user consent: real-model rerun of 2610.16741 through
-  `summarizeDailyPaperWithValidationRetry` (temp config, 0600) → structured
-  Chinese summary with formulas kept, no fallback.
+  `summarizeDailyPaperWithValidationRetry` (temp config, 0600) on both
+  `gpt-6.1-sol` and `gpt-6-luna` → structured Chinese summary with formulas
+  kept, no fallback.
 
 ## Abort / reshape triggers
 

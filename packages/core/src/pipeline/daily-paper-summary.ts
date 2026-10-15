@@ -42,6 +42,15 @@ export interface DailyPaperSummaryDeps {
   previousValidationError?: DailyPaperSummaryValidationError;
 }
 
+export interface DailyPaperSummaryRetryDeps
+  extends Omit<DailyPaperSummaryDeps, "previousValidationError"> {
+  /** Called for every validation failure, including the one that exhausts retries. */
+  onValidationFailure?: (
+    error: DailyPaperSummaryValidationError,
+    attempt: number,
+  ) => void;
+}
+
 export const DAILY_PAPER_SUMMARY_VALIDATION_ERROR_CODE =
   "ARXIV_DAILY_PAPER_SUMMARY_VALIDATION" as const;
 
@@ -68,6 +77,13 @@ export class DailyPaperSummaryValidationError extends Error {
   readonly reasonCode?: DailyPaperSummaryValidationReasonCode;
   readonly fieldKey?: keyof Omit<StructuredPaperSummary, "id">;
   readonly issues?: readonly DailyPaperSummaryMathValidationIssue[];
+  /**
+   * Raw `JSON.parse` message for an invalid-json failure. It can quote model
+   * text, so it is for local logs and error messages only, never for prompts.
+   */
+  readonly detail?: string;
+  /** Trusted category (and raw-text offset) derived from `detail`; prompt-safe. */
+  readonly jsonCause?: DailyPaperSummaryJsonCause;
 
   constructor(
     paperId: string,
@@ -76,6 +92,8 @@ export class DailyPaperSummaryValidationError extends Error {
       reasonCode?: DailyPaperSummaryValidationReasonCode;
       fieldKey?: keyof Omit<StructuredPaperSummary, "id">;
       issues?: readonly DailyPaperSummaryMathValidationIssue[];
+      detail?: string;
+      jsonCause?: DailyPaperSummaryJsonCause;
     } = {},
   ) {
     super(message);
@@ -83,7 +101,60 @@ export class DailyPaperSummaryValidationError extends Error {
     this.reasonCode = details.reasonCode;
     this.fieldKey = details.fieldKey;
     this.issues = details.issues;
+    this.detail = details.detail;
+    this.jsonCause = details.jsonCause;
   }
+}
+
+export type DailyPaperSummaryJsonCauseCategory =
+  | "bad-escape"
+  | "truncated"
+  | "control-character"
+  | "unexpected-token"
+  | "other";
+
+export interface DailyPaperSummaryJsonCause {
+  category: DailyPaperSummaryJsonCauseCategory;
+  /** Character offset (0-based) into the raw response, when V8 reported one. */
+  position?: number;
+}
+
+/**
+ * Map a V8 `JSON.parse` message to a closed set of categories. The message may
+ * quote model text, so only the category and the numeric position leave here.
+ */
+export function classifyJsonParseFailure(message: string): DailyPaperSummaryJsonCause {
+  let category: DailyPaperSummaryJsonCauseCategory = "other";
+  if (/\bbad (escaped character|unicode escape)/i.test(message)) {
+    category = "bad-escape";
+  } else if (/unexpected end of json|unterminated string/i.test(message)) {
+    category = "truncated";
+  } else if (/bad control character/i.test(message)) {
+    category = "control-character";
+  } else if (
+    /unexpected (token|non-whitespace)|^expected\b|is not valid json/i.test(message)
+  ) {
+    category = "unexpected-token";
+  }
+  const match = /\bat position (\d+)/.exec(message);
+  return match ? { category, position: Number(match[1]) } : { category };
+}
+
+const LOG_DETAIL_MAX_CHARS = 240;
+
+/** One-line, bounded description of a validation failure for local warn logs. */
+export function describeValidationFailureForLog(
+  error: DailyPaperSummaryValidationError,
+): string {
+  const code = error.reasonCode ?? "unknown";
+  if (code === "invalid-json" && error.detail) {
+    const flat = error.detail.replace(/\s+/g, " ").trim();
+    const bounded = flat.length > LOG_DETAIL_MAX_CHARS
+      ? `${flat.slice(0, LOG_DETAIL_MAX_CHARS)}…`
+      : flat;
+    return `${code} ${JSON.stringify(bounded)}`;
+  }
+  return error.fieldKey ? `${code} field=${error.fieldKey}` : code;
 }
 
 export function isDailyPaperSummaryValidationError(
@@ -145,15 +216,16 @@ export async function summarizeDailyPaper(
 
 export async function summarizeDailyPaperWithValidationRetry(
   paper: DailyPaperSummaryInput,
-  deps: Omit<DailyPaperSummaryDeps, "previousValidationError">,
+  deps: DailyPaperSummaryRetryDeps,
 ): Promise<DailyPaperResult> {
+  const { onValidationFailure, ...summaryDeps } = deps;
   let previousValidationError: DailyPaperSummaryValidationError | undefined;
 
   for (let attempt = 1; attempt <= DAILY_PAPER_SUMMARY_MAX_ATTEMPTS; attempt += 1) {
     throwIfCancelled(deps.signal);
     try {
       const summary = await summarizeDailyPaper(paper, {
-        ...deps,
+        ...summaryDeps,
         previousValidationError,
       });
       return { kind: "structured", summary };
@@ -161,6 +233,7 @@ export async function summarizeDailyPaperWithValidationRetry(
       if (isCancellationError(error)) throw error;
       if (isDailyPaperSummaryValidationError(error) && error.paperId === paper.id) {
         previousValidationError = error;
+        onValidationFailure?.(error, attempt);
         if (attempt < DAILY_PAPER_SUMMARY_MAX_ATTEMPTS) continue;
         return {
           kind: "fallback",
@@ -234,6 +307,13 @@ function buildPaperData(
   );
 }
 
+// String.raw keeps the example literal: the raw JSON shows two backslashes and
+// the parsed text shows one.
+const JSON_ESCAPE_INSTRUCTION_ZH =
+  String.raw`JSON 字符串里的每个反斜杠都要写成两个（例如 JSON 原文写 "$28\\pm7$"，解析后是 $28\pm7$）；保留 LaTeX 公式，不要把公式改写成纯文本。`;
+const JSON_ESCAPE_INSTRUCTION_EN =
+  String.raw`Every backslash inside a JSON string must be written twice (for example, write "$28\\pm7$" in the raw JSON, which parses to $28\pm7$); keep LaTeX formulas as LaTeX and do not rewrite them as plain text.`;
+
 function buildCorrectionGuidance(
   error: DailyPaperSummaryValidationError,
   language: SummaryLanguage,
@@ -246,6 +326,7 @@ function buildCorrectionGuidance(
       `Return only strict JSON with exactly these keys: ${keys}.\n` +
       `The id field must equal the ID in paper_data.\n` +
       `Every string field must be non-empty after trimming.\n` +
+      (error.reasonCode === "invalid-json" ? `${JSON_ESCAPE_INSTRUCTION_EN}\n` : "") +
       `Math rules for semantic fields:\n` +
       `- In semantic fields, use Obsidian inline math $...$ only.\n` +
       `- Do not use \\(...\\), \\[...\\], or $$...$$.\n` +
@@ -262,6 +343,7 @@ function buildCorrectionGuidance(
     `只返回严格 JSON，且恰好包含这些键：${keys}。\n` +
     `id 字段必须等于 paper_data 中的 ID。\n` +
     `每个字符串字段在 trim 后都必须非空。\n` +
+    (error.reasonCode === "invalid-json" ? `${JSON_ESCAPE_INSTRUCTION_ZH}\n` : "") +
     `语义字段数学规则：\n` +
     `- 语义字段中的数学公式只能使用 Obsidian 行内格式 $...$。\n` +
     `- 禁止使用 \\(...\\)、\\[...\\] 或 $$...$$。\n` +
@@ -272,6 +354,34 @@ function buildCorrectionGuidance(
     `反例：$<\\rho>$、裸 \\alpha、$M_{*}$ $=10^{10}$（拆成相邻片段）、\\(\\alpha\\)、$$\\alpha$$。\n` +
     `不要用 Markdown 代码块包裹 JSON，也不要附加其他文本。`
   );
+}
+
+function trustedJsonCauseSuffix(
+  cause: DailyPaperSummaryJsonCause | undefined,
+  language: SummaryLanguage,
+): string {
+  if (!cause) return "";
+  const position = Number.isSafeInteger(cause.position) && cause.position! >= 0
+    ? cause.position
+    : undefined;
+  if (language === "en") {
+    const at = position === undefined ? "" : ` at character offset ${position}`;
+    switch (cause.category) {
+      case "bad-escape": return ` (illegal backslash escape${at})`;
+      case "truncated": return ` (the response ended unexpectedly${at}; likely truncated)`;
+      case "control-character": return ` (unescaped control character inside a string${at})`;
+      case "unexpected-token": return ` (unexpected character${at})`;
+      default: return position === undefined ? "" : ` (parse failure${at})`;
+    }
+  }
+  const at = position === undefined ? "" : `字符偏移量 ${position} 处`;
+  switch (cause.category) {
+    case "bad-escape": return `（${at}有非法反斜杠转义）`;
+    case "truncated": return `（响应在${at || "中途"}意外结束，疑似被截断）`;
+    case "control-character": return `（字符串内${at}有未转义的控制字符）`;
+    case "unexpected-token": return `（${at}有意外字符）`;
+    default: return position === undefined ? "" : `（${at}解析失败）`;
+  }
 }
 
 function trustedCorrectionReason(
@@ -292,7 +402,7 @@ function trustedCorrectionReason(
     .join(", ");
   if (language === "en") {
     switch (error.reasonCode) {
-      case "invalid-json": return "the response was not strict JSON";
+      case "invalid-json": return `the response was not strict JSON${trustedJsonCauseSuffix(error.jsonCause, "en")}`;
       case "invalid-root": return "the JSON root was not an object";
       case "invalid-keys": return "the JSON keys did not match the required schema";
       case "invalid-id-type": return "the id field was not a string";
@@ -306,7 +416,7 @@ function trustedCorrectionReason(
     }
   }
   switch (error.reasonCode) {
-    case "invalid-json": return "响应不是严格 JSON";
+    case "invalid-json": return `响应不是严格 JSON${trustedJsonCauseSuffix(error.jsonCause, "zh")}`;
     case "invalid-root": return "JSON 根值不是对象";
     case "invalid-keys": return "JSON 键与要求的结构不一致";
     case "invalid-id-type": return "id 字段不是字符串";
@@ -331,6 +441,12 @@ const FOUR_HEX_DIGITS = /^[0-9A-Fa-f]{4}$/;
  * a tab. Only string literals are touched; valid escapes stay as they are.
  */
 export function repairSummaryJsonBackslashes(text: string): string {
+  return repairWithInsertions(text).text;
+}
+
+/** `inserted` lists the output indexes of the backslashes the repair added. */
+function repairWithInsertions(text: string): { text: string; inserted: number[] } {
+  const inserted: number[] = [];
   let out = "";
   let inString = false;
   for (let i = 0; i < text.length; i++) {
@@ -366,13 +482,19 @@ export function repairSummaryJsonBackslashes(text: string): string {
       isLatex = true;
     }
     if (isLatex) {
+      inserted.push(out.length);
       out += "\\\\";
     } else {
       out += ch + next;
       i++;
     }
   }
-  return out;
+  return { text: out, inserted };
+}
+
+function boundedDetail(detail: string): string {
+  const flat = detail.replace(/\s+/g, " ").trim();
+  return flat.length > 300 ? `${flat.slice(0, 300)}…` : flat;
 }
 
 function parseDailyPaperSummary(
@@ -380,13 +502,24 @@ function parseDailyPaperSummary(
   expectedId: string,
 ): StructuredPaperSummary {
   let value: unknown;
+  const repaired = repairWithInsertions(raw);
   try {
-    value = JSON.parse(repairSummaryJsonBackslashes(raw));
-  } catch {
+    value = JSON.parse(repaired.text);
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    const parsed = classifyJsonParseFailure(detail);
+    // V8 reports offsets into the repaired text; map back to the raw response.
+    const jsonCause: DailyPaperSummaryJsonCause = parsed.position === undefined
+      ? parsed
+      : {
+          ...parsed,
+          position: parsed.position -
+            repaired.inserted.filter((index) => index < parsed.position!).length,
+        };
     throw new DailyPaperSummaryValidationError(
       expectedId,
-      `summarizeDailyPaper: response for ${expectedId} is not strict JSON`,
-      { reasonCode: "invalid-json" },
+      `summarizeDailyPaper: response for ${expectedId} is not strict JSON: ${boundedDetail(detail)}`,
+      { reasonCode: "invalid-json", detail: boundedDetail(detail), jsonCause },
     );
   }
   return validateStructuredPaperSummaryValue(value, expectedId);

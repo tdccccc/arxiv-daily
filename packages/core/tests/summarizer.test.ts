@@ -498,13 +498,44 @@ describe("summarizeDaily", () => {
     expect(extractPaperSummaries(output)["2607.00002"]).toBeUndefined();
     expect(output).toContain("其中 1 篇使用回退内容。");
     expect(output).toContain("- **原始摘要**: abstract 2607.00002");
-    expect(warn).toHaveBeenCalledWith(
-      "summarizeDaily: fallback for 2607.00002 reason=validation-exhausted attempts=3",
+    // One line per fallback, carrying the last failure's parse message.
+    const fallbackWarns = warn.mock.calls
+      .map(([message]) => String(message))
+      .filter((message) => message.startsWith("summarizeDaily: fallback for"));
+    expect(fallbackWarns).toHaveLength(1);
+    expect(fallbackWarns[0]).toContain(
+      "2607.00002 reason=validation-exhausted attempts=3 lastFailure=invalid-json ",
     );
+    expect(fallbackWarns[0]).toContain("final not json");
+    expect(fallbackWarns[0]).not.toContain("\n");
     expect(Object.keys(extractPaperSummaries(output)).sort()).toEqual([
       "2607.00001",
       "2607.00003",
     ]);
+  });
+
+  it("names the last non-JSON failure (code and field) in the fallback warning", async () => {
+    const warn = vi.fn();
+    const llm = {
+      call: vi.fn(async () =>
+        JSON.stringify({
+          id: "2607.00001",
+          coreProblem: "p",
+          keyMethod: "m",
+          mainResult: "   ",
+          whyRelevant: "w",
+          limitations: "l",
+        }),
+      ),
+    };
+    await summarizeDaily(
+      [paper("2607.00001")],
+      "2026-07-22",
+      deps(llm, { logger: { info: vi.fn(), warn, error: vi.fn(), debug: vi.fn() } }),
+    );
+    expect(warn).toHaveBeenCalledWith(
+      "summarizeDaily: fallback for 2607.00001 reason=validation-exhausted attempts=3 lastFailure=empty-field field=mainResult",
+    );
   });
 
   it("contains three invalid-math attempts to one paper and preserves neighboring summaries", async () => {

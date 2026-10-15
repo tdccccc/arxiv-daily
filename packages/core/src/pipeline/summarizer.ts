@@ -22,6 +22,7 @@ import type {
 } from "../settings/types";
 import {
   derivePaperSourceSections,
+  describeValidationFailureForLog,
   summarizeDailyPaperWithValidationRetry,
 } from "./daily-paper-summary";
 import {
@@ -138,6 +139,7 @@ export async function summarizeDaily(
 
     let result: DailyPaperResult;
     let recovered = false;
+    let lastValidationFailure: string | undefined;
     if (reusable) {
       result = reusable;
       recovered = true;
@@ -155,6 +157,9 @@ export async function summarizeDaily(
         summaryLanguage: deps.summaryLanguage,
         signal: deps.signal,
         onMetrics: deps.onMetrics,
+        onValidationFailure: (error) => {
+          lastValidationFailure = describeValidationFailureForLog(error);
+        },
       });
       throwIfCancelled(deps.signal);
       try {
@@ -174,6 +179,9 @@ export async function summarizeDaily(
       fallbackCount += 1;
       deps.logger.warn(
         `summarizeDaily: fallback for ${paper.id} reason=${result.reasonCode} attempts=${result.attempts}` +
+          (result.reasonCode === "validation-exhausted" && lastValidationFailure
+            ? ` lastFailure=${lastValidationFailure}`
+            : "") +
           (recovered ? " recovered=true" : ""),
       );
     }
