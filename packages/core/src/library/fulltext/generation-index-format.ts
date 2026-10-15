@@ -322,18 +322,24 @@ export function decodeLexicalDictionaryBlock(bytes: Uint8Array): LexicalDictiona
  * on its exact inputs returns the identical value for a fraction of the cost.
  */
 const BUCKET_CACHE_LIMIT = 200_000;
-const bucketCache = new Map<string, number>();
+// namespace -> term -> bucket, so a hit costs two Map lookups and no key-string allocation.
+const bucketCache = new Map<string, Map<string, number>>();
+let bucketCacheSize = 0;
 
 export function lexicalTermBucket(namespace: LexicalNamespace, term: string): number {
-  const cacheKey = typeof term === "string" ? `${String(namespace)}\u0000${term}` : null;
-  if (cacheKey !== null) {
-    const cached = bucketCache.get(cacheKey);
+  const cacheable = typeof term === "string" && typeof namespace === "string";
+  let byTerm: Map<string, number> | undefined;
+  if (cacheable) {
+    byTerm = bucketCache.get(namespace);
+    const cached = byTerm?.get(term);
     if (cached !== undefined) return cached;
   }
   const bucket = computeLexicalTermBucket(namespace, term);
-  if (cacheKey !== null) {
-    if (bucketCache.size >= BUCKET_CACHE_LIMIT) bucketCache.clear();
-    bucketCache.set(cacheKey, bucket);
+  if (cacheable) {
+    if (bucketCacheSize >= BUCKET_CACHE_LIMIT) { bucketCache.clear(); bucketCacheSize = 0; byTerm = undefined; }
+    if (!byTerm) bucketCache.set(namespace, byTerm = new Map());
+    byTerm.set(term, bucket);
+    bucketCacheSize += 1;
   }
   return bucket;
 }
