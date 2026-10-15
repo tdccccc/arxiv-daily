@@ -90,6 +90,32 @@ describe("summarizeDaily", () => {
     expect(Object.keys(extractPaperSummaries(result.markdown))).toEqual(["2607.00001"]);
   });
 
+  it("renders the title-only header line from the deps into the daily report", async () => {
+    const llm = { call: vi.fn(async () => structured("2607.00001")) };
+    let rendered: DailySummaryAssemblyInput | undefined;
+    const dailyRenderer = (input: DailySummaryAssemblyInput) => {
+      rendered = input;
+      return assembleDailySummary(input);
+    };
+    const withLine = await summarizeDaily([paper("2607.00001")], "2026-07-22", deps(llm, {
+      titleOnlyCandidates: { count: 2, total: 5 }, dailyRenderer,
+    }));
+    expect(rendered?.titleOnlyCandidates).toEqual({ count: 2, total: 5 });
+    expect(withLine.markdown).toContain("筛选时 5 篇候选中有 2 篇没有摘要，只依据标题判断。");
+
+    const without = await summarizeDaily([paper("2607.00001")], "2026-07-22", deps(llm, { dailyRenderer }));
+    expect(rendered?.titleOnlyCandidates).toBeUndefined();
+    expect(without.markdown).not.toContain("只依据标题判断");
+  });
+
+  it("rejects an invalid title-only count before the first LLM call", async () => {
+    const llm = { call: vi.fn() };
+    await expect(summarizeDaily([paper("2607.00001")], "2026-07-22", deps(llm, {
+      titleOnlyCandidates: { count: 3, total: 2 },
+    }))).rejects.toThrow(/titleOnlyCandidates/);
+    expect(llm.call).not.toHaveBeenCalled();
+  });
+
   it("runs assembly preflight before the first LLM call", async () => {
     const llm = { call: vi.fn() };
 

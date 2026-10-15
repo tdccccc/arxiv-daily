@@ -31,10 +31,12 @@ import {
   isDailySummaryAssemblyRuntimeError,
   type DailyPaperResult,
   type DailyPaperSlot,
+  type DailyTitleOnlyCandidates,
   type DailySummaryAssemblyInput,
   type DailySummaryAssemblyPaper,
   preflightDailySummaryAssembly,
   preflightDailySummaryPapers,
+  validateDailyTitleOnlyCandidates,
 } from "./daily-summary-assembler";
 import {
   isDailySummaryRescueExhaustedError,
@@ -80,6 +82,8 @@ export interface SummarizerDeps {
   summaryLanguage?: SummaryLanguage;
   /** Counts omitted by the report limit, separate from per-paper summaries. */
   omittedByTopic?: Readonly<Record<string, number>>;
+  /** Candidates filtered on title only (no abstract); shown in the report header when count > 0. */
+  titleOnlyCandidates?: DailyTitleOnlyCandidates;
   signal?: AbortSignal;
   onMetrics?: MetricsObserver;
   onDailyPaperProgress?: (completed: number, total: number) => void;
@@ -114,6 +118,8 @@ export async function summarizeDaily(
     topicDirections: paper.topicDirections,
   }));
   preflightDailySummaryPapers(assemblyPapers, deps.arxivSettings);
+  // Fail before spending model calls on a report that cannot be assembled.
+  validateDailyTitleOnlyCandidates(deps);
 
   const slots: DailyPaperSlot[] = [];
   let fallbackCount = 0;
@@ -199,6 +205,7 @@ export async function summarizeDaily(
     arxivSettings: deps.arxivSettings,
     summaryLanguage: deps.summaryLanguage,
     ...(deps.omittedByTopic ? { omittedByTopic: deps.omittedByTopic } : {}),
+    ...(deps.titleOnlyCandidates ? { titleOnlyCandidates: deps.titleOnlyCandidates } : {}),
   };
   preflightDailySummaryAssembly(assemblyInput);
 

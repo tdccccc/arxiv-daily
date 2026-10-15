@@ -581,3 +581,63 @@ describe("daily limit omissions in rescue", () => {
     expect(() => buildDailySummaryRescueContract(value)).toThrow(/omittedByTopic/);
   });
 });
+
+describe("title-only candidates in rescue", () => {
+  it.each([
+    { language: "zh" as const, fallback: "其中 1 篇使用回退内容。", line: "筛选时 4 篇候选中有 2 篇没有摘要，只依据标题判断。", omitted: "因每日总数上限，另有 3 篇相关论文未展示。" },
+    { language: "en" as const, fallback: "1 paper uses fallback content.", line: "2 of 4 candidate papers had no abstract during filtering and were judged by title only.", omitted: "3 additional relevant papers were omitted because of the daily paper limit." },
+  ])("carries the $language line in fixedPrefix and counts, and accepts a model echo of it", async ({ language, fallback, line, omitted }) => {
+    const value = input();
+    value.summaryLanguage = language;
+    value.omittedByTopic = { a: 1, c: 2 };
+    value.titleOnlyCandidates = { count: 2, total: 4 };
+    const contract = buildDailySummaryRescueContract(value);
+    expect(contract.counts).toMatchObject({ total: 2, detail: 1, fallback: 1, omitted: 3, titleOnly: 2 });
+    const prefix = contract.fixedPrefix;
+    expect(prefix.filter((entry) => entry === line)).toHaveLength(1);
+    expect(prefix[prefix.indexOf(line) - 1]).toBe(fallback);
+    expect(prefix[prefix.indexOf(line) + 1]).toBe(omitted);
+
+    const llm = {
+      call: async (messages: Array<{ content: string }>) => {
+        const serialized = /<rescue_contract>\n([\s\S]*?)\n<\/rescue_contract>/.exec(messages[1]!.content)![1]!;
+        return copyTransportedContract(JSON.parse(serialized));
+      },
+    };
+    const output = await rescueDailySummary(value, { llm: llm as any, logger: logger() as any });
+    expect(output.split("\n").filter((entry) => entry === line)).toHaveLength(1);
+    expect(() => validateDailySummaryRescueMarkdown(output, requiredMarkdown(value), contract)).not.toThrow();
+    expect(extractFallbackPaperIds(output)).toEqual(["2607.00002"]);
+    expect(Object.keys(extractPaperSummaries(output))).toEqual(["2607.00001"]);
+  });
+
+  it("rejects rescue output that drops or alters the line", () => {
+    const value = input();
+    value.titleOnlyCandidates = { count: 2, total: 4 };
+    const contract = buildDailySummaryRescueContract(value);
+    const expected = renderDailySummaryRescueMarkdown(contract);
+    const line = "2 of 4 candidate papers had no abstract during filtering and were judged by title only.";
+    for (const changed of [expected.replace(`${line}\n`, ""), expected.replace("2 of 4", "3 of 4")]) {
+      expect(() => validateDailySummaryRescueMarkdown(changed, expected, contract))
+        .toThrow(DailySummaryRescueValidationError);
+    }
+  });
+
+  it.each(["zh", "en"] as const)("keeps %s rescue Markdown unchanged when the count is 0 or undefined", (language) => {
+    const value = input();
+    value.summaryLanguage = language;
+    const original = requiredMarkdown(value);
+    value.titleOnlyCandidates = { count: 0, total: 9 };
+    expect(requiredMarkdown(value)).toBe(original);
+    expect(buildDailySummaryRescueContract(value).counts).toMatchObject({ titleOnly: 0 });
+  });
+
+  it.each([{ count: -1, total: 3 }, { count: 4, total: 3 }, { count: 1.5, total: 3 }])(
+    "rejects invalid title-only counts %j before building a rescue contract",
+    (titleOnly) => {
+      const value = input();
+      value.titleOnlyCandidates = titleOnly;
+      expect(() => buildDailySummaryRescueContract(value)).toThrow(/titleOnlyCandidates/);
+    },
+  );
+});

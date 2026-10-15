@@ -537,6 +537,7 @@ export class ArxivPipeline {
           signal,
           onMetrics: (metrics) => runMetrics.record(metrics),
           omittedByTopic,
+          titleOnlyCandidates,
           onDailyPaperProgress: (completed, total) =>
             this.progress.setStage("summarize-daily", completed, total),
         },

@@ -4,6 +4,7 @@ import {
   dailyHeader,
   normalizeSummaryLanguage,
   omittedPapersText,
+  titleOnlyCandidatesText,
 } from "../settings/summary-language";
 import type { ArxivSettings, SummaryLanguage } from "../settings/types";
 import { normalizePaperDiscoveryProvenance } from "./discovery-provenance-marker";
@@ -82,6 +83,31 @@ export interface DailySummaryAssemblyInput {
   summaryLanguage?: SummaryLanguage;
   /** Matched, non-ignored papers omitted only because of the daily limit. */
   omittedByTopic?: Readonly<Record<string, number>>;
+  /** Candidates offered to the filter with no abstract; shown in the header when count > 0. */
+  titleOnlyCandidates?: DailyTitleOnlyCandidates;
+}
+
+export interface DailyTitleOnlyCandidates {
+  count: number;
+  total: number;
+}
+
+/** Validate the trusted title-only snapshot shared by normal and rescue rendering. */
+export function validateDailyTitleOnlyCandidates(
+  input: Pick<DailySummaryAssemblyInput, "titleOnlyCandidates">,
+): DailyTitleOnlyCandidates {
+  const value: unknown = input.titleOnlyCandidates;
+  if (value === undefined) return { count: 0, total: 0 };
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw new Error("preflightDailySummaryAssembly: invalid titleOnlyCandidates object");
+  }
+  const { count, total } = value as Record<string, unknown>;
+  if (typeof count !== "number" || typeof total !== "number"
+    || !Number.isSafeInteger(count) || !Number.isSafeInteger(total)
+    || count < 0 || count > total) {
+    throw new Error("preflightDailySummaryAssembly: invalid titleOnlyCandidates counts");
+  }
+  return { count, total };
 }
 
 /** Share the trusted omission snapshot between normal and rescue rendering. */
@@ -181,6 +207,7 @@ export function preflightDailySummaryPapers(
 export function preflightDailySummaryAssembly(input: DailySummaryAssemblyInput): void {
   preflightDailySummaryPapers(input.slots.map(({ paper }) => paper), input.arxivSettings);
   validateDailySummaryOmissions(input);
+  validateDailyTitleOnlyCandidates(input);
   for (const { paper, result } of input.slots) {
     if (result.kind === "structured") {
       for (const field of STRUCTURED_FIELDS) {
@@ -272,6 +299,7 @@ function renderDailySummarySlots(input: DailySummaryAssemblyInput, emergency: bo
   const language = normalizeSummaryLanguage(input.summaryLanguage);
   const slotsByTopic = groupSlots(slots, arxivSettings);
   const omissions = validateDailySummaryOmissions(input);
+  const titleOnly = validateDailyTitleOnlyCandidates(input);
   const detailCount = slots.filter(({ paper }) => paper.isDetail || Boolean(paper.paperPath)).length;
   const fallbackCount = slots.filter(({ result }) => result.kind === "fallback").length;
   const out = emergency
@@ -286,6 +314,7 @@ function renderDailySummarySlots(input: DailySummaryAssemblyInput, emergency: bo
     dailyCountLine(language, slots.length, detailCount),
   );
   if (fallbackCount > 0) out.push(fallbackCountLine(language, fallbackCount));
+  if (titleOnly.count > 0) out.push(titleOnlyCandidatesText(language, titleOnly.count, titleOnly.total));
   if (omissions.total > 0) out.push(omittedPapersText(language, omissions.total, true));
 
   const emptyTopics: Array<{ name: string; omittedCount: number }> = [];

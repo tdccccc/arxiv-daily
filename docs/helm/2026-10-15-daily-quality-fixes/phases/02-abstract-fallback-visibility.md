@@ -2,8 +2,8 @@
 
 goal_ref: ../goal.md
 created: 2026-10-15T18:30:00+08:00
-updated: 2026-10-15T22:20:00+08:00
-revision: 4
+updated: 2026-10-15T23:00:00+08:00
+revision: 5
 
 ## Outcome
 
@@ -120,7 +120,12 @@ run-history (CLI and Obsidian) without failing the run.
 - first signal: Red — assembler, rescue and summarizer tests expecting the
   line (and its absence at 0).
 - checks: same tests Green; report-rendering suites Green.
-- [ ] accepted on observed evidence
+- [x] accepted on observed evidence — Red 30/213 in four target files;
+  Green: core 2608, root typecheck 0, lint 0 errors, CLI 457/457, full plugin
+  1048/1048; no existing expectation changed. Line sits after the fallback
+  line, before the omitted line; byte-identical output at 0. Rescue
+  `fixedPrefix`/`counts` carry it (whole-string postflight). Report parsers
+  return identical results with and without the line (tested).
 
 ### Chunk 5 — run-history and host surfaces
 

@@ -13,6 +13,7 @@ import { DEFAULT_SETTINGS } from "../src/settings/defaults";
 import { normalizeTopic } from "../src/settings/topics";
 import { ArxivSourceAdapter, type SourceAdapter } from "../src/sources";
 import { ArxivHttpError } from "../src/pipeline/arxiv-fetcher";
+import { summarizeDaily } from "../src/pipeline/summarizer";
 import { markupParser } from "./markup-parser";
 
 const date = "2026-09-07";
@@ -33,11 +34,14 @@ function harness(
     abstractOf?: (id: string) => string;
     /** Replaces the scripted source, e.g. with a real ArxivSourceAdapter over fake HTTP. */
     makeSource?: (logger: Logger) => SourceAdapter;
+    /** Runs the real summarizer (the model answers with a valid structured summary) instead of the scripted one. */
+    realSummarizer?: boolean;
   } = {},
 ) {
   let records = initial;
   // What the model returns can cover fewer papers than were offered to it.
   let response = options.response;
+  const realSummarizer = options.realSummarizer === true;
   const abstractOf = options.abstractOf ?? ((id: string) => "SECRET-ABSTRACT " + id);
   const files: Record<string, string> = {};
   const directories = new Set<string>();
@@ -82,6 +86,13 @@ function harness(
   const llm = {
     call: vi.fn(async (messages: Array<{ content: string }>) => {
       if (messages[0]!.content.includes("relevanceScore")) return JSON.stringify({ papers: response ?? records });
+      if (options.realSummarizer) {
+        const paperId = /\d{4}\.\d{5}/.exec(messages.map((message) => message.content).join("\n"))![0];
+        return JSON.stringify({
+          id: paperId, coreProblem: "problem", keyMethod: "method",
+          mainResult: "result", whyRelevant: "value", limitations: "limits",
+        });
+      }
       return JSON.stringify({ papers: [] });
     }),
   };
@@ -121,7 +132,7 @@ function harness(
       model: "model-a",
     },
     detailSelection: { normalThreshold: 70, exceptionalThreshold: 90, softLimit: 2 },
-    summarizeDaily: summarize,
+    summarizeDaily: realSummarizer ? summarizeDaily : summarize,
     ...(options.checkpoint ? { checkpointStores: { filter: filterStore } } : {}),
     ...(options.port === null ? {} : { filterDecisionStore: options.port ?? decisionStore }),
     ...(options.withIndex ? { paperIndex } : {}),
@@ -390,6 +401,41 @@ describe("filter decision record on commit", () => {
 
       expect(result).toMatchObject({ kind: "completed", outcome: "no_updates" });
       expect(result).not.toHaveProperty("titleOnlyCandidates");
+    });
+  });
+
+  describe("title-only line in the daily report", () => {
+    const missing = (...ids: string[]) => (paperId: string) => (ids.includes(paperId) ? "" : "An abstract");
+
+    it("writes the header line when candidates were filtered on title only", async () => {
+      const h = harness([decision(1, 90), skipped(2), decision(3, 80)], {
+        abstractOf: missing(id(1), id(2)), realSummarizer: true,
+      });
+
+      const result = await h.makePipeline().runForDate(date);
+
+      expect(result).toMatchObject({ kind: "completed", outcome: "papers_written" });
+      const daily = h.files[`arxiv-daily/daily/${date}.md`]!;
+      expect(daily).toContain("筛选时 3 篇候选中有 2 篇没有摘要，只依据标题判断。");
+      expect(daily.match(/只依据标题判断/g)).toHaveLength(1);
+    });
+
+    it("writes no line when every candidate had an abstract", async () => {
+      const h = harness([decision(1, 90), decision(2, 80)], { realSummarizer: true });
+
+      await h.makePipeline().runForDate(date);
+
+      const daily = h.files[`arxiv-daily/daily/${date}.md`]!;
+      expect(daily).toContain("共 2 篇相关论文");
+      expect(daily).not.toContain("只依据标题判断");
+    });
+
+    it("hands the summarizer the same N of M the result carries", async () => {
+      const h = harness([decision(1, 90), decision(2, 80)], { abstractOf: missing(id(1)) });
+
+      await h.makePipeline().runForDate(date);
+
+      expect(h.summarize.mock.calls[0]![2].titleOnlyCandidates).toEqual({ count: 1, total: 2 });
     });
   });
 
