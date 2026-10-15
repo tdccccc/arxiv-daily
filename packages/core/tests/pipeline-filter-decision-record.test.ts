@@ -25,8 +25,14 @@ const skipped = (index: number): FilterRecord => ({
   id: id(index), category: "skip", relevanceScore: 0, directions: [],
 });
 
-function harness(initial: FilterRecord[]) {
+function harness(
+  initial: FilterRecord[],
+  options: { response?: FilterRecord[]; abstractOf?: (id: string) => string } = {},
+) {
   let records = initial;
+  // What the model returns can cover fewer papers than were offered to it.
+  let response = options.response;
+  const abstractOf = options.abstractOf ?? ((id: string) => "SECRET-ABSTRACT " + id);
   const files: Record<string, string> = {};
   const directories = new Set<string>();
   const storage: StorageAdapter = {
@@ -55,7 +61,7 @@ function harness(initial: FilterRecord[]) {
       kind: "ok" as const, channels: ["astro-ph.GA"],
       papers: records.map(({ id }) => ({
         paperKey: "arxiv:" + id, source: "arxiv", externalId: id,
-        title: "Research paper " + id, authors: "A. Researcher", abstract: "SECRET-ABSTRACT " + id,
+        title: "Research paper " + id, authors: "A. Researcher", abstract: abstractOf(id),
         categories: ["astro-ph.GA"], canonicalUrl: "https://arxiv.org/abs/" + id,
       })),
     })),
@@ -67,7 +73,7 @@ function harness(initial: FilterRecord[]) {
   };
   const llm = {
     call: vi.fn(async (messages: Array<{ content: string }>) => {
-      if (messages[0]!.content.includes("relevanceScore")) return JSON.stringify({ papers: records });
+      if (messages[0]!.content.includes("relevanceScore")) return JSON.stringify({ papers: response ?? records });
       return JSON.stringify({ papers: [] });
     }),
   };
@@ -115,7 +121,7 @@ function harness(initial: FilterRecord[]) {
   });
   return {
     files, source, llm, summarize, writer, paperIndex, warn, filterStore, decisionStore, makePipeline,
-    respondWith: (next: FilterRecord[]) => { records = next; },
+    respondWith: (next: FilterRecord[]) => { records = next; response = undefined; },
   };
 }
 
@@ -139,7 +145,7 @@ describe("filter decision record on commit", () => {
     expect(result).toMatchObject({ kind: "completed", papersWritten: 2 });
     const record = readRecord(h.files);
     expect(record).toMatchObject({
-      schemaVersion: 1,
+      schemaVersion: 2,
       reportDate: date,
       writtenAt: "2026-09-07T08:00:00.000Z",
       promptContractVersion: 4,
@@ -160,6 +166,7 @@ describe("filter decision record on commit", () => {
       directions: [{ id: "topic-a-direction", text: "Direction of topic-a", tag: "topic-a" }],
       relevanceScore: 90,
       outcome: "in_report",
+      hadAbstract: true,
     });
     expect(byId[id(3)]).toMatchObject({ outcome: "in_report" });
     expect(byId[id(5)]).toMatchObject({
@@ -169,7 +176,7 @@ describe("filter decision record on commit", () => {
     });
     expect(byId[id(4)]).toEqual({
       id: id(4), title: `Research paper ${id(4)}`, category: "skip",
-      directions: [], relevanceScore: 0, outcome: "skipped_by_model",
+      directions: [], relevanceScore: 0, outcome: "skipped_by_model", hadAbstract: true,
     });
   });
 
@@ -269,6 +276,50 @@ describe("filter decision record on commit", () => {
     await empty.makePipeline().runForDate(date);
     expect(empty.llm.call).not.toHaveBeenCalled();
     expect(empty.files[recordPath]).toBeUndefined();
+  });
+
+  it("lists every offered paper, counting the ones the model left out as skipped", async () => {
+    const h = harness(
+      [decision(1, 90), decision(2, 80), decision(3, 70), decision(4, 60)],
+      { response: [decision(3, 70), decision(1, 90)] },
+    );
+
+    await h.makePipeline().runForDate(date);
+
+    // Source order, not the model's order, and no paper is missing.
+    expect(readRecord(h.files).candidates.map((c: { id: string; category: string; outcome: string; relevanceScore: number }) =>
+      [c.id, c.category, c.outcome, c.relevanceScore])).toEqual([
+      [id(1), "topic-a", "in_report", 90],
+      [id(2), "skip", "skipped_by_model", 0],
+      [id(3), "topic-a", "in_report", 70],
+      [id(4), "skip", "skipped_by_model", 0],
+    ]);
+    expect(readRecord(h.files).candidates[1]).toEqual({
+      id: id(2), title: `Research paper ${id(2)}`, category: "skip",
+      directions: [], relevanceScore: 0, outcome: "skipped_by_model", hadAbstract: true,
+    });
+  });
+
+  it("lists every candidate as skipped when the model returns no papers", async () => {
+    const h = harness([decision(1, 90), decision(2, 80)], { response: [] });
+
+    const result = await h.makePipeline().runForDate(date);
+
+    expect(result).toMatchObject({ kind: "completed", outcome: "no_matches" });
+    expect(readRecord(h.files).candidates.map((c: { id: string; outcome: string }) => [c.id, c.outcome]))
+      .toEqual([[id(1), "skipped_by_model"], [id(2), "skipped_by_model"]]);
+  });
+
+  it("notes which candidates the classifier saw without an abstract", async () => {
+    const h = harness(
+      [decision(1, 90), skipped(2), decision(3, 80)],
+      { abstractOf: (paperId) => (paperId === id(1) ? "" : paperId === id(2) ? "  \n " : "An abstract") },
+    );
+
+    await h.makePipeline().runForDate(date);
+
+    expect(readRecord(h.files).candidates.map((c: { id: string; hadAbstract: boolean }) => [c.id, c.hadAbstract]))
+      .toEqual([[id(1), false], [id(2), false], [id(3), true]]);
   });
 
   it("writes nothing when the filter or the daily summary fails", async () => {

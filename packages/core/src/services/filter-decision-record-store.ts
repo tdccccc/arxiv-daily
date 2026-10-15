@@ -4,7 +4,7 @@ import type { CheckpointGenerationIdentity } from "./daily-summary-checkpoint-st
 import type { OutputSettings } from "../settings/types";
 import { derivePaperInboxPaths } from "./paper-index";
 
-export const FILTER_DECISION_RECORD_SCHEMA_VERSION = 1 as const;
+export const FILTER_DECISION_RECORD_SCHEMA_VERSION = 2 as const;
 /** Records older than this many days (by report date) are pruned on each write. */
 export const FILTER_DECISION_RETENTION_DAYS = 180;
 
@@ -32,6 +32,8 @@ export interface FilterDecisionCandidate {
   directions: FilterDecisionDirection[];
   relevanceScore: number;
   outcome: FilterDecisionOutcome;
+  /** Whether the classifier was shown an abstract; false means it judged on the title alone. */
+  hadAbstract: boolean;
 }
 
 export interface FilterDecisionRecordDocument {
@@ -296,9 +298,9 @@ function isGeneration(value: unknown): value is CheckpointGenerationIdentity {
 }
 
 function isCandidate(value: unknown): value is FilterDecisionCandidate {
-  return isExactObject(value, ["id", "title", "category", "directions", "relevanceScore", "outcome"]) &&
+  return isExactObject(value, ["id", "title", "category", "directions", "relevanceScore", "outcome", "hadAbstract"]) &&
     typeof value.id === "string" && typeof value.title === "string" &&
-    typeof value.category === "string" &&
+    typeof value.category === "string" && typeof value.hadAbstract === "boolean" &&
     typeof value.relevanceScore === "number" && Number.isFinite(value.relevanceScore) &&
     typeof value.outcome === "string" && (OUTCOMES as readonly string[]).includes(value.outcome) &&
     Array.isArray(value.directions) && value.directions.every((direction) =>

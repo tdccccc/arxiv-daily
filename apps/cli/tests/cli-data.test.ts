@@ -242,7 +242,7 @@ describe("CLI data portability", () => {
       generation: buildCheckpointGenerationIdentity(filterCompatibility.llm, 0),
       candidates: [{
         id: "2608.00001", title: "First", category: "skip", directions: [],
-        relevanceScore: 0, outcome: "skipped_by_model",
+        relevanceScore: 0, outcome: "skipped_by_model", hadAbstract: true,
       }],
     });
 

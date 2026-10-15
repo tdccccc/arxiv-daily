@@ -2,8 +2,8 @@
 
 goal_ref: ../goal.md
 created: 2026-10-15T10:35:00+08:00
-updated: 2026-10-15T11:08:00+08:00
-revision: 2
+updated: 2026-10-15T11:35:00+08:00
+revision: 3
 
 ## Outcome
 
@@ -56,10 +56,23 @@ Add a core store for filter decision records (one JSON document per report date 
 - checks: read-through for consistency with the existing checkpoint terms.
 - [x] accepted on observed evidence — owner read-through; wording updated for the no-match L1
 
+### Chunk 5 — record omitted papers and abstract availability (L1, from the real run)
+
+- change: the record lists every source paper offered to the filter; papers the model left out (the prompt allows omission, and `{"papers": []}` on a no-match day) are recorded as `skip` / score 0 / `skipped_by_model`; each candidate records whether the classifier saw an abstract.
+- why: real CLI run for 2026-10-14 fetched ~100 candidates but recorded 3; the same run hit arXiv HTTP 429 during abstract enrichment and classified on titles only, which the record did not reveal.
+- kind: bug fix
+- first signal: Red — pipeline record tests for partial model output, empty model output and an empty abstract fail.
+- checks: focused tests Green; core, CLI and plugin suites; core typecheck; rerun the real CLI trial and see the full candidate list.
+- [x] accepted on observed evidence — delegate Red (15 store + 4 pipeline failures) → 31/31 Green; core 2487, CLI 457, plugin 1048 passed; owner re-ran focused tests, build, lint, typecheck, boundaries Green; real rerun recorded 100/100 candidates (98 skipped_by_model, 2 in_report), `hadAbstract` false for all (arXiv 429 again)
+
 ## Phase verification
 
 - Root verification command (as used by CI's "Root workspace verification") passes.
 - One real CLI daily run against `plugin_test/arxiv-daily` (or a temp vault) with the user's consent if it calls the model, or with the existing fixed-response acceptance setup otherwise: the record file exists after the run, contains skipped candidates, and the filter checkpoint is gone as before. Note the observed file size per day.
+
+Observed (2026-10-15):
+- CI root verification steps run locally after Chunks 1–4: release tools, boundaries, lint, typecheck, workspace tests, build, Obsidian submission check, smoke build all exit 0; not run: `npm audit`, `check:published-manifest`, `smoke:install` (network / publish credentials; CI runs them). After Chunk 5: lint, typecheck, boundaries, build and all three workspace suites Green.
+- Real CLI run (user-consented, model `gpt-6-luna`, astro-ph.CO + GA, 2026-10-14, temp vault): record written with 100 candidates, ~30 KB; `filter-checkpoints/` and `daily-summary-checkpoints/` empty after commit; no API key or endpoint URL in the record.
 
 ## Abort / reshape triggers
 

@@ -34,6 +34,7 @@ import {
   isPaperFilterResponseValidationError,
   type DailyFilterCheckpointPort,
   type FilterClassification,
+  type FilterRecord,
   type FilteredPaper,
 } from "./paper-filter";
 import type { NoveltyCheckpointPort } from "./personalized-novelty";
@@ -77,6 +78,9 @@ export type PipelineResult =
   | { kind: "failed_permanent"; reason: string };
 
 const CONTENT_FETCH_CONCURRENCY = 6;
+
+const omittedByModel = (id: string): FilterRecord =>
+  ({ id, category: "skip", directions: [], relevanceScore: 0 });
 
 export interface DateScopedCheckpointLifecyclePort {
   removeAll(reportDate: string): Promise<void>;
@@ -649,9 +653,9 @@ export class ArxivPipeline {
   ): Promise<void> {
     const store = this.deps.filterDecisionStore;
     if (!store) return;
-    const titles = new Map(papers.map((paper) => [paper.id, paper.title] as const));
+    const decided = new Map(classification.records.map((record) => [record.id, record] as const));
     const directionsByRef = new Map(classification.directions.map((d) => [d.ref, d] as const));
-    const outcomeOf = (record: FilterClassification["records"][number]): FilterDecisionOutcome => {
+    const outcomeOf = (record: FilterRecord): FilterDecisionOutcome => {
       if (record.category === "skip") return "skipped_by_model";
       if (outcomes.visibleIds.has(record.id)) return "in_report";
       return outcomes.ignoredIds.has(record.id) ? "excluded_ignored" : "cut_by_limit";
@@ -663,17 +667,23 @@ export class ArxivPipeline {
         promptContractVersion: classification.promptContractVersion,
         resultContractVersion: classification.resultContractVersion,
         generation: classification.generation,
-        candidates: classification.records.map((record) => ({
-          id: record.id,
-          title: titles.get(record.id) ?? "",
-          category: record.category,
-          directions: record.directions.flatMap((ref) => {
-            const direction = directionsByRef.get(ref);
-            return direction ? [{ id: direction.id, text: direction.text, tag: direction.tag }] : [];
-          }),
-          relevanceScore: record.relevanceScore,
-          outcome: outcomeOf(record),
-        })),
+        // Every paper offered to the classifier, in source order. The prompt lets
+        // the model leave out papers that are not relevant, so omission counts as skip.
+        candidates: papers.map((paper) => {
+          const record = decided.get(paper.id) ?? omittedByModel(paper.id);
+          return {
+            id: paper.id,
+            title: paper.title,
+            category: record.category,
+            directions: record.directions.flatMap((ref) => {
+              const direction = directionsByRef.get(ref);
+              return direction ? [{ id: direction.id, text: direction.text, tag: direction.tag }] : [];
+            }),
+            relevanceScore: record.relevanceScore,
+            outcome: outcomeOf(record),
+            hadAbstract: paper.abstract.trim().length > 0,
+          };
+        }),
       });
     } catch (error) {
       this.deps.logger.warn(

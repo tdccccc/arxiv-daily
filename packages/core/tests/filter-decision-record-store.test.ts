@@ -77,6 +77,7 @@ function input(overrides: Partial<FilterDecisionRecordInput> = {}): FilterDecisi
         directions: [{ id: "da", text: "Direction A", tag: "topic-a" }],
         relevanceScore: 80,
         outcome: "in_report",
+        hadAbstract: true,
       },
       {
         id: "2608.00002",
@@ -85,6 +86,7 @@ function input(overrides: Partial<FilterDecisionRecordInput> = {}): FilterDecisi
         directions: [],
         relevanceScore: 0,
         outcome: "skipped_by_model",
+        hadAbstract: false,
       },
     ],
     ...overrides,
@@ -178,7 +180,17 @@ describe("FilterDecisionRecordStore", () => {
     files[documentPath] = JSON.stringify({ ...good, extra: true });
     await expect(store.load(reportDate)).resolves.toBeNull();
 
-    expect(warn).toHaveBeenCalledTimes(5);
+    files[documentPath] = JSON.stringify({
+      ...good,
+      candidates: [{ ...good.candidates[0], hadAbstract: "yes" }],
+    });
+    await expect(store.load(reportDate)).resolves.toBeNull();
+
+    const { hadAbstract: _omitted, ...withoutFlag } = good.candidates[0]!;
+    files[documentPath] = JSON.stringify({ ...good, candidates: [withoutFlag] });
+    await expect(store.load(reportDate)).resolves.toBeNull();
+
+    expect(warn).toHaveBeenCalledTimes(7);
     expect(warn.mock.calls.every(([message]) => String(message).includes(documentPath))).toBe(true);
   });
 
