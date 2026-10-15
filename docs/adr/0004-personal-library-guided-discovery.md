@@ -59,7 +59,7 @@ Manual topics and confirmed library-derived directions are complementary discove
 
 After determining relevance, the product also estimates **personal novelty** relative to the relevant representative set.
 
-> Note (2026-10-15): the representative-set basis no longer exists (ADR 0012 §4). ADR 0015 defines the current basis: the library papers most similar to each digest paper, retrieved on demand.
+> Note (2026-10-15): the representative-set basis no longer exists (ADR 0012 §4). ADR 0015 proposed a replacement basis (the library papers most similar to each digest paper) and then withdrew it the same day: personal novelty is not part of the product, and the daily report carries no novelty line. The rest of this section is the record of the original decision.
 
 - Novelty is expressed as a difference type such as a new task, method, dataset, experiment, efficiency result, or counter-evidence.
 - The explanation names its comparison basis and evidence depth.
@@ -109,7 +109,7 @@ The first implementation initiative delivers:
 3. proposed directions and representative papers;
 4. researcher confirmation of the interest profile;
 5. union filtering with manual topics;
-6. visible discovery sources and abstract-level personal-novelty explanations in the daily report.
+6. visible discovery sources and abstract-level personal-novelty explanations in the daily report (the novelty explanations were later withdrawn, ADR 0015).
 
 Reading candidates, direction reviews, full-text RAG, autonomous Agent execution, and MCP remain later initiatives.
 
@@ -125,7 +125,7 @@ The primary user acceptance test is whether the library-derived directions surfa
 - Supporting libraries outside the Vault requires host-specific filesystem capability and explicit permission handling, especially in the plugin.
 - Paper-level cataloging and retrieval must be designed before fine-grained RAG. Full-text parsing, chunking, embeddings, and reranking remain optional later projections.
 - Reading candidates and dispositions add lifecycle states beyond the current star/index model; their exact storage representation is an implementation decision.
-- Generated novelty explanations are provisional evidence, not user-authored knowledge.
+- Generated novelty explanations are provisional evidence, not user-authored knowledge. (Personal novelty was later withdrawn, ADR 0015; this bullet is historical.)
 
 ## Non-decisions
 

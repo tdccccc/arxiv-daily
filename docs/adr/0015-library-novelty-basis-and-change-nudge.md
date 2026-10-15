@@ -1,8 +1,8 @@
 # ADR 0015: Novelty compares against retrieved library papers; library changes nudge a new-papers-only rescan
 
-Status: Accepted (2026-10-15)
+Status: Accepted (2026-10-15); §1–2 withdrawn 2026-10-15, §3–5 in force
 
-Related: ADR 0004 (personal-library-guided discovery), whose §4 novelty basis this replaces; ADR 0007 (incremental trigger on index completion), which this supersedes; ADR 0008 (opt-in remote embedding); ADR 0011 (reading candidates dropped); ADR 0012 (topics hold a list of directions), which left the novelty basis open; ADR 0013 (index titles and abstracts); ADR 0014 (library proposals file into topics).
+Related: ADR 0004 (personal-library-guided discovery), whose §4 novelty basis §1–2 proposed to replace and then withdrew; ADR 0007 (incremental trigger on index completion), which this supersedes; ADR 0008 (opt-in remote embedding); ADR 0011 (reading candidates dropped); ADR 0012 (topics hold a list of directions), which left the novelty basis open; ADR 0013 (index titles and abstracts); ADR 0014 (library proposals file into topics).
 
 ## Context
 
@@ -18,6 +18,8 @@ Two constraints from earlier decisions bound the design. ADR 0014 refuses unmeas
 
 ### 1. Novelty compares each digest paper with its most similar library papers
 
+> Withdrawn (2026-10-15). See "Withdrawal of §1–2" below. The text is kept as the record of what was decided and shipped to a test library; the product does not do this.
+
 For every paper in a daily digest, the comparison basis is the library papers most similar to that paper, retrieved on demand from the title-and-abstract index, at most 5. This applies to all digest papers, not only those selected by a direction the library proposed: a direction is text and carries no origin that matters at classification time (ADR 0012 §4), and the researcher wants to know what each paper adds relative to what they hold regardless of which line selected it.
 
 The model receives the digest paper and those retrieved papers and either states a difference type with its comparison basis and evidence depth (ADR 0004 §4 stays in force for that expression), or judges that no retrieved paper is comparable. Evidence depth stays titles and abstracts; a novelty line must not be presented as a full-text finding.
@@ -25,6 +27,8 @@ The model receives the digest paper and those retrieved papers and either states
 No similarity floor is applied before or after retrieval. Whether a retrieved paper is comparable is the model's judgment, consistent with ADR 0014. Retrieval returns a ranked top-N; it does not claim that rank implies relevance.
 
 ### 2. Novelty runs only under valid library processing consent
+
+> Withdrawn (2026-10-15). See "Withdrawal of §1–2" below.
 
 The step sends library titles and abstracts to the configured model endpoint, so it runs only while library processing consent is valid for that endpoint and scope (ADR 0004 §7). Retrieval mode follows the library's embedding mode; lexical retrieval is available without any embedding endpoint, and a remote embedding endpoint is used only where its own consent already exists.
 
@@ -55,14 +59,30 @@ The rescan replaces the current proposal as ADR 0014 §4 describes, carrying for
 
 Split and merge suggestions and direction locking are not rejected on principle; they are not wanted now. A later decision may introduce them against the text-only direction model.
 
+## Withdrawal of §1–2 (2026-10-15)
+
+Personal novelty is withdrawn from the product before release: no pipeline stage, no novelty line in the daily report, no marker written, no Dashboard or workbench display, no disclosure of this use in the consent text. The code and acceptance scenarios added for it were removed afterwards; the commits that added them stay in history.
+
+Why, from using it on a real library:
+
+- **The researcher does not choose the comparison.** The papers a digest paper is compared with are picked by text retrieval over titles and abstracts. There is no way for the researcher to confirm that a given library paper is one they care to compare against, and no way to filter for that. A line can be faithful to both abstracts and still be a comparison nobody asked for.
+- **The lines reduce to "a related library paper exists".** In evaluation against a real library, the lines that were written nearly always cited a single library paper, often a catalog or simulation release that the new paper happened to use, and the difference type was almost always "new task". Whatever the line said, the information was that the library holds something related. The researcher judged that not worth a daily line. Even after the prompt was tightened so the model declined most papers (in the final calibration run, 5 lines for 20 digest papers), the lines that remained rested on that single related paper.
+- **Downgrading was considered and rejected.** Replacing the difference-type explanation with a plain "you hold a related library paper: <title>" line was weighed and rejected for the same reason: it states the one thing the evaluation showed, and the researcher said it was of little use.
+- The step also cost about a minute added to a daily run of 20 papers (one sequential model call per paper), which was acceptable only if the lines earned it.
+
+What was kept from this work, because it is useful without novelty:
+
+- The lexical query is capped at the BM25 limit on distinct terms inside core search, so a pasted abstract or other long free-text query to lexical or hybrid library search no longer fails with "more than 64 unique terms". Text within the limit is searched unchanged.
+- The BM25 index verification speedup (faster hashing and hoisted bucket computation). Results are byte-identical to before.
+
+Compatibility: reports written while the feature existed contain a personal-novelty marker line and a visible quote line. Nothing parses the marker any more; those lines are ordinary report text and are neither flagged nor removed. Layout code that locates the topic-direction marker still counts the legacy marker as a preceding line pair so older reports keep their direction data. The paper index drops any stored novelty field the next time it is saved; its schema version is unchanged. Library processing consent is unaffected: its fingerprint did not change when the feature was added.
+
+Direction suggestions and the rescan (§3–5) did not depend on novelty and are unchanged.
+
 ## Consequences
 
-- Every digest paper can carry a comparison against the researcher's own library, using machinery that already exists, without restoring representative papers or any evidence on accepted directions.
-- Novelty adds up to one model call per digest paper (default daily cap of 20) and sends library abstracts to the endpoint; hence the consent gate. Researchers without authorization see the digest exactly as before.
-- Because there is no similarity floor, novelty quality depends on the model declining to compare unrelated papers. That must be checked against a real library, not assumed.
+- Struck by the withdrawal of §1–2 (kept for the record, no longer in force): every digest paper carrying a comparison against the library; one extra model call per digest paper and the consent gate for that use; reliance on the model declining to compare unrelated papers; `file:` knowledge-base documents as comparison basis; marker version 2 carrying basis titles. Researchers see the daily digest exactly as before this ADR, with or without library authorization.
 - The researcher is told when the library has drifted from the current proposal without any model spend or consent, and chooses whether to scan. The cost of the model call occurs only on that explicit action, and scales with the new papers rather than the library.
-- The comparison basis can include library documents the index could not identify as arXiv papers (`file:sha256:` knowledge-base documents), using the title and abstract the index extracted for them; they carry no authors, date or categories, are shown by title only, and have no link. A digest paper whose own PDF sits in the library under an unrecognised filename is excluded from its own basis by title. Extraction quality is mixed (some "abstracts" are author lists) and is not gated; the model's refusal to compare is the only filter, as for unrelated arXiv papers.
-- The marker carries the basis titles (marker version 2, at most 5 basis papers, each title shortened to 300 code units in the marker only) so that the Dashboard, the workbench and the paper index can show titles without looking up the library, and so that a history rebuild from the reports restores them. Version 1 markers (no titles) remain readable. An older plugin reading a version 2 marker treats that day's novelty markers as invalid and shows no novelty for that day; the report text is unaffected. The feature was unreleased when this was decided.
 - The nudge count 3 is a heuristic. Too low and the nudge becomes noise; too high and a small but real shift goes unnoticed. It is stated here so that it can be argued with.
 - A nudge is only meaningful relative to the current proposal; with no proposal yet, the first scan is the existing first-run flow of ADR 0014 §1.
 - The dormant incremental code (placement, buffer pool, recluster, suggestion store and command) has no remaining role and can be removed; it stays in history. ADR 0007 is marked superseded; its body is kept as the record of what was planned.
