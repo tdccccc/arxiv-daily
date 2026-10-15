@@ -37,42 +37,42 @@ revision: 1
 - kind: behavior（持久格式的加法）
 - first signal: 新建 `packages/core/tests/personal-library-change.test.ts`：「无提案返回 null」「旧提案无字段时输入集含未分组者都算已计入」「新增 2 篇不提醒、3 篇提醒」「manifest 里被去重丢掉的兜底文件不计」「failed 状态不计」；`personal-library-proposal-contract.test.ts` 新用例「accountedPaperKeys 缺输入 key 被拒绝」「v6 旧文档不带字段仍解码且 round-trip 不变」「updateCandidate/removeCandidate 后字段保留」。命令：`npm test -- tests/personal-library-change.test.ts tests/personal-library-proposal-contract.test.ts`（当前红：模块不存在）。
 - checks: 同上 + `tests/personal-library-proposal-store.test.ts tests/personal-library-proposal-review.test.ts`；`npm run typecheck`；`npm run check:boundaries`。
-- [ ] accepted on observed evidence
+- [x] accepted on observed evidence
 
 ### Chunk 2 — 只扫新增的提案者（core，假 LLM）
 - change: `proposeNewPapersPersonalLibraryDirections({catalog, knowledgeBase, previous, existingTopics, llm, …})`（同文件或兄弟文件，复用 `organizeBoundedEvidence` 与同一套 strict decode）：取 Chunk 1 的未计入 key→每篇一个证据组（不聚类、不读向量）→模型→`coveredGroups`/新方向/新主题；写 `accountedPaperKeys = (previous 已计入 ∩ 当前范围) ∪ 本次输入`；无 previous、无现有主题抛 `no-baseline`，无新论文抛 `nothing-new`（宿主回退整库/提示）。`proposeClustered…` 也写 `accountedPaperKeys`（含 `mergedDuplicates` 丢弃者，并接受 `previous`）。生成合同指纹加 scope 标记；组织提示加一句「组可能只含一篇论文」，提示版本 v4。
 - kind: behavior
 - first signal: 新建 `packages/core/tests/library-new-papers-proposal.test.ts`：「发给模型的消息只含未计入论文与现有方向文字，不含老论文」「全部 covered=合法的空增量结果」「新主题/追加到现有主题均通过 strict decode」「重扫后同一 manifest 的未计入数=0，老论文未重新变新」「5 篇新论文单组也不触发 no-evidence」。命令：`npm test -- tests/library-new-papers-proposal.test.ts`。
 - checks: `tests/clustered-direction-proposer.test.ts tests/personal-library-topic-organization.test.ts tests/personal-library-thin-evidence.test.ts`；typecheck；boundaries。
-- [ ] accepted on observed evidence
+- [x] accepted on observed evidence
 
 ### Chunk 3 — LibraryWorkflow 与 CLI（对等）
 - change: `LibraryWorkflow.propose({scope:"full"|"new-papers"})`（后者读 previous、调 Chunk 2，其余校验同现有）；`review()` 快照加 `newPaperKeys`；`library propose --new`；`library index` 的 JSON 输出加 `newPapersSinceSuggestions`，>=3 时 stderr 一行提示；`library directions` 视图带该数；工作台「分析之后新增的论文」改读已计入集合，并给该区块一个「更新方向建议」按钮（走 `propose` scope=new-papers，确认文案写明只发送新增论文）。`status` 不动（只读 connection，不开库存储）。
 - kind: behavior
 - first signal: `packages/core/tests/library-workflow.test.ts`「propose new-papers 只发送新增并保存带继承集合的提案」；`apps/cli/tests/cli-library.test.ts`「library index 输出未计入数，>=3 时 stderr 提示；library propose --new 不重复发老论文」；`apps/cli/tests/workbench-library-review-ui.test.ts`「重扫后新增列表只含真新增」。命令：`npm test -- tests/library-workflow.test.ts`；`npm run test --workspace arxiv-daily -- tests/cli-library.test.ts tests/workbench-library-review-ui.test.ts`（命令形式沿用 P2，已核实 workspace 名为 `arxiv-daily`）。
 - checks: `apps/cli/tests/workbench-library.test.ts workbench-library-ui.test.ts`；typecheck。注意与 P2 Chunk 6 同改 apps/cli（runtime.ts vs library-cmd.ts），P2 Chunk 6 验收后再动。
-- [ ] accepted on observed evidence
+- [x] accepted on observed evidence
 
 ### Chunk 4 — 插件：完成点计数与提醒
 - change: `PersonalLibraryProfileSnapshot` 加 `newPaperKeys`；`refreshLibraryIndexTrace` 末尾与每次提案保存/重载后重算（读 manifest + 已载入提案，try/catch）；`indexPersonalLibraryFullText` 成功后若 >=3 弹一条 Notice（文案由纯函数 `describeLibraryChangeNudge(count)` 给出，放 `library/index-completion.ts` 旁；带「更新方向建议」按钮，点开复审弹窗）；`generatePersonalLibraryDirections` 加 `scope`，`new-papers` 走 Chunk 2，缺基线回退整库并在返回里说明。无提案/计数失败/<3 均不提示，且绝不使索引失败。
 - kind: behavior
 - first signal: 新建 `plugin/tests/library-change-nudge.test.ts`：纯函数文案（单数/复数、<3 返回 null）；`plugin/tests/fulltext-index-lifecycle.test.ts` 新用例「索引完成后有提案且新增 3 篇→发一条提示；2 篇/无提案→不发；计数抛错→索引仍成功」；`plugin/tests/library-generation-progress.test.ts` 新用例「scope=new-papers 只把新增发给模型」。命令：`npm run test --workspace obsidian-arxiv-daily -- tests/library-change-nudge.test.ts tests/fulltext-index-lifecycle.test.ts`。
 - checks: `tests/commands.test.ts tests/settings-declarative-tab.test.ts tests/library-build-index-scan-first.test.ts`；`npm run typecheck`；与 P2 Chunk 5 同改 main.ts，其验收后再动。
-- [ ] accepted on observed evidence
+- [x] accepted on observed evidence
 
 ### Chunk 5 — 插件：复审弹窗
 - change: 用实时提醒取代静态 `renderIncrementalNotice`：库有 N 篇新论文时在提案页顶部显示一句话+主按钮「更新方向建议（N 篇新论文）」→ `generate(scope:"new-papers")`；沿用 `generate()` 里「有未审候选/草稿则确认」（modal:1069）；`Generate again` 留在「More options」；`needsCoverageUpdate` 的按钮改名「重新核对覆盖」避免和新按钮同名；概览「已分析 N 篇…有 M 篇不在分析中」改读已计入集合；重扫提案的概览标明「本次新增 K 篇」。
 - kind: behavior
 - first signal: `plugin/tests/personal-library-interest-profile-modal.test.ts` 新用例：「新增 3 篇时出现更新按钮并以 scope=new-papers 调 controller.generate」「新增 <3 篇不显示按钮」「有未审候选时先出确认」「覆盖已变更时按钮叫重新核对覆盖且走整库」「概览不把已计入论文说成未分析」。命令：`npm run test --workspace obsidian-arxiv-daily -- tests/personal-library-interest-profile-modal.test.ts`。
 - checks: `tests/proposal-acceptance-ui.test.ts tests/library-modal.test.ts`；typecheck；`npm run build --workspace obsidian-arxiv-daily`。
-- [ ] accepted on observed evidence
+- [x] accepted on observed evidence
 
 ### Chunk 6 — 删除休眠增量代码与修过期文档
 - change: 删 core `library/incremental/*`、`index.ts:32-36` 导出、`personal-library-direction-diff.system.md`、两个测试文件；删插件孤儿项（上文清单）、重复命令 `review-incremental-suggestions`、modal 里 `incrementalSuggestion*`/`DirectionDiffSuggestion`；`unclassifiedBufferPool*`/`bufferPoolHeading` 的 ADR 0007 术语命名保持不动（仅注释更新，避免大面积测试改名）。文档：technical-report 约 50（增量更新段，删）、86（Proposed/Confirmed、"buffer pool" 描述改为当前主题/方向模型）、88-90（代表论文/novelty 输入段，与 P2 已改内容对一次，不覆盖 P2）、272 行实为 papers.json 条目，grep 复核后确有过期再改；ADR 0004 §3 只加一条注记（同 §4 的 2026-10-15 注记格式：代表论文基准已由 ADR 0012/0015 取代）；CONTEXT.md 复核「Representative set」条目，若无矛盾不动。
 - kind: removal + docs
 - first signal: 在 `plugin/tests/commands.test.ts` 新增「不注册 review-incremental-suggestions」（当前红）；删除后 `grep -rn "IncrementalSuggestions\|DirectionDiffSuggestion\|INCREMENTAL_BUFFER_TRIGGER\|library/incremental\|direction-diff" packages plugin apps` 无输出。命令：`npm run test --workspace obsidian-arxiv-daily -- tests/commands.test.ts`。
 - checks: `npm run typecheck`、`npm run check:boundaries`、core 全量 `npm test`、`npm run test:workspaces`；`git diff --check`；`rg 代表论文 docs/technical-report.md` 人工核。
-- [ ] accepted on observed evidence
+- [x] accepted on observed evidence
 
 ## Phase verification
 

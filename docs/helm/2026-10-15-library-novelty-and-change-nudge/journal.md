@@ -76,3 +76,29 @@
 - change: P2 done；goal 成功标准 2、3 勾选；成功标准 4 措辞改为「未被任何扫描计入」（与 ADR 0015 §3 一致）；P3 active，阶段文件取自先前只读规划。
 - disposition: 已知代价：新颖性约给日报增加 1 分钟（P2 最终提示下 20 篇约 50 秒）；勉强类说明（模拟/数据发布论文被引用于不同问题）偶有出现。用户尚未在真实 Obsidian 中看过测试库效果。
 - next: P3 Chunk 1–2（纯 core）交子代理。
+
+## 2026-10-15 — note（阶段性提交与 P3 Chunk 1–2）
+
+- evidence: 用户要求阶段性提交：5d7c2cf docs(adr)、216114e perf(library)、243e5db feat(novelty)、85d923d test(acceptance)、1d4b296 docs(helm)。提交时 P3 子代理正在改 core，故 P3 文件全部排除，index.ts 只暂存 prior-work 导出一行。在干净临时 worktree 验证 HEAD：typecheck 0、test:workspaces 0；根测试一次失败于 tests/delivery/resend.test.ts「preserves concurrent unrelated delivery-state mutations」，单独重跑 5 次全过，提交未触及 delivery，判为既有不稳定测试。P3 Chunk 1–2：子代理 Red→Green（/tmp/helm-p3-c12-report.md），owner 复跑 6 文件 173 项 Green、typecheck 0；schemaVersion 保持 6，未读向量。
+- change: Chunk 3 须让 LibraryWorkflow 的整库扫描传入 previous；无标题无目录元数据的论文会被计数却令重扫以 catalog-invalid 失败——计数应排除扫描不可用的论文。
+- next: Chunk 3（core workflow + CLI）与 Chunk 4（插件计数与提醒）并行。
+
+## 2026-10-15 — L3 steer（撤回个人新颖性）
+
+- evidence: 用户看过真实样例与放置位置后指出：新颖性多为对照单篇论文，而对照论文由检索按文字相似度挑选，无法确认是研究者关心的比较对象，也无从筛选；评测也显示差异类型几乎全为「新任务」、实际信息是「库里有篇相关论文」。owner 提出 A 降格为库内相关论文一行 / B 不做 / C 仅挪位置；用户选 B：「加个你库里有一篇相关论文《X》确实也没多大用」。用户另定：Dashboard 论文列表不需要展示新颖性。
+- change: Intent 与成功标准修订：P2 的两条新颖性标准划掉并注明撤回，新增撤回标准；新增 P4。P3 不受影响，继续执行。
+- disposition: 删除——新颖性流水线阶段、prior-work 端口与宿主接线、日报渲染/标记写入、Dashboard 与工作台显示、授权文案中的日报用途、acceptance 中的新颖性场景与探索任务；保留——BM25 校验提速（216114e）、查询截词 limitBm25QueryTerms（如能用于 Dashboard 找相似论文）、知识库检索对 file: 文档的支持；历史日报中的旧标记读取时容忍且不报错。已提交的 243e5db/85d923d 不改写历史，以新提交撤回。ADR 0015 §1–2 标记撤回并写明原因。
+- next: P3 继续；P4 先由只读子代理盘点删除范围、兼容要求与 Dashboard 找相似论文是否有同样超词问题，再执行。
+
+## 2026-10-15 — note（P3 Chunk 3–5 验收）
+
+- evidence: Chunk 3（core workflow+CLI，/tmp/helm-p3-c3-report.md）、Chunk 4（插件计数与提醒，/tmp/helm-p3-c4-report.md）、Chunk 5（复审弹窗，/tmp/helm-p3-c5-report.md）各自 Red→Green。owner 复核：typecheck 0、boundaries OK、根测试与 test:workspaces 全绿（CLI 469、插件 1098）、lint 0 error / 16 warning。
+- change: 弹窗与工作台在 N≥1 时都显示更新按钮；索引后提醒仍要求 ≥3。原「Update suggestions」改名「Recheck coverage」。
+- disposition: 两处小不一致交 Chunk 6 顺带修正：插件概览「不在本次分析」未与可扫描集合取交集（工作台有）；索引完成时若目录尚未载入，提醒计数未按目录过滤。
+- next: Chunk 6（删除休眠增量代码与过时文档）。
+
+## 2026-10-15 — note（P3 完成，真实环境检查移至 P5）
+
+- evidence: Chunk 6（/tmp/helm-p3-c6-report.md）删除 core incremental/**、direction-diff 提示与测试、插件孤儿项与重复命令；修正插件概览计数与索引后提醒计数（按目录过滤）；technical-report、ADR 0004 §3 注记、getting-started/workbench/CLI README 中英文更新。owner 复核：typecheck 0、boundaries OK、根测试与 test:workspaces 全绿、lint 0 error / 16 warning、全量 build OK、diff --check 干净、删除 grep 为空。
+- change: P3 的 Phase verification 中真实 Obsidian 检查（带按钮的提醒、弹窗更新按钮）与真实模型只扫新增的质量评估尚未做；为免与 P4 的删除改动重复验收，合并到新增的 P5 一次完成。P3 done，P4 active。
+- next: 按用户要求阶段性提交 P3；随后执行 P4。
