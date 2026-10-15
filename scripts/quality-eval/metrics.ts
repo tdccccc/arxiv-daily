@@ -55,8 +55,23 @@ export interface TopicMetrics {
 
 export type LabelledRow = SheetRow & { label: "y" | "n" };
 
+export interface Disagreement {
+  row: number;
+  date: string;
+  id: string;
+  title: string;
+  score: number;
+  modelCategory: string;
+  modelDirections: number[];
+  labelDirections: number[];
+  note: string;
+  hadAbstractAtFilter: boolean;
+}
+
 export const isLabelled = (row: SheetRow): row is LabelledRow => row.label !== null;
 const isSelected = (row: SheetRow): boolean => row.modelCategory !== "skip";
+/** Whether the row came from the down-sampled stratum of papers the recorded filter skipped. */
+const fromSkippedStratum = (row: SheetRow): boolean => (row.sampledAs ?? (isSelected(row) ? "selected" : "skipped")) === "skipped";
 
 function ratio(hits: number, n: number): Ratio {
   return { value: n > 0 ? hits / n : null, n, hits };
@@ -92,13 +107,13 @@ function summarize(counts: Confusion): ScoreSummary {
  * exported and count once. Null when the population is unknown or no skipped row is labelled.
  */
 export function skippedWeight(rows: readonly LabelledRow[], skippedAvailable: number | null): number | null {
-  const labelledSkipped = rows.filter((row) => !isSelected(row)).length;
+  const labelledSkipped = rows.filter(fromSkippedStratum).length;
   return skippedAvailable !== null && skippedAvailable > 0 && labelledSkipped > 0 ? skippedAvailable / labelledSkipped : null;
 }
 
 function weighted(rows: readonly LabelledRow[], selected: (row: SheetRow) => boolean, weight: number | null): WeightedSummary | null {
   if (weight === null) return null;
-  const { precision, recall, f1 } = summarize(confuse(rows, selected, (row) => (isSelected(row) ? 1 : weight)));
+  const { precision, recall, f1 } = summarize(confuse(rows, selected, (row) => (fromSkippedStratum(row) ? weight : 1)));
   return { skippedWeight: weight, precision, recall, f1 };
 }
 
@@ -152,4 +167,26 @@ export function topicMetrics(
     };
   });
   return { topics, withoutDirection: rows.filter((row) => row.label === "y" && row.labelDirections.length === 0).length };
+}
+
+/** Papers the model got wrong, and true positives filed under another direction, ordered by date then id. */
+export function disagreementsOf(rows: readonly LabelledRow[]): {
+  falseNegatives: Disagreement[];
+  falsePositives: Disagreement[];
+  directionMismatches: Disagreement[];
+} {
+  const describe = (row: LabelledRow): Disagreement => ({
+    row: row.row, date: row.date, id: row.id, title: row.title, score: row.modelScore, modelCategory: row.modelCategory,
+    modelDirections: row.modelDirections, labelDirections: row.labelDirections, note: row.note, hadAbstractAtFilter: row.hadAbstractAtFilter,
+  });
+  const order = (left: Disagreement, right: Disagreement): number =>
+    left.date < right.date ? -1 : left.date > right.date ? 1 : left.id < right.id ? -1 : left.id > right.id ? 1 : 0;
+  const pick = (keep: (row: LabelledRow) => boolean): Disagreement[] => rows.filter(keep).map(describe).sort(order);
+  return {
+    falseNegatives: pick((row) => row.label === "y" && !isSelected(row)),
+    falsePositives: pick((row) => row.label === "n" && isSelected(row)),
+    directionMismatches: pick((row) =>
+      row.label === "y" && isSelected(row) && row.labelDirections.length > 0
+      && !row.labelDirections.some((number) => row.modelDirections.includes(number))),
+  };
 }

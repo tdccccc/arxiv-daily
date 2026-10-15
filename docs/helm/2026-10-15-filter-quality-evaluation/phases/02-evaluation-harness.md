@@ -46,7 +46,8 @@ A developer can export a label sheet from a vault's filter decision records, a r
 - kind: behavior
 - first signal: Red — tests with a fake LLM client fail because the rerun path does not exist.
 - checks: focused tests Green; script test command Green; no network or model calls in tests.
-- [ ] accepted on observed evidence
+- L1: the user's CLI config has no topics, so topics default to the sheet's direction snapshot (the filter prompt uses only tag + ordered direction text); `--topics-from-config` is the opt-in alternative. Core's strict-JSON + contract decode was extracted as `decodePaperFilterResponse` so the script reuses it.
+- [x] accepted on observed evidence — delegate Red (core 3 failed: `decodePaperFilterResponse is not a function`; script 13/14 failed) → Green; owner re-ran quality-eval tests 42/42, paper-filter + pipeline 160 passed, release tools 883, lint, typecheck, boundaries Green; no model called
 
 ### Chunk 4 — usage guide
 

@@ -18,6 +18,7 @@ import {
   prepareDailyFilterCheckpoint,
   type FilterDirectionRef,
   type FilterRecord,
+  type PaperFilterRequest,
   type PreparedDailyFilterCheckpoint,
 } from "./paper-filter-contract";
 import type { PersonalNoveltyWithBasis } from "./personalized-novelty";
@@ -239,29 +240,7 @@ export async function filterPapers(
     }
     throwIfCancelled(deps.signal);
 
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(unwrapSingleCodeFence(raw));
-    } catch {
-      throw new PaperFilterResponseValidationError(
-        "response is not strict JSON",
-        "invalid-json",
-      );
-    }
-
-    const records = decodePaperFilterRecords(
-      parsed,
-      new Set(request.identity.knownIds),
-      new Set(request.identity.validTags),
-      request.identity.directions,
-    );
-    if (!records.ok) {
-      throw new PaperFilterResponseValidationError(
-        `response violates the filter contract: ${records.reason}`,
-        "invalid-contract",
-      );
-    }
-    validatedRecords = records.value;
+    validatedRecords = decodePaperFilterResponse(raw, request);
     try {
       await deps.checkpointStore?.save(
         deps.reportDate,
@@ -342,6 +321,38 @@ function reportClassification(
   } catch (error) {
     deps.logger.warn("paper-filter: classification observer failed", error);
   }
+}
+
+/**
+ * Validate a raw model answer against the request it answers: strict JSON
+ * (one surrounding code fence is tolerated), then the filter contract. Papers
+ * the model left out are simply absent from the result; by the prompt's
+ * contract that means not relevant. Throws `PaperFilterResponseValidationError`.
+ */
+export function decodePaperFilterResponse(raw: string, request: PaperFilterRequest): FilterRecord[] {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(unwrapSingleCodeFence(raw));
+  } catch {
+    throw new PaperFilterResponseValidationError(
+      "response is not strict JSON",
+      "invalid-json",
+    );
+  }
+
+  const records = decodePaperFilterRecords(
+    parsed,
+    new Set(request.identity.knownIds),
+    new Set(request.identity.validTags),
+    request.identity.directions,
+  );
+  if (!records.ok) {
+    throw new PaperFilterResponseValidationError(
+      `response violates the filter contract: ${records.reason}`,
+      "invalid-contract",
+    );
+  }
+  return records.value;
 }
 
 /**

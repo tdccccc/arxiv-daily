@@ -7,6 +7,8 @@ export interface SheetRow {
   date: string;
   id: string;
   title: string;
+  /** The abstract on the sheet; empty when export could not fetch one. */
+  abstract: string;
   hadAbstractAtFilter: boolean;
   modelCategory: string;
   modelDirections: number[];
@@ -16,6 +18,11 @@ export interface SheetRow {
   label: "y" | "n" | null;
   labelDirections: number[];
   note: string;
+  /**
+   * Which stratum the row was sampled from, when that differs from what `modelCategory`
+   * says: a rerun changes the decision, never the sample. Absent for recorded rows.
+   */
+  sampledAs?: "selected" | "skipped";
 }
 
 export class SheetError extends Error {
@@ -65,7 +72,7 @@ export function parseSheet(text: string, legendNumbers: ReadonlySet<number>): Sh
     }
 
     rows.push({
-      row, date: cell("date"), id, title: cells[at.title] ?? "",
+      row, date: cell("date"), id, title: cells[at.title] ?? "", abstract: cells[at.abstract] ?? "",
       hadAbstractAtFilter: flag === "true", modelCategory: cell("model_category"), modelDirections,
       modelScore: score, modelOutcome: cell("model_outcome"),
       label: labelText === "y" || labelText === "n" ? labelText : null,

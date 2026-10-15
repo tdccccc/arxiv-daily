@@ -280,7 +280,3 @@ test("command-line arguments are validated", () => {
   assert.throws(() => qe.parseEvaluateArgs(["--sheet", "/s", "--out", "/o", "--bogus"]), /unknown option.*--bogus/i);
   assert.throws(() => qe.parseEvaluateArgs(["--sheet"]), /--sheet/);
 });
-
-test("without --recorded evaluate does not guess: the model rerun is not available yet", async () => {
-  await assert.rejects(evaluate(await writeSheet(), { recorded: false }), /--recorded/);
-});
