@@ -2,8 +2,8 @@
 
 goal_ref: ../goal.md
 created: 2026-10-15T18:30:00+08:00
-updated: 2026-10-15T22:00:00+08:00
-revision: 3
+updated: 2026-10-15T22:20:00+08:00
+revision: 4
 
 ## Outcome
 
@@ -103,7 +103,12 @@ run-history (CLI and Obsidian) without failing the run.
 - first signal: Red — pipeline test (decision-record harness with
   `abstractOf`) expecting the count on the result.
 - checks: same tests Green; pipeline suites Green.
-- [ ] accepted on observed evidence
+- [x] accepted on observed evidence — Red 4/5 new decision-record tests
+  (field missing; empty-day absence passes by design); Green 23/23, core
+  2573, root typecheck 0, CLI 457/457, plugin commands + history-sync 74/74.
+  `titleOnlyCandidates: {count, total}` on completed results (papers_written
+  and both no_matches paths), absent on empty days and repairs; warn line
+  when count > 0. Summarizer threading left to Chunk 4.
 
 ### Chunk 4 — daily report header line
 

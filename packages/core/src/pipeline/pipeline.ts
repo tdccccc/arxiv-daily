@@ -70,8 +70,25 @@ interface SourcePaperMeta extends PaperMeta {
   paperKey?: string;
 }
 
+/**
+ * Candidates offered to the relevance filter with an empty abstract after the
+ * listing's abstract enrichment and fallbacks. `count` of `total` were judged
+ * on the title alone. Informational only: it never changes the run status.
+ */
+export interface TitleOnlyCandidates {
+  count: number;
+  total: number;
+}
+
 export type PipelineResult =
-  | { kind: "completed"; papersWritten: number; digest?: DailyDigest; outcome?: RunOutcome }
+  | {
+    kind: "completed";
+    papersWritten: number;
+    digest?: DailyDigest;
+    outcome?: RunOutcome;
+    /** Present whenever candidates were listed (count may be 0); absent on empty days and repairs. */
+    titleOnlyCandidates?: TitleOnlyCandidates;
+  }
   | { kind: "pending"; reason: string; outcome?: RunOutcome }
   | { kind: "cancelled"; reason: string }
   | { kind: "failed_transient"; reason: string }
@@ -212,6 +229,15 @@ export class ArxivPipeline {
       `pipeline: ${sourcePapers.length} papers for ${dateStr} across ${fetched.categories.join(", ")}`,
     );
     stageEnd("fetch-recent");
+    const titleOnlyCandidates: TitleOnlyCandidates = {
+      count: sourcePapers.filter((paper) => paper.abstract.trim().length === 0).length,
+      total: sourcePapers.length,
+    };
+    if (titleOnlyCandidates.count > 0) {
+      logger.warn(
+        `pipeline: ${titleOnlyCandidates.count}/${titleOnlyCandidates.total} candidates filtered on title only (no abstract)`,
+      );
+    }
 
     // 3. Empty day
     if (sourcePapers.length === 0) {
@@ -280,6 +306,7 @@ export class ArxivPipeline {
         papersWritten: 0,
         outcome: "no_matches",
         digest: this.buildZeroDigest(dateStr),
+        titleOnlyCandidates,
       };
     }
 
@@ -329,6 +356,7 @@ export class ArxivPipeline {
         papersWritten: 0,
         outcome: "no_matches",
         digest: this.buildZeroDigest(dateStr),
+        titleOnlyCandidates,
       };
     }
 
@@ -597,6 +625,7 @@ export class ArxivPipeline {
       papersWritten: enriched.length,
       outcome: "papers_written",
       digest,
+      titleOnlyCandidates,
     };
   }
 

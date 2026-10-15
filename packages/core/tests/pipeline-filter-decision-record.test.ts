@@ -329,6 +329,70 @@ describe("filter decision record on commit", () => {
       .toEqual([[id(1), false], [id(2), false], [id(3), true]]);
   });
 
+  describe("title-only candidate count on the result", () => {
+    const missing = (...ids: string[]) => (paperId: string) => (ids.includes(paperId) ? "" : "An abstract");
+
+    it("carries N of M on a completed day and warns once", async () => {
+      const h = harness(
+        [decision(1, 90), skipped(2), decision(3, 80)],
+        { abstractOf: (paperId) => (paperId === id(1) ? "" : paperId === id(2) ? "  \n " : "An abstract") },
+      );
+
+      const result = await h.makePipeline().runForDate(date);
+
+      expect(result).toMatchObject({
+        kind: "completed", outcome: "papers_written", titleOnlyCandidates: { count: 2, total: 3 },
+      });
+      const lines = h.warn.mock.calls.map(([line]) => String(line)).filter((line) => line.includes("title only"));
+      expect(lines).toEqual(["pipeline: 2/3 candidates filtered on title only (no abstract)"]);
+    });
+
+    it("carries 0 of M, without a warning, when every candidate has an abstract", async () => {
+      const h = harness([decision(1, 90), decision(2, 80)]);
+
+      const result = await h.makePipeline().runForDate(date);
+
+      expect(result).toMatchObject({ kind: "completed", titleOnlyCandidates: { count: 0, total: 2 } });
+      expect(h.warn.mock.calls.filter(([line]) => String(line).includes("title only"))).toEqual([]);
+    });
+
+    it("still carries the count when the model keeps nothing (no_matches)", async () => {
+      const h = harness([skipped(1), skipped(2)], { abstractOf: missing(id(2)) });
+
+      const result = await h.makePipeline().runForDate(date);
+
+      expect(result).toMatchObject({
+        kind: "completed", papersWritten: 0, outcome: "no_matches",
+        titleOnlyCandidates: { count: 1, total: 2 },
+      });
+    });
+
+    it("still carries the count when every kept paper is ignored", async () => {
+      const h = harness([decision(1, 90), skipped(2)], { abstractOf: missing(id(1), id(2)) });
+      await h.paperIndex.upsertFromDailyPaper({
+        arxivId: id(1), title: "Ignored paper", authors: "A", date: "2026-09-04",
+        arxivCategory: "astro-ph.GA", primaryTopic: "topic-a", detail: false,
+      });
+      await h.paperIndex.setStatus(id(1), "ignored");
+
+      const result = await h.makePipeline({ withIndex: true }).runForDate(date);
+
+      expect(result).toMatchObject({
+        kind: "completed", papersWritten: 0, outcome: "no_matches",
+        titleOnlyCandidates: { count: 2, total: 2 },
+      });
+    });
+
+    it("is absent on a day with no candidates", async () => {
+      const h = harness([]);
+
+      const result = await h.makePipeline().runForDate(date);
+
+      expect(result).toMatchObject({ kind: "completed", outcome: "no_updates" });
+      expect(result).not.toHaveProperty("titleOnlyCandidates");
+    });
+  });
+
   describe("when the query API is unavailable", () => {
     const listing = (ids: string[]) => `<dl id="articles"><h3>Mon, 7 Sep 2026 (showing ${ids.length} of ${ids.length} entries )</h3>`
       + ids.map((paperId, index) => `<dt><a name="item${index}">[${index}]</a> <a href="/abs/${paperId}" title="Abstract">arXiv:${paperId}</a></dt>`
