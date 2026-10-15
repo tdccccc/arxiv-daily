@@ -65,8 +65,8 @@ export function confirmLibraryAuthorization(
     }
     modal.contentEl.createEl("p", {
       text: disclosure.processingDepth === "full-text"
-        ? "Authorizing permits titles and abstracts extracted from PDFs in that folder to be sent to the endpoints above, where they are turned into similarity vectors for library search. The daily report also sends the titles and abstracts of the library papers it retrieves as comparisons to the same model endpoint, to say what is new in each digest paper. Nothing else on this device is sent, and you can revoke this from settings at any time. Changing the folder, endpoints, file types, or depth invalidates it."
-        : "Inventory preview is local, read-only, and does not require this authorization. Authorizing permits eligible metadata and abstracts to be sent to the endpoints in later direction-generation steps. The daily report also sends the titles and abstracts of the library papers it retrieves as comparisons to the same model endpoint, to say what is new in each digest paper. Nothing else on this device is sent, and you can revoke this from settings at any time. Changing the folder, endpoint, file types, or depth invalidates it.",
+        ? "Authorizing permits titles and abstracts extracted from PDFs in that folder to be sent to the endpoints above, where they are turned into similarity vectors for library search. Nothing else on this device is sent, and you can revoke this from settings at any time. Changing the folder, endpoints, file types, or depth invalidates it."
+        : "Inventory preview is local, read-only, and does not require this authorization. Authorizing permits eligible metadata and abstracts to be sent to the endpoints in later direction-generation steps. Nothing else on this device is sent, and you can revoke this from settings at any time. Changing the folder, endpoint, file types, or depth invalidates it.",
     });
     const actions = modal.contentEl.createDiv({ cls: "arxiv-daily-modal-button-row" });
     let settled = false;

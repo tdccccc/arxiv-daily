@@ -19,7 +19,7 @@ import {
   STATE_FILE,
   startObsidianExplorationSession,
 } from "../acceptance/exploration-obsidian.mjs";
-import { ACCEPTANCE_DATE, FIXTURE_NOVELTY_EXPLANATION_PREFIX, PAPERS, startFixtureServer } from "../acceptance/fixtures.mjs";
+import { ACCEPTANCE_DATE, PAPERS, startFixtureServer } from "../acceptance/fixtures.mjs";
 import { createObsidianSettings } from "../acceptance/obsidian.mjs";
 import * as obsidianTaskLibrary from "../acceptance/exploration-tasks/obsidian.mjs";
 import { LIBRARY_EMBEDDING_DIMENSION, startLibraryFixture } from "../acceptance/exploration-tasks/library.mjs";
@@ -313,7 +313,6 @@ test("the default Obsidian goal tasks have ids, titles, Chinese goals and a prog
     "library-revoke-consent", "library-remote-consent",
     "library-build-index", "library-search", "library-similar-papers",
     "library-accept-direction", "library-edit-candidate",
-    "library-novelty-visible",
   ]);
   for (const t of tasks) {
     assert.equal(typeof t.title, "string");
@@ -1987,88 +1986,6 @@ test("library-similar-papers: prepare() connects the library remote+authorized, 
     assert.deepEqual(driver.ensureDailyReportCalls, [ACCEPTANCE_DATE]);
     assert.equal(driver.disk().settings.embedding.mode, "remote");
     assert.ok(driver.disk().libraryConnection?.authorization);
-  });
-});
-
-// ---------------------------------------------------------------------------
-// Library novelty and change nudge P2: library-novelty-visible — the Dashboard's personal-novelty block must be
-// on screen (not merely present in the DOM) after the model switches to the All tab.
-// ---------------------------------------------------------------------------
-
-const NOVELTY_LINES = [
-  "Personal novelty: new experiment vs. prior papers: arxiv:2610.10002, arxiv:9912.00099",
-  "Evidence depth: metadata and abstract",
-  `${FIXTURE_NOVELTY_EXPLANATION_PREFIX}2610.10001 adds a bounded controlled experiment.`,
-];
-
-function createFakeNoveltyDriver({ visibleLines = [], report = "> Personal novelty: x", calls = [] } = {}) {
-  const base = createFakeLibraryTaskDriver(minimalLibraryDisk(), { vaultRoot: undefined });
-  return {
-    ...base, calls,
-    async clearDateState(date) { calls.push(["clearDateState", date]); },
-    async ensureDailyReport(date) { calls.push(["ensureDailyReport", date]); },
-    async file(relative) { calls.push(["file", relative]); return report; },
-    async ensurePaperUnstarred(id) { calls.push(["ensurePaperUnstarred", id]); },
-    async reloadPlugin() { calls.push(["reloadPlugin"]); },
-    async read(expression) {
-      assert.equal(expression, obsidianTaskLibrary.VISIBLE_NOVELTY_LINES_EXPRESSION, "the verifier must read the on-screen novelty lines, nothing else");
-      return typeof visibleLines === "function" ? visibleLines() : visibleLines;
-    },
-  };
-}
-
-test("library-novelty-visible: verify fails on the untouched state (All tab never clicked, nothing on screen)", async () => {
-  const task = (await obsidianTaskLibrary.goalTasks()).find(t => t.id === "library-novelty-visible");
-  assert.ok(task, "library-novelty-visible must exist in the Obsidian goal task library");
-  const result = await task.verify({ driver: createFakeNoveltyDriver(), actions: [] });
-  assert.equal(result.passed, false);
-});
-
-test("library-novelty-visible: verify fails when All was clicked but the novelty block is still not on screen (below the fold or absent)", async () => {
-  const task = (await obsidianTaskLibrary.goalTasks()).find(t => t.id === "library-novelty-visible");
-  const result = await task.verify({ driver: createFakeNoveltyDriver({ visibleLines: [] }), actions: [clickNamed("All")] });
-  assert.equal(result.passed, false);
-});
-
-test("library-novelty-visible: verify fails when the novelty block is on screen but All was never clicked (leftover state alone is not enough)", async () => {
-  const task = (await obsidianTaskLibrary.goalTasks()).find(t => t.id === "library-novelty-visible");
-  const result = await task.verify({ driver: createFakeNoveltyDriver({ visibleLines: NOVELTY_LINES }), actions: [clickNamed("Starred")] });
-  assert.equal(result.passed, false);
-});
-
-test("library-novelty-visible: verify fails when only part of the block is on screen or its text is not the novelty note", async () => {
-  const task = (await obsidianTaskLibrary.goalTasks()).find(t => t.id === "library-novelty-visible");
-  const partial = await task.verify({ driver: createFakeNoveltyDriver({ visibleLines: NOVELTY_LINES.slice(0, 2) }), actions: [clickNamed("All")] });
-  assert.equal(partial.passed, false);
-  const wrong = await task.verify({ driver: createFakeNoveltyDriver({ visibleLines: ["Discovery source: Manual", "Manual topics: Research", "something else"] }), actions: [clickNamed("All")] });
-  assert.equal(wrong.passed, false);
-});
-
-test("library-novelty-visible: verify passes once All was clicked and the whole novelty block is on screen", async () => {
-  const task = (await obsidianTaskLibrary.goalTasks()).find(t => t.id === "library-novelty-visible");
-  const result = await task.verify({ driver: createFakeNoveltyDriver({ visibleLines: NOVELTY_LINES }), actions: [clickNamed("All")] });
-  assert.equal(result.passed, true, JSON.stringify(result));
-});
-
-test("library-novelty-visible: prepare() builds the index, generates the report with a novelty line, unstars every paper and ends with the note off screen", async () => {
-  await withRealLibraryRoot(async (vaultRoot) => {
-    const task = (await obsidianTaskLibrary.goalTasks()).find(t => t.id === "library-novelty-visible");
-    const calls = [];
-    const driver = { ...createFakeNoveltyDriver({ calls }), fixture: { vaultRoot, server: { url: "http://127.0.0.1:1", requests: [] } } };
-    await task.prepare({ driver });
-    assert.deepEqual(calls.filter(([name]) => name === "ensureDailyReport"), [["ensureDailyReport", obsidianTaskLibrary.LIBRARY_NOVELTY_DATE]]);
-    assert.deepEqual(calls.filter(([name]) => name === "ensurePaperUnstarred").map(([, id]) => id), PAPERS.map(p => p.id));
-    assert.equal(driver.buildLibraryIndexCalls.length, 1);
-    assert.equal(driver.disk().settings.embedding.mode, "remote");
-  });
-});
-
-test("library-novelty-visible: prepare() refuses to start when the report has no novelty line or the note is already on screen", async () => {
-  await withRealLibraryRoot(async (vaultRoot) => {
-    const task = (await obsidianTaskLibrary.goalTasks()).find(t => t.id === "library-novelty-visible");
-    const fixture = { vaultRoot, server: { url: "http://127.0.0.1:1", requests: [] } };
-    await assert.rejects(task.prepare({ driver: { ...createFakeNoveltyDriver({ report: "no novelty here" }), fixture } }), /no personal-novelty line/);
-    await assert.rejects(task.prepare({ driver: { ...createFakeNoveltyDriver({ visibleLines: NOVELTY_LINES }), fixture } }), /already on screen/);
   });
 });
 

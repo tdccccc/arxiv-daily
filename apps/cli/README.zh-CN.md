@@ -130,8 +130,6 @@ arxiv-daily library review --input REQUEST.json
 
 被接受的方向会变成普通的研究主题设置。`library search --query TEXT` 可以直接在已索引的文献库中检索。[工作台](https://github.com/tdccccc/arxiv-daily/blob/main/docs/workbench.zh-CN.md)也支持在浏览器里连接、索引、浏览文献库和审核方向。
 
-授权文献库处理后，日报也会把按相似度检索到的文献库论文的标题和摘要发送给同一模型端点，用来说明入选论文相对这些论文新在哪里。运行 `library revoke` 撤销授权即可停止，日报只是不再带这类说明。常驻的 `schedule` 进程在启动时读取授权状态，修改授权后请重启它。
-
 ## 更新
 
 ```bash

@@ -10,14 +10,10 @@ import {
   extractFallbackAbstracts,
   extractPaperSummaries,
   parseDailyReportDiscoveryProvenance,
-  parseDailyReportPersonalNovelty,
 } from "../pipeline/daily-summary-parser";
 import type {
   DailyReportDiscoveryProvenanceParseResult,
 } from "../pipeline/discovery-provenance-marker";
-import type {
-  DailyReportPersonalNoveltyParseResult,
-} from "../pipeline/personal-novelty-marker";
 import { classifyPaperNote } from "./paper-note-classifier";
 import { modernArxivResources } from "../utils/arxiv";
 
@@ -88,7 +84,6 @@ interface DailyCandidateCollection {
   parsedReports: Set<string>;
   summaries: Record<string, PaperSummary>;
   provenanceByReport: Map<string, DailyReportDiscoveryProvenanceParseResult>;
-  noveltyByReport: Map<string, DailyReportPersonalNoveltyParseResult>;
 }
 
 export async function syncDashboardHistory(
@@ -154,11 +149,6 @@ export async function syncDashboardHistory(
       .filter(([, result]) => result.kind === "invalid")
       .map(([report]) => report),
   );
-  const invalidNoveltyReports = new Set(
-    [...dailyCollection.noveltyByReport]
-      .filter(([, result]) => result.kind === "invalid")
-      .map(([report]) => report),
-  );
 
   for (const report of dailyCollection.parsedReports) {
     const provenance = dailyCollection.provenanceByReport.get(report);
@@ -173,25 +163,10 @@ export async function syncDashboardHistory(
       );
     }
   }
-  for (const report of dailyCollection.parsedReports) {
-    const novelty = dailyCollection.noveltyByReport.get(report);
-    if (novelty?.kind === "valid") {
-      await deps.store.reconcileDailyReportOccurrenceNovelty(
-        report,
-        novelty.occurrences,
-      );
-    } else if (novelty?.kind === "invalid") {
-      deps.logger?.warn(
-        `dashboard: skipped invalid personal novelty in ${report}: ${novelty.reason}`,
-      );
-    }
-  }
-
   const markerChanged = await deps.store.mutate((index) => {
     const changed = pruneStaleMarkerReferences(
       index,
       invalidProvenanceReports,
-      invalidNoveltyReports,
       deps.output,
     );
     return { result: changed, changed: changed > 0 };
@@ -367,7 +342,6 @@ async function collectDailyCandidates(
   const parsedReports = new Set<string>();
   const summaries: Record<string, PaperSummary> = {};
   const provenanceByReport = new Map<string, DailyReportDiscoveryProvenanceParseResult>();
-  const noveltyByReport = new Map<string, DailyReportPersonalNoveltyParseResult>();
   const seen = new Set<string>();
   const dailyFiles = markdownFiles
     .map((file) => ({ file, path: normalizeVaultPath(file.path) }))
@@ -380,7 +354,6 @@ async function collectDailyCandidates(
       const markdown = await deps.vault.adapter.read(path);
       mergePaperSummaries(summaries, extractPaperSummaries(markdown));
       provenanceByReport.set(path, parseDailyReportDiscoveryProvenance(markdown, date));
-      noveltyByReport.set(path, parseDailyReportPersonalNovelty(markdown, date));
       const fallbackAbstracts = extractFallbackAbstracts(markdown);
       const parsed = parseDailyCandidates(
         markdown,
@@ -410,7 +383,6 @@ async function collectDailyCandidates(
     parsedReports,
     summaries,
     provenanceByReport,
-    noveltyByReport,
   };
 }
 
@@ -736,7 +708,6 @@ function pruneStaleDailyReports(
 function pruneStaleMarkerReferences(
   inbox: PaperInbox,
   invalidProvenanceReports: Set<string>,
-  invalidNoveltyReports: Set<string>,
   output: OutputSettings,
 ): number {
   const dailyDir = normalizeVaultPath(output.dailyDir);
@@ -752,18 +723,6 @@ function pruneStaleMarkerReferences(
         !dailyReports.has(normalizedReport)
       ) {
         delete entry.discoveryProvenanceByReport[report];
-        changed += 1;
-      }
-    }
-    for (const report of Object.keys(entry.noveltyByReport)) {
-      const normalizedReport = normalizeVaultPath(report);
-      const managed = Boolean(dailyDateFromPath(normalizedReport, dailyDir));
-      if (
-        managed &&
-        !invalidNoveltyReports.has(normalizedReport) &&
-        !dailyReports.has(normalizedReport)
-      ) {
-        delete entry.noveltyByReport[report];
         changed += 1;
       }
     }

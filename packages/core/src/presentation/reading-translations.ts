@@ -309,14 +309,6 @@ export const readingMessages: Array<readonly [zh: string, en: string]> = [
     "Discovery source"
   ],
   [
-    "与已有文献的关系",
-    "Relationship to prior literature"
-  ],
-  [
-    "比较依据：",
-    "Comparison basis: "
-  ],
-  [
     "原始摘要",
     "Original abstract"
   ],

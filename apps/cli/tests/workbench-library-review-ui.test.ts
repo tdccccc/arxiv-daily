@@ -154,7 +154,6 @@ it("discloses model processing before analysis and cancellation sends no authori
  const confirmation=root.querySelector("[data-confirmation]")!;
  expect(confirmation.textContent).toContain("/literature"); expect(confirmation.textContent).toContain("https://model.example/v1"); expect(confirmation.textContent).toContain("https://embed.example/v1");
  expect(confirmation.textContent).toContain("标题与摘要");
- expect(confirmation.textContent).toMatch(/日报.*标题和摘要.*同一模型端点/);
  click(root,"cancel"); expect(request).toHaveBeenCalledTimes(1);
 });
 

@@ -1,5 +1,4 @@
 import { DISCOVERY_PROVENANCE_MARKER_PREFIX } from "./discovery-provenance-marker";
-import { PERSONAL_NOVELTY_MARKER_PREFIX } from "./personal-novelty-marker";
 import {
   normalizeTopicDirectionHits,
   type TopicDirectionHit,
@@ -8,6 +7,15 @@ import {
 export const TOPIC_DIRECTION_MARKER_VERSION = 1 as const;
 export const TOPIC_DIRECTION_MARKER_PREFIX = "arxiv-daily-topic-directions";
 export const TOPIC_DIRECTION_MARKER_MAX_CODE_UNITS = 48_000 as const;
+
+/**
+ * Marker prefix of the withdrawn daily personal novelty (ADR 0015). Nothing
+ * writes or parses these markers any more, but reports written while the
+ * feature existed still carry a marker line plus a visible line between the
+ * discovery provenance and the topic-direction callout, so they are still
+ * counted as a two-line preceding family when locating the canonical slot.
+ */
+const LEGACY_PERSONAL_NOVELTY_MARKER_PREFIX = "arxiv-daily-personal-novelty";
 
 interface MarkerPayload {
   v: typeof TOPIC_DIRECTION_MARKER_VERSION;
@@ -74,7 +82,8 @@ export function parseTopicDirectionMarker(line: string): MarkerPayload | null {
 /**
  * Parse the whole report's topic-direction markers.
  *
- * The marker family sits after discovery provenance and personal novelty.
+ * The marker family sits after discovery provenance and (in old reports) the
+ * withdrawn personal novelty.
  * Legacy reports put the bare marker in that slot; current reports put a
  * metadata callout there (separated from preceding quotes by a blank line) and
  * its quoted marker immediately after it. Both layouts preserve the other
@@ -112,7 +121,7 @@ export function parseDailyReportTopicDirections(
     if (markerIndexes.length !== 1) {
       return { kind: "invalid", reason: "topic direction marker count is invalid" };
     }
-    const preceding = [DISCOVERY_PROVENANCE_MARKER_PREFIX, PERSONAL_NOVELTY_MARKER_PREFIX]
+    const preceding = [DISCOVERY_PROVENANCE_MARKER_PREFIX, LEGACY_PERSONAL_NOVELTY_MARKER_PREFIX]
       .filter((prefix) => lines.slice(block.start + 1, block.end)
         .some((line) => line.startsWith(`<!-- ${prefix}:`)));
     const markerIndex = markerIndexes[0]!;

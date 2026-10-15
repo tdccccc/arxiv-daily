@@ -31,11 +31,6 @@ import {
   type DailyFilterCheckpointPort,
   type FilteredPaper,
 } from "./paper-filter";
-import type {
-  LibraryPriorWorkPort,
-  NoveltyCheckpointPort,
-} from "./personalized-novelty";
-import { runLibraryNoveltyStage } from "./library-novelty-stage";
 import {
   summarizeDaily,
   summarizePaperDetail,
@@ -43,7 +38,6 @@ import {
 } from "./summarizer";
 import {
   parseDailyReportDiscoveryProvenance,
-  parseDailyReportPersonalNovelty,
   extractPaperSummaries,
 } from "./daily-summary-parser";
 import { dailySelectionMarkerRegExp } from "../services/daily-selection-marker";
@@ -85,10 +79,8 @@ export interface DailySummaryCheckpointLifecyclePort
   extends DailySummaryCheckpointPort,
     DateScopedCheckpointLifecyclePort {}
 
-/** `NoveltyCheckpointPort` is the novelty stage's checkpoint, kept by the same store as the filter's. */
 export interface DailyFilterCheckpointLifecyclePort
   extends DailyFilterCheckpointPort,
-    NoveltyCheckpointPort,
     DateScopedCheckpointLifecyclePort {}
 
 export interface DailyGenerationCheckpointStores {
@@ -119,12 +111,6 @@ export interface PipelineDeps {
    * an ArxivSourceAdapter from fetcher + paperFetcher (backward compatible).
    */
   sourceAdapter?: SourceAdapter;
-  /**
-   * Retrieves the library papers most similar to a digest paper, as the basis
-   * for personal novelty. The host supplies it only while library processing
-   * consent is valid; when omitted the novelty stage does not run (ADR 0015).
-   */
-  libraryPriorWork?: LibraryPriorWorkPort;
 }
 
 export class ArxivPipeline {
@@ -295,30 +281,6 @@ export class ArxivPipeline {
         outcome: "no_matches",
         digest: this.buildZeroDigest(dateStr),
       };
-    }
-
-    // 5b. Personal novelty: compare each visible paper with its most similar
-    // library papers (ADR 0015). Never fails the run; missing novelty is normal.
-    if (this.deps.libraryPriorWork && this.sourceAdapter.sourceId === "arxiv") {
-      stageStart("personal-novelty");
-      const novelties = await runLibraryNoveltyStage({
-        port: this.deps.libraryPriorWork,
-        papers: visiblePapers,
-        reportDate: dateStr,
-        llm: this.deps.llm,
-        llmSettings: this.deps.llmSettings,
-        summaryLanguage: this.deps.output.summaryLanguage,
-        logger,
-        progress: this.progress,
-        checkpointStore: this.deps.checkpointStores?.filter,
-        signal,
-        onMetrics: (metrics) => runMetrics.record(metrics),
-      });
-      for (const paper of visiblePapers) {
-        const novelty = novelties.get(paper.id);
-        if (novelty) paper.personalNovelty = novelty;
-      }
-      stageEnd("personal-novelty", ` (${novelties.size}/${visiblePapers.length} papers)`);
     }
 
     // 6. Fetch content for each filtered paper
@@ -540,16 +502,6 @@ export class ArxivPipeline {
           logger.warn(`pipeline: committed provenance projection invalid: ${provenance.reason}`);
         }
         throwIfCancelled(signal);
-        const novelty = parseDailyReportPersonalNovelty(dailySummary, dateStr);
-        if (novelty.kind === "valid") {
-          await this.deps.paperIndex.reconcileDailyReportOccurrenceNovelty?.(
-            dailyPath,
-            novelty.occurrences,
-          );
-        } else {
-          logger.warn(`pipeline: committed novelty projection invalid: ${novelty.reason}`);
-        }
-        throwIfCancelled(signal);
         await this.deps.paperIndex.setSummaries(
           extractPaperSummaries(dailySummary),
         );
@@ -682,16 +634,6 @@ export class ArxivPipeline {
         );
       } else {
         this.deps.logger.warn(`pipeline: existing daily provenance invalid: ${provenance.reason}`);
-      }
-      throwIfCancelled(signal);
-      const novelty = parseDailyReportPersonalNovelty(markdown, dateStr);
-      if (novelty.kind === "valid") {
-        await this.deps.paperIndex.reconcileDailyReportOccurrenceNovelty?.(
-          dailyPath,
-          novelty.occurrences,
-        );
-      } else {
-        this.deps.logger.warn(`pipeline: existing daily novelty invalid: ${novelty.reason}`);
       }
       throwIfCancelled(signal);
       await this.deps.paperIndex.setSummaries(summaries);

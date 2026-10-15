@@ -42,23 +42,15 @@ it("lists index-only papers, real details and exact daily occurrences without wr
   expect(await readFile(join(config.vaultRoot, index.paths.papersJsonPath), "utf8")).toBe(before); expect(run).not.toHaveBeenCalled();
 });
 
-it("projects comparison-basis titles from the persisted novelty and omits them for legacy entries", async () => {
-  const { get, index, report } = await fixture();
-  const fileKey = `file:sha256:${"ab".repeat(32)}`;
-  const base = { differenceType: "new-method", comparisonBasis: ["arxiv:2501.00001", fileKey], evidenceDepth: "metadata-and-abstract" as const, explanation: "Adds a method." };
-  await index.reconcileDailyReportOccurrenceNovelty(report, [
-    { arxivId: "2609.10001", novelty: { ...base, comparisonBasisTitles: { "arxiv:2501.00001": "Prior paper one", [fileKey]: "Library PDF" } } },
-    { arxivId: "2609.10002", novelty: base },
-  ]);
-  const papers = (await (await get("api/papers")).json()).papers as Array<{ arxivId: string; novelty: { comparisonBasis: unknown[] } | null }>;
-  expect(papers.find(p => p.arxivId === "2609.10001")!.novelty!.comparisonBasis).toEqual([
-    { paperKey: "arxiv:2501.00001", title: "Prior paper one" },
-    { paperKey: fileKey, title: "Library PDF" },
-  ]);
-  expect(papers.find(p => p.arxivId === "2609.10002")!.novelty!.comparisonBasis).toEqual([
-    { paperKey: "arxiv:2501.00001" },
-    { paperKey: fileKey },
-  ]);
+it("never projects novelty, even for an index entry that still carries the legacy field", async () => {
+  const { get, config, index } = await fixture();
+  const file = join(config.vaultRoot, index.paths.papersJsonPath);
+  const doc = JSON.parse(await readFile(file, "utf8"));
+  for (const entry of Object.values(doc.papers) as Array<Record<string, unknown>>) entry.noveltyByReport = { "daily/2026-10-01.md": { differenceType: "new-method", comparisonBasis: ["arxiv:2501.00001"], evidenceDepth: "metadata-and-abstract", explanation: "Legacy." } };
+  await writeFile(file, JSON.stringify(doc));
+  const papers = (await (await get("api/papers")).json()).papers as Array<Record<string, unknown>>;
+  expect(papers.length).toBeGreaterThan(0);
+  for (const paper of papers) expect(paper).not.toHaveProperty("novelty");
 });
 
 it("persists independent reading and star marks through the existing index, preserving notes and metadata", async () => {

@@ -9,8 +9,6 @@ import type { ArxivSettings, SummaryLanguage } from "../settings/types";
 import { normalizePaperDiscoveryProvenance } from "./discovery-provenance-marker";
 import { normalizeTopicDirectionHits, type TopicDirectionHit } from "./topic-direction-hits";
 import type { PaperDiscoveryProvenance } from "./discovery-provenance-marker";
-import { normalizePersonalNoveltyWithBasis } from "./personalized-novelty";
-import type { PersonalNoveltyWithBasis } from "./personalized-novelty";
 import {
   DAILY_SUMMARY_EMERGENCY_MARKER,
   emergencyWarning,
@@ -41,14 +39,6 @@ export interface DailySummaryAssemblyPaper {
   paperPath?: string | null;
   detailLink?: string;
   discoveryProvenance?: PaperDiscoveryProvenance;
-  /**
-   * Validated personal novelty with trusted basis display titles, carried only
-   * from library-derived papers with a novelty outcome. Novelty is not part of
-   * daily summary generation prompts or the summary checkpoint identity, but —
-   * like discovery provenance — the deterministic rescue/emergency re-render
-   * contracts may carry it; persisted markers stay minimal.
-   */
-  personalNovelty?: PersonalNoveltyWithBasis;
   /**
    * Directions of this paper's own topic that selected it, in the topic's
    * order. Kept beside `discoveryProvenance` rather than inside it: a topic
@@ -157,10 +147,6 @@ export function preflightDailySummaryPapers(
     if (paper.discoveryProvenance
       && !normalizePaperDiscoveryProvenance(paper.discoveryProvenance)) {
       throw new Error(`preflightDailySummaryAssembly: paper ${paper.id} has invalid discovery provenance`);
-    }
-    if (paper.personalNovelty
-      && !normalizePersonalNoveltyWithBasis(paper.personalNovelty)) {
-      throw new Error(`preflightDailySummaryAssembly: paper ${paper.id} has invalid personal novelty`);
     }
     if (paper.topicDirections
       && !normalizeTopicDirectionHits(paper.topicDirections)) {

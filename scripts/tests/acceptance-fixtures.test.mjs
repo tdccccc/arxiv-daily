@@ -8,7 +8,7 @@ import { fileURLToPath } from "node:url";
 import { spawn } from "node:child_process";
 import { build } from "esbuild";
 import { DOMParser } from "linkedom";
-import { ACCEPTANCE_DATE, FIXTURE_NOVELTY_EXPLANATION_PREFIX, PAPERS, createFixtureEnvironment, startFixtureServer } from "../acceptance/fixtures.mjs";
+import { ACCEPTANCE_DATE, PAPERS, createFixtureEnvironment, startFixtureServer } from "../acceptance/fixtures.mjs";
 
 async function serverFor(t) {
   const server = await startFixtureServer();
@@ -44,31 +44,6 @@ test("fixture serves the real arXiv and model wire formats and records effective
   assert.equal(recorded.model, "fixture-model-2");
   assert.match(recorded.prompt, /Changed research direction/);
   assert.doesNotMatch(JSON.stringify(server.requests), /never-log-this/);
-});
-
-test("the novelty prompt gets a novelty over the supplied basis for one paper and noComparablePrior for the other", async t => {
-  const server = await serverFor(t);
-  const prompt = (await readFile(new URL("../../packages/core/src/prompts/personal-novelty.system.md", import.meta.url), "utf8"));
-  const ask = async (paperId, basis) => {
-    const response = await proxy(server, "https://fixture-model.test/v1/chat/completions", {
-      method: "POST", headers: { "content-type": "application/json" },
-      body: JSON.stringify({ model: "fixture-model", stream: false, messages: [
-        { role: "system", content: prompt },
-        { role: "user", content: `Compare this new paper against its complete retrieved basis.\n<paper_data>\n${JSON.stringify({ paper: { paperKey: `arxiv:${paperId}`, title: "t", abstract: "a" }, basis: basis.map(paperKey => ({ paperKey, title: "b", abstract: "c" })) })}\n</paper_data>` },
-      ] }),
-    });
-    assert.equal(response.status, 200);
-    return JSON.parse((await response.json()).choices[0].message.content);
-  };
-  const novelty = await ask(PAPERS[0].id, ["arxiv:9912.00099", "arxiv:2610.10002"]);
-  assert.deepEqual(Object.keys(novelty).sort(), ["comparisonBasis", "differenceType", "evidenceDepth", "explanation"]);
-  assert.deepEqual(novelty.comparisonBasis, ["arxiv:2610.10002", "arxiv:9912.00099"]);
-  assert.equal(novelty.evidenceDepth, "metadata-and-abstract");
-  assert.ok(novelty.explanation.startsWith(FIXTURE_NOVELTY_EXPLANATION_PREFIX));
-  assert.deepEqual(await ask(PAPERS[1].id, ["arxiv:2610.10001"]), { noComparablePrior: true });
-  assert.equal(server.requests.filter(r => r.kind === "personal-novelty").length, 2);
-  const missing = await proxy(server, "https://fixture-model.test/v1/chat/completions", { method: "POST", body: JSON.stringify({ model: "m", stream: false, messages: [{ role: "system", content: prompt }, { role: "user", content: "<paper_data>{\"paper\":{\"paperKey\":\"arxiv:2610.10001\"},\"basis\":[]}</paper_data>" }] }) });
-  assert.equal(missing.status, 400, "a novelty request without a retrieved basis is a product bug the fixture must surface");
 });
 
 test("unknown external requests fail locally and are visible in evidence", async t => {

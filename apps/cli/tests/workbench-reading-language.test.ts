@@ -9,7 +9,7 @@ import { setUiLanguage } from "../src/workbench/web/i18n";
 
 const disposers: Array<() => void> = [];
 afterEach(() => { disposers.splice(0).forEach(dispose => dispose()); setUiLanguage("zh"); document.body.innerHTML = ""; });
-const paper = { key: "arxiv:2609.12345", arxivId: "2609.12345", title: "核心问题", authors: ["原文"], published: "2026-10-01", topics: ["待读"], category: "cs.AI", status: "inbox", priority: "normal", starred: false, abstract: "原始摘要", summary: { coreProblem: "主要结果", whyRelevant: "推荐理由" }, detailPath: null, reports: [], originalUrl: "https://arxiv.org/abs/2609.12345", pdfUrl: "https://arxiv.org/pdf/2609.12345", provenance: null, novelty: null } as WorkbenchPaper;
+const paper = { key: "arxiv:2609.12345", arxivId: "2609.12345", title: "核心问题", authors: ["原文"], published: "2026-10-01", topics: ["待读"], category: "cs.AI", status: "inbox", priority: "normal", starred: false, abstract: "原始摘要", summary: { coreProblem: "主要结果", whyRelevant: "推荐理由" }, detailPath: null, reports: [], originalUrl: "https://arxiv.org/abs/2609.12345", pdfUrl: "https://arxiv.org/pdf/2609.12345", provenance: null } as WorkbenchPaper;
 const day: WorkbenchCalendarDay = { date: "2026-10-01", state: "has-report", reportPath: "daily/report.md", reportTitle: "论文概览", papers: 3, message: "日报已保存，可以打开阅读。", canGenerate: false, actionLabel: null };
 function host() { const root = document.createElement("div"); document.body.append(root); return root; }
 

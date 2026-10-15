@@ -13,7 +13,6 @@ import {
   type FilterRecord,
   type PreparedDailyFilterCheckpoint,
 } from "./paper-filter-contract";
-import type { PersonalNoveltyWithBasis } from "./personalized-novelty";
 import type { TopicDirectionHit } from "./topic-direction-hits";
 
 export {
@@ -44,12 +43,6 @@ export interface FilteredPaper extends PaperMeta {
    * already on disk carry the provenance and are still read back.
    */
   discoveryProvenance?: PaperDiscoveryProvenance;
-  /**
-   * Set by the library novelty stage after filtering, only when the host
-   * supplied a library port and the model found a comparable library paper
-   * (ADR 0015).
-   */
-  personalNovelty?: PersonalNoveltyWithBasis;
 }
 
 export interface DailyFilterCheckpointPort {

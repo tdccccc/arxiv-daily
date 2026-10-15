@@ -15,16 +15,6 @@ import {
   type PreparedDailyFilterCheckpoint,
 } from "../pipeline/paper-filter-contract";
 import type { OutputSettings } from "../settings/types";
-import {
-  PERSONAL_NOVELTY_PROMPT_CONTRACT_VERSION,
-  PERSONAL_NOVELTY_RESULT_CONTRACT_VERSION,
-  decodeNoveltyCheckpointRecords,
-  decodeNoveltyFingerprintInput,
-  fingerprintNoveltyCheckpointInput,
-  isPreparedNoveltyCheckpoint,
-  type NoveltyCheckpointRecord,
-  type PreparedNoveltyCheckpoint,
-} from "../pipeline/personalized-novelty";
 import { derivePaperInboxPaths } from "./paper-index";
 import { sha256ForCheckpointTests } from "./daily-summary-checkpoint-store";
 
@@ -38,19 +28,6 @@ export {
   type DailyFilterCheckpointFingerprintInput,
   type PreparedDailyFilterCheckpoint,
 } from "../pipeline/paper-filter-contract";
-export {
-  PERSONAL_NOVELTY_PROMPT_CONTRACT_VERSION,
-  PERSONAL_NOVELTY_RESULT_CONTRACT_VERSION,
-  decodeNoveltyCheckpointRecords,
-  decodeNoveltyFingerprintInput,
-  fingerprintNoveltyCheckpointInput,
-  isPreparedNoveltyCheckpoint,
-  prepareNoveltyCheckpoint,
-  type NoveltyCheckpointPort,
-  type NoveltyCheckpointRecord,
-  type PreparedNoveltyCheckpoint,
-} from "../pipeline/personalized-novelty";
-
 export interface DailyFilterCheckpointDocument {
   schemaVersion: typeof DAILY_FILTER_CHECKPOINT_SCHEMA_VERSION;
   reportDate: string;
@@ -71,19 +48,14 @@ export interface DailyFilterCheckpointPaths {
    */
   personalizedDocumentPath: string;
   personalizedBackupPath: string;
-  noveltyDocumentPath: string;
-  noveltyBackupPath: string;
-}
-
-export const NOVELTY_FILTER_CHECKPOINT_SCHEMA_VERSION = 1 as const;
-
-export interface NoveltyFilterCheckpointDocument {
-  schemaVersion: typeof NOVELTY_FILTER_CHECKPOINT_SCHEMA_VERSION;
-  reportDate: string;
-  fingerprint: string;
-  fingerprintInput: PreparedNoveltyCheckpoint["fingerprintInput"];
-  completedAt: string;
-  result: NoveltyCheckpointRecord[];
+  /**
+   * The withdrawn library novelty stage (ADR 0015) also kept a checkpoint here
+   * during an in-flight run. Nothing reads or writes it any more; a run that
+   * crashed before commit can leave the files behind, so `removeAll` still
+   * deletes them.
+   */
+  legacyNoveltyDocumentPath: string;
+  legacyNoveltyBackupPath: string;
 }
 
 export interface DailyFilterCheckpointStoreOptions {
@@ -118,15 +90,15 @@ export function deriveDailyFilterCheckpointPaths(
   const personalizedDocumentPath = storage.normalizePath(
     `${directory}/${reportDate}.personalized.json`,
   );
-  const noveltyDocumentPath = storage.normalizePath(`${directory}/${reportDate}.novelty.json`);
+  const legacyNoveltyDocumentPath = storage.normalizePath(`${directory}/${reportDate}.novelty.json`);
   return {
     directory,
     documentPath,
     backupPath: storage.normalizePath(`${documentPath}.bak`),
     personalizedDocumentPath,
     personalizedBackupPath: storage.normalizePath(`${personalizedDocumentPath}.bak`),
-    noveltyDocumentPath,
-    noveltyBackupPath: storage.normalizePath(`${noveltyDocumentPath}.bak`),
+    legacyNoveltyDocumentPath,
+    legacyNoveltyBackupPath: storage.normalizePath(`${legacyNoveltyDocumentPath}.bak`),
   };
 }
 
@@ -198,80 +170,6 @@ export class DailyFilterCheckpointStore {
     return clone(document.result);
   }
 
-  async loadNovelty(reportDate: string): Promise<NoveltyFilterCheckpointDocument | null> {
-    const paths = this.pathsFor(reportDate);
-    const primary = await this.readNoveltyDocument(paths.noveltyDocumentPath, reportDate);
-    if (primary.kind === "valid") return primary.document;
-    if (primary.kind === "unreadable") {
-      throw new DailyFilterCheckpointStoreError(
-        `cannot read personal novelty checkpoint: ${paths.noveltyDocumentPath}`,
-        primary.error,
-      );
-    }
-    const backup = await this.readNoveltyDocument(paths.noveltyBackupPath, reportDate);
-    if (backup.kind === "unreadable") {
-      throw new DailyFilterCheckpointStoreError(
-        `cannot read personal novelty checkpoint: ${paths.noveltyBackupPath}`,
-        backup.error,
-      );
-    }
-    if (backup.kind === "valid") {
-      this.warn(`personal novelty checkpoint recovered from backup: ${paths.noveltyBackupPath}`);
-      return backup.document;
-    }
-    return null;
-  }
-
-  async lookupNoveltyReusable(
-    reportDate: string,
-    prepared: PreparedNoveltyCheckpoint,
-  ): Promise<NoveltyCheckpointRecord[] | null> {
-    requireNoveltyPrepared(prepared);
-    const document = await this.loadNovelty(reportDate);
-    if (!document || document.fingerprint !== prepared.fingerprint) return null;
-    return clone(document.result);
-  }
-
-  saveNovelty(
-    reportDate: string,
-    prepared: PreparedNoveltyCheckpoint,
-    result: unknown,
-  ): Promise<NoveltyFilterCheckpointDocument> {
-    const paths = this.pathsFor(reportDate);
-    return this.enqueue(paths.noveltyDocumentPath, async () => {
-      requireNoveltyPrepared(prepared);
-      await this.assertNoveltyMutable(reportDate);
-      if (prepared.fingerprintInput.promptContractVersion
-          !== PERSONAL_NOVELTY_PROMPT_CONTRACT_VERSION
-        || prepared.fingerprintInput.resultContractVersion
-          !== PERSONAL_NOVELTY_RESULT_CONTRACT_VERSION) {
-        throw new DailyFilterCheckpointStoreError(
-          "cannot persist unsupported personal novelty contract versions",
-        );
-      }
-      // Every planned call paper must carry exactly one strict terminal outcome
-      // (novelty, validation-exhausted, no-comparable-prior, or plan-too-large); input-invalid,
-      // transport, output-limit, and checkpoint reasons are never durable, and
-      // partial coverage is rejected so a hit can only reuse complete results.
-      const decoded = decodeNoveltyCheckpointRecords(result, prepared.fingerprintInput.plan);
-      if (!decoded.ok) {
-        throw new DailyFilterCheckpointStoreError(
-          `invalid personal novelty checkpoint result: ${decoded.reason}`,
-        );
-      }
-      const document: NoveltyFilterCheckpointDocument = {
-        schemaVersion: NOVELTY_FILTER_CHECKPOINT_SCHEMA_VERSION,
-        reportDate,
-        fingerprint: prepared.fingerprint,
-        fingerprintInput: clone(prepared.fingerprintInput),
-        completedAt: this.now().toISOString(),
-        result: decoded.value,
-      };
-      await this.persistNovelty(paths, document);
-      return clone(document);
-    });
-  }
-
   save(
     reportDate: string,
     prepared: PreparedDailyFilterCheckpoint,
@@ -328,11 +226,11 @@ export class DailyFilterCheckpointStore {
       await removeIfExists(this.storage, `${paths.personalizedDocumentPath}.tmp`);
       await removeIfExists(this.storage, `${paths.personalizedBackupPath}.tmp`);
     });
-    await this.enqueue(paths.noveltyDocumentPath, async () => {
-      await removeIfExists(this.storage, paths.noveltyDocumentPath);
-      await removeIfExists(this.storage, paths.noveltyBackupPath);
-      await removeIfExists(this.storage, `${paths.noveltyDocumentPath}.tmp`);
-      await removeIfExists(this.storage, `${paths.noveltyBackupPath}.tmp`);
+    await this.enqueue(paths.legacyNoveltyDocumentPath, async () => {
+      await removeIfExists(this.storage, paths.legacyNoveltyDocumentPath);
+      await removeIfExists(this.storage, paths.legacyNoveltyBackupPath);
+      await removeIfExists(this.storage, `${paths.legacyNoveltyDocumentPath}.tmp`);
+      await removeIfExists(this.storage, `${paths.legacyNoveltyBackupPath}.tmp`);
     });
   }
 
@@ -363,30 +261,6 @@ export class DailyFilterCheckpointStore {
     return;
   }
 
-  private async assertNoveltyMutable(reportDate: string): Promise<void> {
-    const paths = this.pathsFor(reportDate);
-    const primary = await this.readNoveltyDocument(paths.noveltyDocumentPath, reportDate);
-    if (primary.kind === "valid") return;
-    if (primary.kind === "unreadable") {
-      throw new DailyFilterCheckpointStoreError(
-        `cannot mutate unreadable personal novelty checkpoint: ${paths.noveltyDocumentPath}`,
-        primary.error,
-      );
-    }
-    const backup = await this.readNoveltyDocument(paths.noveltyBackupPath, reportDate);
-    if (backup.kind === "valid") {
-      this.warn(`personal novelty checkpoint recovered from backup: ${paths.noveltyBackupPath}`);
-      return;
-    }
-    if (backup.kind === "unreadable") {
-      throw new DailyFilterCheckpointStoreError(
-        `cannot mutate unreadable personal novelty checkpoint: ${paths.noveltyBackupPath}`,
-        backup.error,
-      );
-    }
-    return;
-  }
-
   private async readDocument(path: string, reportDate: string): Promise<DocumentReadResult> {
     let exists: boolean;
     try {
@@ -413,57 +287,6 @@ export class DailyFilterCheckpointStore {
     } catch (error) {
       this.warn(`corrupt daily filter checkpoint ignored: ${path}`, error);
       return { kind: "corrupt", error };
-    }
-  }
-
-  private async readNoveltyDocument(
-    path: string,
-    reportDate: string,
-  ): Promise<{ kind: "missing" } | { kind: "corrupt"; error?: unknown }
-    | { kind: "unreadable"; error: unknown }
-    | { kind: "valid"; document: NoveltyFilterCheckpointDocument }> {
-    let exists: boolean;
-    try {
-      exists = await this.storage.exists(path);
-    } catch (error) {
-      this.warn(`unreadable personal novelty checkpoint ignored: ${path}`, error);
-      return { kind: "unreadable", error };
-    }
-    if (!exists) return { kind: "missing" };
-    let raw: string;
-    try {
-      raw = await this.storage.readText(path);
-    } catch (error) {
-      this.warn(`unreadable personal novelty checkpoint ignored: ${path}`, error);
-      return { kind: "unreadable", error };
-    }
-    try {
-      const document = decodeNoveltyDocument(JSON.parse(raw), reportDate);
-      if (!document) {
-        this.warn(`invalid personal novelty checkpoint ignored: ${path}`);
-        return { kind: "corrupt" };
-      }
-      return { kind: "valid", document };
-    } catch (error) {
-      this.warn(`corrupt personal novelty checkpoint ignored: ${path}`, error);
-      return { kind: "corrupt", error };
-    }
-  }
-
-  private async persistNovelty(
-    paths: DailyFilterCheckpointPaths,
-    document: NoveltyFilterCheckpointDocument,
-  ): Promise<void> {
-    await ensureDirDeep(this.storage, paths.directory);
-    try {
-      await replaceNoveltyWithBackup(
-        this.storage, paths, `${JSON.stringify(document, null, 2)}\n`, document.reportDate,
-      );
-    } catch (error) {
-      throw new DailyFilterCheckpointStoreError(
-        `failed to save personal novelty checkpoint: ${paths.noveltyDocumentPath}`,
-        error,
-      );
     }
   }
 
@@ -533,32 +356,6 @@ function decodeDocument(value: unknown, reportDate: string): DailyFilterCheckpoi
   if (!decoded.ok) return null;
   return {
     schemaVersion: DAILY_FILTER_CHECKPOINT_SCHEMA_VERSION,
-    reportDate,
-    fingerprint: value.fingerprint,
-    fingerprintInput,
-    completedAt: value.completedAt,
-    result: decoded.value,
-  };
-}
-
-function decodeNoveltyDocument(
-  value: unknown,
-  reportDate: string,
-): NoveltyFilterCheckpointDocument | null {
-  if (!isExactObject(value, [
-    "schemaVersion", "reportDate", "fingerprint", "fingerprintInput", "completedAt", "result",
-  ]) || value.schemaVersion !== NOVELTY_FILTER_CHECKPOINT_SCHEMA_VERSION
-    || value.reportDate !== reportDate
-    || typeof value.fingerprint !== "string"
-    || !/^sha256:[0-9a-f]{64}$/.test(value.fingerprint)
-    || !isIsoDate(value.completedAt)) return null;
-  const fingerprintInput = decodeNoveltyFingerprintInput(value.fingerprintInput);
-  if (!fingerprintInput
-    || fingerprintNoveltyCheckpointInput(fingerprintInput) !== value.fingerprint) return null;
-  const decoded = decodeNoveltyCheckpointRecords(value.result, fingerprintInput.plan);
-  if (!decoded.ok) return null;
-  return {
-    schemaVersion: NOVELTY_FILTER_CHECKPOINT_SCHEMA_VERSION,
     reportDate,
     fingerprint: value.fingerprint,
     fingerprintInput,
@@ -687,64 +484,6 @@ async function replaceWithBackup(
   }
 }
 
-async function replaceNoveltyWithBackup(
-  storage: StorageAdapter,
-  paths: DailyFilterCheckpointPaths,
-  content: string,
-  reportDate: string,
-): Promise<void> {
-  const tmp = `${paths.noveltyDocumentPath}.tmp`;
-  const backupTmp = `${paths.noveltyBackupPath}.tmp`;
-  await removeIfExists(storage, tmp);
-  await removeIfExists(storage, backupTmp);
-  try {
-    await writePrivateCheckpointText(storage, tmp, content);
-    let previous: string | null = null;
-    if (await storage.exists(paths.noveltyDocumentPath)) {
-      const raw = await storage.readText(paths.noveltyDocumentPath);
-      if (decodeRawNoveltyDocument(raw, reportDate)) previous = raw;
-    }
-    let recoveryContent = previous;
-    if (recoveryContent === null && await storage.exists(paths.noveltyBackupPath)) {
-      const raw = await storage.readText(paths.noveltyBackupPath);
-      if (decodeRawNoveltyDocument(raw, reportDate)) recoveryContent = raw;
-      else await storage.remove(paths.noveltyBackupPath);
-    }
-    if (previous !== null) {
-      await writePrivateCheckpointText(storage, backupTmp, previous);
-      await removeIfExists(storage, paths.noveltyBackupPath);
-      await storage.rename(backupTmp, paths.noveltyBackupPath);
-    }
-    if (await storage.exists(paths.noveltyDocumentPath)) {
-      await storage.remove(paths.noveltyDocumentPath);
-    }
-    try {
-      await storage.rename(tmp, paths.noveltyDocumentPath);
-    } catch (error) {
-      if (recoveryContent !== null) {
-        await removeIfExists(storage, tmp);
-        await writePrivateCheckpointText(storage, tmp, recoveryContent);
-        await storage.rename(tmp, paths.noveltyDocumentPath);
-      }
-      throw error;
-    }
-  } finally {
-    await removeIfExists(storage, tmp);
-    await removeIfExists(storage, backupTmp);
-  }
-}
-
-function decodeRawNoveltyDocument(
-  raw: string,
-  reportDate: string,
-): NoveltyFilterCheckpointDocument | null {
-  try {
-    return decodeNoveltyDocument(JSON.parse(raw), reportDate);
-  } catch {
-    return null;
-  }
-}
-
 function fingerprint(input: DailyFilterCheckpointFingerprintInput): string {
   return `sha256:${sha256ForCheckpointTests(JSON.stringify(input))}`;
 }
@@ -761,16 +500,6 @@ function requirePrepared(value: unknown): asserts value is PreparedDailyFilterCh
   if (!isPreparedDailyFilterCheckpoint(value)) {
     throw new DailyFilterCheckpointStoreError(
       "daily filter checkpoint requires a prepared exact request snapshot",
-    );
-  }
-}
-
-function requireNoveltyPrepared(
-  value: unknown,
-): asserts value is PreparedNoveltyCheckpoint {
-  if (!isPreparedNoveltyCheckpoint(value)) {
-    throw new DailyFilterCheckpointStoreError(
-      "personal novelty checkpoint requires a prepared exact call-plan snapshot",
     );
   }
 }

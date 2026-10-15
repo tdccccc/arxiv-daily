@@ -107,7 +107,7 @@ workbench 目标任务（`--host workbench --task ...`，共 12 个）：
 | `library-accept-direction` | 生成并采纳一个来自个人文献库的候选研究方向 |
 | `library-edit-candidate` | 重命名并丢弃个人文献库的候选研究方向 |
 
-obsidian 目标任务（`--host obsidian --task ...`，共 22 个）：
+obsidian 目标任务（`--host obsidian --task ...`，共 21 个）：
 
 | id | 内容 |
 |---|---|
@@ -132,7 +132,6 @@ obsidian 目标任务（`--host obsidian --task ...`，共 22 个）：
 | `library-similar-papers` | 查看论文的文献库相似结果 |
 | `library-accept-direction` | 采纳一个来自个人文献库的候选研究方向 |
 | `library-edit-candidate` | 编辑个人文献库的一个候选研究方向 |
-| `library-novelty-visible` | 在 Dashboard 查看论文相对个人文献库的新颖性说明（切到 All 并让说明显示在屏幕上） |
 
 用户角色（`--persona`，两端共用同一组 id，自身文案按宿主调整）：`first-time-user`（第一次使用的新用户）、`impatient-clicker`（没耐心快速乱点的用户）、`keyboard-only`（只用键盘操作、动作被限制为按键和等待的用户）。`--release` 在不显式传 `--persona` 时，等价于连同以上全部角色一起选中。
 
@@ -194,7 +193,7 @@ obsidian 目标任务（`--host obsidian --task ...`，共 22 个）：
 |---|---|---|
 | 首次使用与设置 | 草稿、保存、模型列表、配置冲突、刷新/重启恢复 | 并非逐项操作所有设置字段；见 `apps/cli/tests/workbench-settings*.test.ts`、`plugin/tests/settings*.test.ts` |
 | 主题与方向 | 修改方向，并确认真实生成请求使用保存的模型和方向 | 新增/删除/排序等组合主要由现有设置测试覆盖 |
-| 日报 | 完整生成、文件/索引/运行状态一致、重复启动、取消重跑、认证失败恢复；Obsidian 另覆盖文献库个人新颖性（授权披露句、授权后日报与 Dashboard 论文行出现新颖性说明，未授权/撤销后不出现） | 零匹配、公告等待、断点及持久化异常主要由 Core pipeline/scheduler 测试覆盖 |
+| 日报 | 完整生成、文件/索引/运行状态一致、重复启动、取消重跑、认证失败恢复 | 零匹配、公告等待、断点及持久化异常主要由 Core pipeline/scheduler 测试覆盖 |
 | 单篇总结 | 工作台生成、保存、当前页面更新和打开阅读 | PDF 回退和其他错误路径由现有 Core/CLI 测试覆盖 |
 | 阅读 | 搜索、概览、来源日报、收藏、待读、返回导航、重启恢复；Obsidian PDF 页码 | 大规模分页、全部键盘路径及移动端未做本版真实浏览器走查 |
 | 文献库 | 工作台连接、浏览及方向审核入口 | 本版未实跑完整扫描、索引、检索、提议生成与接受；已有 `cli-personalized-workflow.test.ts`、`workbench-library*.test.ts` 和 Core library 测试 |

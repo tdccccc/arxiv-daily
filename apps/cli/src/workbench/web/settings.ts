@@ -1,4 +1,4 @@
-import { t, setUiLanguage, DAILY_NOVELTY_DISCLOSURE } from "./i18n";
+import { t, setUiLanguage } from "./i18n";
 import type { UiAppearancePreferences } from "@arxiv-daily/core";
 import { h, type DomAttrs } from "./dom";
 import { modelCombobox, mountModelCombobox } from "./model-combobox";
@@ -509,7 +509,7 @@ export function bindSettings(form: HTMLFormElement, snapshot: SettingsSnapshot, 
    if(name==='library-build'){
     await refreshLibrary();
     if(library?.status.kind!=='authorized' && library?.disclosure){
-     const lines=[t('Folder: {0}',library.disclosure.selectedRoot),t('Eligible files: {0}',library.disclosure.eligibleExtensions.join(', ')),t('Processing depth: {0}',t(library.disclosure.processingDepth==='full-text'?'Titles and abstracts':library.disclosure.processingDepth)),t('Model endpoint: {0}',library.disclosure.endpoint),...(library.disclosure.embeddingEndpoint?[t('Embedding endpoint: {0}',library.disclosure.embeddingEndpoint)]:[]),t(DAILY_NOVELTY_DISCLOSURE)];
+     const lines=[t('Folder: {0}',library.disclosure.selectedRoot),t('Eligible files: {0}',library.disclosure.eligibleExtensions.join(', ')),t('Processing depth: {0}',t(library.disclosure.processingDepth==='full-text'?'Titles and abstracts':library.disclosure.processingDepth)),t('Model endpoint: {0}',library.disclosure.endpoint),...(library.disclosure.embeddingEndpoint?[t('Embedding endpoint: {0}',library.disclosure.embeddingEndpoint)]:[])];
      find('.settings-action-host').replaceChildren(
       h("div", { class: "settings-confirm", role: "group", "aria-label": t('Library processing consent') },
        h("h4", null, t('Confirm library processing')),

@@ -91,9 +91,6 @@ export function overview(paper: WorkbenchPaper, pending: boolean): Node[] {
           paper.provenance
             ? h("section", null, h("h2", null, t("发现来源")), h("p", null, [...paper.provenance.manualTopics.map(topic => topic.name || topic.tag), ...paper.provenance.directions.map(direction => direction.name)].join(" · ")))
             : null,
-          paper.novelty
-            ? h("section", null, h("h2", null, t("与已有文献的关系")), scientificBody(paper.novelty.explanation), h("small", null, `${t("比较依据：")}${paper.novelty.comparisonBasis.map(item => item.title || item.paperKey).join(" · ")}`))
-            : null,
           paper.abstract ? h("section", null, h("h2", null, t("原始摘要")), scientificBody(paper.abstract)) : null,
           paper.reports.length
             ? h("section", null, h("h2", null, t("来源日报")),
