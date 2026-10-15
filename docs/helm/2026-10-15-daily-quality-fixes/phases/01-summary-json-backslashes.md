@@ -2,8 +2,8 @@
 
 goal_ref: ../goal.md
 created: 2026-10-15T16:46:40+08:00
-updated: 2026-10-15T17:25:00+08:00
-revision: 3
+updated: 2026-10-15T17:50:00+08:00
+revision: 4
 
 ## Outcome
 
@@ -100,6 +100,20 @@ kept. Prompt-file change is chunk 3 and depends on the user's decision.
   `summarizeDailyPaperWithValidationRetry` (temp config, 0600) on both
   `gpt-6.1-sol` and `gpt-6-luna` → structured Chinese summary with formulas
   kept, no fallback.
+
+Results (2026-10-15):
+
+- Local root verification at d471ec2 (Node 22.22.2 vs CI 22.17.0): all 13
+  steps passed — release-tools 882, core 2542 (+2 skipped), node-runtime 73,
+  cli 457, plugin 1048, settings UI 172; lint 0 errors; build, Obsidian
+  submission, smoke build/install OK; published-manifest informational pass.
+- Real model, 2 calls (user-approved, temp config deleted, key not found in
+  saved output): `gpt-6.1-sol` structured on call 1, raw JSON already valid,
+  formulas kept (`$(28\pm7)\%$`). `gpt-6-luna` structured on call 1; raw
+  `JSON.parse` failed ("Bad escaped character … position 302", `\pm`×4,
+  `\sigma`), repair rescued it, formulas kept (`$28\pm7$%`, `$1\sigma$`).
+  No control characters in any field. The reasoned-retry path was not
+  exercised by a real model (covered by unit tests only).
 
 ## Abort / reshape triggers
 

@@ -2,8 +2,8 @@
 
 status: active
 created: 2026-10-15T16:46:40+08:00
-updated: 2026-10-15T16:46:40+08:00
-revision: 1
+updated: 2026-10-15T17:50:00+08:00
+revision: 2
 owner: current-session
 
 ## Intent
@@ -15,15 +15,15 @@ API is throttled.
 
 ## Success criteria
 
-- [ ] A summary response that writes LaTeX with single backslashes (the real
+- [x] A summary response that writes LaTeX with single backslashes (the real
       2610.16741 responses in `summary-repro/out-A.json`) yields a structured
       summary with its formulas intact instead of `validation-exhausted`.
-- [ ] `\times`, `\rm`, `\beta`, `\frac`, `\nu` written with one backslash keep
+- [x] `\times`, `\rm`, `\beta`, `\frac`, `\nu` written with one backslash keep
       their LaTeX instead of turning into control characters.
-- [ ] An `invalid-json` failure logs the concrete parse error, and the retry
+- [x] An `invalid-json` failure logs the concrete parse error, and the retry
       tells the model why it failed and to double backslashes while keeping
       LaTeX.
-- [ ] A real-model rerun of 2610.16741 (with user consent) gives a Chinese
+- [x] A real-model rerun of 2610.16741 (with user consent) gives a Chinese
       structured summary that keeps its formulas.
 - [ ] When the arXiv query API fails or is throttled, papers still lacking an
       abstract get one from their `arxiv.org/abs/<id>` page, within a daily cap,
@@ -60,8 +60,8 @@ API is throttled.
 
 ## Phases
 
-1. P1 — single-backslash LaTeX in summary JSON is repaired and diagnosable, so formula-heavy papers get structured summaries — status: active
-2. P2 — abstracts survive query-API throttling via abs-page fallback, and title-only filtering is visible in report and run-history — status: pending
+1. P1 — single-backslash LaTeX in summary JSON is repaired and diagnosable, so formula-heavy papers get structured summaries — status: done
+2. P2 — abstracts survive query-API throttling via abs-page fallback, and title-only filtering is visible in report and run-history — status: active
 
 ## Open questions
 
