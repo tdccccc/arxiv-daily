@@ -29,7 +29,7 @@ Add a core store for filter decision records (one JSON document per report date 
 - kind: behavior
 - first signal: Red — new `packages/core/tests/filter-decision-record-store.test.ts` fails because the store does not exist.
 - checks: focused test Green; `npm run -w packages/core test` (or the workspace's equivalent) stays Green; typecheck.
-- [ ] accepted on observed evidence
+- [x] accepted on observed evidence — delegate observed Red (module missing) → 15/15 Green; owner re-ran `vitest run tests/filter-decision-record-store.test.ts` Green; workspace tests + typecheck Green per delegate report
 
 ### Chunk 2 — pipeline writes the record on commit
 
