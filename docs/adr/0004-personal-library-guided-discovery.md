@@ -57,6 +57,8 @@ Manual topics and confirmed library-derived directions are complementary discove
 
 After determining relevance, the product also estimates **personal novelty** relative to the relevant representative set.
 
+> Note (2026-10-15): the representative-set basis no longer exists (ADR 0012 §4). ADR 0015 defines the current basis: the library papers most similar to each digest paper, retrieved on demand.
+
 - Novelty is expressed as a difference type such as a new task, method, dataset, experiment, efficiency result, or counter-evidence.
 - The explanation names its comparison basis and evidence depth.
 - Metadata- or abstract-level evidence must not be presented as if it were a full-text finding.

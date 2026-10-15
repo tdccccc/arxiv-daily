@@ -1,6 +1,6 @@
 # ADR 0007: Direction incremental updates trigger on index completion, with a split consent gate
 
-Status: Accepted (2026-08-07 Helm P4 follow-up design)
+Status: Superseded by ADR 0015 (2026-10-15)
 
 Related: ADR 0004 (personal-library-guided discovery); ADR 0006 (unified search entry).
 
