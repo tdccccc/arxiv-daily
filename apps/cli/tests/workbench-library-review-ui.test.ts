@@ -272,3 +272,30 @@ it("shows no update button when nothing is new and localizes the update copy", a
  expect(text).toContain("Only the 1 new paper");
  expect(text).not.toMatch(/[\u4e00-\u9fff]/);
 });
+
+const coveredLine = (root: HTMLElement) => [...root.querySelectorAll("p")].find(p => /已被你现有的方向覆盖|already covered by your existing directions/.test(p.textContent ?? ""));
+
+it("tells how many of the new papers existing directions already cover, in both languages, and nothing at zero", async () => {
+ const covered = rescanned();
+ covered.proposal = { ...covered.proposal!, catalogInputPapers: ["p4", "p5", "p6"].map(evidence), accountedPaperKeys: ["p1", "p2", "p3", "p4", "p5", "p6"], coveredPaperKeys: ["p4", "p6", "p1"] };
+ const zh = setup(vi.fn().mockResolvedValue(covered)); await settle();
+ expect(coveredLine(zh.root)?.textContent).toBe("其中 2 篇新论文已被你现有的方向覆盖");
+ expect(coveredLine(zh.root)?.closest("details")).toBeNull();
+ setUiLanguage("en");
+ const en = setup(vi.fn().mockResolvedValue(covered)); await settle();
+ expect(coveredLine(en.root)?.textContent).toBe("New papers already covered by your existing directions: 2");
+ const none = rescanned();
+ none.proposal = { ...none.proposal!, coveredPaperKeys: ["p1"] };
+ const quiet = setup(vi.fn().mockResolvedValue(none)); await settle();
+ expect(coveredLine(quiet.root)).toBeUndefined();
+ const full = setup(vi.fn().mockResolvedValue(fixture())); await settle();
+ expect(coveredLine(full.root)).toBeUndefined();
+});
+
+it("still tells how many new papers were covered when the update proposed no new direction", async () => {
+ const value = rescanned();
+ value.proposal = { ...value.proposal!, topics: [], coveredPaperKeys: ["p4"] };
+ const {root} = setup(vi.fn().mockResolvedValue(value)); await settle();
+ expect(coveredLine(root)?.textContent).toBe("其中 1 篇新论文已被你现有的方向覆盖");
+ expect(root.textContent).toContain("本次分析没有新增候选方向");
+});

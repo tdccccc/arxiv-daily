@@ -16,6 +16,11 @@ export function describeLibraryChangeLine(count: number): string {
   return `${describeNewLibraryPapers(count)} in your library ${count === 1 ? "isn't" : "aren't"} reflected in your direction suggestions yet.`;
 }
 
+/** What an update of new papers found that needed no new direction; the caller shows it only above zero. */
+export function describeCoveredNewPapers(count: number): string {
+  return `New papers already covered by your existing directions: ${count}`;
+}
+
 /**
  * What to tell the researcher when their library has drifted from the current
  * direction suggestions (ADR 0015 section 3). `null` below the nudge count,

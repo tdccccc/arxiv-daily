@@ -1360,6 +1360,51 @@ describe("papers new since the direction suggestions", () => {
     expect(vi.mocked(ctrl.mock.generate).mock.calls[0]).toHaveLength(2);
   });
 
+  describe("papers of the update that existing directions already cover", () => {
+    /** An update of new papers: it analysed key(5..7) and accounts for key(1..7). */
+    function updated(covered: string[], overrides: Partial<InterestProfileReviewSnapshot> = {}) {
+      const base = reviewed();
+      return reviewed({
+        proposal: {
+          ...base.proposal!,
+          catalogInputPapers: [5, 6, 7].map((n) => ({ paperKey: key(n), evidenceFingerprint: evidence })),
+          accountedPaperKeys: [1, 2, 3, 4, 5, 6, 7].map(key),
+          coveredPaperKeys: covered,
+        },
+        ...overrides,
+      });
+    }
+    const line = (count: number) => `New papers already covered by your existing directions: ${count}`;
+
+    it("says how many of the new papers were already covered, in the main view", () => {
+      const modal = open(controller(updated([key(5), key(7)])).mock);
+      expect(modal.contentEl.textContent).toContain(line(2));
+      const paragraph = Array.from(modal.contentEl.querySelectorAll("p")).find((p) => p.textContent === line(2));
+      expect(paragraph).toBeDefined();
+      expect(paragraph!.closest("details")).toBeNull();
+      expect(modal.contentEl.textContent!.match(/already covered by your existing directions/g)).toHaveLength(1);
+    });
+
+    it("says nothing when none of the new papers were covered", () => {
+      const modal = open(controller(updated([key(1)])).mock);
+      expect(modal.contentEl.textContent).not.toContain("already covered by your existing directions");
+    });
+
+    it("does not call a full analysis an update of new papers", () => {
+      const base = reviewed();
+      const modal = open(controller(reviewed({
+        proposal: { ...base.proposal!, accountedPaperKeys: undefined, coveredPaperKeys: ["arxiv:2608.00001"] },
+      })).mock);
+      expect(modal.contentEl.textContent).not.toContain("already covered by your existing directions");
+    });
+
+    it("sits beside the update-button line when more papers arrived since", () => {
+      const modal = open(controller(updated([key(5)], { newPaperKeys: [key(8), key(9), key(10)] })).mock);
+      expect(modal.contentEl.textContent).toContain(line(1));
+      expect(modal.contentEl.textContent).toContain("3 new papers in your library aren't reflected");
+    });
+  });
+
   describe("library overview", () => {
     function overviewSnapshot(overrides: Partial<InterestProfileReviewSnapshot> = {}) {
       const base = reviewed();

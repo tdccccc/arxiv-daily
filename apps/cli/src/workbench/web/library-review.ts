@@ -1,5 +1,5 @@
 import {
-  accountedPaperKeysOf, isThinEvidenceDirectionCandidate, matchingProposalAcceptance, resolveProposedTopicTarget,
+  accountedPaperKeysOf, countNewPapersCoveredByExistingDirections, isThinEvidenceDirectionCandidate, matchingProposalAcceptance, resolveProposedTopicTarget,
   type LibraryReviewSnapshot, type LibraryPreviewPaper, type LibraryDirectionPreview,
   type PersonalLibraryDirectionCandidate, type PersonalLibraryProposedTopic, type LibraryAuthorizationDisclosure,
 } from "@arxiv-daily/core";
@@ -132,8 +132,12 @@ export function mountLibraryReview(root: HTMLElement, options: Options) {
   function proposedView(): Node[] {
     const proposal = snapshot!.proposal;
     if (!proposal) return [h("div", { class: "review-empty" }, h("h2", null, t("尚无候选方向")), h("p", null, t("先建立文献库索引，再生成候选方向；审核接受后才参与每日发现。")))];
-    if (!proposal.topics.length) return [h("div", { class: "review-empty" }, h("p", null, t("本次分析没有新增候选方向。请查看文献库概览。")))];
+    // After an update of new papers: how many of them needed no new direction.
+    const coveredNew = countNewPapersCoveredByExistingDirections(proposal);
+    const coveredLine = coveredNew > 0 ? [h("p", { class: "review-covered-new", role: "status" }, t("其中 {0} 篇新论文已被你现有的方向覆盖", coveredNew))] : [];
+    if (!proposal.topics.length) return [...coveredLine, h("div", { class: "review-empty" }, h("p", null, t("本次分析没有新增候选方向。请查看文献库概览。")))];
     return [
+      ...coveredLine,
       h("div", { class: "review-selection" },
         button("select-all", "选择全部可审核方向"),
         button("select-none", "取消选择"),

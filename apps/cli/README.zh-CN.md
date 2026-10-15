@@ -119,7 +119,7 @@ arxiv-daily library status                        # 查看范围和授权指纹
 arxiv-daily library authorize --fingerprint HASH   # 对该指纹对应的确切范围授权
 arxiv-daily library prepare                        # 安装可选的 PDF/嵌入运行时组件
 arxiv-daily library scan
-arxiv-daily library index
+arxiv-daily library index                          # 若自上次扫描后增删或改名了 PDF，先自动重新扫描（只为新论文联网查询 arXiv）；目录没变则不扫描、不联网
 arxiv-daily library propose                        # 生成方向候选
 arxiv-daily library propose --new                  # 新增论文后：只把新论文连同现有方向发给模型
 arxiv-daily library directions                     # 查看候选

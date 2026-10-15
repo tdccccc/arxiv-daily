@@ -60,6 +60,7 @@ topicNameKey,
 updatePersonalLibraryDirectionCandidate,
 selectPersonalLibraryDirectionPapers,
 reconcilePersonalLibraryCatalog,
+detectPersonalLibraryFolderChange,
 RunCancellationService,
 normalizeArxivId,
 FullTextKnowledgeBaseFileStore,
@@ -1469,6 +1470,26 @@ export default class ArxivDailyPlugin extends Plugin {
     }
   }
 
+  /** The connected folder's scoped source, checked to still be the folder that was chosen. */
+  private async verifiedLibrarySource(
+    connection: PersistedLibraryConnection,
+    revision: number,
+    operation: OperationHandle,
+  ): Promise<OpenedScopedLibrarySource> {
+    const source = this.librarySource
+      ?? await this.openLibrarySource(connection.selectedRoot);
+    operation.signal.throwIfAborted();
+    this.assertLibraryConnectionCurrent(connection, revision);
+    if (
+      source.canonicalRoot !== connection.selectedRoot
+      || source.rootIdentity !== connection.rootIdentity
+    ) {
+      throw new Error("Library folder identity changed; choose it again");
+    }
+    this.librarySource = source;
+    return source;
+  }
+
   /**
    * Walk the library folder, re-identify files and persist the reconciled
    * catalog. Shared by `scanPersonalLibrary` (its own operation, its own
@@ -1485,20 +1506,12 @@ export default class ArxivDailyPlugin extends Plugin {
     store: PersonalLibraryCatalogStore,
     scopeFingerprint: string,
     identificationFingerprint: string,
+    /** A listing the caller just took (the index build's change check); otherwise the folder is listed here. */
+    listed?: LibraryInventory,
   ): Promise<PersonalLibraryCatalog> {
     operation.signal.throwIfAborted();
-    const source = this.librarySource
-      ?? await this.openLibrarySource(connection.selectedRoot);
-    operation.signal.throwIfAborted();
-    this.assertLibraryConnectionCurrent(connection, revision);
-    if (
-      source.canonicalRoot !== connection.selectedRoot
-      || source.rootIdentity !== connection.rootIdentity
-    ) {
-      throw new Error("Library folder identity changed; choose it again");
-    }
-    this.librarySource = source;
-    const inventory = await source.inventory({ signal: operation.signal });
+    const source = await this.verifiedLibrarySource(connection, revision, operation);
+    const inventory = listed ?? await source.inventory({ signal: operation.signal });
     operation.signal.throwIfAborted();
     this.assertLibraryConnectionCurrent(connection, revision);
     const current = await store.load(scopeFingerprint, identificationFingerprint);
@@ -1665,14 +1678,42 @@ export default class ArxivDailyPlugin extends Plugin {
       let catalog = await catalogStore.load(scopeFingerprint, identificationFingerprint);
       operation.signal.throwIfAborted();
       this.assertLibraryConnectionCurrent(connection, revision);
-      // `lastScan === null` is the one safe signal that this exact folder (this
-      // scope/identification fingerprint) has never been scanned: `load` above
-      // already folds "no catalog file", "corrupt catalog" and "catalog from a
-      // different folder/extension set" into the same empty, unscanned
-      // catalog. A library that has been scanned before keeps reading the
-      // stored catalog exactly as before — no surprise network rescan on every
-      // build.
-      const scannedBeforeIndexing = catalog.lastScan === null;
+      // Scan first when the folder is not the one the stored catalog describes.
+      // `lastScan === null` means this exact folder (this scope/identification
+      // fingerprint) was never scanned: `load` above already folds "no catalog
+      // file", "corrupt catalog" and "catalog from a different folder/extension
+      // set" into the same empty, unscanned catalog. Otherwise a local listing
+      // of the folder (no file reads, no network) is compared with the files
+      // the last scan recorded; only a difference (added, removed, renamed or
+      // modified PDFs) triggers a scan, and the scan asks arXiv only about
+      // papers the catalog does not hold. An unchanged folder reads the stored
+      // catalog exactly as before — no network rescan on every build.
+      let scannedBeforeIndexing = catalog.lastScan === null;
+      let listing: LibraryInventory | undefined;
+      if (!scannedBeforeIndexing) {
+        if (updateProgress) {
+          this.progress?.setTask("Indexing library titles and abstracts", "Checking the library folder for changes");
+        }
+        this.libraryIndexStatus.report({ phase: "checking the library folder for changes" });
+        try {
+          const checked = await this.verifiedLibrarySource(connection, revision, operation);
+          listing = await checked.inventory({ signal: operation.signal });
+          operation.signal.throwIfAborted();
+          scannedBeforeIndexing = detectPersonalLibraryFolderChange({
+            catalog, inventory: listing, eligibleExtensions: connection.eligibleExtensions,
+          }).changed;
+        } catch (error) {
+          // The check is an optimization of freshness, not a precondition:
+          // when the folder cannot be listed, index the stored catalog as
+          // before (reading papers will report an unreachable folder itself).
+          if (operation.signal.aborted) throw error;
+          this.assertLibraryConnectionCurrent(connection, revision);
+          this.logger?.warn?.("library: could not check the folder for changes before indexing", error);
+          listing = undefined;
+        }
+        operation.signal.throwIfAborted();
+        this.assertLibraryConnectionCurrent(connection, revision);
+      }
       if (scannedBeforeIndexing) {
         if (updateProgress) {
           this.progress?.setTask("Indexing library titles and abstracts", "Scanning the library folder");
@@ -1686,6 +1727,7 @@ export default class ArxivDailyPlugin extends Plugin {
             catalogStore,
             scopeFingerprint,
             identificationFingerprint,
+            listing,
           );
         } catch (error) {
           // Cancellation is an outcome, not a scan fault: let it propagate
@@ -1700,22 +1742,12 @@ export default class ArxivDailyPlugin extends Plugin {
         }
         operation.signal.throwIfAborted();
         this.assertLibraryConnectionCurrent(connection, revision);
-        if (updateProgress) {
-          this.progress?.setTask("Indexing library titles and abstracts", "Extracting and embedding titles and abstracts");
-        }
-        this.libraryIndexStatus.report({ phase: "reading the library catalog" });
       }
-      const source = this.librarySource
-        ?? await this.openLibrarySource(connection.selectedRoot);
-      operation.signal.throwIfAborted();
-      this.assertLibraryConnectionCurrent(connection, revision);
-      if (
-        source.canonicalRoot !== connection.selectedRoot
-        || source.rootIdentity !== connection.rootIdentity
-      ) {
-        throw new Error("Library folder identity changed; choose it again");
+      if (updateProgress) {
+        this.progress?.setTask("Indexing library titles and abstracts", "Extracting and embedding titles and abstracts");
       }
-      this.librarySource = source;
+      this.libraryIndexStatus.report({ phase: "reading the library catalog" });
+      const source = await this.verifiedLibrarySource(connection, revision, operation);
       // Obsidian's built-in pdf.js becomes reachable via `window.pdfjsLib`
       // after the official loader resolves; the extractor defaults to it.
       await loadPdfJs();

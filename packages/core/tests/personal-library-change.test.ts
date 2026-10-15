@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   LIBRARY_CHANGE_NUDGE_COUNT,
+  countNewPapersCoveredByExistingDirections,
   listUnaccountedLibraryPapers,
   shouldNudgeLibraryChange,
 } from "../src/library/personal-library-change";
@@ -193,5 +194,32 @@ describe("listUnaccountedLibraryPapers", () => {
     expect(listUnaccountedLibraryPapers({ manifest, proposal: proposalOf(known), catalog })).toEqual([inCatalog, usable]);
     // Without the catalog nothing can be judged, so the older behavior is unchanged.
     expect(listUnaccountedLibraryPapers({ manifest, proposal: proposalOf(known) })).toHaveLength(4);
+  });
+});
+
+describe("countNewPapersCoveredByExistingDirections", () => {
+  const input = (...keys: string[]) => keys.map((paperKey) => ({ paperKey, evidenceFingerprint: evidence }));
+  const a = arxivKey("2612", 1), b = arxivKey("2612", 2), c = arxivKey("2612", 3), old = arxivKey("2612", 9);
+
+  it("counts the update's input papers that existing directions already cover", () => {
+    expect(countNewPapersCoveredByExistingDirections({
+      catalogInputPapers: input(a, b, c), accountedPaperKeys: [a, b, c, old], coveredPaperKeys: [a, c, old],
+    })).toBe(2);
+  });
+
+  it("is zero when no new paper is covered, or the coverage record is missing", () => {
+    expect(countNewPapersCoveredByExistingDirections({
+      catalogInputPapers: input(a), accountedPaperKeys: [a, old], coveredPaperKeys: [old],
+    })).toBe(0);
+    expect(countNewPapersCoveredByExistingDirections({ catalogInputPapers: input(a), accountedPaperKeys: [a, old] })).toBe(0);
+  });
+
+  it("is zero for a scan of the whole library, where nothing is 'new'", () => {
+    expect(countNewPapersCoveredByExistingDirections({
+      catalogInputPapers: input(a, b), accountedPaperKeys: [a, b], coveredPaperKeys: [a],
+    })).toBe(0);
+    expect(countNewPapersCoveredByExistingDirections({
+      catalogInputPapers: input(a, b), coveredPaperKeys: [a],
+    })).toBe(0);
   });
 });

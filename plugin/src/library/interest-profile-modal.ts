@@ -8,6 +8,7 @@ import {
   PERSONAL_LIBRARY_MAX_REPRESENTATIVES,
   PERSONAL_LIBRARY_MIN_REPRESENTATIVES,
   accountedPaperKeysOf,
+  countNewPapersCoveredByExistingDirections,
   isThinEvidenceDirectionCandidate,
   matchingProposalAcceptance,
   resolveProposedTopicTarget,
@@ -27,7 +28,7 @@ import {
 import type { PersonalLibraryProfileSnapshot } from "../../main";
 import type { LibraryConnectionStatus } from "./connection";
 import { chooseModal } from "../services/modal";
-import { describeLibraryChangeLine, describeNewLibraryPapers } from "./change-nudge";
+import { describeCoveredNewPapers, describeLibraryChangeLine, describeNewLibraryPapers } from "./change-nudge";
 
 export interface InterestProfileReviewSnapshot
   extends Omit<PersonalLibraryProfileSnapshot, "authorization"> {
@@ -981,7 +982,10 @@ export class PersonalLibraryInterestProfileModal extends ArxivDailyModal {
    */
   private renderLibraryChange(parent: HTMLElement, snapshot: InterestProfileReviewSnapshot): void {
     const count = snapshot.proposal ? snapshot.newPaperKeys?.length ?? 0 : 0;
-    if (!this.updateMessage && count === 0) return;
+    // After an update of new papers, say how many of them needed no new
+    // direction; otherwise they are visible only under More options.
+    const covered = snapshot.proposal ? countNewPapersCoveredByExistingDirections(snapshot.proposal) : 0;
+    if (!this.updateMessage && count === 0 && covered === 0) return;
     const section = parent.createDiv({ cls: "arxiv-daily-interest-review__library-change" });
     if (this.updateMessage) {
       section.createEl("p", {
@@ -989,6 +993,7 @@ export class PersonalLibraryInterestProfileModal extends ArxivDailyModal {
         attr: { role: "status" }, text: this.updateMessage,
       });
     }
+    if (covered > 0) section.createEl("p", { text: describeCoveredNewPapers(covered), attr: { role: "status" } });
     if (count === 0) return;
     section.createEl("p", { text: describeLibraryChangeLine(count), attr: { role: "status" } });
     const generation = generationAvailability(snapshot);

@@ -86,7 +86,13 @@ export async function runCliLibrary(config: CliRuntimeConfig, args: string[], io
       const catalog = await context.workflow.scan({ signal });
       print({ revision: catalog.revision, lastScan: catalog.lastScan, paperCount: Object.keys(catalog.papers).length });
     } else if (command === "index") {
-      const summary = await context.workflow.index({ signal, onProgress: detail => io.stderr.write(redactText(detail, { secrets }) + "\n") });
+      const summary = await context.workflow.index({
+        signal,
+        onProgress: detail => io.stderr.write(redactText(detail, { secrets }) + "\n"),
+        onFolderChange: change => io.stderr.write(change.neverScanned
+          ? "The library folder has not been scanned yet; scanning it before indexing.\n"
+          : `The library folder changed since the last scan (${change.added.length} added, ${change.removed.length} removed, ${change.modified.length} modified); scanning it before indexing. Only papers not already in the catalog are looked up on arXiv.\n`),
+      });
       // The count is advisory: it must never turn a finished index into a failure.
       const newPapersSinceSuggestions = await countNewPapers(context.workflow, signal);
       print({ ...summary, newPapersSinceSuggestions });

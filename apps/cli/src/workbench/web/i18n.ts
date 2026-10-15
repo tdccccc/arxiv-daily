@@ -9,6 +9,7 @@ const cliMessages: ReadonlyArray<readonly [string,string]> = [
  ["还没有可供对比的研究主题，将改为分析整个文献库的标题和摘要。新的候选方向会替换当前候选，请先保存需要保留的修改。",
   "There are no research topics to compare with yet, so the titles and abstracts of the whole library will be analysed instead. The new suggestions replace the current candidates, so save any edits you want to keep first."],
  ["本次新增 {0} 篇", "{0} added in this update"],
+ ["其中 {0} 篇新论文已被你现有的方向覆盖", "New papers already covered by your existing directions: {0}"],
 ];
 for (const pair of [...workbenchMessages,...settingsMessages,...readingMessages,...cliMessages]) { catalog.set(pair[0],pair); catalog.set(pair[1],pair); }
 export function setUiLanguage(value: UiLanguage): void { language=value; }

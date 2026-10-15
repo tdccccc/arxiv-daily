@@ -119,7 +119,7 @@ arxiv-daily library status                        # scope + authorization finger
 arxiv-daily library authorize --fingerprint HASH   # authorize that exact scope
 arxiv-daily library prepare                        # install optional PDF/embedding runtime
 arxiv-daily library scan
-arxiv-daily library index
+arxiv-daily library index                          # rescans first if PDFs were added, removed or renamed since the last scan (only new papers are looked up on arXiv); otherwise no scan, no network
 arxiv-daily library propose                        # generate topic/direction candidates
 arxiv-daily library propose --new                  # after adding papers: send only the new ones, with your existing directions
 arxiv-daily library directions                     # review candidates

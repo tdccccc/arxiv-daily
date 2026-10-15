@@ -86,3 +86,19 @@ export function listUnaccountedLibraryPapers(input: {
     .filter(({ paperKey }) => !catalog || catalog.papers[paperKey] !== undefined || Boolean(manifest.papers[paperKey]?.title))
     .map(({ paperKey }) => paperKey);
 }
+
+/**
+ * How many of the papers an update of new papers analysed were already covered
+ * by the researcher's existing directions. Zero for any other proposal: a scan
+ * of the whole library has no "new" papers to speak of, and one that predates
+ * `accountedPaperKeys` cannot say it was an update. Read from the proposal
+ * alone (no manifest, no model).
+ */
+export function countNewPapersCoveredByExistingDirections(
+  proposal: Pick<PersonalLibraryDirectionProposal, "catalogInputPapers" | "accountedPaperKeys" | "coveredPaperKeys">,
+): number {
+  const analysed = new Set(proposal.catalogInputPapers.map(({ paperKey }) => paperKey));
+  if (accountedPaperKeysOf(proposal).length <= analysed.size) return 0;
+  const covered = new Set(proposal.coveredPaperKeys ?? []);
+  return [...analysed].filter((paperKey) => covered.has(paperKey)).length;
+}

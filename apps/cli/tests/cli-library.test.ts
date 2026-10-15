@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { mkdtemp, mkdir, readFile, realpath, rm, stat, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, realpath, rename, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { parse as parseToml, stringify as stringifyToml } from "smol-toml";
@@ -344,6 +344,48 @@ describe("CLI shared library workflow", () => {
     const status = await f.invoke(["status"]);
     expect(JSON.parse(status.stdout)).not.toHaveProperty("newPapersSinceSuggestions");
   }, 30_000);
+
+  it("index alone notices PDFs added to the folder, asking arXiv only about them", async () => {
+    const f = await fixture();
+    await f.invoke(["scan"]); await f.invoke(["index"]);
+    const first = decodePersonalLibraryDirectionProposal(JSON.parse((await f.invoke(["propose"])).stdout))!;
+    await f.invoke(["confirm", "--candidate", first.topics[0]!.directions[0]!.id, "--proposal-revision", String(first.revision)]);
+    const arxivLookups = () => vi.mocked(f.http.request).mock.calls
+      .map(([request]) => new URL(request.url))
+      .filter(url => url.origin === "https://export.arxiv.org" && url.searchParams.has("id_list"))
+      .map(url => url.searchParams.get("id_list"));
+
+    const unchanged = await f.invoke(["index"]);
+    expect(unchanged.code, unchanged.stderr).toBe(0);
+    expect(unchanged.stderr).not.toMatch(/folder changed/i);
+    expect(JSON.parse(unchanged.stdout)).toMatchObject({ indexed: 0, reused: 6 });
+    const lookupsBefore = arxivLookups().length;
+
+    await f.addPapers([7, 8, 9]);
+    const indexed = await f.invoke(["index"]);
+    expect(indexed.code, indexed.stderr).toBe(0);
+    expect(indexed.stderr).toMatch(/folder changed.*scanning/i);
+    expect(JSON.parse(indexed.stdout)).toMatchObject({ indexed: 3, reused: 6, failed: 0, newPapersSinceSuggestions: 3 });
+    expect(indexed.stderr).toMatch(/3 .*papers.*not covered.*library propose --new/s);
+    expect(arxivLookups().slice(lookupsBefore)).toEqual(["2610.00007,2610.00008,2610.00009"]);
+    expect(Object.keys((await f.stores().catalog.load(f.stores().scope, f.stores().identification)).papers)).toHaveLength(9);
+
+    const again = await f.invoke(["index"]);
+    expect(again.stderr).not.toMatch(/folder changed/i);
+    expect(JSON.parse(again.stdout)).toMatchObject({ indexed: 0, reused: 9 });
+    expect(arxivLookups().slice(lookupsBefore)).toHaveLength(1);
+
+    await rm(join(f.sourceRoot, "2610.00009.pdf"));
+    await rename(join(f.sourceRoot, "2610.00001.pdf"), join(f.sourceRoot, "moved.2610.00001.pdf"));
+    const pruned = await f.invoke(["index"]);
+    expect(pruned.code, pruned.stderr).toBe(0);
+    expect(pruned.stderr).toMatch(/folder changed.*scanning/i);
+    expect(arxivLookups().slice(lookupsBefore)).toHaveLength(1);
+    const catalog = await f.stores().catalog.load(f.stores().scope, f.stores().identification);
+    expect(Object.keys(catalog.papers)).toHaveLength(8);
+    expect(catalog.files["moved.2610.00001.pdf"]?.status).toBe("ready");
+    expect(catalog.files["2610.00001.pdf"]).toBeUndefined();
+  }, 60_000);
 
   it("proposes --new sends only the new papers, then reports nothing new", async () => {
     const f = await fixture();
