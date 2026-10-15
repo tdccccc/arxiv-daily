@@ -437,6 +437,15 @@ describe("registerCommands", () => {
     );
   });
 
+  it("does not register a duplicate incremental-suggestions review command", () => {
+    const plugin = makePlugin();
+    registerCommands(plugin as any);
+    const ids = vi.mocked(plugin.addCommand).mock.calls.map(([value]) => value.id);
+
+    expect(ids).toContain("review-personal-library-directions");
+    expect(ids).not.toContain("review-incremental-suggestions");
+  });
+
   it("contains synchronous direction review open failures without exposing details", () => {
     Notice.calls = [];
     const plugin = makePlugin();

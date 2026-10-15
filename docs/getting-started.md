@@ -166,6 +166,7 @@ Connect one local paper-library folder — including a folder outside your vault
 - Model processing is separately authorized after you review the selected folder, eligible file types, processing depth, and the effective model endpoint it will use.
 - Changing the folder, endpoint, eligible file types, or processing depth invalidates that authorization. You can revoke it at any time.
 - The library can propose a few broad topics and directions; only directions you explicitly accept are used for daily filtering.
+- When you add papers to the folder and re-index, a notice tells you once 3 or more new papers are not yet reflected in your direction suggestions. It only offers: nothing is scanned and no model is called until you choose **Update direction suggestions** in the review, which sends only the new papers (with your existing directions) to the model. You can start the same update from the CLI with `library propose --new`.
 
 ## Troubleshooting
 

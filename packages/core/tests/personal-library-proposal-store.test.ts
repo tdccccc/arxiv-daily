@@ -349,6 +349,17 @@ describe("proposal lifecycle", () => {
     expect(reloaded?.coverageEvidence).toEqual(coverageEvidence);
   });
 
+  it("reloads the accounted paper set so a replacement keeps what was seen", async () => {
+    const memory = makeStorage();
+    const original = proposal();
+    const accountedPaperKeys = [...original.catalogInputPapers.map(({ paperKey }) => paperKey), `file:sha256:${"f".repeat(64)}`];
+    const saved = await stores(memory.storage).proposals.replace({ ...original, accountedPaperKeys }, null);
+    expect(saved.accountedPaperKeys).toEqual(accountedPaperKeys);
+    const reloaded = await stores(memory.storage).proposals.load();
+    expect(reloaded?.accountedPaperKeys).toEqual(accountedPaperKeys);
+    expect(parse(memory.files[proposalPath]).accountedPaperKeys).toEqual(accountedPaperKeys);
+  });
+
   it.each([4, 5])("retires a v%i proposal on load and allows a fresh generation with existing coverage", async (schemaVersion) => {
     const memory = makeStorage();
     const legacy = { ...proposal(), schemaVersion };

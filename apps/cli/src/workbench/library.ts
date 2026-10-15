@@ -3,7 +3,7 @@ import * as path from "node:path";
 import { searchFullTextKnowledgeBase, LibrarySourceError, createEmptyPersonalLibraryCatalog, redactText, PersonalLibraryInterestProfileReviewError, PersonalLibraryDirectionProposalStoreError, type LibraryReviewSnapshot, type LibraryDirectionPreview, type FullTextKnowledgeBaseManifest, type PersonalLibraryCatalog, type EmbeddingModel, type PersonalLibraryPaperRecord, type PersonalLibraryScanSummary } from "@arxiv-daily/core";
 import { openScopedLibrarySource } from "@arxiv-daily/node-runtime";
 import { CliConfigError, type CliRuntimeConfig } from "../config";
-import { createCliLibraryContext, type CliLibraryOptions } from "../library-cmd";
+import { createCliLibraryContext, proposeNewPapersOrFull, type CliLibraryOptions } from "../library-cmd";
 import { WorkbenchError } from "./documents";
 import { createCliTopicSettings } from "../library-topic-settings";
 
@@ -85,7 +85,7 @@ export class WorkbenchLibrary {
       await this.catalog(new URLSearchParams());
       const empty = `sha256:${"0".repeat(64)}`;
       return { catalog: createEmptyPersonalLibraryCatalog(empty, empty), proposal: null,
-        topics: structuredClone(this.config.settings.arxiv.topics), acceptances: [], indexedPapers: [],
+        topics: structuredClone(this.config.settings.arxiv.topics), acceptances: [], indexedPapers: [], newPaperKeys: null,
         configRevision: this.config.configRevision!, connected: false };
     }
     return this.withContext(async context => this.reviewResult(await context.workflow.review()), undefined, true);
@@ -130,11 +130,17 @@ export class WorkbenchLibrary {
     }, signal);
   }
 
-  async propose(raw: unknown, signal?: AbortSignal): Promise<WorkbenchLibraryReview> {
-    const input = reviewInput(raw); exactKeys(input, ["configRevision", "expectedProposalRevision"]);
+  /** `scope: "new-papers"` sends only unaccounted papers; `note` receives what the host did instead of the obvious. */
+  async propose(raw: unknown, signal?: AbortSignal, note?: (message: string) => void): Promise<WorkbenchLibraryReview> {
+    const input = reviewInput(raw); exactKeys(input, ["configRevision", "expectedProposalRevision", "scope"]);
+    if (input.scope !== undefined && input.scope !== "full" && input.scope !== "new-papers") throw new WorkbenchError(400, "scope must be full or new-papers");
     return this.withContext(async (context, currentSignal) => {
       await this.assertReviewCurrent(context, input);
-      await context.workflow.propose({ signal: currentSignal });
+      if (input.scope === "new-papers") {
+        const result = await proposeNewPapersOrFull(context.workflow, currentSignal);
+        if (result.kind === "fallback-full") note?.("还没有可供对比的研究主题或候选分析，已改为分析整个文献库。");
+        if (result.kind === "nothing-new") note?.("没有新增论文，未向模型发送任何内容。");
+      } else await context.workflow.propose({ signal: currentSignal });
       return this.reviewResult(await context.workflow.review());
     }, signal);
   }

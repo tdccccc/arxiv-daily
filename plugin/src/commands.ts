@@ -413,19 +413,6 @@ export function registerCommands(plugin: ArxivDailyPlugin): void {
     },
   });
 
-  plugin.addCommand({
-    id: "review-incremental-suggestions",
-    name: "Review incremental direction suggestions",
-    callback: () => {
-      try {
-        plugin.openPersonalLibraryDirectionReview();
-      } catch (error) {
-        plugin.logger.error("commands: failed to open incremental suggestion review", error);
-        notice("arXiv Daily: suggestion review could not be opened. Try again.", 10_000);
-      }
-    },
-  });
-
   /**
    * Secondary personal library actions used to sit behind a "Manage…" menu in
    * settings. The settings row now shows at most three buttons, so these live

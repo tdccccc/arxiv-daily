@@ -782,8 +782,9 @@ describe("clustered generation contract", () => {
     const contract = createPersonalLibraryClusteredDirectionGenerationContract(resolvePersonalLibraryClusteringOptions());
     const parsed = JSON.parse(contract);
     expect(contract.length).toBeLessThanOrEqual(4096);
-    expect(parsed.version).toBe("personal-library-clustered-direction-proposer-v4");
-    expect(parsed.organizationPrompt).toBe("personal-library-topic-organization-v3");
+    expect(parsed.version).toBe("personal-library-clustered-direction-proposer-v5");
+    expect(parsed.scope).toBe("full-library");
+    expect(parsed.organizationPrompt).toBe("personal-library-topic-organization-v4");
     expect(parsed.clustering).toMatchObject({ minClusterSize: 2, centerCorpus: true, similarityQuantile: 0.95 });
     expect(parsed).toMatchObject({ minTopics: 2, maxTopics: 4, maxDirectionsPerTopic: 2 });
     expect(parsed).not.toHaveProperty("synthesisPrompt");

@@ -66,7 +66,7 @@ Settings mirrors the Obsidian plugin's section order: LLM, arXiv categories, res
 Connect and index a local PDF folder from **Settings → Personal library**, then use:
 
 - **Personal library** — browse/search your indexed papers by title and abstract, and open local PDFs (up to 25 MiB) in a new tab.
-- **Review directions** — inspect proposed topics/directions with representative evidence and previews, edit them, and accept some or all. Accepted directions become ordinary research topics and join daily filtering. Opening either page doesn't call a model by itself.
+- **Review directions** — inspect proposed topics/directions with representative evidence and previews, edit them, and accept some or all. Accepted directions become ordinary research topics and join daily filtering. When the library holds papers no earlier analysis accounted for, the page offers an update that sends only those new papers to the model. Opening either page doesn't call a model by itself.
 
 Library search and indexing from a terminal are also available via `arxiv-daily library …` — see the [CLI README](https://github.com/tdccccc/arxiv-daily/blob/main/apps/cli/README.md#optional-personal-library).
 

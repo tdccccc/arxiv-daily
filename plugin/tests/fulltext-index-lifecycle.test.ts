@@ -15,6 +15,7 @@ import {
   type GenerationDescriptor,
   type StorageAdapter,
 } from "@arxiv-daily/core";
+import { Notice } from "obsidian";
 import ArxivDailyPlugin from "../main.ts";
 import { LibraryIndexStatusStore } from "../src/library/index-status";
 import { createLibraryConnection } from "../src/library/connection";
@@ -716,5 +717,129 @@ describe("personal library full-text index lifecycle", () => {
       removedGenerationIds: [],
     });
     expect(runtime.internals.operations.beginFullTextMaintenanceTransition).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("library change nudge after indexing", () => {
+  const stamp = "2026-08-18T00:00:00.000Z";
+  const paperKeys = ["arxiv:2601.00001", "arxiv:2601.00002", "arxiv:2601.00003", "arxiv:2601.00004", "arxiv:2601.00005"];
+
+  async function seeded(options: { ready: string[]; proposalInputs: string[] | "none" | "malformed" }) {
+    // A host without generation support commits through the legacy manifest,
+    // which keeps these cases about the nudge rather than about index building.
+    const runtime = fixture(limitedStorage(memoryStorage().storage));
+    const manifest = await runtime.legacy.loadManifest();
+    Object.assign(manifest, { revision: 2, modelId: "fixture-model", dimension: 2 });
+    for (const paperKey of options.ready) {
+      manifest.papers[paperKey] = {
+        paperKey, status: "ready", modelId: "fixture-model", dimension: 2,
+        title: `Paper ${paperKey}`, textHash: "sha256:old", chunkCount: 1,
+        filePaths: ["paper.pdf"], observationFingerprints: ["fingerprint"], updatedAt: stamp,
+      };
+    }
+    runtime.legacy.loadManifest.mockResolvedValue(manifest);
+    runtime.internals.libraryProposal = options.proposalInputs === "none" ? null
+      : options.proposalInputs === "malformed" ? { revision: 1, proposalId: "proposal.1", scopeFingerprint: runtime.scopeFingerprint }
+        : { revision: 1, proposalId: "proposal.1", scopeFingerprint: runtime.scopeFingerprint, catalogInputPapers: options.proposalInputs.map((paperKey) => ({ paperKey })) };
+    Notice.calls = [];
+    return runtime;
+  }
+
+  function nudges() {
+    return Notice.calls.filter(({ message }) => /direction suggestions/.test(message));
+  }
+
+  it("shows one notice with an action that opens the review when 3 papers are new", async () => {
+    const runtime = await seeded({ ready: paperKeys, proposalInputs: paperKeys.slice(0, 2) });
+    const open = vi.fn();
+    runtime.internals.openPersonalLibraryDirectionReview = open;
+
+    await runtime.plugin.indexPersonalLibraryFullText();
+
+    expect(nudges()).toHaveLength(1);
+    const [shown] = nudges();
+    expect(shown!.message).toContain("3 new papers in your library aren't reflected in your direction suggestions yet.");
+    expect(runtime.plugin.getPersonalLibraryProfileSnapshot().newPaperKeys).toHaveLength(3);
+    // Showing the nudge does not start anything.
+    expect(open).not.toHaveBeenCalled();
+    shown!.fragment!.querySelector("button")!.click();
+    expect(open).toHaveBeenCalledOnce();
+    expect(shown!.notice.hidden).toBe(true);
+  });
+
+  it("stays quiet for 2 new papers but still records them", async () => {
+    const runtime = await seeded({ ready: paperKeys.slice(0, 4), proposalInputs: paperKeys.slice(0, 2) });
+    await runtime.plugin.indexPersonalLibraryFullText();
+    expect(nudges()).toHaveLength(0);
+    expect(runtime.plugin.getPersonalLibraryProfileSnapshot().newPaperKeys).toHaveLength(2);
+  });
+
+  it("stays quiet when there is no proposal to be out of date against", async () => {
+    const runtime = await seeded({ ready: paperKeys, proposalInputs: "none" });
+    await runtime.plugin.indexPersonalLibraryFullText();
+    expect(nudges()).toHaveLength(0);
+    expect(runtime.plugin.getPersonalLibraryProfileSnapshot().newPaperKeys).toEqual([]);
+  });
+
+  it("still finishes indexing when the count cannot be computed", async () => {
+    const runtime = await seeded({ ready: paperKeys, proposalInputs: "malformed" });
+    await expect(runtime.plugin.indexPersonalLibraryFullText()).resolves.toBeDefined();
+    expect(nudges()).toHaveLength(0);
+    expect(runtime.plugin.getPersonalLibraryProfileSnapshot().newPaperKeys).toEqual([]);
+    expect(runtime.plugin.libraryIndexStatus.snapshot().lastRun).toBeDefined();
+  });
+
+  it("counts only papers a scan can use, so the count matches what an update sends", async () => {
+    const runtime = await seeded({ ready: paperKeys, proposalInputs: paperKeys.slice(0, 1) });
+    const manifest = await runtime.legacy.loadManifest();
+    // Neither in the catalog nor titled: an update could not use these two.
+    manifest.papers[paperKeys[1]!]!.title = "";
+    manifest.papers[paperKeys[2]!]!.title = "";
+    // The catalog knows the third, so it stays usable without an indexed title.
+    runtime.internals.libraryCatalog = { papers: { [paperKeys[2]!]: { paperKey: paperKeys[2] } } };
+    await runtime.plugin.indexPersonalLibraryFullText();
+    expect(runtime.plugin.getPersonalLibraryProfileSnapshot().newPaperKeys.slice().sort())
+      .toEqual([paperKeys[2], paperKeys[3], paperKeys[4]].sort());
+  });
+
+  it("loads the catalog for the count when none is loaded yet, so an index run right after start counts what an update can send", async () => {
+    const runtime = await seeded({ ready: paperKeys, proposalInputs: paperKeys.slice(0, 1) });
+    const manifest = await runtime.legacy.loadManifest();
+    manifest.papers[paperKeys[1]!]!.title = "";
+    manifest.papers[paperKeys[2]!]!.title = "";
+    const catalog = await runtime.internals.buildPersonalLibraryCatalogStore().load();
+    catalog.papers[paperKeys[2]!] = { paperKey: paperKeys[2], title: "Catalog title", filePaths: ["paper.pdf"] };
+    runtime.internals.buildPersonalLibraryCatalogStore = vi.fn(() => ({ load: vi.fn(async () => structuredClone(catalog)) }));
+    runtime.internals.libraryCatalog = null;
+    await runtime.plugin.indexPersonalLibraryFullText();
+    expect(runtime.plugin.getPersonalLibraryProfileSnapshot().newPaperKeys.slice().sort())
+      .toEqual([paperKeys[2], paperKeys[3], paperKeys[4]].sort());
+  });
+
+  it("falls back to the plain count without failing indexing when the catalog cannot be loaded for the count", async () => {
+    const runtime = await seeded({ ready: paperKeys, proposalInputs: paperKeys.slice(0, 2) });
+    const catalog = await runtime.internals.buildPersonalLibraryCatalogStore().load();
+    let calls = 0;
+    runtime.internals.buildPersonalLibraryCatalogStore = vi.fn(() => ({
+      load: vi.fn(async () => {
+        calls += 1;
+        // The index run's own load succeeds; only the count's load fails.
+        if (calls > 1) throw new Error("catalog unreadable");
+        return structuredClone(catalog);
+      }),
+    }));
+    runtime.internals.libraryCatalog = null;
+    await expect(runtime.plugin.indexPersonalLibraryFullText()).resolves.toBeDefined();
+    expect(runtime.plugin.getPersonalLibraryProfileSnapshot().newPaperKeys).toHaveLength(3);
+    expect(nudges()).toHaveLength(1);
+  });
+
+  it("starts no scan and makes no model call to count", async () => {
+    const runtime = await seeded({ ready: paperKeys, proposalInputs: paperKeys.slice(0, 2) });
+    const generate = vi.fn();
+    runtime.internals.generatePersonalLibraryDirections = generate;
+    await runtime.plugin.indexPersonalLibraryFullText();
+    expect(generate).not.toHaveBeenCalled();
+    expect(runtime.legacy.store.loadPaper).not.toHaveBeenCalled();
   });
 });

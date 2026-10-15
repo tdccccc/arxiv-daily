@@ -244,11 +244,11 @@ export async function startWorkbench(options: WorkbenchOptions) {
         if (preview && (typeof body.candidateId !== "string" || !body.candidateId.trim())) throw new WorkbenchError(400, "请选择要预览的方向。");
         saving = false;
         const started: WorkbenchRun = beginRun(preview ? "预览研究方向" : "生成候选方向", null, async (io, signal) => {
-          io.stdout.write(preview ? "正在检验代表论文与方向的匹配情况。\n" : "正在根据文献库生成候选方向。\n");
+          io.stdout.write(preview ? "正在检验代表论文与方向的匹配情况。\n" : body.scope === "new-papers" ? "正在根据新增论文更新方向建议。\n" : "正在根据文献库生成候选方向。\n");
           if (preview) {
             const result = await library.preview(body, signal);
             if (!signal.aborted && libraryPreview?.runId === started.id) libraryPreview.preview = result;
-          } else await library.propose(body, signal);
+          } else await library.propose(body, signal, message => io.stdout.write(message + "\n"));
           io.stdout.write("方向分析已完成。\n");
           return 0;
         });

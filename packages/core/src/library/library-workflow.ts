@@ -25,7 +25,8 @@ import { FullTextKnowledgeBaseFileStore } from "./fulltext/knowledge-base-store"
 import { FullTextGenerationIndexStore, type FullTextLegacyMigrationLease } from "./fulltext/generation-index-store";
 import { indexPersonalLibraryFullText } from "./fulltext/index-orchestration";
 import { preflightFullTextGenerationSynchronization, synchronizeFullTextGenerationIndex } from "./fulltext/generation-index-orchestration";
-import { proposeClusteredPersonalLibraryDirections } from "./personal-library-direction-proposer";
+import { proposeClusteredPersonalLibraryDirections, proposeNewPapersPersonalLibraryDirections } from "./personal-library-direction-proposer";
+import { listUnaccountedLibraryPapers } from "./personal-library-change";
 import { updatePersonalLibraryDirectionCandidate, renamePersonalLibraryProposedTopic, movePersonalLibraryDirectionCandidate, removePersonalLibraryDirectionCandidate } from "./personal-library-proposal-review";
 import { previewPersonalLibraryDirection, type LibraryDirectionPreview, type LibraryPreviewPaper } from "./personal-library-direction-preview";
 import { acceptProposedTopics, type ProposalAcceptanceReceipt } from "../settings/accept-proposed-topics";
@@ -61,8 +62,21 @@ export interface LibraryReviewSnapshot extends LibraryTopicSettingsSnapshot {
   catalog: PersonalLibraryCatalog;
   proposal: PersonalLibraryDirectionProposal | null;
   indexedPapers: LibraryPreviewPaper[];
+  /**
+   * Indexed papers that no scan has accounted for, newest first (a scan could
+   * not use papers without metadata, so they are left out); null without a proposal.
+   */
+  newPaperKeys: string[] | null;
 }
 export interface LibraryWorkflowRunOptions { signal?: AbortSignal }
+export interface LibraryProposeInput extends LibraryWorkflowRunOptions {
+  /**
+   * `full` rescans the whole library; `new-papers` sends only papers no scan has
+   * accounted for. The latter throws a proposer error with code `no-baseline`
+   * (no proposal or topics to compare with) or `nothing-new`.
+   */
+  scope?: "full" | "new-papers";
+}
 export interface LibraryReviewVersions { expectedProposalRevision?: number | null }
 export interface LibraryAcceptTopicsInput extends LibraryWorkflowRunOptions, LibraryReviewVersions {
   topicIds: readonly string[];
@@ -209,17 +223,20 @@ export class LibraryWorkflow {
     });
   }
 
-  async propose(run: LibraryWorkflowRunOptions = {}): Promise<PersonalLibraryDirectionProposal> {
+  async propose(run: LibraryProposeInput = {}): Promise<PersonalLibraryDirectionProposal> {
     return this.mutate(async () => {
       await this.check(run.signal);
       await this.options.assertAuthorized("directions");
       const catalog = await this.loadCatalog();
       const previous = await this.proposalStore.load();
       const settings = await this.readTopicSettings();
-      const proposal = await proposeClusteredPersonalLibraryDirections({
+      const proposerOptions = {
         catalog, knowledgeBase: this.knowledgeBase, llm: this.guardedLlm(run.signal),
-        existingTopics: settings.topics, now: this.now, createId: this.createId, signal: run.signal,
-      });
+        existingTopics: settings.topics, previous, now: this.now, createId: this.createId, signal: run.signal,
+      };
+      const proposal = run.scope === "new-papers"
+        ? await proposeNewPapersPersonalLibraryDirections(proposerOptions)
+        : await proposeClusteredPersonalLibraryDirections(proposerOptions);
       await this.check(run.signal);
       await this.options.assertAuthorized("directions");
       if ((await this.loadCatalog()).revision !== catalog.revision) throw new Error("Personal library catalog changed during direction generation");
@@ -243,7 +260,8 @@ export class LibraryWorkflow {
       return [{ paperKey: record.paperKey, title, abstract: paper?.abstract ?? record.abstract ?? "", categories: [...(paper?.categories ?? [])] }];
     }).sort((left, right) => left.paperKey.localeCompare(right.paperKey));
     await this.check();
-    return { catalog, proposal, indexedPapers, ...settings };
+    const newPaperKeys = listUnaccountedLibraryPapers({ manifest, proposal, catalog });
+    return { catalog, proposal, indexedPapers, newPaperKeys, ...settings };
   }
 
   async updateCandidate(input: LibraryCandidateUpdateInput): Promise<LibraryReviewSnapshot> {

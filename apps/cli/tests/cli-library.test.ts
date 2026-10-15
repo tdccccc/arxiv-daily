@@ -111,7 +111,7 @@ async function fixture({ authorized = true, remote = false } = {}) {
       const match = /<paper_data>\n([\s\S]*)\n<\/paper_data>/.exec(user);
       if (!match) throw new Error("Fixture model expected paper_data");
       const parsed = JSON.parse(match[1]!) as { groups: { id: string; papers: {paperKey:string}[] }[] };
-      const answer = { topics: parsed.groups.map((group,index) => ({suggestedName:`Research theme ${index}`,directions:[{text:`Research direction ${index}`,discoveryCues:["methods","evaluation"],groupIds:[group.id],representativePaperKeys:group.papers.slice(0,3).map(paper=>paper.paperKey)}]})) };
+      const answer = { topics: parsed.groups.map((group,index) => ({suggestedName:`Research theme ${modelRequests.length}-${index}`,directions:[{text:`Research direction ${index}`,discoveryCues:["methods","evaluation"],groupIds:[group.id],representativePaperKeys:group.papers.slice(0,3).map(paper=>paper.paperKey)}]})) };
       return { status: 200, headers: {}, bodyText: `data: ${JSON.stringify({ choices: [{ delta: { content: JSON.stringify(answer) } }] })}\n\ndata: [DONE]\n\n` };
     }
     throw new Error(`Unexpected fixture HTTP request: ${request.url}`);
@@ -136,10 +136,17 @@ async function fixture({ authorized = true, remote = false } = {}) {
       knowledgeBase: new FullTextKnowledgeBaseFileStore(storage, config.settings.output, scope, identification),
     };
   }
+  async function addPapers(serials: number[]) {
+    for (const serial of serials) {
+      const id = `2610.${String(serial).padStart(5, "0")}`;
+      await writeFile(join(sourceRoot, `${id}.pdf`), pdfBytes(id, "agents"));
+    }
+    return serials.map(serial => `arxiv:2610.${String(serial).padStart(5, "0")}`);
+  }
   async function assertSourcesUnchanged() {
     for (const [file, bytes] of sources) expect(new Uint8Array(await readFile(join(sourceRoot, file)))).toEqual(bytes);
   }
-  return { root, sourceRoot, vaultRoot, sources, config, configPath, connection, parser, embedding, http, options, modelRequests, invoke, stores, assertSourcesUnchanged };
+  return { root, sourceRoot, vaultRoot, sources, config, configPath, connection, parser, embedding, http, options, modelRequests, invoke, stores, addPapers, assertSourcesUnchanged };
 }
 
 describe("CLI shared library workflow", () => {
@@ -305,5 +312,74 @@ describe("CLI shared library workflow", () => {
     expect(manifest.revision).toBe(0);
     expect(manifest.papers).toEqual({});
     await f.assertSourcesUnchanged();
+  });
+  it("reports papers added since the direction suggestions and nudges from three", async () => {
+    const f = await fixture();
+    await f.invoke(["scan"]);
+    const beforeProposal = await f.invoke(["index"]);
+    expect(JSON.parse(beforeProposal.stdout).newPapersSinceSuggestions).toBeNull();
+    expect(beforeProposal.stderr).not.toMatch(/propose --new/);
+    const proposal = decodePersonalLibraryDirectionProposal(JSON.parse((await f.invoke(["propose"])).stdout))!;
+    await f.invoke(["confirm", "--candidate", proposal.topics[0]!.directions[0]!.id, "--proposal-revision", String(proposal.revision)]);
+    const unchanged = await f.invoke(["index"]);
+    expect(JSON.parse(unchanged.stdout).newPapersSinceSuggestions).toBe(0);
+    expect(unchanged.stderr).not.toMatch(/propose --new/);
+
+    await f.addPapers([7, 8]);
+    await f.invoke(["scan"]);
+    const two = await f.invoke(["index"]);
+    expect(two.code, two.stderr).toBe(0);
+    expect(JSON.parse(two.stdout).newPapersSinceSuggestions).toBe(2);
+    expect(two.stderr).not.toMatch(/propose --new/);
+
+    await f.addPapers([9]);
+    await f.invoke(["scan"]);
+    const three = await f.invoke(["index"]);
+    expect(JSON.parse(three.stdout)).toMatchObject({ newPapersSinceSuggestions: 3, failed: 0 });
+    expect(three.stderr).toMatch(/3 .*papers.*not covered.*library propose --new/s);
+    expect((three.stderr.match(/propose --new/g) ?? [])).toHaveLength(1);
+
+    const directions = await f.invoke(["directions"]);
+    expect(JSON.parse(directions.stdout).newPapersSinceSuggestions).toBe(3);
+    const status = await f.invoke(["status"]);
+    expect(JSON.parse(status.stdout)).not.toHaveProperty("newPapersSinceSuggestions");
+  }, 30_000);
+
+  it("proposes --new sends only the new papers, then reports nothing new", async () => {
+    const f = await fixture();
+    await f.invoke(["scan"]); await f.invoke(["index"]);
+    const first = decodePersonalLibraryDirectionProposal(JSON.parse((await f.invoke(["propose"])).stdout))!;
+    await f.invoke(["confirm", "--candidate", first.topics[0]!.directions[0]!.id, "--proposal-revision", String(first.revision)]);
+    const added = await f.addPapers([7, 8, 9]);
+    await f.invoke(["scan"]); await f.invoke(["index"]);
+    const requestsBefore = f.modelRequests.length;
+    const updated = await f.invoke(["propose", "--new"]);
+    expect(updated.code, updated.stderr).toBe(0);
+    expect(f.modelRequests).toHaveLength(requestsBefore + 1);
+    const sent = f.modelRequests[requestsBefore]!;
+    for (const key of added) expect(sent).toContain(key);
+    for (let serial = 1; serial <= 6; serial++) expect(sent).not.toContain(`arxiv:2610.${String(serial).padStart(5, "0")}`);
+    const proposal = decodePersonalLibraryDirectionProposal(JSON.parse(updated.stdout))!;
+    expect(proposal.catalogInputPapers.map(paper => paper.paperKey)).toEqual(added);
+    expect(JSON.parse((await f.invoke(["directions"])).stdout).newPapersSinceSuggestions).toBe(0);
+
+    const again = await f.invoke(["propose", "--new"]);
+    expect(again.code, again.stderr).toBe(0);
+    expect(f.modelRequests).toHaveLength(requestsBefore + 1);
+    expect(again.stderr).toMatch(/no new papers/i);
+    expect(JSON.parse(again.stdout)).toMatchObject({ updated: false, newPapersSinceSuggestions: 0 });
+  }, 30_000);
+
+  it("propose --new scans the whole library when there is nothing to compare with, and rejects other arguments", async () => {
+    const f = await fixture();
+    await f.invoke(["scan"]); await f.invoke(["index"]);
+    const result = await f.invoke(["propose", "--new"]);
+    expect(result.code, result.stderr).toBe(0);
+    expect(result.stderr).toMatch(/whole library/i);
+    expect(decodePersonalLibraryDirectionProposal(JSON.parse(result.stdout))!.catalogInputPapers).toHaveLength(6);
+    const invalid = await f.invoke(["propose", "--old"]);
+    expect(invalid.code).toBe(2);
+    const bare = await f.invoke(["propose", "extra"]);
+    expect(bare.code).toBe(2);
   });
 });

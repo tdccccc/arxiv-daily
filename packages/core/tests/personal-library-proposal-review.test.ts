@@ -23,6 +23,7 @@ import {
   movePersonalLibraryDirectionCandidate,
   removePersonalLibraryConfirmedDirection,
   removePersonalLibraryDirectionCandidate,
+  renamePersonalLibraryProposedTopic,
   updatePersonalLibraryConfirmedDirection,
   updatePersonalLibraryDirectionCandidate,
 } from "../src/library/personal-library-proposal-review";
@@ -350,5 +351,45 @@ describe("moving one proposed direction", () => {
     expect(decodePersonalLibraryDirectionProposal(result)).toEqual(result);
     expect(original.topics).toHaveLength(1);
     expect(original.topics[0]!.directions).toHaveLength(12);
+  });
+});
+
+describe("accounted papers survive every review transaction", () => {
+  const extra = `file:sha256:${"d".repeat(64)}`;
+  function accounted(): PersonalLibraryDirectionProposal {
+    return { ...proposal(), accountedPaperKeys: ["arxiv:2608.00001", extra] };
+  }
+
+  it("keeps the set through update, merge, remove, rename and move", () => {
+    const expected = ["arxiv:2608.00001", extra];
+    expect(decodePersonalLibraryDirectionProposal(accounted())?.accountedPaperKeys).toEqual(expected);
+    expect(updatePersonalLibraryDirectionCandidate({
+      proposal: accounted(), candidateId: "candidate.1", patch: { text: "Corrected direction line" },
+    }).accountedPaperKeys).toEqual(expected);
+    expect(mergePersonalLibraryDirectionCandidates({
+      proposal: accounted(), sourceCandidateIds: ["candidate.1", "candidate.2"],
+      candidateId: "candidate.3", draft: draft(["arxiv:2608.00001"]), catalog: catalog(),
+    }).accountedPaperKeys).toEqual(expected);
+    expect(removePersonalLibraryDirectionCandidate({
+      proposal: accounted(), candidateId: "candidate.1",
+    }).accountedPaperKeys).toEqual(expected);
+    expect(removePersonalLibraryDirectionCandidate({
+      proposal: { ...accounted(), topics: [{ ...accounted().topics[0]!, directions: [accounted().topics[0]!.directions[0]!] }] },
+      candidateId: "candidate.1",
+    }).accountedPaperKeys).toEqual(expected);
+    expect(renamePersonalLibraryProposedTopic({
+      proposal: accounted(), topicId: "topic.1", suggestedName: "Renamed",
+    }).accountedPaperKeys).toEqual(expected);
+    expect(movePersonalLibraryDirectionCandidate({
+      proposal: accounted(), candidateId: "candidate.1", targetTopicId: null,
+      suggestedName: "Elsewhere", topicId: "topic.9",
+    }).accountedPaperKeys).toEqual(expected);
+  });
+
+  it("does not invent the field for a proposal that never had one", () => {
+    const result = updatePersonalLibraryDirectionCandidate({
+      proposal: proposal(), candidateId: "candidate.1", patch: { text: "Corrected direction line" },
+    });
+    expect(result).not.toHaveProperty("accountedPaperKeys");
   });
 });

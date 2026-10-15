@@ -45,7 +45,7 @@ function makePlugin() {
     libraryOutputRevision: 0,
     libraryMutationQueue: Promise.resolve(),
     libraryIndexedPapers: [{ paperKey: `file:sha256:${"1".repeat(64)}`, title: "A Local Paper" }],
-    buildPersonalLibraryProfileStores: () => ({ proposal: {}, suggestions: {} }),
+    buildPersonalLibraryProfileStores: () => ({ proposal: {} }),
     // Fails inside the run, after the status bar already belongs to it.
     buildFullTextKnowledgeBaseStore: () => { throw new Error("knowledge base unavailable"); },
   });

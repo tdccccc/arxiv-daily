@@ -121,6 +121,7 @@ arxiv-daily library prepare                        # 安装可选的 PDF/嵌入�
 arxiv-daily library scan
 arxiv-daily library index
 arxiv-daily library propose                        # 生成方向候选
+arxiv-daily library propose --new                  # 新增论文后：只把新论文连同现有方向发给模型
 arxiv-daily library directions                     # 查看候选
 arxiv-daily library confirm --candidate ID --proposal-revision N
 # 也可以一次性查看/接受多个：

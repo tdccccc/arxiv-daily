@@ -18,6 +18,12 @@ export const PERSONAL_LIBRARY_MAX_PROPOSAL_CANDIDATES = 12 as const;
 export const PERSONAL_LIBRARY_MIN_REPRESENTATIVES = 1 as const;
 export const PERSONAL_LIBRARY_MAX_REPRESENTATIVES = 5 as const;
 export const PERSONAL_LIBRARY_MAX_SELECTED_CATALOG_PAPERS = 1_000 as const;
+/**
+ * Bound on the papers a proposal records as already accounted for by some scan
+ * (ADR 0015 section 3). A rescan inherits its predecessor's set, so this is
+ * larger than one scan's input but still bounded by the library itself.
+ */
+export const PERSONAL_LIBRARY_MAX_ACCOUNTED_PAPERS = 10_000 as const;
 export const PERSONAL_LIBRARY_MAX_CANDIDATE_LINEAGE_IDS = 12 as const;
 export const PERSONAL_LIBRARY_MAX_PROPOSAL_LINEAGE_IDS = 12 as const;
 export const PERSONAL_LIBRARY_MAX_ID_LENGTH = 128 as const;
@@ -109,6 +115,27 @@ export interface PersonalLibraryDirectionProposal {
   /** Canonical evidence already covered by existing directions, outside candidates. */
   coveredPaperKeys?: string[];
   coverageEvidence?: PersonalLibraryCoverageEvidence[];
+  /**
+   * Every library paper some scan has seen, whether it ended up covered,
+   * proposed or left ungrouped: this scan's input plus what its predecessors
+   * accounted for (ADR 0015 section 3). Sorted, unique, canonical, and always
+   * a superset of `catalogInputPapers`. Optional so that proposals saved
+   * before it existed keep decoding; read it through `accountedPaperKeysOf`.
+   */
+  accountedPaperKeys?: string[];
+}
+
+/**
+ * The papers a scan has already accounted for. A proposal without the field
+ * predates it, and its only record of what it saw is its input set, which
+ * includes the ungrouped papers.
+ */
+export function accountedPaperKeysOf(
+  proposal: Pick<PersonalLibraryDirectionProposal, "catalogInputPapers" | "accountedPaperKeys">,
+): string[] {
+  return proposal.accountedPaperKeys !== undefined
+    ? [...proposal.accountedPaperKeys]
+    : proposal.catalogInputPapers.map(({ paperKey }) => paperKey);
 }
 
 export interface PersonalLibraryCoverageEvidence {
@@ -318,16 +345,18 @@ function decodeRetiredFlatProposalIdentity(
 function decodeDirectionProposal(value: unknown, maxCandidates: number): PersonalLibraryDirectionProposal | null {
   const hasCoveredPaperKeys = isPlainObject(value) && Object.hasOwn(value, "coveredPaperKeys");
   const hasCoverageEvidence = isPlainObject(value) && Object.hasOwn(value, "coverageEvidence");
+  const hasAccountedPaperKeys = isPlainObject(value) && Object.hasOwn(value, "accountedPaperKeys");
   if (!isExactObject(value, [
     "schemaVersion", "revision", "proposalId", "scopeFingerprint", "identificationFingerprint",
     "catalogInputFingerprint", "catalogInputPapers", "generationContractFingerprint", "generatedAt", "topics",
     ...(hasCoveredPaperKeys ? ["coveredPaperKeys"] : []),
     ...(hasCoverageEvidence ? ["coverageEvidence"] : []),
+    ...(hasAccountedPaperKeys ? ["accountedPaperKeys"] : []),
   ])
     // Only the current schema decodes. Earlier proposals were a flat candidate
-    // list with name+description directions; both shapes changed in v4 and the
-    // proposal document has never been in a release, so it is regenerated
-    // rather than migrated (goal Constraints).
+    // list with name+description directions; both shapes changed in v4, so
+    // they are regenerated rather than migrated. Version 6 is released: new
+    // fields are therefore optional additions, never a version bump.
     || value.schemaVersion !== PERSONAL_LIBRARY_PROPOSAL_SCHEMA_VERSION
     || !isNonNegativeSafeInteger(value.revision)
     || !isOpaqueId(value.proposalId)
@@ -356,6 +385,16 @@ function decodeDirectionProposal(value: unknown, maxCandidates: number): Persona
       || !value.coveredPaperKeys.every((key) => manifestKeys.has(key))
       || !isStrictlyOrderedUnique(value.coveredPaperKeys)) return null;
     coveredPaperKeys = [...value.coveredPaperKeys];
+  }
+  let accountedPaperKeys: string[] | undefined;
+  if (hasAccountedPaperKeys) {
+    if (!isUnknownArray(value.accountedPaperKeys)
+      || value.accountedPaperKeys.length > PERSONAL_LIBRARY_MAX_ACCOUNTED_PAPERS
+      || !value.accountedPaperKeys.every((key): key is string => isCanonicalProposalPaperKey(key))
+      || !isStrictlyOrderedUnique(value.accountedPaperKeys)) return null;
+    const accounted = new Set<string>(value.accountedPaperKeys);
+    if (!catalogInputPapers.every(({ paperKey }) => accounted.has(paperKey))) return null;
+    accountedPaperKeys = [...value.accountedPaperKeys];
   }
   const covered = new Set(coveredPaperKeys);
   let coverageEvidence: PersonalLibraryCoverageEvidence[] | undefined;
@@ -433,6 +472,7 @@ function decodeDirectionProposal(value: unknown, maxCandidates: number): Persona
     topics,
     ...(coveredPaperKeys !== undefined ? { coveredPaperKeys } : {}),
     ...(coverageEvidence !== undefined ? { coverageEvidence } : {}),
+    ...(accountedPaperKeys !== undefined ? { accountedPaperKeys } : {}),
   };
 }
 

@@ -79,10 +79,10 @@ function snapshot(overrides: Partial<InterestProfileReviewSnapshot> = {}): Inter
       generatedAt: "2026-08-03T00:00:00.000Z",
       topics: [{ id: "topic-1", suggestedName: "Research agents", directions: [candidate] }],
     },
-    suggestions: null,
     indexedPapers: [],
+    newPaperKeys: [],
     authorization: { kind: "authorized", rootLabel: "papers", processingDepth: "metadata-and-abstracts", endpoint: "https://example.test" } as any,
-    catalogLoadError: null, proposalLoadError: null, suggestionsLoadError: null,
+    catalogLoadError: null, proposalLoadError: null,
     settingsTopicNames: [],
     ...overrides,
   };
@@ -171,10 +171,8 @@ function openPluginReview(
     libraryCatalog: initial.catalog,
     libraryProposal: initial.proposal,
     libraryIndexedPapers: initial.indexedPapers,
-    librarySuggestions: initial.suggestions,
     libraryCatalogLoadError: null,
     libraryProposalLoadError: null,
-    librarySuggestionsLoadError: null,
   });
   wireSettingsTransaction(plugin);
   plugin.openPersonalLibraryDirectionReview();
@@ -580,8 +578,8 @@ describe("accepting a proposed structure", () => {
     expect(section?.textContent).toBe(bufferPoolHeading(2));
     expect(section?.querySelectorAll("li")).toHaveLength(0);
     expect(section?.textContent).not.toContain("Paper <img src=x>");
-    // The next action stays visible independently of uncovered-paper counts.
-    expect(root.textContent).toContain("rebuild the library index and regenerate proposals");
+    // The static "rebuild and regenerate" hint is gone; the live library-change line replaces it.
+    expect(root.textContent).not.toContain("rebuild the library index and regenerate proposals");
   });
 
   it("renders nothing when every paper is covered by a proposed direction", () => {
@@ -1226,4 +1224,212 @@ it("requires a valid explicitly chosen destination before moving a candidate", a
   await expect(plugin.movePersonalLibraryProposalCandidate({
     candidateId: "large-direction-1", targetTopicId: null, suggestedName: "Separate topic",
   })).rejects.toThrow(/already.*applied|already.*accepted/i);
+});
+
+describe("papers new since the direction suggestions", () => {
+  const key = (n: number) => `arxiv:2609.${String(n).padStart(5, "0")}`;
+  const newKeys = (count: number) => Array.from({ length: count }, (_, index) => key(index + 1));
+
+  /** A fully reviewed proposal, so replacing it needs no confirmation. */
+  function reviewed(overrides: Partial<InterestProfileReviewSnapshot> = {}) {
+    const base = snapshot();
+    return snapshot({
+      proposal: { ...base.proposal!, topics: [], coveredPaperKeys: ["arxiv:2608.00001"], coverageEvidence: [] },
+      ...overrides,
+    });
+  }
+
+  function newPapersButton(root: HTMLElement, count: number): HTMLButtonElement {
+    return button(root, `Update direction suggestions (${count} new ${count === 1 ? "paper" : "papers"})`);
+  }
+
+  it("shows a live line and a primary button that updates from the new papers only", async () => {
+    const ctrl = controller(reviewed({ newPaperKeys: newKeys(3) }));
+    const modal = open(ctrl.mock);
+    const update = newPapersButton(modal.contentEl, 3);
+    expect(update.classList.contains("mod-cta")).toBe(true);
+    expect(update.closest("details")).toBeNull();
+    expect(modal.contentEl.textContent).toContain("3 new papers in your library aren't reflected in your direction suggestions yet.");
+    expect(modal.contentEl.textContent).not.toContain("After adding papers, rebuild the library index");
+    update.click();
+    await vi.waitFor(() => expect(ctrl.mock.generate).toHaveBeenCalledOnce());
+    expect(ctrl.mock.generate).toHaveBeenCalledWith(expect.any(Function), expect.any(AbortSignal), { scope: "new-papers" });
+    // The proposal is fully reviewed, so nothing was asked before running.
+    expect(Modal.opened).toHaveLength(1);
+  });
+
+  it("is also offered for fewer papers than the notice threshold", () => {
+    const one = open(controller(reviewed({ newPaperKeys: newKeys(1) })).mock);
+    expect(one.contentEl.textContent).toContain("1 new paper in your library isn't reflected in your direction suggestions yet.");
+    expect(newPapersButton(one.contentEl, 1).disabled).toBe(false);
+    one.close();
+    const two = open(controller(reviewed({ newPaperKeys: newKeys(2) })).mock);
+    expect(newPapersButton(two.contentEl, 2)).toBeDefined();
+  });
+
+  it("shows neither the line nor the button when no paper is new", () => {
+    const modal = open(controller(reviewed({ newPaperKeys: [] })).mock);
+    expect(modal.contentEl.textContent).not.toContain("aren't reflected");
+    expect(modal.contentEl.textContent).not.toContain("isn't reflected");
+    expect(Array.from(modal.contentEl.querySelectorAll("button"))
+      .some((item) => /Update direction suggestions/.test(item.textContent ?? ""))).toBe(false);
+  });
+
+  it("does not offer the update without a proposal to compare with", () => {
+    const modal = open(controller(snapshot({ proposal: null, newPaperKeys: newKeys(3) })).mock);
+    expect(modal.contentEl.textContent).not.toContain("aren't reflected");
+  });
+
+  it("confirms before replacing unreviewed directions and says only the new papers are sent", async () => {
+    const ctrl = controller(snapshot({ newPaperKeys: newKeys(3) }));
+    const modal = open(ctrl.mock);
+    newPapersButton(modal.contentEl, 3).click();
+    await vi.waitFor(() => expect(Modal.opened.length).toBeGreaterThan(1));
+    const confirmation = Modal.opened.at(-1)!.contentEl;
+    expect(confirmation.textContent).toContain("Only the 3 new papers");
+    expect(confirmation.textContent).toMatch(/other library papers are not sent again/i);
+    expect(confirmation.textContent).toMatch(/replace the current (proposal|suggestions)/i);
+    expect(ctrl.mock.generate).not.toHaveBeenCalled();
+    await confirmChoice("Cancel");
+    await Promise.resolve();
+    expect(ctrl.mock.generate).not.toHaveBeenCalled();
+    newPapersButton(modal.contentEl, 3).click();
+    await confirmChoice("Update");
+    await vi.waitFor(() => expect(ctrl.mock.generate).toHaveBeenCalledWith(
+      expect.any(Function), expect.any(AbortSignal), { scope: "new-papers" },
+    ));
+  });
+
+  it("tells the researcher the whole library is analysed when there are no research topics to compare with", async () => {
+    const ctrl = controller(snapshot({ newPaperKeys: newKeys(3), settingsTopics: [] }));
+    const modal = open(ctrl.mock);
+    newPapersButton(modal.contentEl, 3).click();
+    await vi.waitFor(() => expect(Modal.opened.length).toBeGreaterThan(1));
+    expect(Modal.opened.at(-1)!.contentEl.textContent).toContain("the titles and abstracts of the whole library will be analysed instead");
+    expect(Modal.opened.at(-1)!.contentEl.textContent).not.toContain("Only the 3 new papers");
+  });
+
+  it("asks for the processing grant first when it has not been given", async () => {
+    const ctrl = controller(reviewed({
+      newPaperKeys: newKeys(3),
+      authorization: { kind: "authorization-required", rootLabel: "papers" } as any,
+    }));
+    const modal = open(ctrl.mock);
+    newPapersButton(modal.contentEl, 3).click();
+    await vi.waitFor(() => expect(ctrl.mock.generate).toHaveBeenCalledOnce());
+    expect(ctrl.mock.authorize).toHaveBeenCalledOnce();
+  });
+
+  it("disables the update when the library is not connected", () => {
+    const modal = open(controller(reviewed({
+      newPaperKeys: newKeys(3),
+      authorization: { kind: "disconnected" } as any,
+    })).mock);
+    expect(newPapersButton(modal.contentEl, 3).disabled).toBe(true);
+  });
+
+  it("says nothing was sent and keeps the suggestions when nothing is new", async () => {
+    const ctrl = controller(reviewed({ newPaperKeys: newKeys(3) }));
+    vi.mocked(ctrl.mock.generate).mockResolvedValue({ outcome: "nothing-new" });
+    const modal = open(ctrl.mock);
+    newPapersButton(modal.contentEl, 3).click();
+    await vi.waitFor(() => expect(modal.contentEl.textContent)
+      .toContain("No new papers since your direction suggestions; nothing was sent to the model."));
+    expect(modal.contentEl.querySelector('[role="alert"]')?.textContent ?? "").toBe("");
+  });
+
+  it("says the whole library was analysed when there was nothing to compare with", async () => {
+    const ctrl = controller(reviewed({ newPaperKeys: newKeys(3) }));
+    vi.mocked(ctrl.mock.generate).mockResolvedValue({
+      outcome: "generated", proposal: {}, scope: "full", fellBackToFull: true,
+    });
+    const modal = open(ctrl.mock);
+    newPapersButton(modal.contentEl, 3).click();
+    await vi.waitFor(() => expect(modal.contentEl.textContent)
+      .toContain("There were no earlier direction suggestions to compare with, so the whole library was analysed."));
+  });
+
+  it("keeps Generate again as a full run under More options", async () => {
+    const ctrl = controller(reviewed({ newPaperKeys: newKeys(3) }));
+    const modal = open(ctrl.mock);
+    const again = button(modal.contentEl, "Generate again");
+    expect(again.closest("details")?.querySelector("summary")?.textContent).toBe("More options");
+    expect(again.classList.contains("mod-cta")).toBe(false);
+    again.click();
+    await vi.waitFor(() => expect(ctrl.mock.generate).toHaveBeenCalledOnce());
+    expect(vi.mocked(ctrl.mock.generate).mock.calls[0]).toHaveLength(2);
+  });
+
+  describe("library overview", () => {
+    function overviewSnapshot(overrides: Partial<InterestProfileReviewSnapshot> = {}) {
+      const base = reviewed();
+      const keys = [key(1), key(2), key(3), key(4)];
+      return reviewed({
+        proposal: {
+          ...base.proposal!,
+          catalogInputPapers: [{ paperKey: key(4), evidenceFingerprint: evidence }],
+          accountedPaperKeys: keys,
+        },
+        indexedPapers: keys.map((paperKey) => ({ paperKey, title: `Paper ${paperKey}` })),
+        ...overrides,
+      });
+    }
+
+    function overviewText(snap: InterestProfileReviewSnapshot): string {
+      const modal = open(controller(snap).mock);
+      button(modal.contentEl, "Library overview").click();
+      return modal.contentEl.textContent ?? "";
+    }
+
+    it("counts every accounted paper as analysed after an update of new papers", () => {
+      const text = overviewText(overviewSnapshot());
+      expect(text).toContain("4 papers analyzed");
+      // Four papers accounted for; this update analysed one of them.
+      expect(text).toContain("1 added in this update");
+      expect(text).not.toContain("were not in this analysis");
+    });
+
+    it("still reports indexed papers no analysis has accounted for", () => {
+      const snap = overviewSnapshot();
+      snap.indexedPapers = [...snap.indexedPapers, { paperKey: key(9), title: "Late arrival" }];
+      snap.newPaperKeys = [key(9)];
+      expect(overviewText(snap)).toContain("1 currently indexed papers were not in this analysis.");
+    });
+
+    it("leaves out unaccounted papers a scan could not use, like the workbench overview", () => {
+      const snap = overviewSnapshot();
+      snap.indexedPapers = [
+        ...snap.indexedPapers,
+        { paperKey: key(9), title: "Late arrival" },
+        { paperKey: key(10), title: "No usable metadata" },
+      ];
+      // Only key(9) is in the scan-eligible set; key(10) is indexed but cannot be scanned.
+      snap.newPaperKeys = [key(9)];
+      const text = overviewText(snap);
+      expect(text).toContain("1 currently indexed papers were not in this analysis.");
+      expect(text).not.toContain("2 currently indexed papers");
+    });
+
+    it("does not claim an addition for a proposal that analysed everything it accounts for", () => {
+      const snap = reviewed();
+      expect(overviewText(snap)).not.toContain("added in this update");
+    });
+  });
+
+  it("calls a coverage re-verification Recheck coverage and keeps it a full run", async () => {
+    const initial = reviewed();
+    initial.settingsTopics = [{ id: "existing", name: "Research", directions: [
+      { id: "followed", text: "My current scope", origin: "manual" },
+    ] } as any];
+    initial.proposal = { ...initial.proposal!, coverageEvidence: [{
+      topicId: "existing", directionId: "followed", directionText: "Previous scope", paperKeys: ["arxiv:2608.00001"],
+    }] };
+    initial.newPaperKeys = newKeys(3);
+    const ctrl = controller(initial);
+    const modal = open(ctrl.mock);
+    expect(findButton(modal.contentEl, "Update suggestions")).toBeUndefined();
+    button(modal.contentEl, "Recheck coverage").click();
+    await vi.waitFor(() => expect(ctrl.mock.generate).toHaveBeenCalledOnce());
+    expect(vi.mocked(ctrl.mock.generate).mock.calls[0]).toHaveLength(2);
+  });
 });

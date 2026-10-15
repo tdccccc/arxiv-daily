@@ -121,6 +121,7 @@ arxiv-daily library prepare                        # install optional PDF/embedd
 arxiv-daily library scan
 arxiv-daily library index
 arxiv-daily library propose                        # generate topic/direction candidates
+arxiv-daily library propose --new                  # after adding papers: send only the new ones, with your existing directions
 arxiv-daily library directions                     # review candidates
 arxiv-daily library confirm --candidate ID --proposal-revision N
 # or review/accept several at once:
