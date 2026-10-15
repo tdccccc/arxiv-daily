@@ -37,7 +37,8 @@ A developer can export a label sheet from a vault's filter decision records, a r
 - kind: behavior
 - first signal: Red — metric tests on a hand-computed fixture fail because the module does not exist.
 - checks: focused tests Green; script test command Green.
-- [ ] accepted on observed evidence
+- L1: skipped rows are down-sampled, so recall is also reported weighted by `skippedAvailable / labelled skipped rows` from the export meta.
+- [x] accepted on observed evidence — delegate Red 0/14 (`parseEvaluateArgs is not a function`) → 14/14 on an 11-row hand-computed fixture (weighting, zero denominators, missing counts); release tools 870 pass; lint, boundaries, product-units Green; owner re-ran export + evaluate tests 29/29 and hand-checked the placeholder-label smoke (/tmp/qe-placeholder, discarded): TP1 FP1 FN2, weight 98/12 = 8.17, weighted recall 1/(1+2×8.17) = 5.8% as reported
 
 ### Chunk 3 — rerun with the real filter
 
