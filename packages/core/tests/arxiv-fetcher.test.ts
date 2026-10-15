@@ -569,6 +569,49 @@ describe("ArxivFetcher", () => {
       expect(http.request).toHaveBeenCalledTimes(2);
     });
 
+    it("does not retry a query API 429 with Retry-After, then fails fast until that Retry-After elapses", async () => {
+      vi.useFakeTimers();
+      const { state, sleeps, coordinator } = fakeClockCoordinator();
+      const logger = { debug: vi.fn(), warn: vi.fn() };
+      const http: HttpClient = {
+        request: vi.fn()
+          .mockResolvedValueOnce({ status: 429, headers: { "Retry-After": "120" }, bodyText: "slow down" })
+          .mockResolvedValue({ status: 200, headers: {}, bodyText: atomFor(["2606.00001"]) }),
+      };
+      const fetcher = fetcherWith(http, coordinator, logger);
+      const cooldownStartedWall = Date.parse("2026-06-25T10:00:00.000Z") + state.monotonic;
+
+      let settled: unknown;
+      const first = fetcher.fetchBySubmittedDate("astro-ph", "2026-06-13")
+        .then(() => undefined, (error: unknown) => { settled = error; });
+      // Rejects promptly: no timer has to fire for the failure to surface.
+      await vi.advanceTimersByTimeAsync(0);
+      expect(settled).toMatchObject({ name: "ArxivHttpError", status: 429 });
+      await first;
+      await vi.advanceTimersByTimeAsync(300_000);
+      expect(http.request).toHaveBeenCalledTimes(1);
+      expect(sleeps).toEqual([]);
+      expect(logger.warn).toHaveBeenCalledWith(
+        expect.stringMatching(/export\.arxiv\.org.*Retry-After 120s.*not retrying.*cooled down for 120s/s),
+      );
+
+      // Within the 120 s: no HTTP request, no inline wait, retryAt = receipt + 120 s.
+      state.monotonic += 60_000;
+      const second = await fetcher.fetchBySubmittedDate("astro-ph", "2026-06-13").catch((e) => e);
+      expect(isArxivRetryDeferredError(second)).toBe(true);
+      expect(second).toBeInstanceOf(ArxivRetryDeferredError);
+      expect((second as ArxivRetryDeferredError).retryAt.getTime()).toBe(cooldownStartedWall + 120_000);
+      expect((second as ArxivRetryDeferredError).remainingMs).toBe(60_000);
+      expect(http.request).toHaveBeenCalledTimes(1);
+      expect(sleeps).toEqual([]);
+
+      // After the 120 s the API is tried again.
+      state.monotonic += 60_000;
+      const papers = await fetcher.fetchBySubmittedDate("astro-ph", "2026-06-13");
+      expect(papers).toHaveLength(1);
+      expect(http.request).toHaveBeenCalledTimes(2);
+    });
+
     it("keeps the query API cooldown from blocking abs pages after a header-less 429", async () => {
       const { sleeps, coordinator } = fakeClockCoordinator();
       const http: HttpClient = {

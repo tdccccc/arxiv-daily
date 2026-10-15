@@ -2,8 +2,8 @@
 
 goal_ref: ../goal.md
 created: 2026-10-15T18:30:00+08:00
-updated: 2026-10-15T23:40:00+08:00
-revision: 6
+updated: 2026-10-16T00:20:00+08:00
+revision: 7
 
 ## Outcome
 
@@ -143,6 +143,30 @@ run-history (CLI and Obsidian) without failing the run.
   values dropped, record kept. CLI `(2 papers written; 3/40 candidates judged
   by title only)`, plugin `describeResult` same suffix (English-only, as
   before); unchanged at 0.
+
+### Chunk 6 — verification fixes (added after phase verification, L1)
+
+- change: (1) reword the new `arxiv-fetcher.ts` comments so
+  `check:boundaries` (regex on `process|Buffer`) passes; (2) any 429 from the
+  query API, with or without Retry-After, is not retried and later API
+  requests during that host's cooldown fail fast instead of waiting inline,
+  so the abs-page fallback starts at once (verification showed a Retry-After
+  120 s API 429 was retried at 0/120/240 s, delaying runs ~4 min, up to
+  30 min per wait). arxiv.org Retry-After handling is unchanged. Commit the
+  e2e test `packages/core/tests/pipeline/abstract-throttle-e2e.test.ts`
+  with scenario (b) updated.
+- kind: bug fix
+- first signal: Red — fetcher test: API 429 with Retry-After makes exactly one
+  request and a second API call within the cooldown fails fast without
+  waiting; e2e (b) expects one API request; `npm run check:boundaries` fails.
+- checks: same tests Green; `check:boundaries` passes; core suite.
+- [x] accepted on observed evidence — Red: new fetcher test + e2e (b) (3 API
+  requests vs 1), `check:boundaries` failing; Green: 51/51 on both files
+  (re-run by owner), `check:boundaries` OK, core 2635, typecheck 0, lint 0
+  errors, export script 15/15 (re-run by owner; its old "429 is retried"
+  expectation now expects one API call plus abs fallback), CLI runtime 7/7.
+  A Retry-After > 30 min on the API still surfaces as deferred on the first
+  call.
 
 ## Phase verification
 

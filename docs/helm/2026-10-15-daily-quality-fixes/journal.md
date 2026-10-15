@@ -38,3 +38,16 @@
   as the abstract source for today's run, with the query API and abs pages as
   gap fillers / backfill path. Added to goal as pending; success criteria for
   P3 are written when it starts.
+
+## 2026-10-15T23:55+08:00 — P2 verification findings and real-run consent
+
+- Phase verification (`tmp/helm-reports/p2-verify.md`): new real-fetcher e2e
+  test 6/6; CI step `check:boundaries` failed on the word "process" in new
+  fetcher comments; an API 429 with Retry-After 120 s was retried at
+  0/120/240 s, delaying the fallback ~4 min (up to 30 min per wait).
+- L1: added P2 Chunk 6 — reword comments; any query-API 429 is not retried
+  and fails fast during its cooldown (extends the user's "fail fast to the
+  fallback" decision to the Retry-After case; arxiv.org unchanged).
+- User approved one real daily run after Chunk 6 (option A): temp config,
+  two topics, astro-ph.CO + astro-ph.GA, max 3 daily papers, gpt-6.1-sol,
+  query API intercepted to return 429; abs/list requests real.

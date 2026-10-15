@@ -41,13 +41,14 @@ const MAX_ARXIV_TIMEOUT_MS = 30 * 60 * 1000;
 const MIN_ARXIV_REQUEST_DELAY_MS = 3_000;
 const MAX_INLINE_ARXIV_COOLDOWN_MS = 30 * 60 * 1000;
 const MAX_COOLDOWN_CHUNK_MS = 30_000;
-/** Host of the Atom query API. Header-less 429s from it are not retried. */
+/** Host of the Atom query API. A 429 from it is never retried. */
 const ARXIV_QUERY_API_HOST = "export.arxiv.org";
 /**
- * In-process fail-fast window after a header-less 429 from the query API.
- * Long enough that a long-lived process (plugin, scheduler) probes the API at
- * most once per window instead of hammering a throttled host; short enough
- * that a manual retry a few minutes later can succeed once the throttle lifts.
+ * In-memory fail-fast window after a header-less 429 from the query API (a 429
+ * with Retry-After uses that value instead). Long enough that a long-running
+ * host (plugin, scheduler) probes the API at most once per window instead of
+ * hammering a throttled host; short enough that a manual retry a few minutes
+ * later can succeed once the throttle lifts.
  */
 const QUERY_API_HEADERLESS_429_COOLDOWN_MS = 10 * 60 * 1000;
 /** Minimum wait before retrying a header-less 429 on arxiv.org pages (then doubles). */
@@ -236,20 +237,25 @@ export class ArxivRequestCoordinator {
     if (error.status !== 429 && error.status !== 503) return undefined;
     const receivedWallMs = this.clock.wallNow();
     const retryAfterMs = parseRetryAfterMs(error.headers, receivedWallMs);
-    if (retryAfterMs == null) {
-      // Header-less 429 on the query API: no retry (see fetchHtml); keep the
-      // host in an in-process fail-fast cooldown. Not reported as deferred
-      // here, so the caller sees the original ArxivHttpError(429).
-      if (error.status === 429 && isQueryApiUrl(url ?? error.url)) {
-        const cooldown = this.cooldownFor(host);
-        const deadline = safeAdd(this.clock.monotonicNow(), QUERY_API_HEADERLESS_429_COOLDOWN_MS);
-        if (deadline > cooldown.failFastUntil) {
-          cooldown.failFastUntil = deadline;
-          cooldown.failFastWallDeadline = safeAdd(receivedWallMs, QUERY_API_HEADERLESS_429_COOLDOWN_MS);
-        }
+    if (error.status === 429 && isQueryApiUrl(url ?? error.url)) {
+      // Any 429 on the query API: no retry (see shouldRetryArxivRequest); keep
+      // the host in an in-memory fail-fast cooldown (Retry-After, else the
+      // default window) so later API requests fail at once instead of waiting.
+      // The caller sees the original ArxivHttpError(429), except when the
+      // server asked for a wait beyond the inline cap: that is reported as
+      // deferred, like any other long Retry-After.
+      const cooldownMs = retryAfterMs ?? QUERY_API_HEADERLESS_429_COOLDOWN_MS;
+      const cooldown = this.cooldownFor(host);
+      const deadline = safeAdd(this.clock.monotonicNow(), cooldownMs);
+      if (deadline > cooldown.failFastUntil) {
+        cooldown.failFastUntil = deadline;
+        cooldown.failFastWallDeadline = safeAdd(receivedWallMs, cooldownMs);
       }
-      return undefined;
+      return retryAfterMs != null && cooldownMs > MAX_INLINE_ARXIV_COOLDOWN_MS
+        ? this.deferredError(cooldown.failFastUntil - this.clock.monotonicNow(), cooldown.failFastWallDeadline)
+        : undefined;
     }
+    if (retryAfterMs == null) return undefined;
     const cooldown = this.cooldownFor(host);
     const monotonicDeadline = safeAdd(this.clock.monotonicNow(), retryAfterMs);
     if (monotonicDeadline > cooldown.until) {
@@ -616,15 +622,23 @@ export class ArxivFetcher {
     );
   }
 
-  /** Build the HTTP error and log header-less 429s (the retry policy keys off them). */
+  /** Build the HTTP error and log the 429s that get special handling (the retry policy keys off them). */
   private httpError(status: number, url: string, headers: Record<string, string>): ArxivHttpError {
     const error = new ArxivHttpError(status, url, headers);
-    if (isHeaderlessRateLimit(error)) {
+    if (status === 429) {
       const host = hostKey(url) || url;
-      const consequence = isQueryApiUrl(url)
-        ? `not retrying; ${ARXIV_QUERY_API_HOST} cooled down for ${QUERY_API_HEADERLESS_429_COOLDOWN_MS / 60_000} min`
-        : `waiting at least ${HEADERLESS_429_MIN_RETRY_MS / 1000}s before any retry`;
-      this.opts.logger.warn(`arXiv ${host} returned HTTP 429 with no Retry-After (${consequence}): ${url}`);
+      const retryAfterMs = parseRetryAfterMs(headers);
+      if (isQueryApiUrl(url)) {
+        const cooldownMs = retryAfterMs ?? QUERY_API_HEADERLESS_429_COOLDOWN_MS;
+        const header = retryAfterMs == null ? "no Retry-After" : `Retry-After ${formatCooldown(retryAfterMs)}`;
+        this.opts.logger.warn(
+          `arXiv ${host} returned HTTP 429 with ${header} (not retrying; ${ARXIV_QUERY_API_HOST} cooled down for ${formatCooldown(cooldownMs)}): ${url}`,
+        );
+      } else if (retryAfterMs == null) {
+        this.opts.logger.warn(
+          `arXiv ${host} returned HTTP 429 with no Retry-After (waiting at least ${HEADERLESS_429_MIN_RETRY_MS / 1000}s before any retry): ${url}`,
+        );
+      }
     }
     return error;
   }
@@ -818,15 +832,15 @@ function requestWithWatchdog(
 }
 
 /**
- * Retry policy for fetchHtml/fetchBinary: the usual retryable set, except a
- * header-less 429 from the query API. That one is not retried: it fails with
- * the plain ArxivHttpError(429) (identify via isArxivHttpError + status 429)
- * so callers can fall back immediately, and the coordinator keeps the host
- * in fail-fast cooldown.
+ * Retry policy for fetchHtml/fetchBinary: the usual retryable set, except any
+ * 429 from the query API (with or without Retry-After). That one is not
+ * retried: it fails with the plain ArxivHttpError(429) (identify via
+ * isArxivHttpError + status 429) so callers can fall back immediately, and the
+ * coordinator keeps the host in fail-fast cooldown.
  */
 function shouldRetryArxivRequest(error: unknown): boolean {
   if (!isRetryableArxivError(error)) return false;
-  return !(isHeaderlessRateLimit(error) && isQueryApiUrl(error.url));
+  return !(isArxivHttpError(error) && error.status === 429 && isQueryApiUrl(error.url));
 }
 
 function arxivRetryDelayMs(
@@ -902,6 +916,10 @@ function safeAdd(left: number, right: number): number {
   return Number.isFinite(sum) && Math.abs(sum) <= Number.MAX_SAFE_INTEGER
     ? sum
     : Number.MAX_SAFE_INTEGER;
+}
+
+function formatCooldown(ms: number): string {
+  return `${Math.max(0, Math.ceil(ms / 1000))}s`;
 }
 
 function formatRemaining(ms: number): string {

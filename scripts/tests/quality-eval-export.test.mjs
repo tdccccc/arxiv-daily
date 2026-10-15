@@ -316,14 +316,15 @@ test("an abs page without an abstract leaves the row empty, and repeated abs fai
   assert.ok(failed.result.warnings.some(warning => /abs page/.test(warning) && /stop/i.test(warning)));
 });
 
-test("a rate-limited request is retried with backoff", async () => {
+test("a rate-limited query API request is not retried; the abs-page fallback fills the abstracts", async () => {
   const vault = await fixtureVault();
   const outDir = path.join(await temp("out"), "sheet");
   const { result, http } = await runExport(vault, outDir, {}, fakeHttp({
     respond: call => (call === 1 ? { status: 429, headers: { "retry-after": "0" }, bodyText: "slow down" } : undefined),
+    abs: id => ({ status: 200, headers: {}, bodyText: absPage(absAbstractOf(id)) }),
   }));
 
-  assert.equal(http.calls.length, 2, "one throttled attempt, then a successful retry");
+  assert.equal(http.calls.length, 1, "one throttled attempt, no retry of the query API (even with Retry-After)");
   assert.equal(result.withoutAbstract, 0);
   assert.ok((await readCsv(outDir)).slice(1).every(row => row[3] !== ""));
 });
