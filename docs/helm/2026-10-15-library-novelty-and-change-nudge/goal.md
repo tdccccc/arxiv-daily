@@ -1,9 +1,9 @@
 # 文献库变化提醒；个人新颖性经实测后撤回（library novelty and change nudge）
 
-status: active
+status: done
 created: 2026-10-15T10:18:36+08:00
-updated: 2026-10-15T23:00:00+08:00
-revision: 6
+updated: 2026-10-16T01:00:00+08:00
+revision: 7
 owner: claude-code-main（worktree `../arxiv-daily-library-novelty`，分支 `feat/library-novelty-and-change-nudge`）
 
 ## Intent
@@ -19,7 +19,7 @@ owner: claude-code-main（worktree `../arxiv-daily-library-novelty`，分支 `fe
 - [x] 建好索引后，本地（不调模型、无需授权）统计尚未被任何一次扫描计入的库论文（ADR 0015 §3）；达到提醒条件时在插件里提示研究者更新方向建议。
 - [x] 研究者点更新后，重扫只把新增论文与现有方向文字发给模型，产出「已覆盖 / 新方向或新主题」建议，沿用现有复审与接受流程。
 - [x] 休眠的增量归类代码（向量阈值归入、待定池重聚类、attach/split/merge 建议、建议存储与重复命令）删除；technical-report 等过时文档修正。
-- [ ] 全量 typecheck、相关测试、boundaries、插件 build 通过；Dashboard / 插件提醒的交互改动经真实 Obsidian 检查（或明确记录未做）。
+- [x] 全量 typecheck、相关测试、boundaries、插件 build 通过；Dashboard / 插件提醒的交互改动经真实 Obsidian 检查（或明确记录未做）。
 
 ## Non-goals
 
@@ -47,7 +47,7 @@ owner: claude-code-main（worktree `../arxiv-daily-library-novelty`，分支 `fe
 2. P2 — 日报对每篇论文按最相似库论文生成新颖性说明，授权门控、失败不影响日报 — status: done
 3. P3 — 库新增论文的本地提醒与只扫新增的重扫，休眠增量代码与过时文档清理（真实环境检查移至 P5）— status: done
 4. P4 — 撤回日报新颖性，保留检索改进，历史日报兼容（Obsidian 固定验收与旧日报真实读取移至 P5）— status: done
-5. P5 — 真实环境验证：Obsidian 中提醒与复审按钮、真实模型只扫新增的结果质量、旧日报读取、Obsidian 固定验收 — status: active
+5. P5 — 真实环境验证：Obsidian 中提醒与复审按钮、真实模型只扫新增的结果质量、旧日报读取、Obsidian 固定验收（含「只点索引也能发现新 PDF」修正）— status: done
 
 ## Open questions
 

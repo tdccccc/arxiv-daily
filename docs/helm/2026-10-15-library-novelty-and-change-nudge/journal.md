@@ -108,3 +108,22 @@
 - evidence: Chunk 1–3（/tmp/helm-p4-c123-report.md）：核心检索词法腿截词，真实索引测试 3 Red→8 Green；旧日报兼容特征测试（v1/v2 标记+命中方向）；删除新颖性阶段、端口、宿主接线、进度阶段，scripts/ 恢复到 85d923d^。Chunk 4–6（/tmp/helm-p4-c456-report.md）：授权文案恢复（指纹不变）；删除索引字段（解码容忍并丢弃，schema 仍为 5）、历史同步、Dashboard、工作台显示；删除标记写入、生成器、提示与检查点端口，topic-direction-marker 保留私有旧前缀，removeAll 继续清理旧 novelty 检查点文件。Chunk 7（/tmp/helm-p4-c7-report.md）：ADR 0015 §1–2 就地标记撤回并新增撤回理由，ADR 0004/0012 注记，CONTEXT 退役条目，technical-report 更新。owner 复核：typecheck 0、根测试与 test:workspaces 全绿、lint 0 error / 16 warning、全量 build OK、diff --check 干净；兼容测试全程保持 Green。
 - change: P4 done；Obsidian 固定验收（应为 8 个场景）与旧日报在真实 Obsidian 中的读取并入 P5。
 - next: 阶段性提交 P4；P5 真实环境验证。
+
+## 2026-10-15 — note（P5 真实环境检查结果）
+
+- evidence: /tmp/p5/report.md：固定验收 Obsidian 8/8、workbench 12/12、工具测试 420/420；真实 Obsidian 中带按钮的提醒可显示可点击，点击后打开弹窗、确认前无模型调用、确认后一次调用只含 4 篇新论文标题，结果 1 篇被既有方向覆盖、3 篇进新主题；再索引无提醒；新增 2 篇无提醒但弹窗提供更新。旧日报在 Dashboard 正常、无警告；新日报无新颖性文本。真实模型（2 次调用）：8 篇新论文 7 篇被归入既有方向（大体合理，个别可商榷）、1 条单篇新方向；再次 --new 不调模型。
+- change: 发现 A——插件「索引」与 CLI library index 只在从未扫描过时扫描文件夹（plugin/main.ts:1668-1675 的既有刻意设计：避免每次构建都意外联网重扫），因此只放入 PDF 再点索引既不会收录新文件也不会提醒，与 ADR 0015 §3 的用户预期不符。观察 B——更新后被既有方向覆盖的论文只在折叠的 More options 中可见。
+- next: 发现 A 交用户决定；B 视为小的界面补充。
+
+## 2026-10-15 — decision（发现 A）
+
+- evidence: 用户选 A：索引前本地比对文件清单，有变化才重扫且只对新文件联网。
+- change: P5 Chunk 2 定为该行为改动，Chunk 3 补「N 篇已被覆盖」提示。plugin/main.ts:1668-1675 中「避免每次构建联网重扫」的原意保留：文件夹未变不联网。
+- next: 子代理实现 Chunk 2+3，完成后阶段性提交。
+
+## 2026-10-16 — note（P5 完成，goal 关闭）
+
+- evidence: /tmp/p5/c23-report.md：索引前本地比对文件清单（路径+大小+修改时间指纹，不读文件不联网），有变化才扫描；扫描只为目录中尚无的 arXiv 编号联网（改名/移动/touch 不再重查）；未变化时不扫描不联网。CLI library index 从未扫描过时现在也会先扫描。结果页显示被既有方向覆盖的新论文数；owner 把措辞改为与数量无关的「New papers already covered by your existing directions: N」。owner 复核：typecheck 0、boundaries OK、根测试与 test:workspaces 全绿、lint 0 error / 16 warning、acceptance 工具 420/420、build OK、diff --check 干净；真实 Obsidian 独立脚本 /tmp/p5/lib-change-final2 两个场景通过（截图已核）。
+- change: 所有成功标准勾选，goal done。
+- disposition: 已知：已有论文的元数据不再因文件被 touch 而刷新；新提醒阈值 3 为经验值；Dashboard「找相似论文」未在真实界面中点过（CLI 长查询已验证）。
+- next: 阶段性提交；推送与 PR 需用户另行同意。
