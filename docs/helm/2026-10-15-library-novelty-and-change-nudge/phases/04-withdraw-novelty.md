@@ -100,3 +100,20 @@ Abort triggers
 - The cap change moves an existing ranking (fulltext-retrieval-evaluation or orchestration tests change): restrict the cap to the throwing case only.
 - A removal reaches code P3 still edits in a way that cannot be merged cleanly; wait for P3 rather than resolving by hand.
 - A fixed-suite scenario other than the novelty one starts failing for a reason tied to removed code.
+
+## Chunk 验收（owner）
+
+- Chunk 1 — 词法查询截词进入核心检索
+- [x] accepted on observed evidence
+- Chunk 2 — 旧日报兼容性特征测试
+- [x] accepted on observed evidence
+- Chunk 3 — 停止生成新颖性（流水线、宿主接线、验收场景）
+- [x] accepted on observed evidence
+- Chunk 4 — 授权文案恢复
+- [x] accepted on observed evidence
+- Chunk 5 — 删除读取与显示
+- [x] accepted on observed evidence
+- Chunk 6 — 删除写入、生成器与检查点端口
+- [x] accepted on observed evidence
+- Chunk 7 — 文档
+- [x] accepted on observed evidence

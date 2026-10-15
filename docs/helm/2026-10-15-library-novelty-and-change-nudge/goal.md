@@ -2,8 +2,8 @@
 
 status: active
 created: 2026-10-15T10:18:36+08:00
-updated: 2026-10-15T20:00:00+08:00
-revision: 5
+updated: 2026-10-15T23:00:00+08:00
+revision: 6
 owner: claude-code-main（worktree `../arxiv-daily-library-novelty`，分支 `feat/library-novelty-and-change-nudge`）
 
 ## Intent
@@ -15,7 +15,7 @@ owner: claude-code-main（worktree `../arxiv-daily-library-novelty`，分支 `fe
 - [x] 决策成文：新 ADR 记录 novelty 对比基准与增量更新的取代方案；ADR 0007 标记被取代、ADR 0012 的 novelty 未决项收口；`CONTEXT.md` 的 Personal novelty / Direction suggestion 等条目与新决定一致。
 - [x] ~~日报（插件与 CLI 两个宿主）对每篇入选论文，按其标题+摘要按需检索库中最相似的少量论文作为对比基准，生成新颖性说明；说明写入日报并在 Dashboard 论文行显示。~~（P2 交付后经 L3 撤回）
 - [x] ~~新颖性只在文献库处理授权有效时运行；未授权、库不可用、模型判定「库中无可比论文」或该步出错时，该篇不写说明，日报照常生成。不引入未经实测的相似度下限。~~（同上）
-- [ ] 新颖性撤回：日报不再生成新颖性（流水线阶段、检索端口、插件/CLI 接线、授权文案中的日报用途、Dashboard 与工作台显示、相关验收）删除；含旧标记的历史日报仍可正常读取、不报错；ADR 0015 与 CONTEXT 记录撤回及原因；检索提速、查询截词、非 arXiv 文档可检索等对库检索有益的改进保留，Dashboard「找相似论文」若有同样的查询超词问题一并修复。
+- [x] 新颖性撤回：日报不再生成新颖性（流水线阶段、检索端口、插件/CLI 接线、授权文案中的日报用途、Dashboard 与工作台显示、相关验收）删除；含旧标记的历史日报仍可正常读取、不报错；ADR 0015 与 CONTEXT 记录撤回及原因；检索提速、查询截词、非 arXiv 文档可检索等对库检索有益的改进保留，Dashboard「找相似论文」若有同样的查询超词问题一并修复。
 - [x] 建好索引后，本地（不调模型、无需授权）统计尚未被任何一次扫描计入的库论文（ADR 0015 §3）；达到提醒条件时在插件里提示研究者更新方向建议。
 - [x] 研究者点更新后，重扫只把新增论文与现有方向文字发给模型，产出「已覆盖 / 新方向或新主题」建议，沿用现有复审与接受流程。
 - [x] 休眠的增量归类代码（向量阈值归入、待定池重聚类、attach/split/merge 建议、建议存储与重复命令）删除；technical-report 等过时文档修正。
@@ -46,8 +46,8 @@ owner: claude-code-main（worktree `../arxiv-daily-library-novelty`，分支 `fe
 1. P1 — 决策成文：新 ADR、旧 ADR 状态、CONTEXT 术语与新决定一致 — status: done
 2. P2 — 日报对每篇论文按最相似库论文生成新颖性说明，授权门控、失败不影响日报 — status: done
 3. P3 — 库新增论文的本地提醒与只扫新增的重扫，休眠增量代码与过时文档清理（真实环境检查移至 P5）— status: done
-4. P4 — 撤回日报新颖性，保留检索改进，历史日报兼容 — status: active
-5. P5 — 真实环境验证：Obsidian 中提醒与复审按钮、真实模型只扫新增的结果质量、旧日报读取 — status: pending
+4. P4 — 撤回日报新颖性，保留检索改进，历史日报兼容（Obsidian 固定验收与旧日报真实读取移至 P5）— status: done
+5. P5 — 真实环境验证：Obsidian 中提醒与复审按钮、真实模型只扫新增的结果质量、旧日报读取、Obsidian 固定验收 — status: active
 
 ## Open questions
 

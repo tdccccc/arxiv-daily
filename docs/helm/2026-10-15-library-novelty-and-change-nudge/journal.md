@@ -102,3 +102,9 @@
 - evidence: Chunk 6（/tmp/helm-p3-c6-report.md）删除 core incremental/**、direction-diff 提示与测试、插件孤儿项与重复命令；修正插件概览计数与索引后提醒计数（按目录过滤）；technical-report、ADR 0004 §3 注记、getting-started/workbench/CLI README 中英文更新。owner 复核：typecheck 0、boundaries OK、根测试与 test:workspaces 全绿、lint 0 error / 16 warning、全量 build OK、diff --check 干净、删除 grep 为空。
 - change: P3 的 Phase verification 中真实 Obsidian 检查（带按钮的提醒、弹窗更新按钮）与真实模型只扫新增的质量评估尚未做；为免与 P4 的删除改动重复验收，合并到新增的 P5 一次完成。P3 done，P4 active。
 - next: 按用户要求阶段性提交 P3；随后执行 P4。
+
+## 2026-10-15 — note（P4 完成）
+
+- evidence: Chunk 1–3（/tmp/helm-p4-c123-report.md）：核心检索词法腿截词，真实索引测试 3 Red→8 Green；旧日报兼容特征测试（v1/v2 标记+命中方向）；删除新颖性阶段、端口、宿主接线、进度阶段，scripts/ 恢复到 85d923d^。Chunk 4–6（/tmp/helm-p4-c456-report.md）：授权文案恢复（指纹不变）；删除索引字段（解码容忍并丢弃，schema 仍为 5）、历史同步、Dashboard、工作台显示；删除标记写入、生成器、提示与检查点端口，topic-direction-marker 保留私有旧前缀，removeAll 继续清理旧 novelty 检查点文件。Chunk 7（/tmp/helm-p4-c7-report.md）：ADR 0015 §1–2 就地标记撤回并新增撤回理由，ADR 0004/0012 注记，CONTEXT 退役条目，technical-report 更新。owner 复核：typecheck 0、根测试与 test:workspaces 全绿、lint 0 error / 16 warning、全量 build OK、diff --check 干净；兼容测试全程保持 Green。
+- change: P4 done；Obsidian 固定验收（应为 8 个场景）与旧日报在真实 Obsidian 中的读取并入 P5。
+- next: 阶段性提交 P4；P5 真实环境验证。
