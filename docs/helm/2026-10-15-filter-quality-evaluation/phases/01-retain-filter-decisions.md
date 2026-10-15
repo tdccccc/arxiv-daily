@@ -54,7 +54,7 @@ Add a core store for filter decision records (one JSON document per report date 
 - kind: non-behavioral
 - first signal: n/a
 - checks: read-through for consistency with the existing checkpoint terms.
-- [ ] accepted on observed evidence
+- [x] accepted on observed evidence — owner read-through; wording updated for the no-match L1
 
 ## Phase verification
 
