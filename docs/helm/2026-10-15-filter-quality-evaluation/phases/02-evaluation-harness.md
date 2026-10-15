@@ -2,8 +2,8 @@
 
 goal_ref: ../goal.md
 created: 2026-10-15T11:45:00+08:00
-updated: 2026-10-15T11:45:00+08:00
-revision: 1
+updated: 2026-10-15T11:50:00+08:00
+revision: 2
 
 ## Outcome
 
@@ -29,7 +29,7 @@ A developer can export a label sheet from a vault's filter decision records, a r
 - kind: behavior
 - first signal: Red — new script tests (fixture vault with v2 records, fake fetch) fail because the export module does not exist.
 - checks: focused tests Green without network; the repo's script test command stays Green.
-- [ ] accepted on observed evidence
+- [x] accepted on observed evidence — delegate Red (`ERR_MODULE_NOT_FOUND` for load.mjs) → 12/12 Green; `npm run test:release-tools` (CI "Test release tools") runs the new tests, 853 pass; boundaries, lint, product-units Green; owner re-ran the focused tests 12/12. Real smoke wrote a correct 42-row sheet but every abstract was empty: export.arxiv.org API answered 429/503 (likely IP/proxy-level throttle) while arxiv.org/abs answered 200 — follow-up in Chunk 5
 
 ### Chunk 2 — score recorded decisions
 
@@ -53,6 +53,15 @@ A developer can export a label sheet from a vault's filter decision records, a r
 - kind: non-behavioral
 - first signal: n/a
 - checks: read-through; commands in the guide match the implemented flags.
+- [ ] accepted on observed evidence
+
+### Chunk 5 — abstract fallback through the abs page (L1, from the real smoke)
+
+- change: export fills abstracts the API batch could not supply by fetching `arxiv.org/abs/<id>` one at a time through core's existing `ArxivFetcher.fetchPaperAbsPage` (spacing and cache included) and core's abstract extraction, exposed from core as a small pure helper rather than copied; cached results make reruns free; rows still empty after both routes keep the warning.
+- why: on 2026-10-15 the export API rejected even single requests for 20+ minutes while the abs page answered; without abstracts the sheet cannot be labelled.
+- kind: behavior
+- first signal: Red — export test where the fake API fails and the fake abs page returns a known abstract expects that abstract in the CSV.
+- checks: focused tests Green; core tests touching paper-content Green; core typecheck; real smoke against the 2026-10-14 record yields non-empty abstracts.
 - [ ] accepted on observed evidence
 
 ## Phase verification
