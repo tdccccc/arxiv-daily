@@ -320,13 +320,68 @@ function trustedCorrectionReason(
   }
 }
 
+const JSON_SINGLE_CHAR_ESCAPES = new Set(['"', "\\", "/"]);
+const JSON_CONTROL_ESCAPES = new Set(["b", "f", "n", "r", "t"]);
+const ASCII_LETTER = /[A-Za-z]/;
+const FOUR_HEX_DIGITS = /^[0-9A-Fa-f]{4}$/;
+
+/**
+ * Double backslashes that models leave single when writing LaTeX into JSON
+ * strings (`$28\pm7$`), so `JSON.parse` neither throws nor turns `\times` into
+ * a tab. Only string literals are touched; valid escapes stay as they are.
+ */
+export function repairSummaryJsonBackslashes(text: string): string {
+  let out = "";
+  let inString = false;
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i]!;
+    if (!inString) {
+      if (ch === '"') inString = true;
+      out += ch;
+      continue;
+    }
+    if (ch === '"') {
+      inString = false;
+      out += ch;
+      continue;
+    }
+    if (ch !== "\\") {
+      out += ch;
+      continue;
+    }
+    const next = text[i + 1];
+    let isLatex: boolean;
+    if (next === undefined) {
+      isLatex = true;
+    } else if (JSON_SINGLE_CHAR_ESCAPES.has(next)) {
+      isLatex = false;
+    } else if (JSON_CONTROL_ESCAPES.has(next)) {
+      // Semantic fields never carry control characters (newlines are rejected
+      // as multiline math and rendering compacts whitespace), so \nu, \times,
+      // \rm, \beta, \frac are LaTeX; \n before a non-letter stays a newline.
+      isLatex = ASCII_LETTER.test(text[i + 2] ?? "");
+    } else if (next === "u") {
+      isLatex = !FOUR_HEX_DIGITS.test(text.slice(i + 2, i + 6));
+    } else {
+      isLatex = true;
+    }
+    if (isLatex) {
+      out += "\\\\";
+    } else {
+      out += ch + next;
+      i++;
+    }
+  }
+  return out;
+}
+
 function parseDailyPaperSummary(
   raw: string,
   expectedId: string,
 ): StructuredPaperSummary {
   let value: unknown;
   try {
-    value = JSON.parse(raw);
+    value = JSON.parse(repairSummaryJsonBackslashes(raw));
   } catch {
     throw new DailyPaperSummaryValidationError(
       expectedId,

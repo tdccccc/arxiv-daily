@@ -2,8 +2,8 @@
 
 goal_ref: ../goal.md
 created: 2026-10-15T16:46:40+08:00
-updated: 2026-10-15T16:46:40+08:00
-revision: 1
+updated: 2026-10-15T16:58:00+08:00
+revision: 2
 
 ## Outcome
 
@@ -55,7 +55,11 @@ kept. Prompt-file change is chunk 3 and depends on the user's decision.
   backslash at end of string, `\u` valid/invalid, `\n` + digit/space, escape
   pairs `\\\\times`) Green; `packages/core` daily-summary tests and typecheck
   Green.
-- [ ] accepted on observed evidence
+- [x] accepted on observed evidence — Red 21/74 for expected reasons (fixture
+  invalid-json → fallback, `\times` → TAB); Green 74/74, core suite 2521
+  passed, root typecheck 0. Out-A attempts 1–2 parse on the first call;
+  attempt 3 now parses but has a model-side unbalanced `$` (`$18\pm5\%，`),
+  rejected as invalid-math and recovered by retry — not an escape problem.
 
 ### Chunk 2 — diagnosable invalid-json and reasoned retry
 
@@ -74,17 +78,12 @@ kept. Prompt-file change is chunk 3 and depends on the user's decision.
   Green.
 - [ ] accepted on observed evidence
 
-### Chunk 3 — prompt hint and contract bump (pending user decision)
+### Chunk 3 — prompt hint and contract bump — dropped
 
-- change: if approved, one escape-rule line in
-  `daily-paper-summary.system.md` and `.en.system.md` that keeps LaTeX, plus
-  `DAILY_SUMMARY_PROMPT_CONTRACT_VERSION` 2 → 3 with old checkpoints treated as
-  misses.
-- kind: behavior
-- first signal: Red — a checkpoint test showing a v2-contract checkpoint is no
-  longer reused after the bump.
-- checks: checkpoint and prompt tests Green.
-- [ ] accepted on observed evidence
+- Dropped 2026-10-15 by user decision (option A, see journal): the system
+  prompts stay unchanged, so `DAILY_SUMMARY_PROMPT_CONTRACT_VERSION` stays 2
+  and existing checkpoints remain valid. The escape rule lives only in the
+  retry correction (Chunk 2).
 
 ## Phase verification
 

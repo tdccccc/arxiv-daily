@@ -1,9 +1,11 @@
+import { readFileSync } from "node:fs";
 import { describe, expect, it, vi } from "vitest";
 import { LlmTransientExhaustedError } from "../src/llm/client";
 import {
   DAILY_PAPER_SUMMARY_VALIDATION_ERROR_CODE,
   DailyPaperSummaryValidationError,
   derivePaperSourceSections,
+  repairSummaryJsonBackslashes,
   resolveTrustedOriginalAbstract,
   summarizeDailyPaper,
   summarizeDailyPaperWithValidationRetry,
@@ -681,5 +683,193 @@ describe("resolveTrustedOriginalAbstract", () => {
         abstractConclusion: "no abstract heading",
       }),
     ).toBe("");
+  });
+});
+
+const singleBackslashFixture = JSON.parse(
+  readFileSync(
+    new URL("./fixtures/daily-summary-single-backslash-responses.json", import.meta.url),
+    "utf8",
+  ),
+) as { paperId: string; responses: string[] };
+
+const CONTROL_CHARS = /[\u0000-\u001f]/;
+
+/** Raw model text: `mainResult` is spliced in verbatim, not JSON-stringified. */
+function rawSummary(mainResultLiteral: string): string {
+  return `{"id":"${paper.id}","coreProblem":"p","keyMethod":"m","mainResult":"${mainResultLiteral}","whyRelevant":"w","limitations":"l"}`;
+}
+
+async function mainResultOf(raw: string) {
+  const { llm } = captureLlm(raw);
+  return (await summarizeDailyPaper(paper, { llm: llm as any })).mainResult;
+}
+
+describe("single-backslash LaTeX in model JSON (real 2610.16741 responses)", () => {
+  const fixturePaper: DailyPaperSummaryInput = { ...paper, id: singleBackslashFixture.paperId };
+
+  it("keeps the fixture to the three raw model responses", () => {
+    expect(singleBackslashFixture.paperId).toBe("2610.16741");
+    expect(singleBackslashFixture.responses).toHaveLength(3);
+  });
+
+  it("parses attempt 1 with intact formulas and no control characters", async () => {
+    const { llm } = captureLlm(singleBackslashFixture.responses[0]);
+    const summary = await summarizeDailyPaper(fixturePaper, { llm: llm as any });
+    expect(summary.mainResult).toContain(String.raw`$28\pm7$%`);
+    expect(summary.mainResult).toContain(String.raw`$L_{\rm X,soft}=2\times10^{44}\ \mathrm{erg\ s^{-1}}$`);
+    expect(summary.mainResult).toContain(String.raw`$8\times10^{44}\ \mathrm{erg\ s^{-1}}$`);
+    for (const value of Object.values(summary)) expect(value).not.toMatch(CONTROL_CHARS);
+  });
+
+  it("parses attempt 2 with intact formulas and no control characters", async () => {
+    const { llm } = captureLlm(singleBackslashFixture.responses[1]);
+    const summary = await summarizeDailyPaper(fixturePaper, { llm: llm as any });
+    expect(summary.mainResult).toContain(String.raw`$28\pm7\%$`);
+    expect(summary.mainResult).toContain(String.raw`$0.96\pm0.06$`);
+    for (const value of Object.values(summary)) expect(value).not.toMatch(CONTROL_CHARS);
+  });
+
+  it("gets attempt 3 past JSON parsing; only the model's own unbalanced $ is rejected as math", async () => {
+    const { llm } = captureLlm(singleBackslashFixture.responses[2]);
+    const error = await summarizeDailyPaper(fixturePaper, { llm: llm as any }).catch((e) => e);
+    expect(error).toBeInstanceOf(DailyPaperSummaryValidationError);
+    expect(error.reasonCode).toBe("invalid-math");
+    expect(error.fieldKey).toBe("mainResult");
+  });
+
+  it("returns a structured summary on the first call instead of a fallback", async () => {
+    for (const index of [0, 1]) {
+      const { llm } = captureLlm(singleBackslashFixture.responses[index]);
+      const result = await summarizeDailyPaperWithValidationRetry(fixturePaper, { llm: llm as any });
+      expect(result.kind).toBe("structured");
+      expect(llm.call).toHaveBeenCalledTimes(1);
+    }
+  });
+
+  it("recovers on the second call when the first is the unbalanced-math response", async () => {
+    const llm = {
+      call: vi.fn()
+        .mockResolvedValueOnce(singleBackslashFixture.responses[2])
+        .mockResolvedValueOnce(singleBackslashFixture.responses[1]),
+    };
+    const result = await summarizeDailyPaperWithValidationRetry(fixturePaper, { llm: llm as any });
+    expect(result.kind).toBe("structured");
+    expect(llm.call).toHaveBeenCalledTimes(2);
+    const secondUser = llm.call.mock.calls[1]![0][1].content as string;
+    expect(secondUser).toContain("mainResult");
+    expect(secondUser).not.toContain("响应不是严格 JSON");
+  });
+});
+
+describe("summary JSON backslash repair through summarizeDailyPaper", () => {
+  it("repairs LaTeX that contains legal JSON escapes without corrupting it", async () => {
+    const out = await mainResultOf(rawSummary(
+      String.raw`$a \times b$ $\rm X$ $\beta$ $\frac{a}{b}$ $\nu$ $x\neq y$ $\nabla f$ $\left(a\right)$`,
+    ));
+    expect(out).toBe(String.raw`$a \times b$ $\rm X$ $\beta$ $\frac{a}{b}$ $\nu$ $x\neq y$ $\nabla f$ $\left(a\right)$`);
+    expect(out).not.toMatch(CONTROL_CHARS);
+  });
+
+  it("repairs backslash followed by characters that are not JSON escapes", async () => {
+    expect(await mainResultOf(rawSummary(String.raw`$x\ y\,z\%$ $\pm\alpha$`)))
+      .toBe(String.raw`$x\ y\,z\%$ $\pm\alpha$`);
+  });
+
+  it("leaves already-doubled backslashes unchanged", async () => {
+    expect(await mainResultOf(rawSummary(String.raw`$a \\times b$ $\\pm 1$`)))
+      .toBe(String.raw`$a \times b$ $\pm 1$`);
+  });
+
+  it("treats an escaped backslash followed by text as one pair (\\\\\\\\times)", async () => {
+    // JSON `\\\\times` decodes to two literal backslashes plus "times".
+    const out = await mainResultOf(rawSummary(String.raw`plain \\\\times end`));
+    expect(out).toBe(String.raw`plain \\times end`);
+  });
+
+  it("mixes a valid pair directly before a single backslash", async () => {
+    // `\\` is a valid pair, then `\times` is repaired: decoded = two backslashes + "times".
+    expect(await mainResultOf(rawSummary(String.raw`$a\\\times b$`)))
+      .toBe(String.raw`$a\\times b$`);
+  });
+
+  it("keeps \\\" inside a string as a quote", async () => {
+    expect(await mainResultOf(rawSummary(String.raw`called \"x\" and $\alpha$`)))
+      .toBe(String.raw`called "x" and $\alpha$`);
+  });
+
+  it("keeps \\/ as a slash", async () => {
+    expect(await mainResultOf(rawSummary(String.raw`a\/b $\alpha$`))).toBe(String.raw`a/b $\alpha$`);
+  });
+
+  it("decodes a valid \\u escape such as the plus-minus sign", async () => {
+    expect(await mainResultOf(rawSummary(String.raw`12 ± 3 and ±`))).toBe("12 ± 3 and ±");
+  });
+
+  it.each([
+    [String.raw`$\u12$`, String.raw`$\u12$`],
+    [String.raw`$\uZZZZ$`, String.raw`$\uZZZZ$`],
+    [String.raw`$\u$`, String.raw`$\u$`],
+    [String.raw`$\u12G4$`, String.raw`$\u12G4$`],
+  ])("doubles a malformed \\u escape (%s)", async (literal, expected) => {
+    expect(await mainResultOf(rawSummary(literal))).toBe(expected);
+  });
+
+  it("keeps \\n before a space or digit as a real newline, still rejected as multiline math", async () => {
+    // Documented trade-off: only letter-adjacent \n is LaTeX; a genuine line
+    // break stays a line break and the existing MULTILINE rule rejects it.
+    for (const literal of [String.raw`$a\n b$`, String.raw`$a\n2 b$`]) {
+      const { llm } = captureLlm(rawSummary(literal));
+      const error = await summarizeDailyPaper(paper, { llm: llm as any }).catch((e) => e);
+      expect(error).toBeInstanceOf(DailyPaperSummaryValidationError);
+      expect(error.reasonCode).toBe("invalid-math");
+    }
+  });
+
+  it("keeps \\t before a non-letter as a tab, and plain-text \\n before a space still as multiline", async () => {
+    expect(await mainResultOf(rawSummary(String.raw`a\t1`))).toBe("a\t1");
+    const { llm } = captureLlm(rawSummary(String.raw`line one\n two`));
+    const error = await summarizeDailyPaper(paper, { llm: llm as any }).catch((e) => e);
+    expect(error.reasonCode).toBe("invalid-math");
+  });
+
+  it("does not touch JSON structure or escapes outside string literals", async () => {
+    const raw = rawSummary(String.raw`$\alpha$`).replace('"id":', '\n  "id" :');
+    expect(await mainResultOf(raw)).toBe(String.raw`$\alpha$`);
+  });
+
+  it("still reports unrepairable broken JSON as invalid-json", async () => {
+    const { llm } = captureLlm(`${rawSummary("x")} trailing`);
+    const error = await summarizeDailyPaper(paper, { llm: llm as any }).catch((e) => e);
+    expect(error.reasonCode).toBe("invalid-json");
+  });
+});
+
+describe("repairSummaryJsonBackslashes", () => {
+  it("returns text without backslashes unchanged", () => {
+    const text = `{"a":"b","c":[1,true,null]}`;
+    expect(repairSummaryJsonBackslashes(text)).toBe(text);
+  });
+
+  it("only edits inside string literals", () => {
+    // A backslash outside a string is invalid JSON anyway; it must be left alone.
+    expect(repairSummaryJsonBackslashes(String.raw`\x {"a":"\x"} \y`)).toBe(String.raw`\x {"a":"\\x"} \y`);
+  });
+
+  it("leaves the escape right before the closing quote alone (\\\" stays an escaped quote)", () => {
+    // `"a\"` is an unterminated string with an escaped quote; the repair does
+    // not try to guess the intent, JSON.parse reports it as invalid.
+    expect(repairSummaryJsonBackslashes(String.raw`{"a":"x\"}`)).toBe(String.raw`{"a":"x\"}`);
+    expect(() => JSON.parse(repairSummaryJsonBackslashes(String.raw`{"a":"x\"}`))).toThrow();
+  });
+
+  it("doubles a trailing lone backslash at end of input inside a string", () => {
+    expect(repairSummaryJsonBackslashes('{"a":"x\\')).toBe('{"a":"x\\\\');
+  });
+
+  it("is idempotent on repaired text", () => {
+    const once = repairSummaryJsonBackslashes(String.raw`{"a":"$\times\pm\u12\nu$ \\ \" \/ ±"}`);
+    expect(repairSummaryJsonBackslashes(once)).toBe(once);
+    expect(JSON.parse(once).a).toBe(String.raw`$\times\pm\u12\nu$ \ " / ±`);
   });
 });
