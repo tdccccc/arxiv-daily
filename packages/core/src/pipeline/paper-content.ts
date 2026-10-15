@@ -155,18 +155,51 @@ export class PaperContentFetcher {
     };
   }
 
+  /**
+   * Abstract text from the arxiv.org/abs page for filtering a listing entry:
+   * served from the shared `abs/<id>` cache when present, otherwise fetched and
+   * cached (a cache write failure is ignored). The text has no "Abstract:"
+   * label and is empty when the page carries no abstract block (still a
+   * successful fetch). `fromNetwork` tells the caller whether this call hit
+   * arxiv.org so it can budget requests. Fetch failures and cancellation are
+   * thrown; this method does not log them.
+   */
+  async fetchListingAbstract(
+    arxivId: string,
+    signal?: AbortSignal,
+  ): Promise<{ abstract: string; fromNetwork: boolean }> {
+    throwIfCancelled(signal);
+    const page = await this.loadAbsPage(arxivId, signal, { tolerateCacheWriteFailure: true });
+    return {
+      abstract: extractAbsPageAbstract(page.html, this.markupParser),
+      fromNetwork: page.fromNetwork,
+    };
+  }
+
+  private async loadAbsPage(
+    arxivId: string,
+    signal: AbortSignal | undefined,
+    opts: { tolerateCacheWriteFailure: boolean },
+  ): Promise<{ html: string; fromNetwork: boolean }> {
+    const absKey = `abs/${arxivId}`;
+    const cached = await this.cache.get(absKey, "abs");
+    if (cached) return { html: cached, fromNetwork: false };
+    const html = await this.fetcher.fetchPaperAbsPage(arxivId, signal);
+    try {
+      await this.cache.set(absKey, "abs", html);
+    } catch (e) {
+      if (!opts.tolerateCacheWriteFailure) throw e;
+    }
+    return { html, fromNetwork: true };
+  }
+
   private async fetchAbsAbstract(
     arxivId: string,
     signal?: AbortSignal,
   ): Promise<{ abstract: string; failure?: string }> {
-    const absKey = `abs/${arxivId}`;
     try {
-      let abs = await this.cache.get(absKey, "abs");
-      if (!abs) {
-        abs = await this.fetcher.fetchPaperAbsPage(arxivId, signal);
-        await this.cache.set(absKey, "abs", abs);
-      }
-      const text = extractAbsPageAbstract(abs, this.markupParser) || "N/A";
+      const page = await this.loadAbsPage(arxivId, signal, { tolerateCacheWriteFailure: false });
+      const text = extractAbsPageAbstract(page.html, this.markupParser) || "N/A";
       return { abstract: `## Abstract\n${text}` };
     } catch (e) {
       if (isCancellationError(e)) throw e;

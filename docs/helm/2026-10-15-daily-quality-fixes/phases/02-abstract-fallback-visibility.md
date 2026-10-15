@@ -2,8 +2,8 @@
 
 goal_ref: ../goal.md
 created: 2026-10-15T18:30:00+08:00
-updated: 2026-10-15T21:20:00+08:00
-revision: 2
+updated: 2026-10-15T22:00:00+08:00
+revision: 3
 
 ## Outcome
 
@@ -85,7 +85,13 @@ run-history (CLI and Obsidian) without failing the run.
   consecutive-failure stop.
 - checks: same tests Green; existing adapter/pipeline tests with partial fakes
   updated deliberately; paper-content and section-extractor tests Green.
-- [ ] accepted on observed evidence
+- [x] accepted on observed evidence — Red 14/80 in the three target files for
+  expected reasons; Green: core 2568, root typecheck 0, CLI 457/457, plugin
+  settings-lifecycle 47/47 (full plugin suite left to phase verification).
+  New `PaperContentFetcher.fetchListingAbstract` shares the `abs/<id>` cache
+  (adapter ids are canonical, same key as `fetchContent`); `fetch()`
+  unchanged. 4 existing tests/fixtures gained a fake method. Known limit: once
+  the 500 cap is hit, remaining papers are skipped even if cached.
 
 ### Chunk 3 — title-only count on the pipeline result
 

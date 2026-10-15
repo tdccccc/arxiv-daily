@@ -11,7 +11,8 @@ import { PaperIndexStore } from "../src/services/paper-index";
 import { Logger } from "../src/services/logger";
 import { DEFAULT_SETTINGS } from "../src/settings/defaults";
 import { normalizeTopic } from "../src/settings/topics";
-import type { SourceAdapter } from "../src/sources";
+import { ArxivSourceAdapter, type SourceAdapter } from "../src/sources";
+import { ArxivHttpError } from "../src/pipeline/arxiv-fetcher";
 import { markupParser } from "./markup-parser";
 
 const date = "2026-09-07";
@@ -27,7 +28,12 @@ const skipped = (index: number): FilterRecord => ({
 
 function harness(
   initial: FilterRecord[],
-  options: { response?: FilterRecord[]; abstractOf?: (id: string) => string } = {},
+  options: {
+    response?: FilterRecord[];
+    abstractOf?: (id: string) => string;
+    /** Replaces the scripted source, e.g. with a real ArxivSourceAdapter over fake HTTP. */
+    makeSource?: (logger: Logger) => SourceAdapter;
+  } = {},
 ) {
   let records = initial;
   // What the model returns can cover fewer papers than were offered to it.
@@ -55,7 +61,9 @@ function harness(
   const decisionStore = new FilterDecisionRecordStore(storage, DEFAULT_SETTINGS.output, {
     now: () => new Date("2026-09-07T08:00:00.000Z"),
   });
-  const source: SourceAdapter = {
+  const logger = new Logger("error");
+  const warn = vi.spyOn(logger, "warn");
+  const scriptedSource: SourceAdapter = {
     sourceId: "arxiv",
     listForDate: vi.fn(async () => ({
       kind: "ok" as const, channels: ["astro-ph.GA"],
@@ -89,8 +97,7 @@ function harness(
     paperDetailExists: vi.fn(async () => false),
     paperDetailLink: (paperId: string) => `[[${paperId}]]`,
   };
-  const logger = new Logger("error");
-  const warn = vi.spyOn(logger, "warn");
+  const source = options.makeSource?.(logger) ?? scriptedSource;
   const makePipeline = (options: {
     maximum?: number;
     withIndex?: boolean;
@@ -320,6 +327,51 @@ describe("filter decision record on commit", () => {
 
     expect(readRecord(h.files).candidates.map((c: { id: string; hadAbstract: boolean }) => [c.id, c.hadAbstract]))
       .toEqual([[id(1), false], [id(2), false], [id(3), true]]);
+  });
+
+  describe("when the query API is unavailable", () => {
+    const listing = (ids: string[]) => `<dl id="articles"><h3>Mon, 7 Sep 2026 (showing ${ids.length} of ${ids.length} entries )</h3>`
+      + ids.map((paperId, index) => `<dt><a name="item${index}">[${index}]</a> <a href="/abs/${paperId}" title="Abstract">arXiv:${paperId}</a></dt>`
+        + `<dd><div class="meta"><div class="list-title mathjax"><span class="descriptor">Title:</span> Research paper ${paperId}</div>`
+        + `<div class="list-authors"><a href="#">A. Researcher</a></div></div></dd>`).join("")
+      + "</dl>";
+    const realSource = (listingAbstract: (paperId: string) => Promise<{ abstract: string; fromNetwork: boolean }>) =>
+      (logger: Logger): SourceAdapter => new ArxivSourceAdapter({
+        fetcher: {
+          fetchRecent: vi.fn(async () => listing([id(1), id(2)])),
+          fetchMetadataByIds: vi.fn(async () => { throw new ArxivHttpError(429, "https://export.arxiv.org/api/query"); }),
+        } as never,
+        paperFetcher: { fetch: vi.fn(), fetchListingAbstract: vi.fn(listingAbstract) } as never,
+        markupParser, logger, defaultCategories: ["astro-ph.GA"],
+      });
+
+    it("filters on abstracts read from abs pages and records hadAbstract", async () => {
+      const h = harness([decision(1, 90), decision(2, 80)], {
+        makeSource: realSource(async (paperId) => ({ abstract: `ABS-PAGE-TEXT ${paperId}`, fromNetwork: true })),
+      });
+
+      const result = await h.makePipeline().runForDate(date);
+
+      expect(result).toMatchObject({ kind: "completed" });
+      const filterPrompt = h.llm.call.mock.calls
+        .map(([messages]) => messages.map((message) => message.content).join("\n"))
+        .find((text) => text.includes("relevanceScore"))!;
+      expect(filterPrompt).toContain(`ABS-PAGE-TEXT ${id(1)}`);
+      expect(filterPrompt).toContain(`ABS-PAGE-TEXT ${id(2)}`);
+      expect(readRecord(h.files).candidates.map((c: { id: string; hadAbstract: boolean }) => [c.id, c.hadAbstract]))
+        .toEqual([[id(1), true], [id(2), true]]);
+    });
+
+    it("still completes, with hadAbstract false, when the abs pages fail too", async () => {
+      const h = harness([decision(1, 90), decision(2, 80)], {
+        makeSource: realSource(async () => { throw new ArxivHttpError(503, "https://arxiv.org/abs/x"); }),
+      });
+
+      const result = await h.makePipeline().runForDate(date);
+
+      expect(result).toMatchObject({ kind: "completed" });
+      expect(readRecord(h.files).candidates.map((c: { hadAbstract: boolean }) => c.hadAbstract)).toEqual([false, false]);
+    });
   });
 
   it("writes nothing when the filter or the daily summary fails", async () => {

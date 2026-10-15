@@ -401,3 +401,72 @@ The results include a measured improvement, uncertainty estimates, and a compari
     expect(dirs.has(`${root}/2606.13359`)).toBe(false);
   });
 });
+
+describe("PaperContentFetcher.fetchListingAbstract", () => {
+  const absPage = (text: string) =>
+    `<html><body><blockquote class="abstract"><span>Abstract:</span> ${text}</blockquote></body></html>`;
+
+  function build(fetchPaperAbsPage: (...args: any[]) => Promise<string>, cache = makeCache()) {
+    const fetcher = {
+      fetchPaperHtml: vi.fn(async () => { throw new Error("unexpected html request"); }),
+      fetchSource: vi.fn(async () => { throw new Error("unexpected source request"); }),
+      fetchPaperAbsPage: vi.fn(fetchPaperAbsPage),
+    };
+    const paperFetcher = new PaperContentFetcher(
+      fetcher as any, cache as any, new Logger("error"), markupParser,
+    );
+    return { fetcher, cache, paperFetcher };
+  }
+
+  it("uses the cached abs page without touching the network", async () => {
+    const cache = makeCache();
+    await cache.set("abs/2609.00001", "abs", absPage("Cached text."));
+    cache.set.mockClear();
+    const { fetcher, paperFetcher } = build(async () => "unused", cache);
+
+    const result = await paperFetcher.fetchListingAbstract("2609.00001");
+
+    expect(result).toEqual({ abstract: "Cached text.", fromNetwork: false });
+    expect(fetcher.fetchPaperAbsPage).not.toHaveBeenCalled();
+    expect(cache.set).not.toHaveBeenCalled();
+  });
+
+  it("fetches and caches the abs page on a cache miss, passing the signal", async () => {
+    const { fetcher, cache, paperFetcher } = build(async () => absPage("Fresh text."));
+    const signal = new AbortController().signal;
+
+    const result = await paperFetcher.fetchListingAbstract("2609.00002", signal);
+
+    expect(result).toEqual({ abstract: "Fresh text.", fromNetwork: true });
+    expect(fetcher.fetchPaperAbsPage).toHaveBeenCalledWith("2609.00002", signal);
+    expect(cache.set).toHaveBeenCalledWith("abs/2609.00002", "abs", absPage("Fresh text."));
+  });
+
+  it("returns an empty abstract (not an error) for a page without an abstract block", async () => {
+    const { paperFetcher } = build(async () => "<html><body><p>withdrawn</p></body></html>");
+
+    await expect(paperFetcher.fetchListingAbstract("2609.00003"))
+      .resolves.toEqual({ abstract: "", fromNetwork: true });
+  });
+
+  it("does not fail the call when writing the cache fails", async () => {
+    const cache = makeCache();
+    cache.set.mockRejectedValue(new Error("disk full"));
+    const { paperFetcher } = build(async () => absPage("Still returned."), cache);
+
+    await expect(paperFetcher.fetchListingAbstract("2609.00004"))
+      .resolves.toEqual({ abstract: "Still returned.", fromNetwork: true });
+  });
+
+  it("propagates fetch failures and cancellation to the caller", async () => {
+    const { paperFetcher } = build(async () => { throw new Error("abs down"); });
+    await expect(paperFetcher.fetchListingAbstract("2609.00005")).rejects.toThrow("abs down");
+
+    const controller = new AbortController();
+    controller.abort("stop");
+    const second = build(async () => absPage("x"));
+    await expect(second.paperFetcher.fetchListingAbstract("2609.00006", controller.signal))
+      .rejects.toMatchObject({ name: "RunCancelledError" });
+    expect(second.fetcher.fetchPaperAbsPage).not.toHaveBeenCalled();
+  });
+});
