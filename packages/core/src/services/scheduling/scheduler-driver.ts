@@ -867,6 +867,7 @@ export class SchedulerDriver {
           requestedPapersWritten: pending.requestedPapersWritten,
           preservedPapersWritten: pending.preservedPapersWritten,
           outcome: pending.result.outcome,
+          titleOnlyCandidates: pending.result.titleOnlyCandidates,
         },
         pending.completedAt,
       ),

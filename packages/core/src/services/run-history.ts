@@ -1,4 +1,5 @@
-import type { PipelineResult } from "../pipeline/pipeline";
+import type { PipelineResult, TitleOnlyCandidates } from "../pipeline/pipeline";
+import { isTitleOnlyCandidates } from "../pipeline/title-only-candidates";
 import type { OutputSettings, RunOutcome, RunStatus } from "../settings/types";
 import type { StorageAdapter } from "../core/adapters";
 import { deriveStorageStateStorePaths } from "./state-store";
@@ -36,6 +37,13 @@ export interface RunHistoryRecord {
   attempts?: number;
   failureAttempts?: number;
   outcome?: RunOutcome;
+  /**
+   * Candidates judged on the title alone because no abstract was available.
+   * Informational: never changes `status`. Written on completed runs whenever
+   * the pipeline reported it (count may be 0); absent on older lines, empty
+   * days and repairs. Readers drop an invalid value, keeping the record.
+   */
+  titleOnlyCandidates?: TitleOnlyCandidates;
 }
 
 export interface RunHistoryStorePaths {
@@ -174,6 +182,9 @@ function formatRunHistoryRecord(record: RunHistoryRecord): string {
     parts.push(`requestedPapers=${record.requestedPapersWritten}`);
   }
   if (record.preservedPapersWritten) parts.push("preservedPapers=true");
+  if (isTitleOnlyCandidates(record.titleOnlyCandidates) && record.titleOnlyCandidates.count > 0) {
+    parts.push(`titleOnly=${record.titleOnlyCandidates.count}/${record.titleOnlyCandidates.total}`);
+  }
   if (record.attempts != null) parts.push(`attempts=${record.attempts}`);
   if (record.reason) parts.push(`reason=${record.reason}`);
   if (record.errorMessage) parts.push(`error=${record.errorMessage}`);
@@ -191,7 +202,7 @@ function decodeRunHistoryLines(
     if (!trimmed) continue;
     try {
       const parsed = JSON.parse(trimmed) as unknown;
-      if (isRunHistoryRecord(parsed)) out.push(parsed);
+      if (isRunHistoryRecord(parsed)) out.push(withoutInvalidOptionalFields(parsed));
     } catch (e) {
       logger?.warn(
         "run history: skipped malformed line",
@@ -201,6 +212,16 @@ function decodeRunHistoryLines(
     }
   }
   return out;
+}
+
+/** Optional diagnostics must never cost the whole record: drop only the bad value. */
+function withoutInvalidOptionalFields(record: RunHistoryRecord): RunHistoryRecord {
+  if (
+    record.titleOnlyCandidates === undefined
+    || isTitleOnlyCandidates(record.titleOnlyCandidates)
+  ) return record;
+  const { titleOnlyCandidates: _invalid, ...rest } = record;
+  return rest;
 }
 
 function truncateHistoryLine(line: string): string {

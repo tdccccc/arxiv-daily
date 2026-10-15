@@ -32,6 +32,34 @@ describe("run-format", () => {
     expect(describeResult({ kind: "completed", outcome: "papers_written", papersWritten: 2 })).toBe("done (2 papers)");
   });
 
+  it("adds a title-only note when candidates lacked abstracts, never as a failure", () => {
+    expect(describeResult({
+      kind: "completed", outcome: "papers_written", papersWritten: 2,
+      titleOnlyCandidates: { count: 3, total: 40 },
+    })).toBe("done (2 papers; 3/40 candidates judged by title only)");
+    expect(describeResult({
+      kind: "completed", outcome: "no_matches", papersWritten: 0,
+      titleOnlyCandidates: { count: 3, total: 40 },
+    })).toBe("no matching papers (3/40 candidates judged by title only)");
+    expect(describeResult({
+      kind: "completed", papersWritten: 1, titleOnlyCandidates: { count: 1, total: 1 },
+    })).toBe("done (1 papers; 1/1 candidates judged by title only)");
+  });
+
+  it("leaves results unchanged when the count is 0 or absent", () => {
+    expect(describeResult({
+      kind: "completed", outcome: "papers_written", papersWritten: 2,
+      titleOnlyCandidates: { count: 0, total: 40 },
+    })).toBe("done (2 papers)");
+    expect(describeResult({
+      kind: "completed", outcome: "no_matches", papersWritten: 0,
+      titleOnlyCandidates: { count: 0, total: 40 },
+    })).toBe("no matching papers");
+    expect(describeRunResults([{ date: "2026-10-02", result: {
+      kind: "completed", papersWritten: 2, titleOnlyCandidates: { count: 3, total: 40 },
+    } }])).toBe("2026-10-02: done (2 papers; 3/40 candidates judged by title only)");
+  });
+
   it("formats manual fetch results with the shared arrow convention", () => {
     expect(describeManualResult({ kind: "done", path: "papers/2606.12345.md" })).toBe(
       "done → papers/2606.12345.md",

@@ -2,8 +2,8 @@
 
 goal_ref: ../goal.md
 created: 2026-10-15T18:30:00+08:00
-updated: 2026-10-15T23:00:00+08:00
-revision: 5
+updated: 2026-10-15T23:40:00+08:00
+revision: 6
 
 ## Outcome
 
@@ -136,7 +136,13 @@ run-history (CLI and Obsidian) without failing the run.
 - first signal: Red — run-history/recorder/scheduler-driver tests and CLI
   run-output test expecting the count; plugin history display test.
 - checks: same tests Green; CLI and plugin suites Green.
-- [ ] accepted on observed evidence
+- [x] accepted on observed evidence — Red core 17/46, CLI 2/38, plugin 3/46;
+  Green: core 2628, CLI 459/459, plugin 1053/1053, root typecheck 0, lint 0
+  errors (16 baseline warnings). History records `{count,total}` whenever
+  present (0 included; formatter hides 0 → `titleOnly=3/40`); malformed
+  values dropped, record kept. CLI `(2 papers written; 3/40 candidates judged
+  by title only)`, plugin `describeResult` same suffix (English-only, as
+  before); unchanged at 0.
 
 ## Phase verification
 

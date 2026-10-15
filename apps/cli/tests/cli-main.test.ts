@@ -1,3 +1,4 @@
+import { isCliRunEvent } from "../src/main-types";
 import { readFileSync } from "node:fs";
 import { describe, expect, it, vi } from "vitest";
 import { runCli, type CliCommandRuntime } from "../src/main";
@@ -212,6 +213,49 @@ describe("CLI main", () => {
     expect(capture.stderr).toEqual([]);
     expect(capture.stdout.join("")).toContain(outcome);
     expect(onRunResult).toHaveBeenCalledWith(expect.objectContaining({ date: "2026-10-02", kind: result.kind, outcome }));
+  });
+
+  it("mentions title-only candidates in the completed line and run event only when positive", async () => {
+    const run = async (result: unknown) => {
+      const capture = captureIo();
+      const onRunResult = vi.fn();
+      const runtime = fakeRuntime();
+      runtime.scheduler = { runForDateNow: vi.fn(async () => result) } as never;
+      const code = await runCli({
+        argv: ["run", "--date", "2026-10-02"],
+        io: { ...capture.io, onRunResult },
+        loadConfig: async () => testConfig(), buildRuntime: () => runtime,
+      });
+      return { code, capture, onRunResult };
+    };
+    const positive = await run({ kind: "completed", papersWritten: 2, outcome: "papers_written", titleOnlyCandidates: { count: 3, total: 40 } });
+    expect(positive.code).toBe(0);
+    expect(positive.capture.stderr).toEqual([]);
+    expect(positive.capture.stdout.join("")).toBe(
+      "run 2026-10-02: completed (2 papers written; 3/40 candidates judged by title only) [papers_written]\n",
+    );
+    expect(positive.onRunResult).toHaveBeenCalledWith(expect.objectContaining({
+      date: "2026-10-02", kind: "completed", papersWritten: 2, titleOnlyCandidates: { count: 3, total: 40 },
+    }));
+    const noMatches = await run({ kind: "completed", papersWritten: 0, outcome: "no_matches", titleOnlyCandidates: { count: 3, total: 40 } });
+    expect(noMatches.code).toBe(0);
+    expect(noMatches.capture.stdout.join("")).toBe(
+      "run 2026-10-02: completed (0 papers written; 3/40 candidates judged by title only) [no_matches]\n",
+    );
+    for (const titleOnlyCandidates of [{ count: 0, total: 40 }, undefined]) {
+      const quiet = await run({ kind: "completed", papersWritten: 2, outcome: "papers_written", ...(titleOnlyCandidates ? { titleOnlyCandidates } : {}) });
+      expect(quiet.capture.stdout.join("")).toBe("run 2026-10-02: completed (2 papers written) [papers_written]\n");
+      expect(quiet.onRunResult.mock.calls[0][0]).not.toHaveProperty("titleOnlyCandidates");
+    }
+  });
+
+  it("validates titleOnlyCandidates on the run event passed through the workbench envelope", () => {
+    const base = { date: "2026-10-02", kind: "completed", papersWritten: 2 };
+    expect(isCliRunEvent(base)).toBe(true);
+    expect(isCliRunEvent({ ...base, titleOnlyCandidates: { count: 3, total: 40 } })).toBe(true);
+    for (const bad of [{ count: -1, total: 4 }, { count: 5, total: 4 }, { count: 1.5, total: 4 }, { count: "1", total: 4 }, "3/40", null]) {
+      expect(isCliRunEvent({ ...base, titleOnlyCandidates: bad })).toBe(false);
+    }
   });
 
   it("uses scheduler-backed run when available", async () => {

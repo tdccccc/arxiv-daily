@@ -1,10 +1,12 @@
-import type { PipelineResult, RunOutcome } from "@arxiv-daily/core";
+import { isTitleOnlyCandidates, type PipelineResult, type RunOutcome, type TitleOnlyCandidates } from "@arxiv-daily/core";
 
 export interface CliRunEvent {
   date: string;
   kind: PipelineResult["kind"] | "skipped";
   outcome?: RunOutcome;
   papersWritten?: number;
+  /** Informational: candidates judged on the title alone; never a failure signal. */
+  titleOnlyCandidates?: TitleOnlyCandidates;
 }
 
 export interface WritableTextStream {
@@ -24,5 +26,6 @@ export function isCliRunEvent(value: unknown): value is CliRunEvent {
   return typeof event.date === "string" && /^\d{4}-\d{2}-\d{2}$/.test(event.date)
     && ["completed", "pending", "cancelled", "failed_transient", "failed_permanent", "skipped"].includes(event.kind ?? "")
     && (event.outcome === undefined || ["awaiting_announcement", "no_updates", "no_matches", "papers_written"].includes(event.outcome))
-    && (event.papersWritten === undefined || Number.isSafeInteger(event.papersWritten) && event.papersWritten >= 0);
+    && (event.papersWritten === undefined || Number.isSafeInteger(event.papersWritten) && event.papersWritten >= 0)
+    && (event.titleOnlyCandidates === undefined || isTitleOnlyCandidates(event.titleOnlyCandidates));
 }

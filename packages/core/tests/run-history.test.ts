@@ -209,6 +209,76 @@ describe("RunHistoryStore", () => {
     expect(logger.warn.mock.calls[0][1]).toHaveLength(203);
   });
 
+  it("formats the title-only candidate count compactly, only when positive", () => {
+    const withCount = formatRunHistoryRecords([
+      record({ titleOnlyCandidates: { count: 3, total: 40 } }),
+    ]);
+    expect(withCount).toContain("titleOnly=3/40");
+    expect(withCount).toContain("papers=10");
+    expect(withCount).toContain("result=completed");
+    const zero = formatRunHistoryRecords([
+      record({ titleOnlyCandidates: { count: 0, total: 40 } }),
+    ]);
+    expect(zero).not.toContain("titleOnly");
+    expect(zero).toBe(formatRunHistoryRecords([record()]));
+  });
+
+  it("round-trips titleOnlyCandidates and still decodes lines without it", async () => {
+    const { storage } = makeStorage({
+      "arxiv-daily/.index/run-history.jsonl": [
+        JSON.stringify(record({ at: "2026-06-25T09:00:00.000Z", date: "2026-06-23" })),
+        JSON.stringify(record({
+          at: "2026-06-25T10:00:00.000Z",
+          date: "2026-06-24",
+          titleOnlyCandidates: { count: 0, total: 40 },
+        })),
+        JSON.stringify(record({
+          at: "2026-06-25T11:00:00.000Z",
+          date: "2026-06-25",
+          titleOnlyCandidates: { count: 3, total: 40 },
+        })),
+      ].join("\n"),
+    });
+    const store = RunHistoryStore.fromStorage(storage, DEFAULT_SETTINGS.output);
+    const latest = await store.readLatest(10);
+    expect(latest.map((entry) => entry.titleOnlyCandidates)).toEqual([
+      { count: 3, total: 40 },
+      { count: 0, total: 40 },
+      undefined,
+    ]);
+  });
+
+  it.each([
+    ["a string", "3/40"],
+    ["a number", 3],
+    ["null", null],
+    ["a negative count", { count: -1, total: 40 }],
+    ["a fractional count", { count: 1.5, total: 40 }],
+    ["count above total", { count: 5, total: 4 }],
+    ["a string count", { count: "3", total: 40 }],
+    ["a missing total", { count: 3 }],
+    ["extra keys", { count: 3, total: 40, extra: true }],
+  ])("ignores a malformed titleOnlyCandidates (%s) without dropping the record", async (_label, bad) => {
+    const logger = { warn: vi.fn() };
+    const { storage } = makeStorage({
+      "arxiv-daily/.index/run-history.jsonl": JSON.stringify({
+        ...record({ date: "2026-06-24" }),
+        titleOnlyCandidates: bad,
+      }),
+    });
+    const store = RunHistoryStore.fromStorage(storage, DEFAULT_SETTINGS.output, logger);
+    const [entry] = await store.readLatest(10);
+    expect(entry).toMatchObject({ date: "2026-06-24", papersWritten: 10 });
+    expect(entry.titleOnlyCandidates).toBeUndefined();
+    expect(formatRunHistoryRecords([entry])).not.toContain("titleOnly");
+  });
+
+  it("the formatter does not render a malformed in-memory titleOnlyCandidates", () => {
+    expect(formatRunHistoryRecords([
+      record({ titleOnlyCandidates: { count: "x", total: 4 } as never }),
+    ])).not.toContain("titleOnly");
+  });
+
   it("formats error messages for sharing from Dashboard", () => {
     expect(
       formatRunHistoryRecords([
