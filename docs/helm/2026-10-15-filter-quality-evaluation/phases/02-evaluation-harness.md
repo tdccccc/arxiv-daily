@@ -55,7 +55,7 @@ A developer can export a label sheet from a vault's filter decision records, a r
 - kind: non-behavioral
 - first signal: n/a
 - checks: read-through; commands in the guide match the implemented flags.
-- [ ] accepted on observed evidence
+- [x] accepted on observed evidence — owner read-through; delegate checked every flag against both commands' `--help` and constants (`FILTER_DECISION_RETENTION_DAYS`, `DEFAULT_SKIPPED_SAMPLE`, `SHEET_FILES`); `check:product-units` Green
 
 ### Chunk 5 — abstract fallback through the abs page (L1, from the real smoke)
 
@@ -71,6 +71,11 @@ A developer can export a label sheet from a vault's filter decision records, a r
 - Export against the real trial vault record (2026-10-14, 100 candidates) fetches abstracts from arXiv and writes the three files; the CSV opens with correct columns (spot-check by parsing it back).
 - `evaluate --recorded` on that sheet with owner-filled placeholder labels (clearly marked as not researcher labels, discarded afterwards) produces a report whose counts match a hand count.
 - Rerun mode is exercised with the fake client only; the first real rerun belongs to P3 with the user's consent.
+
+Observed (2026-10-15):
+- Export against the real 2026-10-14 record (100 candidates): 42-row sheet, 42/42 abstracts via abs-page fallback while the API was throttled, CSV parses back with 12 columns per row (`/tmp/qe-smoke2`).
+- `evaluate --recorded` on a placeholder-labelled copy matched a hand count (TP1 FP1 FN2, weighted recall 5.8%); copy discarded.
+- Rerun mode exercised with the fake client only (42 quality-eval tests); no real model call in P2.
 
 ## Abort / reshape triggers
 
