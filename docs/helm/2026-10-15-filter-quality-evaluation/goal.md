@@ -2,8 +2,8 @@
 
 status: active
 created: 2026-10-15T10:35:00+08:00
-updated: 2026-10-15T12:25:00+08:00
-revision: 4
+updated: 2026-10-15T12:35:00+08:00
+revision: 5
 owner: claude-code-session-2026-10-15
 
 ## Intent
@@ -44,9 +44,9 @@ owner: claude-code-session-2026-10-15
 <!-- Single source of truth for phase status. PN ↔ filename NN. Integer IDs are permanent and never reused; replacement phases take the next unused number. Outcomes only — no steps. The active line is the current focus. -->
 1. P1 — 日报完成后保留当天全部筛选决定，有日期上限，CLI 与插件一致 — status: done
 2. P2 — 开发者评估工具：导出标注表、按标注用真实模型重跑或给历史判定打分、输出可对比的报告 — status: done
-3. P3 — 研究者标注不少于 30 篇并完成第一次真实模型基线运行 — status: pending
+3. P3 — 研究者标注不少于 30 篇并完成第一次真实模型基线运行 — status: active
 
 ## Open questions
 
 - （已关闭，见 journal 2026-10-15）保留天数默认值：真实运行 100 篇候选约 30 KB/天，180 天约 5 MB，保持 180 天。
-- P3 的候选从哪里来：P1 上线后需要先跑几天日报积累记录；若等不及，P2 可加"按日期直接取 arXiv 当天新论文"作为补充来源。
+- （已关闭，见 journal 2026-10-15）P3 的候选：用户同意用真实模型补跑最近 5 个公告日积累记录。
