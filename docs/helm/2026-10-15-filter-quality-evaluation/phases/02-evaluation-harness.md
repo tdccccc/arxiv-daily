@@ -62,7 +62,7 @@ A developer can export a label sheet from a vault's filter decision records, a r
 - kind: behavior
 - first signal: Red — export test where the fake API fails and the fake abs page returns a known abstract expects that abstract in the CSV.
 - checks: focused tests Green; core tests touching paper-content Green; core typecheck; real smoke against the 2026-10-14 record yields non-empty abstracts.
-- [ ] accepted on observed evidence
+- [x] accepted on observed evidence — delegate Red (3 script cases; `extractAbsPageAbstract is not a function` ×3) → script 15/15, core helper files 33 passed; core suite 2491, typecheck, lint, boundaries, release tools 856 Green; owner re-ran script tests, core helper files, CLI 457 and plugin 1048 Green. Real smoke: 42/42 abstracts via abs pages in ~3 min with the API still timing out; cached rerun 0.23 s, no network
 
 ## Phase verification
 

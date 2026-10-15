@@ -6,7 +6,9 @@ import {
   AtomMetadataCache,
   DEFAULT_SETTINGS,
   FilterDecisionRecordStore,
+  HtmlCache,
   Logger,
+  extractAbsPageAbstract,
   modernArxivResources,
   type ArxivRequestCoordinator,
   type FilterDecisionCandidate,
@@ -27,7 +29,9 @@ export const SHEET_COLUMNS = [
 export const DEFAULT_SKIPPED_SAMPLE = 50;
 const ABSTRACT_BATCH = 100;
 const ABSTRACT_CACHE_DIR = "abstract-cache";
+const ABS_PAGE_CACHE_DIR = "abs-cache";
 const ABSTRACT_CACHE_DAYS = 3650;
+const ABS_PAGE_FAILURE_LIMIT = 3;
 const SHEET_FILES = { csv: "labels.csv", guide: "labels.guide.md", meta: "labels.meta.json" } as const;
 
 export interface ExportOptions {
@@ -278,7 +282,9 @@ export async function runExport(options: ExportOptions, deps: ExportDeps = {}): 
  * Abstracts come through core's arXiv fetcher: it batches `id_list` queries,
  * waits out HTTP 429 with backoff, and reads/writes a metadata cache, which
  * here lives beside the sheet so an interrupted export resumes without
- * refetching. A failed batch costs only that batch's abstracts.
+ * refetching. A failed batch costs only that batch's abstracts; papers still
+ * without one are then read from their arxiv.org/abs pages, which are not
+ * subject to the API's throttling.
  */
 async function fetchAbstracts(
   ids: readonly string[],
@@ -299,10 +305,24 @@ async function fetchAbstracts(
       storage: new NodeStorageAdapter(outDir),
     }),
   });
+  const absPages = new HtmlCache({
+    rootDir: ABS_PAGE_CACHE_DIR,
+    expiryDays: ABSTRACT_CACHE_DAYS,
+    storage: new NodeStorageAdapter(outDir),
+  });
+  const parser = new LinkedomMarkupParser();
   const abstracts = new Map<string, string>();
   const unique = [...new Set(ids)];
-  for (let start = 0; start < unique.length; start += ABSTRACT_BATCH) {
-    const batch = unique.slice(start, start + ABSTRACT_BATCH);
+  // Papers an earlier run already resolved from their abs page need no API request: the API
+  // caches only what it returned, so without this a rerun would ask for them again.
+  for (const id of unique) {
+    const page = await absPages.get(`abs/${modernArxivResources(id)?.id ?? id}`, "abs");
+    const abstract = page === null ? "" : extractAbsPageAbstract(page, parser);
+    if (abstract) abstracts.set(id, abstract);
+  }
+  const pending = unique.filter((id) => !abstracts.has(id));
+  for (let start = 0; start < pending.length; start += ABSTRACT_BATCH) {
+    const batch = pending.slice(start, start + ABSTRACT_BATCH);
     try {
       const found = await fetcher.fetchMetadataByIds(batch);
       for (const id of batch) {
@@ -315,7 +335,45 @@ async function fetchAbstracts(
       warn(`abstract fetch failed for ${batch.length} papers (${reason}); fetched ones stay cached, so a later run with --force picks up where this one stopped`);
     }
   }
+
+  const missing = pending.filter((id) => !abstracts.has(id));
+  if (missing.length > 0) {
+    deps.onProgress?.(`reading ${missing.length} abstracts from arxiv.org/abs pages`);
+    await fillFromAbsPages(missing, abstracts, fetcher, absPages, parser, warn);
+  }
   return abstracts;
+}
+
+async function fillFromAbsPages(
+  ids: readonly string[],
+  abstracts: Map<string, string>,
+  fetcher: ArxivFetcher,
+  cache: HtmlCache,
+  parser: LinkedomMarkupParser,
+  warn: (message: string) => void,
+): Promise<void> {
+  let consecutiveFailures = 0;
+  for (const [index, id] of ids.entries()) {
+    const canonical = modernArxivResources(id)?.id;
+    if (!canonical) continue;
+    try {
+      let page = await cache.get(`abs/${canonical}`, "abs");
+      if (page === null) {
+        page = await fetcher.fetchPaperAbsPage(canonical);
+        await cache.set(`abs/${canonical}`, "abs", page).catch(() => undefined);
+      }
+      consecutiveFailures = 0;
+      const abstract = extractAbsPageAbstract(page, parser);
+      if (abstract) abstracts.set(id, abstract);
+    } catch (error) {
+      consecutiveFailures += 1;
+      if (consecutiveFailures >= ABS_PAGE_FAILURE_LIMIT) {
+        const reason = (error as Error).message.replace(/:?\s*https?:\/\/\S+/g, "").trim();
+        warn(`arxiv.org/abs page fetching stopped after ${consecutiveFailures} consecutive failures (${reason}); ${ids.length - index - 1} papers were not tried`);
+        return;
+      }
+    }
+  }
 }
 
 function renderGuide(legend: readonly LegendEntry[], dates: readonly string[]): string {

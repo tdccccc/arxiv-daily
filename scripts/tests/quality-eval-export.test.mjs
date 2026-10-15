@@ -77,12 +77,27 @@ const atomFeed = entries => `<?xml version="1.0"?><feed xmlns="http://www.w3.org
 // arXiv's parser collapses whitespace in abstracts, so newlines are exercised through titles and the CSV unit test.
 const abstractOf = id => `Abstract of ${id}, with "quotes", commas, and Chinese. 星系团。`;
 
-/** A fake arXiv Atom endpoint; `respond` can override a call (returns a response or undefined). */
+const absPage = text => `<html><body><blockquote class="abstract mathjax">\n<span class="descriptor">Abstract:</span>${text}\n</blockquote></body></html>`;
+const absAbstractOf = id => `Abs page abstract of ${id}, with $x_1$ math. 星系团。`;
+const API_DOWN = () => ({ status: 400, headers: {}, bodyText: "bad request" });
+
+/**
+ * A fake arXiv: the Atom API (`calls`) and the /abs/<id> pages (`absCalls`).
+ * `respond` can override an API call and `abs` an abs page (a response, or undefined for the default);
+ * by default abs pages do not exist.
+ */
 function fakeHttp(options = {}) {
   const calls = [];
+  const absCalls = [];
   return {
     calls,
+    absCalls,
     request: async request => {
+      const absId = /^https:\/\/arxiv\.org\/abs\/(.+)$/.exec(request.url)?.[1];
+      if (absId) {
+        absCalls.push(absId);
+        return options.abs?.(absId, absCalls.length) ?? { status: 404, headers: {}, bodyText: "not found" };
+      }
       const ids = new URL(request.url).searchParams.get("id_list")?.split(",") ?? [];
       calls.push({ url: request.url, ids });
       const custom = options.respond?.(calls.length, ids, request);
@@ -242,6 +257,63 @@ test("rows whose abstract cannot be fetched are kept empty with a warning", asyn
   assert.equal(failed.result.withoutAbstract, 7);
   assert.ok(failed.result.warnings.length > 0);
   assert.ok((await readCsv(failedOut)).slice(1).every(row => row[3] === ""));
+});
+
+test("abstracts the API cannot supply come from the arxiv.org/abs page", async () => {
+  const vault = await fixtureVault();
+  const outDir = path.join(await temp("out"), "sheet");
+  const http = fakeHttp({
+    respond: API_DOWN,
+    abs: id => ({ status: 200, headers: {}, bodyText: absPage(absAbstractOf(id)) }),
+  });
+  const { result } = await runExport(vault, outDir, {}, http);
+
+  const [, ...rows] = await readCsv(outDir);
+  assert.equal(rows.length, 7);
+  for (const row of rows) assert.equal(row[3], absAbstractOf(row[1]), "the same extraction the daily pipeline applies, 'Abstract:' label removed");
+  assert.deepEqual([...http.absCalls].sort(), rows.map(row => row[1]).sort(), "one abs request per paper");
+  assert.equal(result.withoutAbstract, 0);
+  assert.ok(result.warnings.some(warning => /abstract fetch failed/.test(warning)), "the API failure is still reported");
+  assert.ok(!result.warnings.some(warning => /no abstract could be fetched/.test(warning)));
+  assert.equal(JSON.parse(await readFile(path.join(outDir, "labels.meta.json"), "utf8")).counts.withoutAbstract, 0);
+});
+
+test("only papers the API missed are requested from the abs page, and a rerun requests nothing", async () => {
+  const vault = await fixtureVault();
+  const outDir = path.join(await temp("out"), "sheet");
+  const missing = new Set([idOf("10", 1), idOf("11", 1)]);
+  const absResponder = id => ({ status: 200, headers: {}, bodyText: absPage(absAbstractOf(id)) });
+  const first = fakeHttp({ missing, abs: absResponder });
+  await runExport(vault, outDir, {}, first);
+
+  assert.deepEqual([...first.absCalls].sort(), [...missing].sort());
+  const [, ...rows] = await readCsv(outDir);
+  const byId = Object.fromEntries(rows.map(row => [row[1], row[3]]));
+  assert.equal(byId[idOf("10", 1)], absAbstractOf(idOf("10", 1)));
+  assert.equal(byId[idOf("10", 2)], abstractOf(idOf("10", 2)), "API abstracts are not replaced");
+
+  const second = fakeHttp({ missing, abs: absResponder });
+  const { result } = await runExport(vault, outDir, { force: true }, second);
+  assert.equal(second.calls.length, 0);
+  assert.equal(second.absCalls.length, 0, "abs pages are cached beside the sheet");
+  assert.equal(result.withoutAbstract, 0);
+});
+
+test("an abs page without an abstract leaves the row empty, and repeated abs failures stop the fallback", async () => {
+  const vault = await fixtureVault();
+  const noAbstract = fakeHttp({ respond: API_DOWN, abs: () => ({ status: 200, headers: {}, bodyText: "<html><body><p>No abstract here</p></body></html>" }) });
+  const out = path.join(await temp("out"), "sheet");
+  const { result } = await runExport(vault, out, {}, noAbstract);
+  assert.equal(result.withoutAbstract, 7);
+  assert.equal(noAbstract.absCalls.length, 7);
+
+  const failing = fakeHttp({ respond: API_DOWN, abs: () => ({ status: 400, headers: {}, bodyText: "bad request" }) });
+  const failedOut = path.join(await temp("out"), "sheet");
+  const failed = await runExport(vault, failedOut, {}, failing);
+  assert.equal(failed.result.rows, 7);
+  assert.equal(failed.result.withoutAbstract, 7);
+  assert.equal(failing.absCalls.length, 3, "gives up after three consecutive abs failures instead of grinding through every paper");
+  assert.ok(failed.result.warnings.some(warning => /abs page/.test(warning) && /stop/i.test(warning)));
 });
 
 test("a rate-limited request is retried with backoff", async () => {
