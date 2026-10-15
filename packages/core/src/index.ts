@@ -37,6 +37,7 @@ export * from "./library/incremental/suggestions-store";
 export * from "./library/library-connection";
 export * from "./library/library-workflow";
 export * from "./library/pdf-library-file-identifier";
+export * from "./library/prior-work";
 export * from "./library/fulltext/ports";
 export * from "./library/fulltext/pdf-text-compat";
 export * from "./library/fulltext/remote-embedding-model";

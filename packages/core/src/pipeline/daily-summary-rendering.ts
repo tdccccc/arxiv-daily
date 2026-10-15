@@ -12,8 +12,9 @@ import {
 } from "./discovery-provenance-marker";
 import { renderPersonalNoveltyMarker } from "./personal-novelty-marker";
 import { renderTopicDirectionMarker } from "./topic-direction-marker";
-import type {
-  PersonalNoveltyDifferenceType,
+import {
+  isNoveltyFileBasisKey,
+  type PersonalNoveltyDifferenceType,
 } from "./personalized-novelty";
 import { hasControlCharacter } from "../utils/control-characters";
 
@@ -287,6 +288,9 @@ function renderVisiblePersonalNovelty(
     const name = title
       ? escapeDiscoveryProvenancePlainText(title)
       : escapeDiscoveryProvenancePlainText(paperKey);
+    // A knowledge-base document has no link and its content hash is no
+    // reader-facing identity: the title stands alone (the key stays in the marker).
+    if (isNoveltyFileBasisKey(paperKey) && title) return name;
     return `${name} (${escapeDiscoveryProvenancePlainText(paperKey)})`;
   }).join(language === "en" ? "; " : "；");
   const depth = language === "en" ? "metadata and abstract" : "元数据与摘要";

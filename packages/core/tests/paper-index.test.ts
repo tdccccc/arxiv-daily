@@ -509,6 +509,87 @@ describe("PaperIndexStore", () => {
       .toEqual({ "arxiv-daily/daily/2026-06-12.md": second });
   });
 
+  it("accepts file: knowledge-base documents in the comparison basis on write and load", async () => {
+    const fileKey = `file:sha256:${"cd".repeat(32)}`;
+    const novelty = {
+      differenceType: "new-dataset",
+      comparisonBasis: ["arxiv:2501.00001", fileKey],
+      evidenceDepth: "metadata-and-abstract" as const,
+      explanation: "Compared with a library PDF.",
+    };
+    const { files, store } = makeStore();
+    await store.upsertFromDailyPaper({
+      arxivId: "2606.12345", title: "A paper", authors: "A", date: "2026-06-11",
+      arxivCategory: "astro-ph", primaryTopic: "photo-z", detail: false,
+      dailyReport: "arxiv-daily/daily/2026-06-11.md",
+    });
+    await store.reconcileDailyReportOccurrenceNovelty(
+      "arxiv-daily/daily/2026-06-11.md", [{ arxivId: "2606.12345", novelty }],
+    );
+    expect((await store.load()).papers["arxiv:2606.12345"]!.noveltyByReport)
+      .toEqual({ "arxiv-daily/daily/2026-06-11.md": novelty });
+    expect(JSON.parse(files["arxiv-daily/.index/papers.json"])
+      .papers["arxiv:2606.12345"].noveltyByReport["arxiv-daily/daily/2026-06-11.md"].comparisonBasis)
+      .toEqual(["arxiv:2501.00001", fileKey]);
+    await expect(store.reconcileDailyReportOccurrenceNovelty(
+      "arxiv-daily/daily/2026-06-11.md",
+      [{ arxivId: "2606.12345", novelty: { ...novelty, comparisonBasis: [`file:sha256:${"CD".repeat(32)}`] } }],
+    )).rejects.toThrow(PaperIndexError);
+  });
+
+  it("stores display titles with the novelty, keeps legacy 4-key entries, and drops only an entry with invalid titles", async () => {
+    const legacy = {
+      differenceType: "new-method",
+      comparisonBasis: ["arxiv:2501.00001"],
+      evidenceDepth: "metadata-and-abstract" as const,
+      explanation: "Legacy explanation.",
+    };
+    const titled = {
+      ...legacy,
+      comparisonBasis: ["arxiv:2501.00001", `file:sha256:${"ef".repeat(32)}`],
+      explanation: "Titled explanation.",
+      comparisonBasisTitles: {
+        "arxiv:2501.00001": "Arxiv prior",
+        [`file:sha256:${"ef".repeat(32)}`]: "Library PDF",
+      },
+    };
+    const { files, store } = makeStore();
+    await store.upsertFromDailyPaper({
+      arxivId: "2606.12345", title: "A paper", authors: "A", date: "2026-06-11",
+      arxivCategory: "astro-ph", primaryTopic: "photo-z", detail: false,
+      dailyReport: "arxiv-daily/daily/2026-06-11.md",
+    });
+    await store.reconcileDailyReportOccurrenceNovelty(
+      "arxiv-daily/daily/2026-06-11.md", [{ arxivId: "2606.12345", novelty: titled }],
+    );
+    expect((await store.load()).papers["arxiv:2606.12345"]!.noveltyByReport)
+      .toEqual({ "arxiv-daily/daily/2026-06-11.md": titled });
+    // Replacing titled with titleless (e.g. a v1 marker) is a change and is stored.
+    await store.reconcileDailyReportOccurrenceNovelty(
+      "arxiv-daily/daily/2026-06-11.md", [{ arxivId: "2606.12345", novelty: legacy }],
+    );
+    expect((await store.load()).papers["arxiv:2606.12345"]!.noveltyByReport)
+      .toEqual({ "arxiv-daily/daily/2026-06-11.md": legacy });
+    // Titles whose keys do not match the basis are rejected wholly.
+    await expect(store.reconcileDailyReportOccurrenceNovelty(
+      "arxiv-daily/daily/2026-06-11.md",
+      [{ arxivId: "2606.12345", novelty: { ...titled, comparisonBasisTitles: { "arxiv:2501.00001": "x" } } as never }],
+    )).rejects.toThrow(PaperIndexError);
+
+    const doc = JSON.parse(files["arxiv-daily/.index/papers.json"]);
+    doc.papers["arxiv:2606.12345"].noveltyByReport = {
+      "arxiv-daily/daily/ok-legacy.md": legacy,
+      "arxiv-daily/daily/ok-titled.md": titled,
+      "arxiv-daily/daily/bad-titles.md": { ...titled, comparisonBasisTitles: { "arxiv:2501.00001": "" } },
+      "arxiv-daily/daily/extra-key.md": { ...legacy, comparisonBasisTitles: {}, extra: 1 },
+    };
+    files["arxiv-daily/.index/papers.json"] = JSON.stringify(doc);
+    expect((await store.load()).papers["arxiv:2606.12345"]!.noveltyByReport).toEqual({
+      "arxiv-daily/daily/ok-legacy.md": legacy,
+      "arxiv-daily/daily/ok-titled.md": titled,
+    });
+  });
+
   it("rejects malformed novelty occurrences without mutating the index", async () => {
     const { store } = makeStore();
     await store.upsertFromDailyPaper({

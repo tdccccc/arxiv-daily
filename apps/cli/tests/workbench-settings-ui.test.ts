@@ -373,6 +373,8 @@ it.each(["en", "zh"] as const)("shows the actual depth for a legacy full-text au
  expect(text).toMatch(language==='zh'?/处理深度：标题与摘要/:/Processing depth: Titles and abstracts/);
  expect(text).not.toMatch(/full.text|全文/i);
  expect(text).toContain(disclosure.embeddingEndpoint);
+ // The daily report reuses this consent for novelty comparison, so the consent says so.
+ expect(text).toMatch(language==='zh'?/日报.*标题和摘要.*同一模型端点/:/daily report.*titles and abstracts.*same model endpoint/i);
 });
 
 

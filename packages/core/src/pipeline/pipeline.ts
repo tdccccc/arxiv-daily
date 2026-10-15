@@ -31,7 +31,11 @@ import {
   type DailyFilterCheckpointPort,
   type FilteredPaper,
 } from "./paper-filter";
-import type { NoveltyCheckpointPort } from "./personalized-novelty";
+import type {
+  LibraryPriorWorkPort,
+  NoveltyCheckpointPort,
+} from "./personalized-novelty";
+import { runLibraryNoveltyStage } from "./library-novelty-stage";
 import {
   summarizeDaily,
   summarizePaperDetail,
@@ -81,11 +85,7 @@ export interface DailySummaryCheckpointLifecyclePort
   extends DailySummaryCheckpointPort,
     DateScopedCheckpointLifecyclePort {}
 
-/**
- * `NoveltyCheckpointPort` stays in the union although the novelty stage is not
- * wired up: the store still owns those checkpoint files on disk, and dropping
- * the port would make it unable to clean them up.
- */
+/** `NoveltyCheckpointPort` is the novelty stage's checkpoint, kept by the same store as the filter's. */
 export interface DailyFilterCheckpointLifecyclePort
   extends DailyFilterCheckpointPort,
     NoveltyCheckpointPort,
@@ -119,6 +119,12 @@ export interface PipelineDeps {
    * an ArxivSourceAdapter from fetcher + paperFetcher (backward compatible).
    */
   sourceAdapter?: SourceAdapter;
+  /**
+   * Retrieves the library papers most similar to a digest paper, as the basis
+   * for personal novelty. The host supplies it only while library processing
+   * consent is valid; when omitted the novelty stage does not run (ADR 0015).
+   */
+  libraryPriorWork?: LibraryPriorWorkPort;
 }
 
 export class ArxivPipeline {
@@ -258,13 +264,6 @@ export class ArxivPipeline {
       };
     }
 
-    // Personal novelty used to run here for library-derived papers. It lost
-    // its comparison basis when the profile document retired (ADR 0012
-    // §Consequences): novelty was defined relative to a named representative
-    // set that no longer exists. Choosing a new basis is a decision left open
-    // on purpose, so the stage is not wired up rather than pointed at a basis
-    // nobody chose. `personalized-novelty.ts` is kept intact for that decision.
-
     throwIfCancelled(signal);
     const indexed = await this.indexFilteredPapers(filtered, dateStr);
     if (indexed.kind !== "ok") return indexed.result;
@@ -296,6 +295,30 @@ export class ArxivPipeline {
         outcome: "no_matches",
         digest: this.buildZeroDigest(dateStr),
       };
+    }
+
+    // 5b. Personal novelty: compare each visible paper with its most similar
+    // library papers (ADR 0015). Never fails the run; missing novelty is normal.
+    if (this.deps.libraryPriorWork && this.sourceAdapter.sourceId === "arxiv") {
+      stageStart("personal-novelty");
+      const novelties = await runLibraryNoveltyStage({
+        port: this.deps.libraryPriorWork,
+        papers: visiblePapers,
+        reportDate: dateStr,
+        llm: this.deps.llm,
+        llmSettings: this.deps.llmSettings,
+        summaryLanguage: this.deps.output.summaryLanguage,
+        logger,
+        progress: this.progress,
+        checkpointStore: this.deps.checkpointStores?.filter,
+        signal,
+        onMetrics: (metrics) => runMetrics.record(metrics),
+      });
+      for (const paper of visiblePapers) {
+        const novelty = novelties.get(paper.id);
+        if (novelty) paper.personalNovelty = novelty;
+      }
+      stageEnd("personal-novelty", ` (${novelties.size}/${visiblePapers.length} papers)`);
     }
 
     // 6. Fetch content for each filtered paper

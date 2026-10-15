@@ -3,7 +3,7 @@ import {
   type LibraryReviewSnapshot, type LibraryPreviewPaper, type LibraryDirectionPreview,
   type PersonalLibraryDirectionCandidate, type PersonalLibraryProposedTopic, type LibraryAuthorizationDisclosure,
 } from "@arxiv-daily/core";
-import { t } from "./i18n";
+import { t, DAILY_NOVELTY_DISCLOSURE } from "./i18n";
 import { h, fragment } from "./dom";
 import { scientificInline } from "./papers";
 import type { WorkbenchRun } from "../server";
@@ -210,6 +210,7 @@ export function mountLibraryReview(root: HTMLElement, options: Options) {
       t("Processing depth: {0}", t("Titles and abstracts")),
       t("Model endpoint: {0}", disclosure.endpoint),
       ...(disclosure.embeddingEndpoint ? [t("Embedding endpoint: {0}", disclosure.embeddingEndpoint)] : []),
+      t(DAILY_NOVELTY_DISCLOSURE),
     ];
     return h("div", { class: "review-disclosure" }, ...lines.map(line => h("p", null, line)));
   }

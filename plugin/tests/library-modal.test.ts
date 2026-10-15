@@ -172,6 +172,24 @@ describe("personal library authorization modal", () => {
     }
   });
 
+  it("discloses that the daily report sends retrieved library paper titles and abstracts to the same model endpoint", async () => {
+    for (const depth of ["full-text", "metadata-and-abstracts"] as const) {
+      const result = confirmLibraryAuthorization({} as App, {
+        ...disclosure,
+        processingDepth: depth,
+        embeddingEndpoint: depth === "full-text" ? "https://embed.example.com/v1" : undefined,
+      });
+      const modal = Modal.opened.at(-1)!;
+      const text = modal.contentEl.textContent ?? "";
+      expect(text).toContain(
+        "The daily report also sends the titles and abstracts of the library papers it retrieves as comparisons to the same model endpoint",
+      );
+      expect(text).toMatch(/novelty|what is new/i);
+      modal.close();
+      await expect(result).resolves.toBe(false);
+    }
+  });
+
   it("resolves false when cancelled or closed outside the buttons", async () => {
     const cancelled = confirmLibraryAuthorization({} as App, disclosure);
     Modal.opened.at(-1)!.contentEl.querySelector<HTMLButtonElement>("button")!.click();

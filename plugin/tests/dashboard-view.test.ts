@@ -722,17 +722,17 @@ describe("dashboard occurrence personal novelty", () => {
       reportDate: "2026-06-10",
       differenceType: "new-method",
       comparisonBasis: [
-        { paperKey: "arxiv:2501.00001" },
-        { paperKey: "arxiv:2501.00002" },
+        { paperKey: "arxiv:2501.00001", title: "Prior paper one" },
+        { paperKey: "arxiv:2501.00002", title: "Prior paper two, with a comma" },
       ],
       evidenceDepth: "metadata-and-abstract",
       explanation: "Introduces a method absent from the representative abstracts.",
     },
   };
 
-  it("formats a clearly labeled novelty block with difference type, paperKey-only basis, depth, and explanation", () => {
+  it("formats a clearly labeled novelty block with difference type, basis titles, depth, and explanation", () => {
     expect(dashboardPersonalNoveltyLines(noveltyRow)).toEqual([
-      "Personal novelty: new method vs. prior papers: arxiv:2501.00001, arxiv:2501.00002",
+      "Personal novelty: new method vs. prior papers: Prior paper one; Prior paper two, with a comma",
       "Evidence depth: metadata and abstract",
       "Introduces a method absent from the representative abstracts.",
     ]);
@@ -743,8 +743,33 @@ describe("dashboard occurrence personal novelty", () => {
         differenceType: "counter-evidence",
       },
     })[0]).toBe(
-      "Personal novelty: counter-evidence vs. prior papers: arxiv:2501.00001, arxiv:2501.00002",
+      "Personal novelty: counter-evidence vs. prior papers: Prior paper one; Prior paper two, with a comma",
     );
+  });
+
+  it("falls back to the paperKey for a basis paper without a title (reports written before titles were persisted)", () => {
+    const fileKey = `file:sha256:${"ab".repeat(32)}`;
+    const legacy = {
+      ...noveltyRow,
+      personalNovelty: {
+        ...noveltyRow.personalNovelty,
+        comparisonBasis: [
+          { paperKey: "arxiv:2501.00001" },
+          { paperKey: "arxiv:2501.00002", title: "Prior\n  paper   two" },
+          { paperKey: fileKey, title: "Library PDF" },
+        ],
+      },
+    };
+    expect(dashboardPersonalNoveltyLines(legacy)[0]).toBe(
+      "Personal novelty: new method vs. prior papers: arxiv:2501.00001; Prior paper two; Library PDF",
+    );
+    expect(dashboardPersonalNoveltyLines({
+      ...noveltyRow,
+      personalNovelty: {
+        ...noveltyRow.personalNovelty,
+        comparisonBasis: [{ paperKey: "arxiv:2501.00001" }, { paperKey: "arxiv:2501.00002" }],
+      },
+    })[0]).toBe("Personal novelty: new method vs. prior papers: arxiv:2501.00001; arxiv:2501.00002");
   });
 
   it("keeps hostile novelty text literal, collapses whitespace, and stays separate from provenance and match reasons", () => {

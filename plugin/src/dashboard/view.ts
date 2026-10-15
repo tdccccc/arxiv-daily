@@ -146,9 +146,10 @@ export function dashboardOccurrenceProvenanceLines(row: DashboardRow): string[] 
 /**
  * Deterministic plain-text Dashboard novelty block, clearly labeled and fully
  * distinct from the discovery provenance block: a localized difference-type
- * label with the persisted comparison-basis paperKeys (titles are never
- * persisted in the index and are never invented; the label explains the basis
- * papers are the direction's representative prior papers), the explicit
+ * label with the comparison-basis paper titles the committed report persisted
+ * (the paperKey when a legacy report has none; titles are never looked up or
+ * invented, and basis papers are the library papers most similar to this paper,
+ * shown as "prior papers"), the explicit
  * metadata-and-abstract evidence-depth disclosure, and the bounded explanation
  * with whitespace collapsed. Every line is rendered literally through DOM text
  * APIs — no tooltips, no truncation, and the full text is visible and
@@ -158,7 +159,10 @@ export function dashboardPersonalNoveltyLines(row: DashboardRow): string[] {
   const novelty = row.personalNovelty;
   if (!novelty) return [];
   const typeLabel = personalNoveltyDifferenceTypeLabel(novelty.differenceType, "en");
-  const basis = novelty.comparisonBasis.map(({ paperKey }) => paperKey).join(", ");
+  // "; " separates papers because titles can contain commas.
+  const basis = novelty.comparisonBasis
+    .map(({ paperKey, title }) => title?.replace(/\s+/gu, " ").trim() || paperKey)
+    .join("; ");
   const explanation = novelty.explanation.replace(/\s+/gu, " ").trim();
   return [
     `Personal novelty: ${typeLabel} vs. prior papers: ${basis}`,

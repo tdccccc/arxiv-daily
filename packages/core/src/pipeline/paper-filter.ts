@@ -45,10 +45,9 @@ export interface FilteredPaper extends PaperMeta {
    */
   discoveryProvenance?: PaperDiscoveryProvenance;
   /**
-   * Read-only legacy field. Personal novelty lost its comparison basis when
-   * the profile document retired (ADR 0012 §Consequences); choosing a new
-   * basis is a decision deliberately left open, so the stage no longer runs
-   * and nothing sets this.
+   * Set by the library novelty stage after filtering, only when the host
+   * supplied a library port and the model found a comparable library paper
+   * (ADR 0015).
    */
   personalNovelty?: PersonalNoveltyWithBasis;
 }

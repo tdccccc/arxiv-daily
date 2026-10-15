@@ -30,6 +30,7 @@ import {
   resolveResendApiKey,
 } from "@arxiv-daily/core";
 import type { CliRuntimeConfig } from "./config";
+import { createCliLibraryPriorWork } from "./library-prior-work";
 
 export interface CliRuntime {
   host: HostAdapters;
@@ -142,6 +143,9 @@ export async function buildCliRuntime(
     logger,
   );
   await stateStore.load();
+  // Present only while library processing is authorized for the report's model
+  // endpoint. A long-running `schedule` process reads this once at start-up.
+  const libraryPriorWork = createCliLibraryPriorWork({ config, storage: host.storage, http: host.http, logger });
   const pipeline = new ArxivPipeline({
     fetcher,
     markupParser: host.markupParser,
@@ -160,6 +164,7 @@ export async function buildCliRuntime(
     llmSettings: config.settings.llm,
     detailSelection: config.settings.detailSelection,
     progress: host.progress,
+    ...(libraryPriorWork ? { libraryPriorWork } : {}),
   });
   const manualFetch = new ManualFetchService({
     storage: host.storage,

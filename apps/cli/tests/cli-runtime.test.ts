@@ -1,17 +1,31 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { access, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { parse, stringify } from "smol-toml";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import {
   DailyFilterCheckpointStore,
   DailySummaryCheckpointStore,
+  LibraryWorkflow,
   Logger,
+  authorizeLibraryConnection,
+  createLibraryConnection,
   normalizeTopic,
+  parseDailyReportPersonalNovelty,
   parseDailyReportTopicDirections,
+  type ChatMessage,
+  type DocumentParser,
+  type EmbeddingModel,
 } from "@arxiv-daily/core";
-import { buildNodeHostAdapters } from "@arxiv-daily/node-runtime";
+import {
+  NodeStorageAdapter,
+  buildNodeHostAdapters,
+  openScopedLibrarySource,
+  type FetchLike,
+} from "@arxiv-daily/node-runtime";
+import { createCliTopicSettings } from "../src/library-topic-settings";
 import { loadCliConfig } from "../src/config";
-import { buildCliRuntime } from "../src/runtime";
+import { buildCliRuntime, type CliRuntime } from "../src/runtime";
 
 const tempDirs: string[] = [];
 
@@ -300,4 +314,195 @@ describe("CLI runtime", () => {
 
     await expect(access(legacyPath)).resolves.toBeUndefined();
   });
+
+});
+
+const NOVELTY_MARKER = "arxiv-daily-personal-novelty";
+const NOVELTY_DATE = "2026-10-01";
+const NOVELTY_DAILY_ID = "2610.10001";
+const NOVELTY_MODEL_URL = "https://model.example/v1";
+const NOVELTY_LIBRARY_IDS = ["2610.00001", "2610.00002", "2610.00003"];
+
+function libraryMetadata(id: string): { title: string; abstract: string } {
+  const title = id === NOVELTY_DAILY_ID
+    ? "Reliable agent evaluation with controlled interventions"
+    : `Agent evaluation baseline study ${id}`;
+  return { title, abstract: `${title}. Agents are evaluated with experimental methods against reproducible baselines.` };
+}
+
+function libraryAtom(ids: string[]): string {
+  return `<?xml version="1.0"?><feed xmlns="http://www.w3.org/2005/Atom" xmlns:arxiv="http://arxiv.org/schemas/atom">${ids.map((id) => {
+    const paper = libraryMetadata(id);
+    return `<entry><id>https://arxiv.org/abs/${id}v1</id><title>${paper.title}</title><author><name>A. Researcher</name></author><summary>${paper.abstract}</summary><published>2026-10-01T00:00:00Z</published><updated>2026-10-01T00:00:00Z</updated><arxiv:primary_category term="cs.AI"/><category term="cs.AI"/></entry>`;
+  }).join("")}</feed>`;
+}
+
+/** Only network transport is controlled; the real pipeline, LlmClient, fetcher, stores and search run. */
+function noveltyTransport() {
+  const noveltyPayloads: Array<{ paper: { paperKey: string }; basis: Array<{ paperKey: string; title: string }> }> = [];
+  const embeddingRequests: string[] = [];
+  const fetch: FetchLike = async (input, init) => {
+    const url = new URL(String(input));
+    if (url.origin === "https://model.example") {
+      const { messages } = JSON.parse(String(init?.body)) as { messages: ChatMessage[] };
+      const system = messages[0]?.content ?? "";
+      const user = messages[1]?.content ?? "";
+      let content: string;
+      if (user.startsWith("Compare this new paper")) {
+        const body = user.split("<paper_data>\n")[1]!.split("\n</paper_data>")[0]!;
+        const payload = JSON.parse(body) as (typeof noveltyPayloads)[number];
+        noveltyPayloads.push(payload);
+        content = JSON.stringify({
+          differenceType: "new-method",
+          comparisonBasis: [(payload.basis.find(({ paperKey }) => paperKey.startsWith("file:")) ?? payload.basis[0]!).paperKey],
+          evidenceDepth: "metadata-and-abstract", explanation: "Adds controlled interventions the library papers do not use.",
+        });
+      } else if (system.includes("为所有命中论文评分")) {
+        content = JSON.stringify({ papers: [{ id: NOVELTY_DAILY_ID, category: "astronomy", directions: ["astronomy#1"], relevanceScore: 90 }] });
+      } else if (system.includes("严格 JSON 对象") || system.includes("strict JSON object")) {
+        content = JSON.stringify({ id: NOVELTY_DAILY_ID, coreProblem: "Reliable measurement", keyMethod: "Controlled intervention", mainResult: "Improves the measured outcome", whyRelevant: "Supports the topic", limitations: "Small sample" });
+      } else {
+        throw new Error(`Unexpected model task: ${system.slice(0, 120)}`);
+      }
+      return new Response(`data: ${JSON.stringify({ choices: [{ delta: { content }, finish_reason: "stop" }] })}\n\ndata: [DONE]\n\n`, {
+        status: 200, headers: { "content-type": "text/event-stream" },
+      });
+    }
+    if (url.pathname.endsWith("/embeddings")) {
+      embeddingRequests.push(url.toString());
+      throw new Error("lexical novelty retrieval must not call an embedding endpoint");
+    }
+    if (url.hostname === "export.arxiv.org" && url.searchParams.has("id_list")) {
+      return new Response(libraryAtom(url.searchParams.get("id_list")!.split(",")), { status: 200 });
+    }
+    if (url.hostname === "arxiv.org" && url.pathname === "/list/cs.AI/recent") {
+      return new Response(`<html><body><dl id="articles"><h3>Thu, 1 Oct 2026 (showing 1 of 1 entries)</h3><dt><a title="Abstract" href="/abs/${NOVELTY_DAILY_ID}">arXiv:${NOVELTY_DAILY_ID}</a></dt><dd><div class="list-title">Title: ${libraryMetadata(NOVELTY_DAILY_ID).title}</div><div class="list-authors"><a>A. Researcher</a></div></dd></dl></body></html>`, { status: 200 });
+    }
+    if (url.hostname === "arxiv.org" && url.pathname.startsWith("/html/")) {
+      const id = url.pathname.slice("/html/".length);
+      return new Response(`<html><body><div class="ltx_abstract">${libraryMetadata(id).abstract}</div><h2>Results</h2><p>The method improves measured reliability.</p></body></html>`, { status: 200 });
+    }
+    throw new Error(`Unexpected network request: ${url}`);
+  };
+  return { fetch, noveltyPayloads, embeddingRequests };
+}
+
+/** An authorized (or not), fully indexed local library plus a daily paper that resembles it. */
+async function noveltyFixture(authorized: boolean, extraFiles: Record<string, string> = {}) {
+  const root = await makeTempDir();
+  const selectedRoot = join(root, "library");
+  const vaultRoot = join(root, "vault");
+  await mkdir(selectedRoot);
+  await mkdir(vaultRoot);
+  await Promise.all(NOVELTY_LIBRARY_IDS.map((id) =>
+    writeFile(join(selectedRoot, `${id}.pdf`), `agent evaluation experimental methods baselines ${id}. `.repeat(30))));
+  await Promise.all(Object.entries(extraFiles).map(([name, text]) =>
+    writeFile(join(selectedRoot, name), text)));
+  const source = await openScopedLibrarySource(selectedRoot);
+  const created = createLibraryConnection(source.canonicalRoot, source.rootIdentity);
+  const connection = authorized ? authorizeLibraryConnection(created, { llmBaseUrl: NOVELTY_MODEL_URL }) : created;
+  const configPath = join(root, "config.toml");
+  await writeFile(configPath, stringify({
+    schema_version: 1, vault_root: vaultRoot, cache_dir: join(root, "cache"),
+    llm: { api_key: "fixture-key", base_url: NOVELTY_MODEL_URL, model: "controlled-model" },
+    embedding: { mode: "local" },
+    arxiv: { categories: ["cs.AI"], timezone: "UTC", topics: [{ name: "Astronomy", tag: "astronomy", description: "Agent evaluation", detail: false }] },
+    output: { summary_language: "en" }, library: connection,
+  }));
+  const config = await loadCliConfig({ configPath });
+  const network = noveltyTransport();
+  const host = buildNodeHostAdapters({ rootDir: vaultRoot, fetch: network.fetch });
+  host.storage = new NodeStorageAdapter(vaultRoot, { lockRoot: join(root, "locks") });
+  const logger = new Logger("error");
+  const seed = await buildCliRuntime(config, { host, logger });
+  const parser: DocumentParser = {
+    capabilities: ["page-text"], provenance: { id: "controlled-parser", version: "1" },
+    parse: async (bytes) => ({ mediaType: "application/pdf", blocks: [{ kind: "page", text: new TextDecoder().decode(bytes), locator: { page: 1, block: 0 } }] }),
+  };
+  // The local embedding identity, so the generation built here is the one the daily search opens.
+  const embedding: EmbeddingModel = {
+    modelId: "multilingual-e5-small-q8", dimension: 384, prefixPolicy: "none",
+    embed: async (texts) => texts.map(() => new Float32Array(384).fill(0.01)),
+  };
+  const workflow = new LibraryWorkflow({
+    topicSettings: createCliTopicSettings(config),
+    storage: host.storage, output: config.settings.output, connection, source, http: host.http,
+    arxivFetcher: seed.fetcher, llm: seed.llm,
+    createParser: async () => ({ parser }), createEmbedding: async () => embedding,
+    assertCurrent: () => undefined, assertAuthorized: () => undefined,
+  });
+  await workflow.scan();
+  expect(await workflow.index()).toMatchObject({ indexed: 3 + Object.keys(extraFiles).length, failed: 0 });
+  seed.dispose?.();
+  network.noveltyPayloads.length = 0;
+  return { config, host, logger, network, configPath };
+}
+
+describe("CLI runtime library novelty", () => {
+  const runtimes: CliRuntime[] = [];
+  afterEach(() => {
+    for (const runtime of runtimes.splice(0)) runtime.dispose?.();
+  });
+
+  it("annotates the daily report with library novelty when library processing is authorized", async () => {
+    const f = await noveltyFixture(true);
+    const runtime = await buildCliRuntime(f.config, { host: f.host, logger: f.logger });
+    runtimes.push(runtime);
+
+    expect(await runtime.pipeline.runForDate(NOVELTY_DATE), f.logger.getBuffer().join("\n"))
+      .toMatchObject({ kind: "completed", papersWritten: 1 });
+
+    const daily = await f.host.storage.readText(runtime.writer.dailyPath(NOVELTY_DATE));
+    expect(daily).toContain(NOVELTY_MARKER);
+    expect(daily).toContain("Personal novelty: new method vs. prior papers: Agent evaluation baseline study");
+    expect(daily).toContain("Adds controlled interventions the library papers do not use");
+    expect(f.network.noveltyPayloads).toHaveLength(1);
+    const basisKeys = f.network.noveltyPayloads[0]!.basis.map(({ paperKey }) => paperKey);
+    expect(basisKeys.length).toBeGreaterThan(0);
+    for (const key of basisKeys) {
+      expect(NOVELTY_LIBRARY_IDS.map((id) => `arxiv:${id}`)).toContain(key);
+    }
+    expect(f.network.embeddingRequests).toEqual([]);
+  }, 30_000);
+
+  it("compares against an indexed library PDF that has no arXiv identity, shown by title only", async () => {
+    // An unrecognised filename: the index keys it file:sha256:... with an extracted title and abstract.
+    const fileTitle = "Controlled interventions for reliable agent evaluation experiments";
+    const f = await noveltyFixture(true, {
+      "lecture-notes-final.pdf": `${fileTitle}\n\nAbstract\n${"Reliable agent evaluation uses controlled interventions against experimental baselines and reproducible methods. ".repeat(3)}\n\n1 Introduction\nBody text.`,
+    });
+    const runtime = await buildCliRuntime(f.config, { host: f.host, logger: f.logger });
+    runtimes.push(runtime);
+
+    expect(await runtime.pipeline.runForDate(NOVELTY_DATE), f.logger.getBuffer().join("\n"))
+      .toMatchObject({ kind: "completed", papersWritten: 1 });
+
+    const payload = f.network.noveltyPayloads[0]!;
+    const fileBasis = payload.basis.find(({ paperKey }) => paperKey.startsWith("file:sha256:"));
+    expect(fileBasis, JSON.stringify(payload.basis.map(({ paperKey }) => paperKey))).toBeDefined();
+    expect(Object.keys(fileBasis!)).toEqual(["paperKey", "title", "abstract"]);
+    expect(fileBasis!.title).toContain("reliable agent evaluation");
+    const daily = await f.host.storage.readText(runtime.writer.dailyPath(NOVELTY_DATE));
+    const parsed = parseDailyReportPersonalNovelty(daily, NOVELTY_DATE);
+    expect(parsed.kind).toBe("valid");
+    if (parsed.kind !== "valid") return;
+    expect(parsed.occurrences).toHaveLength(1);
+    expect(parsed.occurrences[0]!.novelty.comparisonBasis).toEqual([fileBasis!.paperKey]);
+    expect(daily).toContain(`prior papers: ${fileBasis!.title.replace(/[.]/g, "\\.")}`);
+    expect(daily).not.toContain("file:sha256");
+  }, 30_000);
+
+  it("writes the same report without novelty when library processing is not authorized", async () => {
+    const f = await noveltyFixture(false);
+    const runtime = await buildCliRuntime(f.config, { host: f.host, logger: f.logger });
+    runtimes.push(runtime);
+
+    expect(await runtime.pipeline.runForDate(NOVELTY_DATE), f.logger.getBuffer().join("\n"))
+      .toMatchObject({ kind: "completed", papersWritten: 1 });
+
+    const daily = await f.host.storage.readText(runtime.writer.dailyPath(NOVELTY_DATE));
+    expect(daily).not.toContain(NOVELTY_MARKER);
+    expect(daily).toContain(libraryMetadata(NOVELTY_DAILY_ID).title);
+    expect(f.network.noveltyPayloads).toEqual([]);
+  }, 30_000);
 });

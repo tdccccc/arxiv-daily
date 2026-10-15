@@ -166,14 +166,10 @@ function noveltyMatches(
   overrides: Partial<PersonalNoveltyMatchInput> = {},
 ): PersonalNoveltyMatchInput {
   return {
-    paperMatches: [{
+    paperBases: [{
       paperKey: "arxiv:2608.00001",
-      directionIds: ["direction.001", "direction.002"],
+      basisPaperKeys: ["arxiv:2501.00001", "arxiv:2501.00002", "arxiv:2501.00003"],
     }],
-    directionRepresentatives: [
-      { directionId: "direction.001", representativePaperKeys: ["arxiv:2501.00001"] },
-      { directionId: "direction.002", representativePaperKeys: ["arxiv:2501.00002", "arxiv:2501.00003"] },
-    ],
     ...overrides,
   };
 }
@@ -236,13 +232,9 @@ function noveltyInputTwoPapers(): PersonalizedNoveltyInput {
 
 function noveltyMatchesTwoPapers(): PersonalNoveltyMatchInput {
   return {
-    paperMatches: [
-      { paperKey: "arxiv:2608.00001", directionIds: ["direction.001"] },
-      { paperKey: "arxiv:2608.00002", directionIds: ["direction.002"] },
-    ],
-    directionRepresentatives: [
-      { directionId: "direction.001", representativePaperKeys: ["arxiv:2501.00001"] },
-      { directionId: "direction.002", representativePaperKeys: ["arxiv:2501.00002"] },
+    paperBases: [
+      { paperKey: "arxiv:2608.00001", basisPaperKeys: ["arxiv:2501.00001"] },
+      { paperKey: "arxiv:2608.00002", basisPaperKeys: ["arxiv:2501.00002"] },
     ],
   };
 }
@@ -844,7 +836,23 @@ describe("novelty filter checkpoint", () => {
     });
   });
 
-  it("misses on any rendered identity change: basis evidence, directions, model, contracts", async () => {
+  it("persists a no-comparable-prior outcome and hits on lookup without any model call", async () => {
+    const { files, storage } = makeStorage();
+    const store = makeStore(storage);
+    const paths = store.pathsFor(reportDate);
+    const noComparable: PersonalNoveltyPaperOutcome = {
+      paperKey: "arxiv:2608.00001", status: "no-novelty", reason: "no-comparable-prior",
+    };
+    await store.saveNovelty(reportDate, noveltyPrepared(), [noComparable]);
+    expect(JSON.parse(files[paths.noveltyDocumentPath]!).result).toEqual([noComparable]);
+    expect(await makeStore(storage).lookupNoveltyReusable(reportDate, noveltyPrepared()))
+      .toEqual([noComparable]);
+    expect(await makeStore(storage).loadNovelty(reportDate)).toMatchObject({
+      result: [noComparable],
+    });
+  });
+
+  it("misses on any rendered identity change: basis evidence, per-paper basis, model, contracts", async () => {
     const { files, storage } = makeStorage();
     const store = makeStore(storage);
     await store.saveNovelty(reportDate, noveltyPrepared(), [noveltyOutcome]);
@@ -864,16 +872,16 @@ describe("novelty filter checkpoint", () => {
     });
     expect(await makeStore(storage).lookupNoveltyReusable(reportDate, evidencePrepared)).toBeNull();
 
-    // Direction identity change (direction→representatives) invalidates.
-    const directionPrepared = noveltyPrepared({
+    // Per-paper basis identity change invalidates.
+    const basisPrepared = noveltyPrepared({
       matches: {
-        directionRepresentatives: [
-          { directionId: "direction.001", representativePaperKeys: ["arxiv:2501.00001"] },
-          { directionId: "direction.002", representativePaperKeys: ["arxiv:2501.00002"] },
-        ],
+        paperBases: [{
+          paperKey: "arxiv:2608.00001",
+          basisPaperKeys: ["arxiv:2501.00001", "arxiv:2501.00002"],
+        }],
       },
     });
-    expect(await makeStore(storage).lookupNoveltyReusable(reportDate, directionPrepared)).toBeNull();
+    expect(await makeStore(storage).lookupNoveltyReusable(reportDate, basisPrepared)).toBeNull();
 
     // Model identity change invalidates.
     const modelPrepared = noveltyPrepared({ llm: { ...compatibility().llm, model: "model-b" } });
@@ -929,8 +937,11 @@ describe("novelty filter checkpoint", () => {
       [{ ...noveltyOutcome, novelty: { ...noveltyRecord.novelty, extra: true } }],
       // Transport/output-limit/checkpoint/input-invalid reasons are never durable.
       [{ ...noveltyOutcome, status: "no-novelty", reason: "transport" }],
-      // A call entry can only terminate validation-exhausted, never plan-too-large.
+      // A call entry can only terminate validation-exhausted or no-comparable-prior,
+      // never plan-too-large.
       [{ ...noveltyOutcome, status: "no-novelty", reason: "plan-too-large" }],
+      // The model's exception shape is decoded into a typed outcome, never stored as novelty.
+      [{ ...noveltyOutcome, novelty: { noComparablePrior: true } }],
     ]) {
       await expect(store.saveNovelty(reportDate, snapshot, invalid))
         .rejects.toThrow(/invalid personal novelty checkpoint/);
@@ -1048,8 +1059,7 @@ describe("novelty filter checkpoint", () => {
     const snapshot = noveltyPrepared();
     await store.saveNovelty(reportDate, snapshot, [noveltyOutcome]);
     const document = JSON.parse(files[paths.noveltyDocumentPath]!);
-    document.fingerprintInput.matches.directionRepresentatives[0].representativePaperKeys =
-      ["arxiv:2501.00003"];
+    document.fingerprintInput.matches.paperBases[0].basisPaperKeys = ["arxiv:2501.00003"];
     document.fingerprint = fingerprintNoveltyCheckpointInput(document.fingerprintInput);
     files[paths.noveltyDocumentPath] = JSON.stringify(document);
     // The tampered document is internally consistent (its fingerprint

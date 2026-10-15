@@ -250,7 +250,7 @@ export class DailyFilterCheckpointStore {
         );
       }
       // Every planned call paper must carry exactly one strict terminal outcome
-      // (novelty, validation-exhausted, or plan-too-large); input-invalid,
+      // (novelty, validation-exhausted, no-comparable-prior, or plan-too-large); input-invalid,
       // transport, output-limit, and checkpoint reasons are never durable, and
       // partial coverage is rejected so a hit can only reuse complete results.
       const decoded = decodeNoveltyCheckpointRecords(result, prepared.fingerprintInput.plan);

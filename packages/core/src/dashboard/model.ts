@@ -10,6 +10,7 @@ import type {
 } from "../pipeline/discovery-provenance-marker";
 import type {
   PersonalNovelty,
+  PersonalNoveltyWithBasis,
   PersonalNoveltyDifferenceType,
 } from "../pipeline/personalized-novelty";
 import type { SummaryLanguage, Topic } from "../settings/types";
@@ -68,13 +69,14 @@ export interface DashboardOccurrenceProvenance {
 }
 
 /**
- * One representative prior paper of a Dashboard novelty comparison basis.
- * Only the persisted paperKey is carried: titles are never persisted in the
- * index (the marker/index payload stays minimal), so display titles are never
- * invented from other sources.
+ * One prior paper of a Dashboard novelty comparison basis. The title is the
+ * display title the committed report's marker carried (marker v2) and is absent
+ * for reports written before titles were persisted; views fall back to the
+ * paperKey. It is never looked up or invented from other sources.
  */
 export interface DashboardPersonalNoveltyBasisPaper {
   paperKey: string;
+  title?: string;
 }
 
 /**
@@ -426,10 +428,10 @@ export function projectDashboardOccurrenceProvenance(
  * Projects the validated personal novelty of the latest committed occurrence
  * onto a Dashboard row using exactly the same deterministic report-date/path
  * selection as projectDashboardOccurrenceProvenance, over noveltyByReport ∩
- * dailyReports. Only persisted minimal payload is projected: the comparison
- * basis carries paperKeys (titles are never persisted in the index and are
- * never invented), and the exact validated evidence depth and bounded
- * explanation pass through. Legacy/no-novelty rows project no metadata.
+ * dailyReports. Only persisted payload is projected: the comparison basis
+ * carries paperKeys with the display titles the marker persisted (absent for
+ * legacy entries, never invented), and the exact validated evidence depth and
+ * bounded explanation pass through. No-novelty rows project no metadata.
  */
 export function projectDashboardOccurrenceNovelty(
   entry: Pick<PaperIndexEntry, "dailyReports" | "noveltyByReport">,
@@ -450,7 +452,11 @@ export function projectDashboardOccurrenceNovelty(
       reportPath: selected.reportPath,
       reportDate: selected.reportDate,
       differenceType: novelty.differenceType,
-      comparisonBasis: novelty.comparisonBasis.map((paperKey) => ({ paperKey })),
+      comparisonBasis: novelty.comparisonBasis.map((paperKey) => {
+        const titles = (novelty as Partial<PersonalNoveltyWithBasis>).comparisonBasisTitles;
+        const title = titles ? titles[paperKey] : undefined;
+        return title ? { paperKey, title } : { paperKey };
+      }),
       evidenceDepth: novelty.evidenceDepth,
       explanation: novelty.explanation,
     },

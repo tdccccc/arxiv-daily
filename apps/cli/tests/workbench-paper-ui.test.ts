@@ -33,6 +33,19 @@ const click = (root: HTMLElement, selector: string) => root.querySelector<HTMLBu
 const ready = async (root: HTMLElement) => vi.waitFor(() => expect(root.querySelector(".reading-pane [data-paper]")?.textContent).toContain(paper.title));
 const change = (root: HTMLElement, selector: string, value: string) => { const input = root.querySelector<HTMLInputElement | HTMLSelectElement>(selector)!; input.value = value; input.dispatchEvent(new Event(input.tagName === "SELECT" ? "change" : "input", { bubbles: true })); };
 
+describe("novelty comparison basis in the reading pane", () => {
+  it("shows basis titles, falling back to the paperKey when a legacy report persisted none", async () => {
+    const novelty = (comparisonBasis: Array<{ paperKey: string; title?: string }>) => ({ reportPath: "daily/2026-10-01.md", reportDate: "2026-10-01", differenceType: "new-method", comparisonBasis, evidenceDepth: "metadata-and-abstract", explanation: "新增了一种方法。" });
+    const withTitles = { ...paper, novelty: novelty([{ paperKey: "arxiv:2501.00001", title: "Prior paper one" }, { paperKey: `file:sha256:${"ab".repeat(32)}`, title: "Library PDF" }, { paperKey: "arxiv:2501.00002" }]) };
+    const { root } = setup(url => url.pathname.endsWith("api/paper") ? json({ paper: withTitles }) : undefined);
+    await ready(root); click(root, "[data-paper]");
+    await vi.waitFor(() => expect(root.querySelector(".reading-appendix small")?.textContent).toContain("Prior paper one"));
+    const basis = root.querySelector(".reading-appendix small")!.textContent!;
+    expect(basis).toContain("Prior paper one · Library PDF · arxiv:2501.00002");
+    expect(basis).not.toContain("file:sha256");
+  });
+});
+
 describe("right-side paper workspace", () => {
   it("starts with every indexed discovery on the right, without auto-opening or duplicating the list on the left", async () => {
     const { root, fetcher } = setup(); await ready(root);

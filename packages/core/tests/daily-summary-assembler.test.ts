@@ -25,6 +25,8 @@ import {
 import { parseDailyReportTopicDirections } from "../src/pipeline/topic-direction-marker";
 import {
   PERSONAL_NOVELTY_MARKER_MAX_CODE_UNITS,
+  PERSONAL_NOVELTY_MARKER_MAX_TITLE_CODE_UNITS,
+  PERSONAL_NOVELTY_MARKER_MAX_TITLED_BASIS,
   parseDailyReportPersonalNovelty,
   parsePersonalNoveltyMarker,
   renderPersonalNoveltyMarker,
@@ -270,7 +272,7 @@ describe("assembleDailySummary", () => {
     const noveltyLines = markdown.split("\n").filter((line) => line.startsWith(prefix));
     expect(noveltyLines).toHaveLength(2);
     for (const line of noveltyLines) expect(line).toContain(depth);
-    expect(markdown.match(/^<!-- arxiv-daily-personal-novelty:v1:/gm)).toHaveLength(2);
+    expect(markdown.match(/^<!-- arxiv-daily-personal-novelty:v2:/gm)).toHaveLength(2);
     expect(markdown.match(/^<!-- arxiv-daily-discovery-provenance:v1:/gm)).toHaveLength(2);
     expect(markdown).toContain(
       `Prior paper one (arxiv:2501\\.00001)${separator}Prior paper two (arxiv:2501\\.00002)`,
@@ -280,8 +282,8 @@ describe("assembleDailySummary", () => {
     expect(parseDailyReportPersonalNovelty(markdown, "2026-07-22")).toEqual({
       kind: "valid",
       occurrences: [
-        { arxivId: "2607.00020", novelty },
-        { arxivId: "2607.00021", novelty },
+        { arxivId: "2607.00020", novelty: noveltyWithBasis },
+        { arxivId: "2607.00021", novelty: noveltyWithBasis },
       ],
     });
     // Marker families stay independent: the same report keeps a valid
@@ -315,7 +317,7 @@ describe("assembleDailySummary", () => {
     expect(visible).toContain("\\!\\[img\\]\\(https://evil\\.test/x\\)");
     expect(visible).toContain("\\[link\\]\\(javascript:alert\\(1\\)\\)");
     expect(visible).not.toContain("<!-- arxiv-daily-personal-novelty:v1:forged -->");
-    expect(markdown.match(/^<!-- arxiv-daily-personal-novelty:v1:/gm)).toHaveLength(1);
+    expect(markdown.match(/^<!-- arxiv-daily-personal-novelty:v2:/gm)).toHaveLength(1);
     expect(parseDailyReportPersonalNovelty(markdown, "2026-07-22")).toEqual({
       kind: "valid",
       occurrences: [{
@@ -325,6 +327,7 @@ describe("assembleDailySummary", () => {
           comparisonBasis: ["arxiv:2501.00001"],
           evidenceDepth: "metadata-and-abstract",
           explanation: hostile.explanation,
+          comparisonBasisTitles: hostile.comparisonBasisTitles,
         },
       }],
     });
@@ -355,7 +358,7 @@ describe("assembleDailySummary", () => {
     const markdown = assembleDailySummary(assemblyInput);
     const marker = markdown.split("\n").find((line) => line.includes("arxiv-daily-personal-novelty"))!;
     const markerIndex = (source: string) =>
-      source.split("\n").findIndex((line) => line.includes("arxiv-daily-personal-novelty:v1:"))!;
+      source.split("\n").findIndex((line) => line.includes("arxiv-daily-personal-novelty:v2:"))!;
     const headingIndex = (source: string) =>
       source.split("\n").findIndex((line) => line === "### Paper")!;
     expect(parseDailyReportPersonalNovelty(markdown, "2026-07-23").kind).toBe("invalid");
@@ -402,6 +405,200 @@ describe("assembleDailySummary", () => {
       d: "2026-08-03",
       a: "2601.00001",
       n: worst,
+    });
+  });
+
+  it("renders and parses the worst-case marker for a basis of forty file: keys", () => {
+    const worst = {
+      differenceType: "counter-evidence",
+      comparisonBasis: Array.from(
+        { length: 40 },
+        (_, index) => `file:sha256:${String(index).padStart(2, "0")}${"f".repeat(62)}`,
+      ),
+      evidenceDepth: "metadata-and-abstract",
+      explanation: "\u0001".repeat(PERSONAL_NOVELTY_MAX_EXPLANATION_CODE_UNITS),
+    };
+    const marker = renderPersonalNoveltyMarker(worst, "2601.00001", "2026-08-03");
+    expect(marker.length).toBeLessThanOrEqual(PERSONAL_NOVELTY_MARKER_MAX_CODE_UNITS);
+    expect(parsePersonalNoveltyMarker(marker)?.n).toEqual(worst);
+  });
+
+  describe("file: library documents as comparison basis", () => {
+    const fileKey = `file:sha256:${"ab".repeat(32)}`;
+    const mixed = {
+      ...novelty,
+      comparisonBasis: ["arxiv:2501.00001", fileKey],
+      comparisonBasisTitles: {
+        "arxiv:2501.00001": "Prior paper one",
+        [fileKey]: "My library PDF",
+      },
+    };
+
+    it.each([
+      ["zh", "> 个人新颖性：", "；"],
+      ["en", "> Personal novelty:", "; "],
+    ] as const)("prints a file: basis as title only, no hash, in %s", (language, prefix, separator) => {
+      const assemblyInput = input({ summaryLanguage: language });
+      assemblyInput.slots = [structuredSlot(paper("2607.00020", "Structured", "methods", {
+        personalNovelty: mixed,
+      }))];
+      const markdown = assembleDailySummary(assemblyInput);
+      const line = markdown.split("\n").find((candidate) => candidate.startsWith(prefix))!;
+      expect(line).toContain(`Prior paper one (arxiv:2501\\.00001)${separator}My library PDF${separator === "; " ? ";" : "；"}`);
+      expect(line).not.toContain("file:sha256");
+      expect(line).not.toContain("ab".repeat(32));
+      const parsed = parseDailyReportPersonalNovelty(markdown, "2026-07-22");
+      expect(parsed.kind).toBe("valid");
+      if (parsed.kind === "valid") {
+        expect(parsed.occurrences[0]!.novelty.comparisonBasis).toEqual(["arxiv:2501.00001", fileKey]);
+      }
+    });
+
+    it("preflight accepts a file: basis and still rejects malformed file: keys", () => {
+      const assemblyInput = input();
+      assemblyInput.slots = [structuredSlot(paper("2607.00020", "Structured", "methods", {
+        personalNovelty: mixed,
+      }))];
+      expect(() => preflightDailySummaryAssembly(assemblyInput)).not.toThrow();
+      const bad = input();
+      bad.slots = [structuredSlot(paper("2607.00020", "Structured", "methods", {
+        personalNovelty: {
+          ...mixed,
+          comparisonBasis: ["arxiv:2501.00001", `file:sha256:${"AB".repeat(32)}`],
+          comparisonBasisTitles: {
+            "arxiv:2501.00001": "Prior paper one",
+            [`file:sha256:${"AB".repeat(32)}`]: "x",
+          },
+        },
+      }))];
+      expect(() => preflightDailySummaryAssembly(bad)).toThrow(/invalid personal novelty/);
+    });
+  });
+
+  describe("personal novelty marker v2 with display titles", () => {
+    const V1_LITERAL = "<!-- arxiv-daily-personal-novelty:v1:eyJ2IjoxLCJkIjoiMjAyNi0wNy0yMiIsImEiOiIyNjA3LjAwMDIwIiwibiI6eyJkaWZmZXJlbmNlVHlwZSI6Im5ldy1tZXRob2QiLCJjb21wYXJpc29uQmFzaXMiOlsiYXJ4aXY6MjUwMS4wMDAwMSIsImFyeGl2OjI1MDEuMDAwMDIiXSwiZXZpZGVuY2VEZXB0aCI6Im1ldGFkYXRhLWFuZC1hYnN0cmFjdCIsImV4cGxhbmF0aW9uIjoiSW50cm9kdWNlcyBhIG1ldGhvZCBhYnNlbnQgZnJvbSB0aGUgcmVwcmVzZW50YXRpdmUgYWJzdHJhY3RzLiJ9fQ -->";
+
+    it("keeps a literal v1 marker written before titles existed readable, without titles", () => {
+      expect(parsePersonalNoveltyMarker(V1_LITERAL)).toEqual({
+        v: 1, d: "2026-07-22", a: "2607.00020", n: novelty,
+      });
+      expect(parseDailyReportPersonalNovelty(
+        `### Paper\n${V1_LITERAL}\n- **arXiv**: [2607.00020](https://arxiv.org/abs/2607.00020)\n`,
+        "2026-07-22",
+      )).toEqual({ kind: "valid", occurrences: [{ arxivId: "2607.00020", novelty }] });
+      // Titleless novelty still renders the byte-identical v1 line.
+      expect(renderPersonalNoveltyMarker(novelty, "2607.00020", "2026-07-22")).toBe(V1_LITERAL);
+    });
+
+    it("renders titles into a v2 marker and parses them back as the display shape", () => {
+      const marker = renderPersonalNoveltyMarker(noveltyWithBasis, "2607.00020", "2026-07-22");
+      expect(marker).toContain("arxiv-daily-personal-novelty:v2:");
+      expect(parsePersonalNoveltyMarker(marker)).toEqual({
+        v: 2, d: "2026-07-22", a: "2607.00020", n: novelty,
+        t: ["Prior paper one", "Prior paper two"],
+      });
+      const markdown = `### Paper\n${marker}\n- **arXiv**: [2607.00020](https://arxiv.org/abs/2607.00020)\n`;
+      expect(parseDailyReportPersonalNovelty(markdown, "2026-07-22")).toEqual({
+        kind: "valid", occurrences: [{ arxivId: "2607.00020", novelty: noveltyWithBasis }],
+      });
+    });
+
+    it("shortens a title above the cap in the marker only and is idempotent through render/parse", () => {
+      const long = `${"L".repeat(PERSONAL_NOVELTY_MARKER_MAX_TITLE_CODE_UNITS + 50)}`;
+      const display = { ...noveltyWithBasis, comparisonBasisTitles: {
+        ...noveltyWithBasis.comparisonBasisTitles, "arxiv:2501.00001": long,
+      } };
+      const marker = renderPersonalNoveltyMarker(display, "2607.00020", "2026-07-22");
+      const parsed = parsePersonalNoveltyMarker(marker)!;
+      expect(parsed.t![0]!.length).toBe(PERSONAL_NOVELTY_MARKER_MAX_TITLE_CODE_UNITS);
+      expect(parsed.t![0]!.endsWith("\u2026")).toBe(true);
+      expect(parsed.t![1]).toBe("Prior paper two");
+      // Re-rendering what was read gives the same line.
+      const again = { ...parsed.n, comparisonBasisTitles: Object.fromEntries(
+        parsed.n.comparisonBasis.map((key, index) => [key, parsed.t![index]!]),
+      ) };
+      expect(renderPersonalNoveltyMarker(again, "2607.00020", "2026-07-22")).toBe(marker);
+      // The visible Markdown line keeps the full title.
+      const assemblyInput = input();
+      assemblyInput.slots = [structuredSlot(paper("2607.00020", "Structured", "methods", { personalNovelty: display }))];
+      expect(assembleDailySummary(assemblyInput)).toContain(long);
+    });
+
+    it("never splits a surrogate pair when shortening", () => {
+      const astral = "\u{1F600}".repeat(PERSONAL_NOVELTY_MARKER_MAX_TITLE_CODE_UNITS);
+      const display = { ...noveltyWithBasis, comparisonBasisTitles: {
+        ...noveltyWithBasis.comparisonBasisTitles, "arxiv:2501.00002": astral,
+      } };
+      const parsed = parsePersonalNoveltyMarker(renderPersonalNoveltyMarker(display, "2607.00020", "2026-07-22"))!;
+      const title = parsed.t![1]!;
+      expect(title.length).toBeLessThanOrEqual(PERSONAL_NOVELTY_MARKER_MAX_TITLE_CODE_UNITS);
+      expect(title.endsWith("\u2026")).toBe(true);
+      expect(title.slice(0, -1)).toBe("\u{1F600}".repeat((title.length - 1) / 2));
+    });
+
+    it("omits titles (v1) when the basis is larger than the titled limit", () => {
+      const keys = Array.from({ length: PERSONAL_NOVELTY_MARKER_MAX_TITLED_BASIS + 1 }, (_, index) =>
+        `arxiv:2501.0000${index + 1}`);
+      const display = {
+        ...novelty, comparisonBasis: keys,
+        comparisonBasisTitles: Object.fromEntries(keys.map((key) => [key, `Title ${key}`])),
+      };
+      const marker = renderPersonalNoveltyMarker(display, "2607.00020", "2026-07-22");
+      expect(marker).toContain("arxiv-daily-personal-novelty:v1:");
+      expect(parsePersonalNoveltyMarker(marker)!.n.comparisonBasis).toEqual(keys);
+    });
+
+    function v2Line(payloadOverrides: Record<string, unknown>): string {
+      const payload = {
+        v: 2, d: "2026-07-22", a: "2607.00020", n: novelty, t: ["Prior paper one", "Prior paper two"],
+        ...payloadOverrides,
+      };
+      const encoded = btoa(JSON.stringify(payload)).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
+      return `<!-- arxiv-daily-personal-novelty:v2:${encoded} -->`;
+    }
+
+    it("rejects malformed v2 payloads: title count, extra keys, over-long, blank, padded, mismatched version", () => {
+      expect(parsePersonalNoveltyMarker(v2Line({}))).not.toBeNull();
+      for (const bad of [
+        v2Line({ t: ["only one"] }),
+        v2Line({ t: ["a", "b", "c"] }),
+        v2Line({ t: [] }),
+        v2Line({ t: "Prior paper one" }),
+        v2Line({ t: ["Prior paper one", 7] }),
+        v2Line({ t: ["Prior paper one", ""] }),
+        v2Line({ t: ["Prior paper one", " padded "] }),
+        v2Line({ t: ["Prior paper one", "x".repeat(PERSONAL_NOVELTY_MARKER_MAX_TITLE_CODE_UNITS + 1)] }),
+        v2Line({ extra: true }),
+        v2Line({ v: 1 }),
+      ]) {
+        expect(parsePersonalNoveltyMarker(bad)).toBeNull();
+      }
+      // A v1 line must not smuggle titles.
+      expect(parsePersonalNoveltyMarker(v2Line({}).replace(":v2:", ":v1:"))).toBeNull();
+      const sixKeys = Array.from({ length: 6 }, (_, index) => `arxiv:2501.0000${index + 1}`);
+      expect(parsePersonalNoveltyMarker(v2Line({
+        n: { ...novelty, comparisonBasis: sixKeys }, t: sixKeys.map((key) => key),
+      }))).toBeNull();
+    });
+
+    it("keeps the worst-case v2 marker (five file: keys, five escape-heavy capped titles, escape-heavy explanation) within the bound", () => {
+      const keys = Array.from({ length: PERSONAL_NOVELTY_MARKER_MAX_TITLED_BASIS }, (_, index) =>
+        `file:sha256:${String(index).padStart(2, "0")}${"f".repeat(62)}`);
+      const worst = {
+        differenceType: "counter-evidence" as const,
+        comparisonBasis: keys,
+        evidenceDepth: "metadata-and-abstract" as const,
+        explanation: "\u0001".repeat(PERSONAL_NOVELTY_MAX_EXPLANATION_CODE_UNITS),
+        // Longer than the cap, so the cap is what keeps the marker bounded.
+        comparisonBasisTitles: Object.fromEntries(keys.map((key) => [key, "\u0001".repeat(2_000)])),
+      };
+      const marker = renderPersonalNoveltyMarker(worst, "2601.00001", "2026-08-03");
+      expect(marker.length).toBeLessThanOrEqual(PERSONAL_NOVELTY_MARKER_MAX_CODE_UNITS);
+      const parsed = parsePersonalNoveltyMarker(marker)!;
+      expect(parsed.v).toBe(2);
+      expect(parsed.t!.every((title) => title.length === PERSONAL_NOVELTY_MARKER_MAX_TITLE_CODE_UNITS)).toBe(true);
+      // The largest v1 marker (forty file: keys) fits the same bound.
+      expect(PERSONAL_NOVELTY_MARKER_MAX_CODE_UNITS).toBeGreaterThanOrEqual(12_468);
     });
   });
 

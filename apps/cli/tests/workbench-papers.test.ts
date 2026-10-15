@@ -42,6 +42,25 @@ it("lists index-only papers, real details and exact daily occurrences without wr
   expect(await readFile(join(config.vaultRoot, index.paths.papersJsonPath), "utf8")).toBe(before); expect(run).not.toHaveBeenCalled();
 });
 
+it("projects comparison-basis titles from the persisted novelty and omits them for legacy entries", async () => {
+  const { get, index, report } = await fixture();
+  const fileKey = `file:sha256:${"ab".repeat(32)}`;
+  const base = { differenceType: "new-method", comparisonBasis: ["arxiv:2501.00001", fileKey], evidenceDepth: "metadata-and-abstract" as const, explanation: "Adds a method." };
+  await index.reconcileDailyReportOccurrenceNovelty(report, [
+    { arxivId: "2609.10001", novelty: { ...base, comparisonBasisTitles: { "arxiv:2501.00001": "Prior paper one", [fileKey]: "Library PDF" } } },
+    { arxivId: "2609.10002", novelty: base },
+  ]);
+  const papers = (await (await get("api/papers")).json()).papers as Array<{ arxivId: string; novelty: { comparisonBasis: unknown[] } | null }>;
+  expect(papers.find(p => p.arxivId === "2609.10001")!.novelty!.comparisonBasis).toEqual([
+    { paperKey: "arxiv:2501.00001", title: "Prior paper one" },
+    { paperKey: fileKey, title: "Library PDF" },
+  ]);
+  expect(papers.find(p => p.arxivId === "2609.10002")!.novelty!.comparisonBasis).toEqual([
+    { paperKey: "arxiv:2501.00001" },
+    { paperKey: fileKey },
+  ]);
+});
+
 it("persists independent reading and star marks through the existing index, preserving notes and metadata", async () => {
   const { mark, get, index, config, note } = await fixture();
   const key = "arxiv:2609.10002", original = await index.get(key);

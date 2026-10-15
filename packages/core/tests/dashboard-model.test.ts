@@ -203,6 +203,26 @@ describe("Dashboard occurrence personal novelty", () => {
       .toEqual(projectDashboardOccurrenceNovelty(entry).personalNovelty);
   });
 
+  it("carries the persisted basis titles per paper and falls back to the bare key for legacy entries", () => {
+    const report = "arxiv-daily/daily/2026-08-01.md";
+    const fileKey = `file:sha256:${"ab".repeat(32)}`;
+    const titled = {
+      ...novelty({ comparisonBasis: ["arxiv:2501.00001", fileKey] }),
+      comparisonBasisTitles: { "arxiv:2501.00001": "Prior paper one", [fileKey]: "Library PDF" },
+    };
+    expect(projectDashboardOccurrenceNovelty(paper({
+      dailyReports: [report], noveltyByReport: { [report]: titled },
+    })).personalNovelty?.comparisonBasis).toEqual([
+      { paperKey: "arxiv:2501.00001", title: "Prior paper one" },
+      { paperKey: fileKey, title: "Library PDF" },
+    ]);
+    const legacy = projectDashboardOccurrenceNovelty(paper({
+      dailyReports: [report], noveltyByReport: { [report]: novelty() },
+    })).personalNovelty?.comparisonBasis;
+    expect(legacy).toEqual([{ paperKey: "arxiv:2501.00001" }, { paperKey: "arxiv:2501.00002" }]);
+    expect(legacy!.every((basis) => !("title" in basis))).toBe(true);
+  });
+
   it("selects the latest committed novelty occurrence deterministically, independent of insertion order", () => {
     const oldReport = "arxiv-daily/daily/2026-08-01.md";
     const latestA = "archive/a/2026-08-03.md";

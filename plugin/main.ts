@@ -148,6 +148,7 @@ import {
   type PersistedLibraryConnection,
 } from "./src/library/connection";
 import { projectLibraryFullTextMatches } from "./src/library/fulltext-results";
+import { wireLibraryPriorWork } from "./src/library/prior-work-wiring";
 import { confirmLibraryAuthorization } from "./src/library/modal";
 import {
   SettingsChangeService,
@@ -223,16 +224,6 @@ export interface PersonalLibraryProfileSnapshot {
   acceptanceLoadError?: string | null;
 }
 
-/**
- * One immutable daily discovery snapshot captured from the currently
- * authorized eligibility join: the personalized discovery input plus, when
- * novelty preparation succeeds, the library-derived novelty representative
- * evidence and the direction→representative mapping. Discovery and novelty
- * share the same gate and lifecycle guards; per-run daily paper evidence for
- * novelty is derived inside the pipeline from the fetched source papers, never
- * here. A novelty-preparation failure degrades to a discovery-only snapshot
- * and never drops personalized discovery.
- */
 class SettingsOperationRegistry extends OperationRegistry {
   private outputTransitionActive = false;
 
@@ -2799,8 +2790,45 @@ export default class ArxivDailyPlugin extends Plugin {
       llmSettings: settings.llm,
       detailSelection: settings.detailSelection,
       progress: this.progress,
+      libraryPriorWork: this.buildLibraryPriorWork(settings.embedding.mode) ?? undefined,
     });
     return pipeline;
+  }
+
+  /**
+   * Library port for the daily novelty comparison (ADR 0015): only while the
+   * connected library is authorized for the model endpoint this run uses, and
+   * re-checked before every lookup so revoking consent stops it mid-run.
+   * Local embedding searches lexically and never loads the embedding model;
+   * remote embedding searches hybrid through the authorized endpoint.
+   */
+  private buildLibraryPriorWork(embeddingMode: "local" | "remote") {
+    return wireLibraryPriorWork({
+      getStatus: () => this.getLibraryConnectionStatus(),
+      embeddingMode,
+      assertRemoteEmbeddingReady: () => this.assertRemoteEmbeddingReady(),
+      loadCatalog: async () => {
+        const connection = this.libraryConnection;
+        if (!connection) throw new Error("Choose a personal library first");
+        const { scopeFingerprint, identificationFingerprint } = this.libraryFingerprints(connection);
+        return await this.buildPersonalLibraryCatalogStore().load(
+          scopeFingerprint,
+          identificationFingerprint,
+        );
+      },
+      openSearchSource: async () => {
+        const connection = this.libraryConnection;
+        if (!connection) throw new Error("Choose a personal library first");
+        const store = this.buildFullTextKnowledgeBaseStore(connection);
+        return {
+          store,
+          sourceManifest: await store.loadManifest(),
+          generationStore: this.buildFullTextGenerationIndexStore(connection),
+          embedding: this.buildEmbeddingModel(),
+        };
+      },
+      logger: this.logger,
+    });
   }
 
   private buildManualFetch(): ManualFetchService {

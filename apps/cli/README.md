@@ -129,6 +129,8 @@ arxiv-daily library review --input REQUEST.json
 
 Accepted directions become ordinary research-topic settings. `library search --query TEXT` searches the indexed library directly. The [workbench](https://github.com/tdccccc/arxiv-daily/blob/main/docs/workbench.md) also supports connecting, indexing, browsing and direction review from a browser.
 
+Authorizing library processing also lets the daily report send the titles and abstracts of the library papers it retrieves as most similar to each digest paper to the same model endpoint, to say how the digest paper is new relative to them. Revoke the authorization (`library revoke`) to stop this; reports then simply omit those notes. A running `schedule` process reads the authorization when it starts, so restart it after changing it.
+
 ## Update
 
 ```bash

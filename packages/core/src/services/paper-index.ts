@@ -3,8 +3,8 @@ import {
   normalizePaperDiscoveryProvenance,
 } from "../pipeline/discovery-provenance-marker";
 import type { PaperDiscoveryProvenance } from "../pipeline/discovery-provenance-marker";
-import { normalizePersonalNovelty } from "../pipeline/personalized-novelty";
-import type { PersonalNovelty } from "../pipeline/personalized-novelty";
+import { normalizePersonalNoveltyRecord } from "../pipeline/personalized-novelty";
+import type { PersonalNoveltyRecord } from "../pipeline/personalized-novelty";
 import type { OutputSettings } from "../settings/types";
 import {
   portablePathCollisionKey,
@@ -76,8 +76,8 @@ export interface PaperIndexEntry {
   dailyReports: string[];
   /** Occurrence projection keyed by normalized committed daily-report path. */
   discoveryProvenanceByReport: Record<string, PaperDiscoveryProvenance>;
-  /** Validated personal-novelty occurrence projection keyed by normalized committed daily-report path. */
-  noveltyByReport: Record<string, PersonalNovelty>;
+  /** Validated personal-novelty occurrence projection (with display titles when the marker carried them) keyed by normalized committed daily-report path. */
+  noveltyByReport: Record<string, PersonalNoveltyRecord>;
   /** Vault-relative note path; stem is externalId, not paperKey. */
   paperPath: string | null;
   arxivUrl: string;
@@ -386,14 +386,14 @@ export class PaperIndexStore {
    */
   async reconcileDailyReportOccurrenceNovelty(
     dailyReport: string,
-    occurrences: Array<{ arxivId: string; novelty: PersonalNovelty }>,
+    occurrences: Array<{ arxivId: string; novelty: PersonalNoveltyRecord }>,
   ): Promise<number> {
     return this.enqueueMutation(async () => {
       const inbox = await this.load();
       const report = normalizeStoragePath(dailyReport);
-      const next = new Map<string, PersonalNovelty>();
+      const next = new Map<string, PersonalNoveltyRecord>();
       for (const occurrence of occurrences) {
-        const novelty = normalizePersonalNovelty(occurrence.novelty);
+        const novelty = normalizePersonalNoveltyRecord(occurrence.novelty);
         if (!novelty) throw new PaperIndexError("invalid occurrence personal novelty");
         next.set(paperKeyFromArxivId(occurrence.arxivId), novelty);
       }
@@ -1209,12 +1209,12 @@ function normalizeProvenanceByReport(value: unknown): Record<string, PaperDiscov
  * are omitted without failing the whole document (the discovery-provenance
  * precedent); only valid occurrences survive into the derived index.
  */
-function normalizeNoveltyByReport(value: unknown): Record<string, PersonalNovelty> {
+function normalizeNoveltyByReport(value: unknown): Record<string, PersonalNoveltyRecord> {
   if (!value || typeof value !== "object" || Array.isArray(value)) return {};
-  const out: Record<string, PersonalNovelty> = {};
+  const out: Record<string, PersonalNoveltyRecord> = {};
   for (const [path, raw] of Object.entries(value)) {
     const normalizedPath = normalizeStoragePath(path);
-    const novelty = normalizePersonalNovelty(raw);
+    const novelty = normalizePersonalNoveltyRecord(raw);
     if (normalizedPath && novelty) out[normalizedPath] = novelty;
   }
   return out;

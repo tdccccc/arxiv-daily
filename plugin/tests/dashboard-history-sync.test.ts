@@ -249,6 +249,40 @@ describe("syncDashboardHistory", () => {
         "arxiv/daily/2026-06-10.md": novelty,
       });
   });
+  it("restores basis display titles from v2 markers into the index and replaces them from a titleless v1 edit", async () => {
+    const fileKey = `file:sha256:${"ab".repeat(32)}`;
+    const base = {
+      differenceType: "new-method",
+      comparisonBasis: ["arxiv:2501.00001", fileKey],
+      evidenceDepth: "metadata-and-abstract" as const,
+      explanation: "New method explanation.",
+    };
+    const titled = {
+      ...base,
+      comparisonBasisTitles: { "arxiv:2501.00001": "Prior paper one", [fileKey]: "Library PDF" },
+    };
+    const render = (value: Parameters<typeof renderPersonalNoveltyMarker>[0]) => [
+      "## Photo-z", "### Paper", renderPersonalNoveltyMarker(value, "2606.00001", "2026-06-10"),
+      "- **Authors**: A", "- **arXiv**: [2606.00001](https://arxiv.org/abs/2606.00001)",
+    ].join("\n");
+    const { files, storage } = makeStorage({
+      "arxiv/daily/2026-06-10.md": render(titled),
+      "arxiv/.index/papers.json": indexJson({
+        "2606.00001": { dailyReports: [], discoveryProvenanceByReport: {}, noveltyByReport: {} },
+      }),
+    });
+    const store = new PaperIndexStore(storage, output);
+    const index = await syncDashboardHistory({ vault: makeVault(files), store, output, topics });
+    expect(index.papers["arxiv:2606.00001"]!.noveltyByReport).toEqual({
+      "arxiv/daily/2026-06-10.md": titled,
+    });
+    // A legacy v1 marker (no titles) in the same report replaces the titled entry.
+    files["arxiv/daily/2026-06-10.md"] = render(base);
+    const afterEdit = await syncDashboardHistory({ vault: makeVault(files), store, output, topics });
+    expect(afterEdit.papers["arxiv:2606.00001"]!.noveltyByReport).toEqual({
+      "arxiv/daily/2026-06-10.md": base,
+    });
+  });
   it("still rebuilds discovery provenance when novelty markers are invalid", async () => {
     const provenance = {
       manualTopicTags: ["photo-z"],
