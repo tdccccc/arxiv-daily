@@ -1,10 +1,11 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { ACCEPTANCE_DATE, PAPERS } from "./fixtures.mjs";
+import { ACCEPTANCE_DATE, FIXTURE_NOVELTY_EXPLANATION_PREFIX, PAPERS } from "./fixtures.mjs";
 import { runScenario, redact } from "./report.mjs";
 import { OBSIDIAN_SCENARIOS, classifyObsidianDiagnostics } from "./obsidian.mjs";
 import { createObsidianDriver, PLUGIN, poll, pollJsonFile } from "./obsidian-ui.mjs";
 import { pdfPageLocationScenario } from "../desktop-acceptance/scenarios.mjs";
+import { seedClusterableLibraryPaper, startLibraryFixture } from "./exploration-tasks/library.mjs";
 
 const SETTINGS = ".obsidian/plugins/arxiv-daily/data.json";
 const STATE = "arxiv-daily/.index/run-state.json";
@@ -190,10 +191,154 @@ async function readingAndReload(d, t) {
   await d.screenshot("obsidian-reading-restored", t);
 }
 
+// ─── Personal novelty in the daily report (ADR 0015) ─────────────────────────────────────────────
+// Three dates, all served by the fixture's recent listing: the first runs with the library connected but not
+// authorized, the second after the researcher agrees in the real consent dialog and the library is indexed,
+// the third after the researcher revokes. Only the second may carry a novelty line.
+const NOVELTY_UNAUTHORIZED_DATE = "2026-10-02";
+const NOVELTY_AUTHORIZED_DATE = "2026-10-05";
+const NOVELTY_REVOKED_DATE = "2026-10-06";
+// Any marker version: v2 carries the basis titles, v1 (older reports) does not.
+const NOVELTY_MARKER = "arxiv-daily-personal-novelty:v";
+const NOVELTY_SENTENCE = "The daily report also sends the titles and abstracts of the library papers it retrieves as comparisons to the same model endpoint, to say what is new in each digest paper.";
+const NOVELTY_LINE = new RegExp(`^> Personal novelty: new experiment vs\\. prior papers: .+; evidence depth: metadata and abstract; ${FIXTURE_NOVELTY_EXPLANATION_PREFIX}`, "m");
+const dailyFor = date => `arxiv-daily/daily/${date}.md`;
+const NOVELTY_ROWS = `Array.from(document.querySelectorAll(".arxiv-daily-dashboard__table tbody tr")).map(row => ({
+  id: row.querySelector(".arxiv-daily-dashboard__star")?.getAttribute("data-arxiv-id") ?? null,
+  novelty: Array.from(row.querySelectorAll(".arxiv-daily-dashboard__novelty")).map(line => line.textContent),
+}))`;
+
+async function runDailyAndWait(d, date) {
+  const start = d.fixture.server.requests.length;
+  await d.runDate(date);
+  const state = await d.wait(`${PLUGIN}.stateStore.get(${JSON.stringify(date)})`, value => value.status === "completed", `${date} daily report completion`, { timeoutMs: 90000 });
+  await d.idle();
+  return { state, markdown: await d.file(dailyFor(date)), requests: d.fixture.server.requests.slice(start) };
+}
+
+async function openAllTabRows(d) {
+  await d.openDashboard();
+  await d.click('.arxiv-daily-dashboard__tab[data-tab="all"]');
+  return d.wait(NOVELTY_ROWS, rows => rows.length === PAPERS.length, "dashboard paper rows");
+}
+
+async function libraryNovelty(d, t) {
+  // The library fixture helpers are written for the exploration driver; this is the part of its contract they use.
+  const fixtureDriver = {
+    fixture: d.fixture, openDashboard: d.openDashboard,
+    async applySettingsPatch(mutate) {
+      const data = await d.jsonFile(SETTINGS);
+      mutate(data);
+      await fs.writeFile(path.join(d.fixture.vaultRoot, SETTINGS), JSON.stringify(data, null, 2));
+      await d.reloadPlugin();
+    },
+    authorizeLibraryProcessing: () => d.evaluate(`(async () => { await ${PLUGIN}.authorizeLibraryProcessing(); return true; })()`),
+  };
+  const extraPdf = path.join(d.fixture.vaultRoot, "library", "9912.00099.pdf");
+  try {
+    t.step("连接自有文献库（本地 Embedding、未授权），另放一篇与日报论文相近的库论文");
+    await startLibraryFixture(fixtureDriver, { embeddingMode: "local" });
+    await seedClusterableLibraryPaper(fixtureDriver);
+    t.check((await d.read(`${PLUGIN}.getLibraryConnectionStatus().kind`)) === "authorization-required", "文献库已连接但尚未授权处理");
+
+    t.step(`文献库未授权时生成 ${NOVELTY_UNAUTHORIZED_DATE} 日报`);
+    const unauthorized = await runDailyAndWait(d, NOVELTY_UNAUTHORIZED_DATE);
+    t.check(unauthorized.state.status === "completed", "未授权时日报照常生成", unauthorized.state);
+    t.check(PAPERS.every(paper => unauthorized.markdown.includes(paper.id)), "未授权的日报仍含两篇论文");
+    t.check(!unauthorized.markdown.includes(NOVELTY_MARKER) && !/Personal novelty/i.test(unauthorized.markdown), "未授权的日报没有个人新颖性标记或文字");
+    t.check(!unauthorized.requests.some(request => request.kind === "personal-novelty"), "未授权时没有向模型发送新颖性对比请求", unauthorized.requests.map(request => request.kind));
+    t.check((await openAllTabRows(d)).every(row => row.novelty.length === 0), "未授权时 Dashboard 论文行没有新颖性块");
+
+    t.step("在设置页把 Embedding 切换为 Remote，打开授权披露对话框");
+    await d.openSettings();
+    await d.evaluate(`(() => {
+      const row = Array.from(document.querySelectorAll(".setting-item")).find(item => /^Embedding( mode)?$/.test(item.querySelector(".setting-item-name")?.textContent?.trim() ?? ""));
+      const select = row?.querySelector("select");
+      if (!select) throw new Error("Embedding mode select not found");
+      select.scrollIntoView({ block: "center" }); select.value = "remote";
+      select.dispatchEvent(new Event("change", { bubbles: true })); return true;
+    })()`);
+    const modalText = await d.wait('document.querySelector(".arxiv-daily-library-authorization-modal")?.textContent ?? ""', value => value.includes("Send titles and abstracts"), "library authorization modal");
+    t.check(modalText.includes(NOVELTY_SENTENCE), "授权对话框说明日报会把检索到的库论文标题和摘要作为对比发送给同一模型端点", modalText);
+    t.check(modalText.includes(`${d.fixture.server.url}/v1`), "授权对话框仍列出模型端点", modalText);
+    const consentShot = path.join(d.artifactDir, "obsidian-library-consent-novelty.png");
+    await d.screenshots.capture("obsidian-library-consent-novelty", { selector: ".arxiv-daily-library-authorization-modal" });
+    t.artifact(consentShot);
+    await d.click(".arxiv-daily-library-authorization-modal .mod-cta");
+    const authorizedSettings = await pollJsonFile(() => d.jsonFile(SETTINGS), data => data.settings.embedding.mode === "remote" && Boolean(data.libraryConnection?.authorization), "remote embedding and library authorization on disk");
+    t.check(Boolean(authorizedSettings.libraryConnection.authorization), "确认披露后授权写入设置");
+    await d.closeSettings();
+    // The embedding key field is a credential the exploration harness deliberately never lets a model touch, and
+    // the fixture needs one for its /embeddings endpoint, so it is seeded the way the exploration tasks seed it.
+    await fixtureDriver.applySettingsPatch(data => { data.settings.embedding.apiKey = "fixture-embedding-key"; });
+    t.check((await d.read(`${PLUGIN}.getLibraryConnectionStatus().kind`)) === "authorized", "写入嵌入密钥并重新加载后文献库授权仍有效");
+
+    t.step("用插件真实的扫描和索引流程建立文献库搜索索引");
+    const built = await d.evaluate(`(async () => {
+      await ${PLUGIN}.indexPersonalLibraryFullText();
+      const snapshot = ${PLUGIN}.libraryIndexStatus.snapshot();
+      return JSON.stringify({ papers: snapshot.lastRun?.papers ?? null, preparationError: snapshot.preparationError ?? null });
+    })()`).then(JSON.parse);
+    t.check(!built.preparationError && built.papers >= PAPERS.length, "文献库索引建立完成", built);
+
+    t.step(`授权后生成 ${NOVELTY_AUTHORIZED_DATE} 日报`);
+    const authorized = await runDailyAndWait(d, NOVELTY_AUTHORIZED_DATE);
+    t.check(authorized.state.status === "completed" && authorized.state.papersWritten === PAPERS.length, "授权后日报完成且论文数量与夹具一致", authorized.state);
+    const noveltyRequests = authorized.requests.filter(request => request.kind === "personal-novelty");
+    t.check(noveltyRequests.length >= 1 && PAPERS.every(paper => noveltyRequests.some(request => request.paperIds?.includes(paper.id))), "每篇日报论文都向模型发送了新颖性对比请求", noveltyRequests.map(request => request.paperIds));
+    t.check(noveltyRequests.every(request => request.model === "fixture-model-2"), "新颖性对比使用界面保存的模型");
+    const markers = authorized.markdown.split("\n").filter(line => line.includes(NOVELTY_MARKER));
+    t.check(markers.length === 1, "日报只为得到新颖性的那一篇写入一个新颖性标记", markers.length);
+    t.check(NOVELTY_LINE.test(authorized.markdown), "日报含可见的 “> Personal novelty: …” 行", authorized.markdown);
+    const titleAt = PAPERS.map(paper => authorized.markdown.indexOf(paper.title));
+    const sectionStart = titleAt[0], sectionEnd = Math.min(authorized.markdown.length, ...titleAt.filter(at => at > sectionStart));
+    const noveltyAt = authorized.markdown.search(NOVELTY_LINE);
+    t.check(titleAt.every(at => at >= 0) && noveltyAt > sectionStart && noveltyAt < sectionEnd, "新颖性行写在得到新颖性的那篇论文的小节内", { titleAt, noveltyAt });
+    await recordFile(d, dailyFor(NOVELTY_AUTHORIZED_DATE), "obsidian-novelty-daily.md", t);
+
+    t.step("在 Dashboard All 标签检查论文行的新颖性块");
+    const rows = await openAllTabRows(d);
+    const withNovelty = rows.find(row => row.id === PAPERS[0].id), without = rows.find(row => row.id === PAPERS[1].id);
+    t.check(withNovelty?.novelty.length === 3, "得到新颖性的论文行显示三行新颖性块", withNovelty);
+    t.check(/^Personal novelty: new experiment vs\. prior papers: \S.*/.test(withNovelty?.novelty[0] ?? "") && !/prior papers: arxiv:\d{4}\.\d{4,5}\b/.test(withNovelty?.novelty[0] ?? ""), "新颖性块首行给出差异类型和对比的库论文标题（而不是裸 paperKey）", withNovelty?.novelty[0]);
+    t.check(withNovelty?.novelty[1] === "Evidence depth: metadata and abstract", "新颖性块声明证据深度只是元数据和摘要", withNovelty?.novelty[1]);
+    t.check((withNovelty?.novelty[2] ?? "").startsWith(FIXTURE_NOVELTY_EXPLANATION_PREFIX), "新颖性块显示模型给出的说明", withNovelty?.novelty[2]);
+    t.check(without?.novelty.length === 0, "模型判定没有可比论文的那一行不显示新颖性块", without);
+    t.check(await d.read(`Array.from(document.querySelectorAll(".arxiv-daily-dashboard__novelty")).every(line => line.getClientRects().length > 0 && getComputedStyle(line).visibility !== "hidden")`), "新颖性块不需要悬停或展开即可见");
+    const rowShot = path.join(d.artifactDir, "obsidian-dashboard-novelty-row.png");
+    await d.screenshots.capture("obsidian-dashboard-novelty-row", { selector: ".arxiv-daily-dashboard__table tbody tr:has(.arxiv-daily-dashboard__novelty)" });
+    t.artifact(rowShot);
+
+    t.step("在设置页撤销文献库授权");
+    await d.openSettings();
+    await d.evaluate(`(() => {
+      const button = Array.from(document.querySelectorAll(".setting-item button")).find(item => item.textContent.trim() === "Revoke");
+      if (!button) throw new Error("Revoke button not found");
+      button.scrollIntoView({ block: "center" }); button.click(); return true;
+    })()`);
+    await d.wait('Boolean(document.querySelector(".arxiv-daily-modal .mod-warning"))', value => value === true, "revocation dialog");
+    await d.click(".arxiv-daily-modal .mod-warning");
+    await pollJsonFile(() => d.jsonFile(SETTINGS), data => !data.libraryConnection?.authorization, "library authorization revoked on disk");
+    await d.closeSettings();
+
+    t.step(`撤销后生成 ${NOVELTY_REVOKED_DATE} 日报`);
+    const revoked = await runDailyAndWait(d, NOVELTY_REVOKED_DATE);
+    t.check(revoked.state.status === "completed", "撤销授权后日报照常生成", revoked.state);
+    t.check(PAPERS.every(paper => revoked.markdown.includes(paper.id)), "撤销后的日报仍含两篇论文");
+    t.check(!revoked.markdown.includes(NOVELTY_MARKER) && !/Personal novelty/i.test(revoked.markdown), "撤销后的日报没有个人新颖性标记或文字");
+    t.check(!revoked.requests.some(request => request.kind === "personal-novelty"), "撤销后没有向模型发送新颖性对比请求", revoked.requests.map(request => request.kind));
+  } finally {
+    // The next scenario opens the first PDF the vault lists; wait until Obsidian's own file watcher has dropped
+    // this one, or it would try to open a file that no longer exists.
+    await fs.rm(extraPdf, { force: true });
+    await d.wait('app.vault.getFiles().some(file => file.name === "9912.00099.pdf")', value => value === false, "vault to notice the removed library PDF", { timeoutMs: 15000 }).catch(() => undefined);
+  }
+}
+
 export async function runObsidianJourneys({ session, fixture, artifactDir }) {
   const d = await createObsidianDriver({ session, fixture, artifactDir });
   const scenarios = [], expectedErrors = new Set();
-  const actions = [settingsPersistence, cancelAndRepeat, authorizationError, retryAndComplete, completedIdempotency, readingAndReload,
+  const actions = [settingsPersistence, cancelAndRepeat, authorizationError, retryAndComplete, completedIdempotency, readingAndReload, libraryNovelty,
     async (driver, t) => {
       t.step("从自有文献库打开 PDF #page=4，读取真实 viewer 页码");
       const result = await pdfPageLocationScenario({ session: driver.session });

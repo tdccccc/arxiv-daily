@@ -9,10 +9,10 @@
  * duplicated. Each task's `verify()` reads real, independent plugin state via `driver.jsonFile(...)` —
  * never the model's own claim of success — matching every other goal task in this project.
  */
-import { ACCEPTANCE_DATE, PAPERS } from "../fixtures.mjs";
+import { ACCEPTANCE_DATE, FIXTURE_NOVELTY_EXPLANATION_PREFIX, PAPERS } from "../fixtures.mjs";
 import { dailyReportFile, entryFor, HISTORY_FILE, INDEX_FILE, paperNoteFile, SETTINGS_FILE, STATE_FILE } from "../exploration-obsidian.mjs";
 import { poll, pollJsonFile } from "../obsidian-ui.mjs";
-import { checkResult, exactLabelPattern, taskResult, uiLabel } from "./checks.mjs";
+import { checkResult, exactLabelPattern, taskResult, uiLabel, uiLabelException } from "./checks.mjs";
 import { seedClusterableLibraryPaper, startLibraryFixture } from "./library.mjs";
 import { PERSONA_TASK_IDS, personaTasks as sharedPersonaTasks } from "./personas.mjs";
 
@@ -29,6 +29,8 @@ export const GOAL_TASK_IDS = [
   "library-build-index", "library-search", "library-similar-papers",
   // Exploration safety and coverage P3 Chunk 3: Direction candidate review tasks.
   "library-accept-direction", "library-edit-candidate",
+  // Library novelty and change nudge P2 (docs/helm/2026-10-15-library-novelty-and-change-nudge): the daily report's personal-novelty note.
+  "library-novelty-visible",
 ];
 
 /** P3 Chunk 5: re-exports the shared persona id list (exploration-tasks/personas.mjs) so `--list`/selection keep reading it from each host's own module, unchanged from before chunk 5 wired it up. */
@@ -239,6 +241,30 @@ const RENAME_TOPIC_LABEL = "Rename topic";
 const TOPIC_NAME_FIELD_LABEL = "Topic name";
 const CARD_EDIT_LABEL = "Edit";
 const DISCARD_LABEL = "Discard";
+// library-novelty-visible: the date whose report carries a personal-novelty note (one of fixtures.mjs's
+// DATES, later than every other task's report date so the Dashboard row shows this report's note), and the
+// Dashboard's own novelty block (plugin/src/dashboard/view.ts: `.arxiv-daily-dashboard__novelty`, three
+// lines — "Personal novelty: …", the evidence-depth line, then the model's explanation).
+export const LIBRARY_NOVELTY_DATE = "2026-10-07";
+const NOVELTY_BLOCK_SELECTOR = ".arxiv-daily-dashboard__novelty";
+const NOVELTY_LABEL = "Personal novelty";
+/**
+ * The novelty block's lines that are actually on screen right now: laid out, not hidden, and inside every
+ * scrolling/clipping ancestor, so a line far below the fold of the Dashboard's own scroll area does not count.
+ */
+export const VISIBLE_NOVELTY_LINES_EXPRESSION = `Array.from(document.querySelectorAll(${JSON.stringify(NOVELTY_BLOCK_SELECTOR)})).filter(line => {
+  const style = getComputedStyle(line);
+  if (style.display === "none" || style.visibility === "hidden" || line.getClientRects().length === 0) return false;
+  const box = line.getBoundingClientRect();
+  if (box.width <= 0 || box.height <= 0 || box.bottom <= 0 || box.top >= window.innerHeight) return false;
+  for (let el = line.parentElement; el; el = el.parentElement) {
+    const overflow = getComputedStyle(el);
+    if (!/(auto|scroll|hidden|clip)/.test(overflow.overflow + overflow.overflowY)) continue;
+    const clip = el.getBoundingClientRect();
+    if (box.bottom <= clip.top || box.top >= clip.bottom) return false;
+  }
+  return true;
+}).map(line => line.textContent)`;
 /** The new topic name library-edit-candidate's rename path asks the model to type, verified byte-for-byte on disk. */
 const LIBRARY_EDIT_NEW_TOPIC_NAME = "文献库候选主题（已重命名）";
 
@@ -1288,6 +1314,49 @@ export function goalTasks() {
           checkResult(`点击 ${REVIEW_SUGGESTIONS_LABEL} 打开建议审核对话框`, true),
           checkResult(`点击该候选方向的 ${DISCARD_LABEL} 按钮`, true),
           checkResult("direction-proposal.json 中该候选方向已被丢弃", ok, proposal?.topics),
+        ]);
+      },
+    },
+    // ─── Library novelty and change nudge P2: the daily report's personal-novelty note on the Dashboard ───
+    {
+      id: "library-novelty-visible", title: "查看论文相对个人文献库的新颖性说明",
+      goal: `打开阅读面板。个人文献库已连接、已获得授权，并已建好索引；其中一篇论文所在日报已经写明“这篇论文相对你文献库里已有论文新在哪”。在论文列表里这段说明以“${NOVELTY_LABEL}”开头，共三行文字，显示在该论文标题下面。请点击 ${ALL_TAB_LABEL} 标签查看全部论文，必要时向下滚动页面，直到这段说明显示在屏幕上；不要修改设置，也不要生成新的日报。`,
+      uiLabels: [
+        uiLabel(ALL_TAB_LABEL, "plugin/src/dashboard/constants.ts"),
+        uiLabelException(NOVELTY_LABEL, "Rendered only as the leading words of a longer template literal (`Personal novelty: ${…}` in plugin/src/dashboard/view.ts), so it has no standalone literal to anchor on."),
+      ],
+      // Starts connected, remote, authorized and indexed (never through the model), then runs one real daily
+      // report so the fixture's novelty answer reaches the plugin through the real pipeline, and finally puts
+      // the Dashboard back on its default Starred tab with nothing starred, so the note is not on screen
+      // until the model switches to All. A precondition that does not hold throws instead of letting the task
+      // pass or fail for the wrong reason.
+      async prepare({ driver }) {
+        await startLibraryFixture(driver, { embeddingMode: "remote", authorized: true });
+        await driver.buildLibraryIndex();
+        await driver.clearDateState(LIBRARY_NOVELTY_DATE);
+        await driver.ensureDailyReport(LIBRARY_NOVELTY_DATE);
+        const markdown = await driver.file(dailyReportFile(LIBRARY_NOVELTY_DATE));
+        if (!markdown.includes("> Personal novelty:")) {
+          throw new Error("library-novelty-visible: the daily report generated in prepare() has no personal-novelty line, so there is nothing for the Dashboard to show");
+        }
+        for (const paper of PAPERS) await driver.ensurePaperUnstarred(paper.id);
+        await driver.reloadPlugin();
+        await driver.openDashboard();
+        const showing = await driver.read(VISIBLE_NOVELTY_LINES_EXPRESSION);
+        if (showing.length > 0) throw new Error("library-novelty-visible: the novelty note is already on screen before the model acts");
+      },
+      async verify({ driver, actions }) {
+        const switchedToAll = actions.some(action => action.type === "click" && new RegExp(`^${ALL_TAB_LABEL}\\d*$`, "i").test((action.control?.name || "").trim()));
+        if (!switchedToAll) return taskResult([checkResult(`点击 ${ALL_TAB_LABEL} 标签`, false)]);
+        const lines = await poll(
+          () => driver.read(VISIBLE_NOVELTY_LINES_EXPRESSION),
+          value => Array.isArray(value) && value.length >= 3, "Dashboard 论文行的新颖性说明已显示在屏幕上", { timeoutMs: 5000 },
+        ).catch(() => []);
+        return taskResult([
+          checkResult(`点击 ${ALL_TAB_LABEL} 标签`, true),
+          checkResult("新颖性说明的第一行以 “Personal novelty:” 开头并在屏幕上可见", lines[0]?.startsWith(`${NOVELTY_LABEL}:`) === true, lines[0]),
+          checkResult("证据深度一行在屏幕上可见", lines[1] === "Evidence depth: metadata and abstract", lines[1]),
+          checkResult("模型给出的说明正文在屏幕上可见", lines[2]?.startsWith(FIXTURE_NOVELTY_EXPLANATION_PREFIX) === true, lines[2]),
         ]);
       },
     },

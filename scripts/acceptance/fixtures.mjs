@@ -10,6 +10,8 @@ export const PAPERS = Object.freeze([
   { id: "2610.10002", title: "Reproducible evidence for research workflows", abstract: "A bounded reproducible experiment measures research reliability." },
 ]);
 
+/** Start of the fixed explanation the novelty fixture returns, so tests can recognise it in a daily report or the Dashboard. */
+export const FIXTURE_NOVELTY_EXPLANATION_PREFIX = "Controlled fixture finding: ";
 const DATES = ["2026-10-09", "2026-10-08", "2026-10-07", "2026-10-06", "2026-10-05", "2026-10-02", ACCEPTANCE_DATE];
 const xml = value => String(value).replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;");
 
@@ -42,6 +44,22 @@ function completion(payload) {
   const user = messages.filter(m => m.role === "user").map(m => typeof m.content === "string" ? m.content : (m.content ?? []).map(block => block.text ?? "").join("\n")).join("\n");
   const ids = paperIds(user);
   const evidence = { model: payload.model, prompt: system, paperIds: ids };
+  if (system.includes("You compare one new arXiv paper against library papers")) {
+    // Daily personal-novelty comparison (ADR 0015). The user message carries `{ paper, basis }`; the answer is
+    // chosen from the digest paper itself so one run shows both outcomes the report must handle: PAPERS[0]
+    // gets a novelty over every basis paper the product supplied, PAPERS[1] the model's "nothing comparable".
+    const raw = /<paper_data>\s*([\s\S]*?)\s*<\/paper_data>/.exec(user)?.[1];
+    const data = JSON.parse(raw ?? "{}");
+    const subject = typeof data.paper?.paperKey === "string" ? data.paper.paperKey.replace(/^arxiv:/, "") : "";
+    const basisKeys = (Array.isArray(data.basis) ? data.basis : []).map(paper => paper?.paperKey).filter(key => typeof key === "string");
+    if (!subject || basisKeys.length === 0) throw new Error("Novelty fixture requires a digest paper and its retrieved basis");
+    evidence.paperIds = [subject];
+    if (subject === PAPERS[1].id) return { ...evidence, kind: "personal-novelty", content: JSON.stringify({ noComparablePrior: true }) };
+    return { ...evidence, kind: "personal-novelty", content: JSON.stringify({
+      differenceType: "new-experiment", comparisonBasis: [...basisKeys].sort(), evidenceDepth: "metadata-and-abstract",
+      explanation: `${FIXTURE_NOVELTY_EXPLANATION_PREFIX}${subject} adds a bounded controlled experiment that the retrieved library papers do not report.`,
+    }) };
+  }
   if (system.includes("为所有命中论文评分") || system.includes("relevanceScore")) {
     const match = /^\s*-\s+([^\s:]+#\d+):/m.exec(system);
     if (!match) throw new Error("Filter fixture requires an actual direction reference");

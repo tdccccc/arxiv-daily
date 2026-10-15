@@ -13,6 +13,7 @@ export const OBSIDIAN_SCENARIOS = [
   ["obsidian.run.retry-complete", "修复外部错误后重新生成完整日报"],
   ["obsidian.run.completed-idempotency", "再次运行已完成日期不重复生成"],
   ["obsidian.reading.star-reload", "打开日报、收藏论文与重新加载恢复"],
+  ["obsidian.library.novelty", "文献库个人新颖性：授权披露、日报与 Dashboard 显示，未授权或撤销后不生成"],
   ["obsidian.pdf.location", "真实 PDF 阅读器定位到指定页"],
 ];
 
