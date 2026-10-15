@@ -53,6 +53,8 @@ Manual topics and confirmed library-derived directions are complementary discove
 - A library-derived match names the relevant direction and representative prior papers.
 - Personalization must not appear as an unexplained black-box score.
 
+> Note (2026-10-15): matches no longer name representative prior papers. ADR 0012 §4 removed representative sets: an accepted direction is one line of text and keeps no evidence, so a library-derived match names the direction only.
+
 ### 4. Rank by relevance and personal novelty
 
 After determining relevance, the product also estimates **personal novelty** relative to the relevant representative set.
