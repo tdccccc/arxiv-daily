@@ -1,15 +1,22 @@
 import type { LlmClient } from "../llm/client";
 import type { Logger } from "../services/logger";
+import {
+  buildCheckpointGenerationIdentity,
+  type CheckpointGenerationIdentity,
+} from "../services/daily-summary-checkpoint-store";
 import { isCancellationError, throwIfCancelled } from "../services/cancellation";
 import type { ArxivSettings, LlmSettings, Topic } from "../settings/types";
 import type { PaperMeta } from "./arxiv-parser";
 import type { MetricsObserver } from "../metrics/generation";
 import type { PaperDiscoveryProvenance } from "./discovery-provenance-marker";
 import {
+  DAILY_FILTER_PROMPT_CONTRACT_VERSION,
+  DAILY_FILTER_RESULT_CONTRACT_VERSION,
   buildPaperFilterRequest,
   classifiableTopics,
   decodePaperFilterRecords,
   prepareDailyFilterCheckpoint,
+  type FilterDirectionRef,
   type FilterRecord,
   type PreparedDailyFilterCheckpoint,
 } from "./paper-filter-contract";
@@ -53,6 +60,21 @@ export interface FilteredPaper extends PaperMeta {
   personalNovelty?: PersonalNoveltyWithBasis;
 }
 
+/**
+ * The validated classification a filter run acted on — every candidate the
+ * model returned, `skip` included — whether it was just generated or reused
+ * from a checkpoint. `filterPapers` returns only the kept papers, so this is
+ * how a caller learns what was decided about the rest.
+ */
+export interface FilterClassification {
+  records: FilterRecord[];
+  /** Directions the classifier was offered, from the frozen request. */
+  directions: FilterDirectionRef[];
+  generation: CheckpointGenerationIdentity;
+  promptContractVersion: number;
+  resultContractVersion: number;
+}
+
 export interface DailyFilterCheckpointPort {
   lookupReusable(
     reportDate: string,
@@ -72,6 +94,8 @@ export interface PaperFilterDeps {
   reportDate: string;
   llmSettings: LlmSettings;
   checkpointStore?: DailyFilterCheckpointPort;
+  /** Called once the classification is validated; never affects the result. */
+  onClassified?: (classification: FilterClassification) => void;
   signal?: AbortSignal;
   onMetrics?: MetricsObserver;
 }
@@ -260,6 +284,8 @@ export async function filterPapers(
     }
   }
 
+  reportClassification(deps, request.options.temperature, prepared, request.identity.directions, validatedRecords);
+
   const idMap = new Map(papers.map((p) => [p.id, p] as const));
   const out: FilteredPaper[] = [];
   for (const item of validatedRecords) {
@@ -292,6 +318,30 @@ export async function filterPapers(
   const skipped = papers.length - out.length;
   logger.info(`paper-filter: ${breakdown}${skipped > 0 ? `, skipped=${skipped}` : ""}`);
   return out;
+}
+
+function reportClassification(
+  deps: PaperFilterDeps,
+  temperature: number,
+  prepared: PreparedDailyFilterCheckpoint | undefined,
+  directions: FilterDirectionRef[],
+  records: FilterRecord[],
+): void {
+  if (!deps.onClassified) return;
+  try {
+    deps.onClassified({
+      records: records.map((record) => ({ ...record, directions: [...record.directions] })),
+      directions: directions.map((direction) => ({ ...direction })),
+      generation: prepared?.fingerprintInput.generation
+        ?? buildCheckpointGenerationIdentity(deps.llmSettings, temperature),
+      promptContractVersion: prepared?.fingerprintInput.promptContractVersion
+        ?? DAILY_FILTER_PROMPT_CONTRACT_VERSION,
+      resultContractVersion: prepared?.fingerprintInput.resultContractVersion
+        ?? DAILY_FILTER_RESULT_CONTRACT_VERSION,
+    });
+  } catch (error) {
+    deps.logger.warn("paper-filter: classification observer failed", error);
+  }
 }
 
 /**

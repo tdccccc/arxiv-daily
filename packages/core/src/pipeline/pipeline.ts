@@ -19,6 +19,10 @@ import type { PaperContentFetcher } from "./paper-content";
 import type { MarkdownWriter } from "./markdown-writer";
 import { isPermanentLlmError, type LlmClient } from "../llm/client";
 import type { PaperIndexEntry, PaperIndexStore } from "../services/paper-index";
+import type {
+  FilterDecisionOutcome,
+  FilterDecisionRecordPort,
+} from "../services/filter-decision-record-store";
 import {
   isCancellationError,
   throwIfCancelled,
@@ -29,6 +33,7 @@ import {
   isPaperFilterCheckpointError,
   isPaperFilterResponseValidationError,
   type DailyFilterCheckpointPort,
+  type FilterClassification,
   type FilteredPaper,
 } from "./paper-filter";
 import type { NoveltyCheckpointPort } from "./personalized-novelty";
@@ -103,6 +108,11 @@ export interface PipelineDeps {
   writer: MarkdownWriter;
   paperIndex?: PaperIndexStore;
   checkpointStores?: DailyGenerationCheckpointStores;
+  /**
+   * Durable record of every filter decision, written once the daily report is
+   * committed. Not a checkpoint: it is never read back to skip a model call.
+   */
+  filterDecisionStore?: FilterDecisionRecordPort;
   /** @deprecated Host compatibility until checkpointStores wiring lands. */
   checkpointStore?: DailySummaryCheckpointLifecyclePort;
   llm: LlmClient;
@@ -215,6 +225,7 @@ export class ArxivPipeline {
     stageStart("filter");
     this.progress.setStage("filter");
     let filtered: FilteredPaper[];
+    const classified: { value?: FilterClassification } = {};
     try {
       filtered = await filterPapers(sourcePapers, {
         llm: this.deps.llm,
@@ -223,6 +234,9 @@ export class ArxivPipeline {
         reportDate: dateStr,
         llmSettings: this.deps.llmSettings,
         checkpointStore: this.deps.checkpointStores?.filter,
+        onClassified: this.deps.filterDecisionStore
+          ? (classification) => { classified.value = classification; }
+          : undefined,
         signal,
         onMetrics: (metrics) => runMetrics.record(metrics),
       });
@@ -249,6 +263,13 @@ export class ArxivPipeline {
     stageEnd("filter", ` (${filtered.length}/${sourcePapers.length} kept)`);
     if (filtered.length === 0) {
       throwIfCancelled(signal);
+      // No report is committed, but the decisions are what recall is judged on.
+      if (classified.value) {
+        await this.recordFilterDecisions(dateStr, classified.value, sourcePapers, {
+          visibleIds: new Set(),
+          ignoredIds: new Set(),
+        });
+      }
       // Don't write empty file - show "0" in calendar
       return {
         kind: "completed",
@@ -271,6 +292,9 @@ export class ArxivPipeline {
     const eligiblePapers = indexed.papers.filter(
       (p) => p.indexEntry?.status !== "ignored",
     );
+    const ignoredIds = new Set(
+      indexed.papers.filter((p) => p.indexEntry?.status === "ignored").map(({ id }) => id),
+    );
     // Rank globally after ignored papers are removed, before any body fetch,
     // detail selection, or summary cost. All later consumers (including report
     // index links) use this same bounded set; the filter cache keeps all scores.
@@ -289,6 +313,12 @@ export class ArxivPipeline {
     }
     if (visiblePapers.length === 0) {
       throwIfCancelled(signal);
+      if (classified.value) {
+        await this.recordFilterDecisions(dateStr, classified.value, sourcePapers, {
+          visibleIds: new Set(),
+          ignoredIds,
+        });
+      }
       // Don't write empty file - show "0" in calendar
       return {
         kind: "completed",
@@ -498,6 +528,12 @@ export class ArxivPipeline {
     await this.deps.writer.writeDaily(dateStr, dailySummary, {
       metrics: runMetrics.snapshot(),
     });
+    if (classified.value) {
+      await this.recordFilterDecisions(dateStr, classified.value, sourcePapers, {
+        visibleIds: new Set(visiblePapers.map(({ id }) => id)),
+        ignoredIds,
+      });
+    }
     await this.cleanupCommittedCheckpoints(dateStr);
     if (this.deps.paperIndex) {
       try {
@@ -601,6 +637,49 @@ export class ArxivPipeline {
     } catch (e) {
       if (isCancellationError(e)) throw e;
       this.deps.logger.error(`pipeline: detail index repair failed for ${arxivId}`, e);
+    }
+  }
+
+  /** Best effort: the committed report stands even when the record cannot be kept. */
+  private async recordFilterDecisions(
+    dateStr: string,
+    classification: FilterClassification,
+    papers: readonly PaperMeta[],
+    outcomes: { visibleIds: ReadonlySet<string>; ignoredIds: ReadonlySet<string> },
+  ): Promise<void> {
+    const store = this.deps.filterDecisionStore;
+    if (!store) return;
+    const titles = new Map(papers.map((paper) => [paper.id, paper.title] as const));
+    const directionsByRef = new Map(classification.directions.map((d) => [d.ref, d] as const));
+    const outcomeOf = (record: FilterClassification["records"][number]): FilterDecisionOutcome => {
+      if (record.category === "skip") return "skipped_by_model";
+      if (outcomes.visibleIds.has(record.id)) return "in_report";
+      return outcomes.ignoredIds.has(record.id) ? "excluded_ignored" : "cut_by_limit";
+    };
+    try {
+      await store.save({
+        reportDate: dateStr,
+        directions: classification.directions,
+        promptContractVersion: classification.promptContractVersion,
+        resultContractVersion: classification.resultContractVersion,
+        generation: classification.generation,
+        candidates: classification.records.map((record) => ({
+          id: record.id,
+          title: titles.get(record.id) ?? "",
+          category: record.category,
+          directions: record.directions.flatMap((ref) => {
+            const direction = directionsByRef.get(ref);
+            return direction ? [{ id: direction.id, text: direction.text, tag: direction.tag }] : [];
+          }),
+          relevanceScore: record.relevanceScore,
+          outcome: outcomeOf(record),
+        })),
+      });
+    } catch (error) {
+      this.deps.logger.warn(
+        `pipeline: filter decision record write failed for ${dateStr}`,
+        error,
+      );
     }
   }
 

@@ -2,8 +2,8 @@
 
 goal_ref: ../goal.md
 created: 2026-10-15T10:35:00+08:00
-updated: 2026-10-15T10:35:00+08:00
-revision: 1
+updated: 2026-10-15T11:08:00+08:00
+revision: 2
 
 ## Outcome
 
@@ -37,7 +37,8 @@ Add a core store for filter decision records (one JSON document per report date 
 - kind: behavior
 - first signal: Red — new pipeline test (mock LLM, same style as existing pipeline tests) fails because no record exists after commit.
 - checks: focused test Green; existing pipeline, paper-filter and checkpoint tests stay Green.
-- [ ] accepted on observed evidence
+- L1 (2026-10-15): `no_matches` completions (every candidate skipped; every kept paper ignored) also write the record — they are the days recall is judged on. Failure paths still write nothing.
+- [x] accepted on observed evidence — delegate observed Red 7/9 then, after the L1 addition, Red 3/13 (no record file on no-match days) → 13/13 Green; owner re-ran record + paper-filter + pipeline tests (154 passed) and core `tsc --noEmit` clean
 
 ### Chunk 3 — hosts wire the store
 
