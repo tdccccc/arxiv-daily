@@ -2,8 +2,8 @@
 
 status: active
 created: 2026-10-15T16:46:40+08:00
-updated: 2026-10-15T18:30:00+08:00
-revision: 3
+updated: 2026-10-16T00:50:00+08:00
+revision: 4
 owner: current-session
 
 ## Intent
@@ -25,14 +25,14 @@ API is throttled.
       LaTeX.
 - [x] A real-model rerun of 2610.16741 (with user consent) gives a Chinese
       structured summary that keeps its formulas.
-- [ ] When the arXiv query API fails or is throttled, papers still lacking an
+- [x] When the arXiv query API fails or is throttled, papers still lacking an
       abstract get one from their `arxiv.org/abs/<id>` page, within a daily cap,
       cancellable, stopping after repeated failures, and reusing the abs-page
       cache.
-- [ ] When some papers were filtered without an abstract, the daily report
+- [x] When some papers were filtered without an abstract, the daily report
       header and run-history say how many, in both CLI and Obsidian, without
       marking the run failed; nothing is shown when none are missing.
-- [ ] A 429 without `Retry-After` no longer triggers short 2–4 s retries.
+- [x] A 429 without `Retry-After` no longer triggers short 2–4 s retries.
 - [ ] Today's daily run takes candidate abstracts from arXiv RSS when
       available, so a throttled query API no longer affects it (P3; detail
       fixed when P3 starts).
@@ -64,5 +64,5 @@ API is throttled.
 ## Phases
 
 1. P1 — single-backslash LaTeX in summary JSON is repaired and diagnosable, so formula-heavy papers get structured summaries — status: done
-2. P2 — abstracts survive query-API throttling via abs-page fallback, and title-only filtering is visible in report and run-history — status: active
+2. P2 — abstracts survive query-API throttling via abs-page fallback, and title-only filtering is visible in report and run-history — status: done
 3. P3 — today's daily run gets candidate abstracts from arXiv RSS, so the query API is only a gap filler — status: pending

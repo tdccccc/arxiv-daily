@@ -2,8 +2,8 @@
 
 goal_ref: ../goal.md
 created: 2026-10-15T18:30:00+08:00
-updated: 2026-10-16T00:20:00+08:00
-revision: 7
+updated: 2026-10-16T00:50:00+08:00
+revision: 8
 
 ## Outcome
 
@@ -178,6 +178,25 @@ run-history (CLI and Obsidian) without failing the run.
 - With user consent (costs model calls): one real daily run in a temp config
   with the query API forced to fail (e.g. fake/blocked host), checking
   `hadAbstract` is mostly true and the header line matches expectations.
+
+Results (2026-10-16):
+
+- E2E (`tests/pipeline/abstract-throttle-e2e.test.ts`, real fetcher/adapter/
+  content fetcher, fake HTTP): 6/6 — header-less and Retry-After API 429 →
+  one API request, abs abstracts in the filter prompt, `hadAbstract` all true,
+  no header line, abs cache hit afterwards; abs pages failing → stop after 3,
+  header line with correct N/M, run-history `{6,6}`, run completed.
+- Local root verification at 0657b5e: all 13 steps passed (release-tools 883,
+  core 2635, node-runtime 73, CLI 459, plugin 1053, settings UI 172,
+  boundaries OK, lint 0 errors, build/submission/smoke OK).
+- Real daily run 2026-10-15 (user-approved; temp config, CO+GA, cap 3,
+  gpt-6.1-sol, export.arxiv.org forced to 429): exit 0, 268 s; 1 API request,
+  68 real abs requests all 200; decision record 68/68 `hadAbstract` true;
+  report has 3 structured papers and no title-only line; run-history
+  `titleOnlyCandidates {0,68}`; 4 LLM calls; temp key deleted, saved files
+  key-free. The failing-fallback header path was exercised only by the e2e
+  test. The "abs-page fallback filled X/Y" line is info-level and hidden in
+  default CLI output (follow-up candidate).
 
 ## Abort / reshape triggers
 
