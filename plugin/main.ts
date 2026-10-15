@@ -97,6 +97,7 @@ import { PaperIndexStore } from "@arxiv-daily/core";
 import {
   DailyFilterCheckpointStore,
   DailySummaryCheckpointStore,
+  FilterDecisionRecordStore,
 } from "@arxiv-daily/core";
 import { PdfService } from "@arxiv-daily/core";
 import { ProjectNotesService } from "@arxiv-daily/core";
@@ -2791,6 +2792,11 @@ export default class ArxivDailyPlugin extends Plugin {
           checkpointStoreOptions,
         ),
       },
+      filterDecisionStore: new FilterDecisionRecordStore(
+        this.host.storage,
+        settings.output,
+        checkpointStoreOptions,
+      ),
       llm,
       logger: this.logger,
       arxiv: settings.arxiv,

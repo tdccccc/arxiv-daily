@@ -46,7 +46,7 @@ Add a core store for filter decision records (one JSON document per report date 
 - kind: behavior
 - first signal: Red — a CLI-level test (existing runtime/daily-run test harness) shows no record after a mocked daily run.
 - checks: focused test Green; `npm run verify` or the repo's root verification stays Green; plugin build passes.
-- [ ] accepted on observed evidence
+- [x] accepted on observed evidence — delegate observed CLI and plugin Red → Green; no production code enumerates `filter-checkpoints` by name, data export/import copies `.index` whole (round-trip test added, Green from the start as regression guard); owner re-ran CLI suite (457 passed) and plugin suite (1048 passed)
 
 ### Chunk 4 — glossary
 

@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it, vi } from "vitest";
 import {
   DailyFilterCheckpointStore,
+  FilterDecisionRecordStore,
   DailySummaryCheckpointStore,
   DEFAULT_SETTINGS,
   Logger,
@@ -770,6 +771,14 @@ describe("plugin settings reload lifecycle", () => {
       "checkpoint warning",
       checkpointError,
     );
+
+    const decisionStore = (pipeline as any).deps.filterDecisionStore;
+    expect(decisionStore).toBeInstanceOf(FilterDecisionRecordStore);
+    expect(decisionStore.storage).toBe((plugin as any).host.storage);
+    expect(decisionStore.output).toEqual(plugin.settings.output);
+    expect(decisionStore.output).not.toBe(plugin.settings.output);
+    decisionStore.options.onWarning("decision warning", checkpointError);
+    expect(warn).toHaveBeenNthCalledWith(3, "decision warning", checkpointError);
   });
 
   it("generates a result-first daily report through plugin composition without rewriting saved reports", async () => {
@@ -829,6 +838,15 @@ describe("plugin settings reload lifecycle", () => {
 
     expect(await pipeline.runForDate("2026-09-08")).toMatchObject({ kind: "completed", papersWritten: 1 });
     const markdown = await storage.readText("arxiv-daily/daily/2026-09-08.md");
+    expect(await storage.exists("arxiv-daily/.index/filter-checkpoints/2026-09-08.json")).toBe(false);
+    const decisions = JSON.parse(await storage.readText("arxiv-daily/.index/filter-decisions/2026-09-08.json"));
+    expect(decisions.candidates.map((c: { id: string; category: string; outcome: string }) =>
+      [c.id, c.category, c.outcome])).toEqual([
+      [ids[0], "active", "in_report"],
+      [ids[1], "limited", "cut_by_limit"],
+    ]);
+    expect(JSON.stringify(decisions)).not.toContain("test-key");
+    expect(JSON.stringify(decisions)).not.toContain("api.example.com");
     expect(await pipeline.runForDate("2026-09-07")).toMatchObject({ kind: "completed" });
     expect(await storage.readText(oldPath)).toBe(oldMarkdown);
     expect((await plugin.buildPaperIndex().get(ids[0]!))?.summary).toEqual({
