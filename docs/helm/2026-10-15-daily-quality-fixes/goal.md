@@ -1,9 +1,9 @@
 # Daily report quality fixes
 
-status: active
+status: done
 created: 2026-10-15T16:46:40+08:00
-updated: 2026-10-16T00:50:00+08:00
-revision: 4
+updated: 2026-10-16T01:10:00+08:00
+revision: 5
 owner: current-session
 
 ## Intent
@@ -33,10 +33,7 @@ API is throttled.
       header and run-history say how many, in both CLI and Obsidian, without
       marking the run failed; nothing is shown when none are missing.
 - [x] A 429 without `Retry-After` no longer triggers short 2–4 s retries.
-- [ ] Today's daily run takes candidate abstracts from arXiv RSS when
-      available, so a throttled query API no longer affects it (P3; detail
-      fixed when P3 starts).
-- [ ] Each phase passes the local "Root workspace verification" steps from
+- [x] Each phase passes the local "Root workspace verification" steps from
       `.github/workflows/lint.yml`.
 
 ## Non-goals
@@ -65,4 +62,4 @@ API is throttled.
 
 1. P1 — single-backslash LaTeX in summary JSON is repaired and diagnosable, so formula-heavy papers get structured summaries — status: done
 2. P2 — abstracts survive query-API throttling via abs-page fallback, and title-only filtering is visible in report and run-history — status: done
-3. P3 — today's daily run gets candidate abstracts from arXiv RSS, so the query API is only a gap filler — status: pending
+3. P3 — today's daily run gets candidate abstracts from arXiv RSS, so the query API is only a gap filler — status: superseded (dropped by user before start; see journal)

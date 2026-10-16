@@ -51,3 +51,24 @@
 - User approved one real daily run after Chunk 6 (option A): temp config,
   two topics, astro-ph.CO + astro-ph.GA, max 3 daily papers, gpt-6.1-sol,
   query API intercepted to return 429; abs/list requests real.
+
+## 2026-10-16T01:10+08:00 — L3 steer: drop P3 (RSS), close the initiative
+
+- Evidence: the P2 real run filled 68/68 abstracts from abs pages with the
+  query API forced to 429; the only remaining cost on throttled days is
+  ~3–4 min of paced page fetches. RSS would touch candidate listing (new
+  parser, new/cross-list/replacement alignment, latest day only) for a small
+  gain.
+- Decision (user): drop P3. Removed its success criterion from goal.md; P3
+  marked superseded without a phase file.
+- Also decided: the "abs-page fallback filled X/Y" line stays an English
+  info-level diagnostics-log line (not shown by default; a warn is printed
+  when abstracts remain missing). Temporary run/log directories under /tmp
+  deleted.
+- Known small follow-ups, not pursued: cap reached skips cached pages too;
+  local API cooldown reuses the "arXiv requested a later retry" error text;
+  the plugin's title-only suffix is English-only like the rest of
+  `describeResult`; the reasoned-retry path was not exercised by a real model.
+- All success criteria met; goal closed as done. Future PR stacks on
+  `feat/quality-evaluation` and must be retargeted to `main` before that base
+  merges.
