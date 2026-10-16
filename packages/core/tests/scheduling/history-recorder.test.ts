@@ -40,6 +40,42 @@ describe("HistoryRecorder", () => {
     expect(rec.papersWritten).toBe(3);
   });
 
+  it.each([
+    [{ count: 3, total: 40 }],
+    [{ count: 0, total: 40 }],
+  ])("records titleOnlyCandidates %j on completion and keeps status completed", async (titleOnlyCandidates) => {
+    const store = makeStore();
+    await store.load();
+    const safeAppend = vi.fn(async (_record: RunHistoryRecord) => {});
+    const recorder = new HistoryRecorder({ runHistory: { safeAppend }, store: () => store });
+    await store.setRunning("2026-05-11");
+    await recorder.recordCompleted("2026-05-11", "scheduler", {
+      papersWritten: 2,
+      requestedPapersWritten: 2,
+      preservedPapersWritten: false,
+      titleOnlyCandidates,
+    });
+    const rec = safeAppend.mock.calls[0][0];
+    expect(rec.titleOnlyCandidates).toEqual(titleOnlyCandidates);
+    expect(rec.status).toBe("completed");
+    expect(rec.resultKind).toBe("completed");
+  });
+
+  it("omits titleOnlyCandidates when the completion carries none", async () => {
+    const store = makeStore();
+    await store.load();
+    const safeAppend = vi.fn(async (_record: RunHistoryRecord) => {});
+    const recorder = new HistoryRecorder({ runHistory: { safeAppend }, store: () => store });
+    await store.setRunning("2026-05-11");
+    await recorder.recordCompleted("2026-05-11", "scheduler", {
+      papersWritten: 0,
+      requestedPapersWritten: 0,
+      preservedPapersWritten: false,
+      outcome: "no_updates",
+    });
+    expect("titleOnlyCandidates" in safeAppend.mock.calls[0][0]).toBe(false);
+  });
+
   it("uses store getter so replaceStore stays coherent", async () => {
     const s1 = makeStore();
     await s1.load();

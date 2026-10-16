@@ -11,6 +11,7 @@ import {
   noCategoryPapersText,
   normalizeSummaryLanguage,
   omittedPapersText,
+  titleOnlyCandidatesText,
 } from "../settings/summary-language";
 import type { SummaryLanguage } from "../settings/types";
 import type {
@@ -18,7 +19,10 @@ import type {
   DailySummaryAssemblyPaper,
   StructuredPaperSummary,
 } from "./daily-summary-assembler";
-import { validateDailySummaryOmissions } from "./daily-summary-assembler";
+import {
+  validateDailySummaryOmissions,
+  validateDailyTitleOnlyCandidates,
+} from "./daily-summary-assembler";
 import {
   extractFallbackPaperIds,
   extractPaperSummaries,
@@ -101,7 +105,7 @@ type RescueContract = {
   fixedPrefix: string[];
   emptyTopicLines: string[];
   topics: Array<{ tag: string; name: string; omitted: number; emptyText: string; omissionText?: string }>;
-  counts: { total: number; detail: number; fallback: number; omitted: number };
+  counts: { total: number; detail: number; fallback: number; omitted: number; titleOnly: number };
   slots: Array<{
     fixedLines: string[];
     paper: DailySummaryAssemblyPaper & { hasDetail: boolean; arxivLink: string };
@@ -174,6 +178,7 @@ export function buildDailySummaryRescueContract(
 ): RescueContract {
   const language = normalizeSummaryLanguage(input.summaryLanguage);
   const omissions = validateDailySummaryOmissions(input);
+  const titleOnly = validateDailyTitleOnlyCandidates(input);
   const display = (value: string): string =>
     protectRescueContractDelimiter(normalizeMarkdownLine(value));
   const slots = input.slots.map(({ paper, result }) => {
@@ -227,6 +232,7 @@ export function buildDailySummaryRescueContract(
     detail: slots.filter(({ paper }) => paper.hasDetail).length,
     fallback: slots.filter(({ result }) => result.kind === "fallback").length,
     omitted: omissions.total,
+    titleOnly: titleOnly.count,
   };
   const fixedPrefix = [
     "<!-- arxiv-daily-rescue-report:start -->",
@@ -234,6 +240,9 @@ export function buildDailySummaryRescueContract(
     dailyCountLine(language, counts.total, counts.detail),
   ];
   if (counts.fallback > 0) fixedPrefix.push(fallbackCountLine(language, counts.fallback));
+  if (titleOnly.count > 0) {
+    fixedPrefix.push(titleOnlyCandidatesText(language, titleOnly.count, titleOnly.total));
+  }
   if (counts.omitted > 0) fixedPrefix.push(omittedPapersText(language, counts.omitted, true));
   return {
     version: 1,

@@ -1,4 +1,5 @@
-import type { PipelineResult } from "./pipeline/pipeline";
+import type { PipelineResult, TitleOnlyCandidates } from "./pipeline/pipeline";
+import { isTitleOnlyCandidates } from "./pipeline/title-only-candidates";
 import type { ManualFetchResult } from "./services/manual-fetch";
 
 export type RunResult = PipelineResult | { kind: "skipped"; reason: string };
@@ -7,8 +8,11 @@ export function describeResult(result: RunResult | null | undefined): string {
   if (!result) return "no result";
   if (result.kind === "completed") {
     if (result.outcome === "no_updates") return "no arXiv updates";
-    if (result.outcome === "no_matches") return "no matching papers";
-    return `done (${result.papersWritten} papers)`;
+    const titleOnly = titleOnlyNote(result.titleOnlyCandidates);
+    if (result.outcome === "no_matches") {
+      return `no matching papers${titleOnly ? ` (${titleOnly})` : ""}`;
+    }
+    return `done (${result.papersWritten} papers${titleOnly ? `; ${titleOnly}` : ""})`;
   }
   if (result.kind === "pending") {
     return `${result.outcome === "awaiting_announcement" ? "awaiting announcement" : "pending"}: ${result.reason}`;
@@ -22,6 +26,16 @@ export function describeResult(result: RunResult | null | undefined): string {
   }
   if (result.kind === "skipped") return `skipped: ${result.reason}`;
   return JSON.stringify(result);
+}
+
+/** Informational only; empty when nothing was judged on the title alone. */
+export function describeTitleOnlyCandidates(candidates: TitleOnlyCandidates | undefined): string {
+  return titleOnlyNote(candidates);
+}
+
+function titleOnlyNote(candidates: TitleOnlyCandidates | undefined): string {
+  if (!isTitleOnlyCandidates(candidates) || candidates.count === 0) return "";
+  return `${candidates.count}/${candidates.total} candidates judged by title only`;
 }
 
 export function describeManualResult(

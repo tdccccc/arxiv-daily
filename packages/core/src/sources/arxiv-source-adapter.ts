@@ -36,7 +36,14 @@ export interface ArxivSourceAdapterDeps {
   logger: Logger;
   /** Default arXiv categories when list options omit channels. */
   defaultCategories: string[];
+  /** Per-run cap on abs-page network fetches (tests may lower it). */
+  absFallbackNetworkLimit?: number;
 }
+
+/** Max arxiv.org/abs network fetches per run when the query API left gaps. */
+const ABS_FALLBACK_NETWORK_LIMIT = 500;
+/** The abs-page fallback gives up after this many failures in a row. */
+const ABS_FALLBACK_FAILURE_LIMIT = 3;
 
 type FailureKind = "failed_transient" | "failed_permanent";
 
@@ -214,16 +221,91 @@ export class ArxivSourceAdapter implements SourceAdapter {
           if (!p.categories.includes(category)) p.categories.push(category);
         }
       }
-      logger.info(
-        `arxiv-source: enriched ${metadataMap.size}/${ids.length} papers via Atom API`,
-      );
+      const missing = papers.filter(lacksAbstract).length;
+      const summary = `arxiv-source: enriched ${metadataMap.size}/${ids.length} papers via Atom API`;
+      if (missing === 0) {
+        logger.info(summary);
+      } else {
+        logger.warn(
+          `${summary}; ${missing} still without an abstract, trying arxiv.org/abs pages`,
+        );
+      }
     } catch (e) {
       if (isCancellationError(e)) throw e;
       logger.warn(
-        `arxiv-source: abstract enrichment failed, continuing with titles only: ${formatArxivHttpError(e)}`,
+        `arxiv-source: abstract enrichment failed: ${formatArxivHttpError(e)}; trying arxiv.org/abs pages`,
       );
     }
+    await this.fillMissingAbstractsFromAbsPages(papers, signal);
   }
+
+  /**
+   * Sequential fallback for papers the query API left without an abstract:
+   * read each arxiv.org/abs page (cache first). Network fetches are capped per
+   * run (cache hits are free) and the loop stops after a few failures in a
+   * row, so a blocked or throttled host cannot stall the run. Never throws
+   * except for cancellation; whatever stays empty is filtered on title only.
+   */
+  private async fillMissingAbstractsFromAbsPages(
+    papers: SourcePaperMeta[],
+    signal?: AbortSignal,
+  ): Promise<void> {
+    const pending = papers.filter(lacksAbstract);
+    if (pending.length === 0) return;
+    const { paperFetcher, logger } = this.deps;
+    const networkLimit = this.deps.absFallbackNetworkLimit ?? ABS_FALLBACK_NETWORK_LIMIT;
+    let networkFetches = 0;
+    let consecutiveFailures = 0;
+    let lastFailure = "";
+    let filled = 0;
+    let stop: "cap" | "failures" | undefined;
+
+    for (const paper of pending) {
+      throwIfCancelled(signal);
+      if (networkFetches >= networkLimit) {
+        stop = "cap";
+        break;
+      }
+      try {
+        const result = await paperFetcher.fetchListingAbstract(paper.externalId, signal);
+        if (result.fromNetwork) networkFetches += 1;
+        // A page without an abstract block is a successful fetch, not a failure.
+        consecutiveFailures = 0;
+        if (result.abstract.trim()) {
+          paper.abstract = result.abstract;
+          filled += 1;
+        }
+      } catch (e) {
+        if (isCancellationError(e)) throw e;
+        // A cooldown refusal never reached arxiv.org, so it spends no budget.
+        if (!isArxivRetryDeferredError(e)) networkFetches += 1;
+        consecutiveFailures += 1;
+        lastFailure = formatArxivHttpError(e);
+        if (consecutiveFailures >= ABS_FALLBACK_FAILURE_LIMIT) {
+          stop = "failures";
+          break;
+        }
+      }
+    }
+
+    const remaining = pending.length - filled;
+    const summary = `arxiv-source: abs-page fallback filled ${filled}/${pending.length} missing abstracts`;
+    if (remaining === 0) {
+      logger.info(summary);
+      return;
+    }
+    const why =
+      stop === "cap"
+        ? `network fetch cap of ${networkLimit} reached`
+        : stop === "failures"
+          ? `stopped after ${ABS_FALLBACK_FAILURE_LIMIT} consecutive failures (last: ${lastFailure})`
+          : "their abs pages carry no abstract";
+    logger.warn(`${summary}; ${remaining} papers remain without an abstract (${why})`);
+  }
+}
+
+function lacksAbstract(paper: SourcePaperMeta): boolean {
+  return paper.abstract.trim().length === 0;
 }
 
 /** Map legacy arXiv extractor DTO → normalized content contract. */

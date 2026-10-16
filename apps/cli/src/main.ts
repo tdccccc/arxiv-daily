@@ -3,6 +3,7 @@ import type { OperationRegistry, PipelineResult } from "@arxiv-daily/core";
 import type { ManualFetchResult } from "@arxiv-daily/core";
 import {
   deliverDailyEmailIfEnabled,
+  describeTitleOnlyCandidates,
   resolveResendApiKey,
   validateFilterConfig,
   validateLlmConfig,
@@ -473,19 +474,26 @@ function optionValue(argv: string[], option: string): string | undefined {
   return value;
 }
 
+/** Only a positive count is worth reporting; 0 keeps the event identical to before. */
+function hasTitleOnlyCandidates(result: Extract<CliRunResult, { kind: "completed" }>): boolean {
+  return describeTitleOnlyCandidates(result.titleOnlyCandidates) !== "";
+}
+
 function writeRunResult(io: CliIo, date: string, result: CliRunResult): number {
   io.onRunResult?.({ date, kind: result.kind,
     ...("outcome" in result ? { outcome: result.outcome } : {}),
     ...(result.kind === "completed" ? { papersWritten: result.papersWritten } : {}),
+    ...(result.kind === "completed" && hasTitleOnlyCandidates(result) ? { titleOnlyCandidates: result.titleOnlyCandidates } : {}),
   });
   if (result.kind === "pending" && result.outcome === "awaiting_announcement") {
     writeLine(io.stdout, `run ${date}: awaiting_announcement (${result.reason})`);
     return 0;
   }
   if (result.kind === "completed") {
+    const titleOnly = describeTitleOnlyCandidates(result.titleOnlyCandidates);
     writeLine(
       io.stdout,
-      `run ${date}: completed (${result.papersWritten} papers written)${result.outcome ? ` [${result.outcome}]` : ""}`,
+      `run ${date}: completed (${result.papersWritten} papers written${titleOnly ? `; ${titleOnly}` : ""})${result.outcome ? ` [${result.outcome}]` : ""}`,
     );
     return 0;
   }

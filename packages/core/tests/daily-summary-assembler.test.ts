@@ -914,3 +914,78 @@ describe("daily limit omissions", () => {
     }
   });
 });
+
+describe("title-only candidates header line", () => {
+  it.each([
+    { language: "zh" as const, count: 2, total: 5, line: "筛选时 5 篇候选中有 2 篇没有摘要，只依据标题判断。" },
+    { language: "zh" as const, count: 1, total: 1, line: "筛选时 1 篇候选中有 1 篇没有摘要，只依据标题判断。" },
+    { language: "en" as const, count: 2, total: 5, line: "2 of 5 candidate papers had no abstract during filtering and were judged by title only." },
+    { language: "en" as const, count: 1, total: 5, line: "1 of 5 candidate papers had no abstract during filtering and was judged by title only." },
+    { language: "en" as const, count: 1, total: 1, line: "1 of 1 candidate paper had no abstract during filtering and was judged by title only." },
+  ])("renders one $language line for $count of $total in normal and emergency reports", ({ language, count, total, line }) => {
+    const value = input({
+      summaryLanguage: language,
+      titleOnlyCandidates: { count, total },
+      omittedByTopic: { methods: 1 },
+    });
+    value.slots[1] = fallbackSlot(value.slots[1]!.paper, "abstract");
+    for (const render of [assembleDailySummary, assembleEmergencyDailySummary]) {
+      const markdown = render(value);
+      expect(markdown.split("\n").filter((entry) => entry === line)).toHaveLength(1);
+      const lines = markdown.split("\n");
+      const at = lines.indexOf(line);
+      expect(lines[at - 1]).toMatch(language === "zh" ? /^其中 1 篇使用回退内容。$/ : /^1 paper uses fallback content\.$/);
+      expect(lines[at + 1]).toMatch(language === "zh" ? /^因每日总数上限，另有 1 篇/ : /^1 additional relevant paper was omitted/);
+      expect(Object.keys(extractPaperSummaries(markdown)).sort()).toEqual(["2607.00001", "2607.00003"]);
+    }
+  });
+
+  it.each(["zh", "en"] as const)("leaves %s output byte-identical when the count is 0 or undefined", (summaryLanguage) => {
+    for (const render of [assembleDailySummary, assembleEmergencyDailySummary]) {
+      const original = render(input({ summaryLanguage }));
+      expect(render(input({ summaryLanguage, titleOnlyCandidates: { count: 0, total: 7 } }))).toBe(original);
+      expect(render(input({ summaryLanguage, titleOnlyCandidates: { count: 0, total: 0 } }))).toBe(original);
+      expect(original).not.toMatch(/只依据标题判断|judged by title only/);
+    }
+  });
+
+  it.each([
+    { label: "negative count", value: { count: -1, total: 3 } },
+    { label: "fractional count", value: { count: 0.5, total: 3 } },
+    { label: "NaN count", value: { count: NaN, total: 3 } },
+    { label: "non-number count", value: { count: "2", total: 3 } },
+    { label: "unsafe count", value: { count: Number.MAX_SAFE_INTEGER + 1, total: Number.MAX_SAFE_INTEGER + 1 } },
+    { label: "negative total", value: { count: 0, total: -1 } },
+    { label: "fractional total", value: { count: 1, total: 1.5 } },
+    { label: "infinite total", value: { count: 1, total: Infinity } },
+    { label: "count above total", value: { count: 4, total: 3 } },
+    { label: "missing total", value: { count: 1 } },
+    { label: "null", value: null },
+    { label: "array", value: [] },
+    { label: "number", value: 3 },
+  ])("rejects $label before rendering", ({ value }) => {
+    const bad = input({ titleOnlyCandidates: value as unknown as { count: number; total: number } });
+    for (const check of [preflightDailySummaryAssembly, assembleDailySummary, assembleEmergencyDailySummary]) {
+      expect(() => check(bad)).toThrow(/titleOnlyCandidates/);
+    }
+  });
+
+  it.each(["zh", "en"] as const)("is invisible to every daily report reader in %s", (summaryLanguage) => {
+    const base = input({ summaryLanguage });
+    base.slots[1] = fallbackSlot(base.slots[1]!.paper, "kept abstract");
+    const withLine = { ...base, titleOnlyCandidates: { count: 3, total: 9 } };
+    for (const render of [assembleDailySummary, assembleEmergencyDailySummary]) {
+      const plain = render(base);
+      const marked = render(withLine);
+      expect(marked).not.toBe(plain);
+      expect(extractPaperSummaries(marked)).toEqual(extractPaperSummaries(plain));
+      expect(extractFallbackPaperIds(marked)).toEqual(extractFallbackPaperIds(plain));
+      expect(extractFallbackAbstracts(marked)).toEqual(extractFallbackAbstracts(plain));
+      expect(hasEmergencyDailySummaryMarker(marked)).toBe(hasEmergencyDailySummaryMarker(plain));
+      expect(parseDailyReportDiscoveryProvenance(marked, "2026-07-22"))
+        .toEqual(parseDailyReportDiscoveryProvenance(plain, "2026-07-22"));
+      expect(parseDailyReportTopicDirections(marked, "2026-07-22"))
+        .toEqual(parseDailyReportTopicDirections(plain, "2026-07-22"));
+    }
+  });
+});

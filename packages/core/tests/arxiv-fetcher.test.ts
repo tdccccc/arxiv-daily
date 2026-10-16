@@ -37,6 +37,16 @@ function makeFetcher(
   });
 }
 
+function makeFetcherWithLogger(http: HttpClient, logger: unknown): ArxivFetcher {
+  return new ArxivFetcher({
+    categories: ["astro-ph"],
+    markupParser,
+    http,
+    logger: logger as Logger,
+    requestDelayMs: 0,
+  });
+}
+
 function atomFor(ids: string[]): string {
   return `<?xml version="1.0"?><feed xmlns="http://www.w3.org/2005/Atom" xmlns:arxiv="http://arxiv.org/schemas/atom">${ids.map((id) => `<entry><id>http://arxiv.org/abs/${id}v1</id><title>Paper ${id}</title><author><name>A. Author</name></author><summary>Abstract ${id}.</summary><published>2026-06-13T00:00:00Z</published><updated>2026-06-14T00:00:00Z</updated><arxiv:primary_category term="astro-ph"/><category term="astro-ph"/></entry>`).join("")}</feed>`;
 }
@@ -448,6 +458,242 @@ describe("ArxivFetcher", () => {
     expect(logger.warn).toHaveBeenCalledWith(
       expect.stringContaining("after 2000ms"),
     );
+  });
+
+  describe("per-host cooldown and header-less 429 handling", () => {
+    const API_URL = "https://export.arxiv.org/api/query";
+    const ABS_URL = "https://arxiv.org/abs/2606.12345";
+
+    function fakeClockCoordinator(options: { startMonotonic?: number } = {}) {
+      const state = { monotonic: options.startMonotonic ?? 0 };
+      const sleeps: number[] = [];
+      const coordinator = new ArxivRequestCoordinator({
+        monotonicNow: () => state.monotonic,
+        wallNow: () => Date.parse("2026-06-25T10:00:00.000Z") + state.monotonic,
+        sleep: async (ms) => { sleeps.push(ms); state.monotonic += ms; },
+      });
+      return { state, sleeps, coordinator };
+    }
+
+    function fetcherWith(http: HttpClient, coordinator: ArxivRequestCoordinator, logger: unknown = new Logger("error")) {
+      return new ArxivFetcher({
+        categories: ["astro-ph"], markupParser, http, logger: logger as Logger,
+        requestDelayMs: 0, requestCoordinator: coordinator,
+      });
+    }
+
+    it("does not delay another host while one host is cooling down (short Retry-After)", async () => {
+      const { sleeps, coordinator } = fakeClockCoordinator();
+      await expect(coordinator.coordinate(
+        async () => { throw new ArxivHttpError(429, API_URL, { "Retry-After": "600" }); },
+        3_000, undefined, API_URL,
+      )).rejects.toMatchObject({ status: 429 });
+
+      await expect(coordinator.coordinate(async () => "abs", 3_000, undefined, ABS_URL)).resolves.toBe("abs");
+      // Only the shared pacing gap, never the 10-minute API cooldown.
+      expect(sleeps).toEqual([3_000]);
+    });
+
+    it("keeps same-host cooldown while leaving the other host free (and the reverse direction)", async () => {
+      const { sleeps, coordinator } = fakeClockCoordinator();
+      await expect(coordinator.coordinate(
+        async () => { throw new ArxivHttpError(503, ABS_URL, { "Retry-After": "60" }); },
+        0, undefined, ABS_URL,
+      )).rejects.toMatchObject({ status: 503 });
+
+      await expect(coordinator.coordinate(async () => "api", 0, undefined, API_URL)).resolves.toBe("api");
+      expect(sleeps).toEqual([]);
+      await expect(coordinator.coordinate(async () => "abs", 0, undefined, ABS_URL)).resolves.toBe("abs");
+      expect(sleeps).toEqual([30_000, 30_000]);
+    });
+
+    it("lets an abs fetch proceed after the query API returned a long Retry-After", async () => {
+      const { sleeps, coordinator } = fakeClockCoordinator();
+      const http: HttpClient = {
+        request: vi.fn(async (req: HttpRequest) => {
+          if (req.url.startsWith("https://export.arxiv.org/")) {
+            return { status: 429, headers: { "Retry-After": "7200" }, bodyText: "slow" };
+          }
+          return { status: 200, headers: {}, bodyText: "<html>abs</html>" };
+        }),
+      };
+      const fetcher = fetcherWith(http, coordinator);
+
+      const apiError = await fetcher.fetchBySubmittedDate("astro-ph", "2026-06-13").catch((e) => e);
+      expect(isArxivRetryDeferredError(apiError)).toBe(true);
+
+      await expect(fetcher.fetchPaperAbsPage("2606.12345")).resolves.toContain("abs");
+      expect(http.request).toHaveBeenCalledTimes(2);
+      expect(sleeps).toEqual([3_000]);
+      // The API itself stays deferred for its own cooldown.
+      await expect(fetcher.fetchBySubmittedDate("astro-ph", "2026-06-13"))
+        .rejects.toBeInstanceOf(ArxivRetryDeferredError);
+      expect(http.request).toHaveBeenCalledTimes(2);
+    });
+
+    it("does not retry a header-less 429 from the query API and then fails fast during the cooldown", async () => {
+      vi.useFakeTimers();
+      const { state, sleeps, coordinator } = fakeClockCoordinator();
+      const logger = { debug: vi.fn(), warn: vi.fn() };
+      const http: HttpClient = {
+        request: vi.fn()
+          .mockResolvedValueOnce({ status: 429, headers: {}, bodyText: "too many requests" })
+          .mockResolvedValue({ status: 200, headers: {}, bodyText: atomFor(["2606.00001"]) }),
+      };
+      const fetcher = fetcherWith(http, coordinator, logger);
+
+      let settled: unknown;
+      const first = fetcher.fetchBySubmittedDate("astro-ph", "2026-06-13")
+        .then(() => ({ ok: true }), (error: unknown) => { settled = error; return { ok: false }; });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(settled).toBeDefined();
+      expect(settled).toMatchObject({ name: "ArxivHttpError", status: 429 });
+      expect(isArxivHttpError(settled)).toBe(true);
+      await first;
+      await vi.advanceTimersByTimeAsync(120_000);
+      expect(http.request).toHaveBeenCalledTimes(1);
+      expect(logger.warn).toHaveBeenCalledWith(expect.stringMatching(/export\.arxiv\.org.*no Retry-After/s));
+
+      // Within the cooldown: no HTTP request, no inline wait.
+      state.monotonic += 60_000;
+      sleeps.length = 0;
+      const second = await fetcher.fetchBySubmittedDate("astro-ph", "2026-06-13").catch((e) => e);
+      expect(isArxivRetryDeferredError(second)).toBe(true);
+      expect(http.request).toHaveBeenCalledTimes(1);
+      expect(sleeps).toEqual([]);
+
+      // Once the cooldown has elapsed the API is tried again.
+      state.monotonic += 24 * 60 * 60 * 1000;
+      const papers = await fetcher.fetchBySubmittedDate("astro-ph", "2026-06-13");
+      expect(papers).toHaveLength(1);
+      expect(http.request).toHaveBeenCalledTimes(2);
+    });
+
+    it("does not retry a query API 429 with Retry-After, then fails fast until that Retry-After elapses", async () => {
+      vi.useFakeTimers();
+      const { state, sleeps, coordinator } = fakeClockCoordinator();
+      const logger = { debug: vi.fn(), warn: vi.fn() };
+      const http: HttpClient = {
+        request: vi.fn()
+          .mockResolvedValueOnce({ status: 429, headers: { "Retry-After": "120" }, bodyText: "slow down" })
+          .mockResolvedValue({ status: 200, headers: {}, bodyText: atomFor(["2606.00001"]) }),
+      };
+      const fetcher = fetcherWith(http, coordinator, logger);
+      const cooldownStartedWall = Date.parse("2026-06-25T10:00:00.000Z") + state.monotonic;
+
+      let settled: unknown;
+      const first = fetcher.fetchBySubmittedDate("astro-ph", "2026-06-13")
+        .then(() => undefined, (error: unknown) => { settled = error; });
+      // Rejects promptly: no timer has to fire for the failure to surface.
+      await vi.advanceTimersByTimeAsync(0);
+      expect(settled).toMatchObject({ name: "ArxivHttpError", status: 429 });
+      await first;
+      await vi.advanceTimersByTimeAsync(300_000);
+      expect(http.request).toHaveBeenCalledTimes(1);
+      expect(sleeps).toEqual([]);
+      expect(logger.warn).toHaveBeenCalledWith(
+        expect.stringMatching(/export\.arxiv\.org.*Retry-After 120s.*not retrying.*cooled down for 120s/s),
+      );
+
+      // Within the 120 s: no HTTP request, no inline wait, retryAt = receipt + 120 s.
+      state.monotonic += 60_000;
+      const second = await fetcher.fetchBySubmittedDate("astro-ph", "2026-06-13").catch((e) => e);
+      expect(isArxivRetryDeferredError(second)).toBe(true);
+      expect(second).toBeInstanceOf(ArxivRetryDeferredError);
+      expect((second as ArxivRetryDeferredError).retryAt.getTime()).toBe(cooldownStartedWall + 120_000);
+      expect((second as ArxivRetryDeferredError).remainingMs).toBe(60_000);
+      expect(http.request).toHaveBeenCalledTimes(1);
+      expect(sleeps).toEqual([]);
+
+      // After the 120 s the API is tried again.
+      state.monotonic += 60_000;
+      const papers = await fetcher.fetchBySubmittedDate("astro-ph", "2026-06-13");
+      expect(papers).toHaveLength(1);
+      expect(http.request).toHaveBeenCalledTimes(2);
+    });
+
+    it("keeps the query API cooldown from blocking abs pages after a header-less 429", async () => {
+      const { sleeps, coordinator } = fakeClockCoordinator();
+      const http: HttpClient = {
+        request: vi.fn(async (req: HttpRequest) => req.url.startsWith("https://export.arxiv.org/")
+          ? { status: 429, headers: {}, bodyText: "" }
+          : { status: 200, headers: {}, bodyText: "<html>abs</html>" }),
+      };
+      const fetcher = fetcherWith(http, coordinator);
+      await expect(fetcher.fetchBySubmittedDate("astro-ph", "2026-06-13")).rejects.toMatchObject({ status: 429 });
+      sleeps.length = 0;
+      await expect(fetcher.fetchPaperAbsPage("2606.12345")).resolves.toContain("abs");
+      expect(sleeps).toEqual([3_000]);
+    });
+
+    it("waits at least 30s, then 60s, after header-less 429s on arxiv.org pages", async () => {
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date("2026-06-25T10:00:00.000Z"));
+      vi.spyOn(Math, "random").mockReturnValue(0); // lowest jitter: the floor must still hold
+      const starts: number[] = [];
+      const logger = { debug: vi.fn(), warn: vi.fn() };
+      const http: HttpClient = {
+        request: vi.fn(async () => {
+          starts.push(Date.now());
+          return starts.length <= 2
+            ? { status: 429, headers: {}, bodyText: "slow down" }
+            : { status: 200, headers: {}, bodyText: "<html>abs</html>" };
+        }),
+      };
+      const result = makeFetcherWithLogger(http, logger).fetchPaperAbsPage("2606.12345");
+      await vi.advanceTimersByTimeAsync(29_999);
+      expect(http.request).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(http.request).toHaveBeenCalledTimes(2);
+      await vi.advanceTimersByTimeAsync(59_999);
+      expect(http.request).toHaveBeenCalledTimes(2);
+      await vi.advanceTimersByTimeAsync(1);
+
+      await expect(result).resolves.toContain("abs");
+      expect(starts[1]! - starts[0]!).toBeGreaterThanOrEqual(30_000);
+      expect(starts[2]! - starts[1]!).toBeGreaterThanOrEqual(60_000);
+      expect(logger.warn).toHaveBeenCalledWith(expect.stringMatching(/arxiv\.org.*no Retry-After/s));
+    });
+
+    it("keeps ordinary 2s backoff for a header-less 503", async () => {
+      vi.useFakeTimers();
+      vi.spyOn(Math, "random").mockReturnValue(0.5);
+      const http: HttpClient = {
+        request: vi.fn()
+          .mockResolvedValueOnce({ status: 503, headers: {}, bodyText: "down" })
+          .mockResolvedValueOnce({ status: 200, headers: {}, bodyText: "<html>abs</html>" }),
+      };
+      const result = makeFetcher(http).fetchPaperAbsPage("2606.12345");
+      // 2s ordinary backoff is shorter than the shared 3s pacing floor, so the
+      // retry starts at 3s; the point is that no 30s header-less-429 floor applies.
+      await vi.advanceTimersByTimeAsync(2_999);
+      expect(http.request).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(1);
+      await expect(result).resolves.toContain("abs");
+      expect(http.request).toHaveBeenCalledTimes(2);
+    });
+
+    it("keeps pacing shared: an API request and an abs request stay at least 3s apart", async () => {
+      const { state, sleeps, coordinator } = fakeClockCoordinator();
+      const starts: Array<{ url: string; at: number }> = [];
+      const http: HttpClient = {
+        request: vi.fn(async (req: HttpRequest) => {
+          starts.push({ url: req.url, at: state.monotonic });
+          return req.url.startsWith("https://export.arxiv.org/")
+            ? { status: 200, headers: {}, bodyText: atomFor(["2606.00001"]) }
+            : { status: 200, headers: {}, bodyText: "<html>abs</html>" };
+        }),
+      };
+      const fetcher = fetcherWith(http, coordinator);
+      await fetcher.fetchBySubmittedDate("astro-ph", "2026-06-13");
+      await fetcher.fetchPaperAbsPage("2606.12345");
+      await fetcher.fetchBySubmittedDate("astro-ph", "2026-06-13");
+
+      expect(starts).toHaveLength(3);
+      expect(starts[1]!.at - starts[0]!.at).toBeGreaterThanOrEqual(3_000);
+      expect(starts[2]!.at - starts[1]!.at).toBeGreaterThanOrEqual(3_000);
+      expect(sleeps).toEqual([3_000, 3_000]);
+    });
   });
 
   it("safely parses full Retry-After delta and receipt-time HTTP dates", () => {

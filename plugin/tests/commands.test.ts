@@ -422,6 +422,68 @@ describe("registerCommands", () => {
     await vi.waitFor(() => expect(refreshFromVault).toHaveBeenCalledOnce());
   });
 
+  it.each([
+    [{ kind: "completed", papersWritten: 2, outcome: "papers_written", titleOnlyCandidates: { count: 3, total: 40 } },
+      "arXiv Daily 2026-10-02: done (2 papers; 3/40 candidates judged by title only)"],
+    [{ kind: "completed", papersWritten: 0, outcome: "no_matches", titleOnlyCandidates: { count: 3, total: 40 } },
+      "arXiv Daily 2026-10-02: no matching papers (3/40 candidates judged by title only)"],
+    [{ kind: "completed", papersWritten: 2, outcome: "papers_written", titleOnlyCandidates: { count: 0, total: 40 } },
+      "arXiv Daily 2026-10-02: done (2 papers)"],
+    [{ kind: "completed", papersWritten: 2, outcome: "papers_written" },
+      "arXiv Daily 2026-10-02: done (2 papers)"],
+  ])("Run today notice reports title-only candidates only when present: %#", async (result, expected) => {
+    Notice.calls = [];
+    const plugin = makePlugin();
+    plugin.settings = {
+      ...DEFAULT_SETTINGS,
+      llm: { ...DEFAULT_SETTINGS.llm, apiKey: "sk-test" },
+      arxiv: {
+        ...DEFAULT_SETTINGS.arxiv,
+        topics: [{ id: "t", name: "Galaxies", tag: "galaxies", description: "Galaxies", directions: [{ id: "d", text: "Galaxies", source: "manual" }], detail: false }],
+      },
+    };
+    plugin.scheduler.runForDateNow.mockResolvedValue(result as never);
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-10-02T12:00:00Z"));
+    try {
+      registerCommands(plugin as any);
+      const command = vi.mocked(plugin.addCommand).mock.calls
+        .map(([value]) => value)
+        .find((value) => value.id === "run-now");
+      command?.callback?.();
+      await vi.waitFor(() => expect(plugin.scheduler.runForDateNow).toHaveBeenCalledOnce());
+      await vi.waitFor(() => expect(Notice.calls.map((c) => c.message)).toContain(expected));
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("shows the title-only count in the run history viewer", async () => {
+    const plugin = makePlugin();
+    plugin.runHistoryStore.readLatest.mockResolvedValue([
+      {
+        schemaVersion: 1, at: "2026-10-02T12:00:00.000Z", date: "2026-10-02",
+        event: "completed", trigger: "manual", status: "completed", resultKind: "completed",
+        papersWritten: 2, titleOnlyCandidates: { count: 3, total: 40 },
+      },
+      {
+        schemaVersion: 1, at: "2026-10-01T12:00:00.000Z", date: "2026-10-01",
+        event: "completed", trigger: "manual", status: "completed", resultKind: "completed",
+        papersWritten: 2, titleOnlyCandidates: { count: 0, total: 40 },
+      },
+    ] as never);
+    registerCommands(plugin as any);
+    const command = vi.mocked(plugin.addCommand).mock.calls
+      .map(([value]) => value)
+      .find((value) => value.id === "show-run-history");
+    command?.callback?.();
+    const modal = Modal.opened.at(-1) as unknown as { contentEl: HTMLElement };
+    const textarea = modal.contentEl.querySelector("textarea") as HTMLTextAreaElement;
+    await vi.waitFor(() => expect(textarea.value).toContain("titleOnly=3/40"));
+    expect(textarea.value.split("\n")[1]).not.toContain("titleOnly");
+    expect(textarea.value).toContain("status=completed");
+  });
+
   it("registers and routes personal library direction review through the shared plugin entry", () => {
     const plugin = makePlugin();
     registerCommands(plugin as any);

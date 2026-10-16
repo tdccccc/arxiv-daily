@@ -22,6 +22,7 @@ import type {
 } from "../settings/types";
 import {
   derivePaperSourceSections,
+  describeValidationFailureForLog,
   summarizeDailyPaperWithValidationRetry,
 } from "./daily-paper-summary";
 import {
@@ -30,10 +31,12 @@ import {
   isDailySummaryAssemblyRuntimeError,
   type DailyPaperResult,
   type DailyPaperSlot,
+  type DailyTitleOnlyCandidates,
   type DailySummaryAssemblyInput,
   type DailySummaryAssemblyPaper,
   preflightDailySummaryAssembly,
   preflightDailySummaryPapers,
+  validateDailyTitleOnlyCandidates,
 } from "./daily-summary-assembler";
 import {
   isDailySummaryRescueExhaustedError,
@@ -79,6 +82,8 @@ export interface SummarizerDeps {
   summaryLanguage?: SummaryLanguage;
   /** Counts omitted by the report limit, separate from per-paper summaries. */
   omittedByTopic?: Readonly<Record<string, number>>;
+  /** Candidates filtered on title only (no abstract); shown in the report header when count > 0. */
+  titleOnlyCandidates?: DailyTitleOnlyCandidates;
   signal?: AbortSignal;
   onMetrics?: MetricsObserver;
   onDailyPaperProgress?: (completed: number, total: number) => void;
@@ -112,6 +117,8 @@ export async function summarizeDaily(
     topicDirections: paper.topicDirections,
   }));
   preflightDailySummaryPapers(assemblyPapers, deps.arxivSettings);
+  // Fail before spending model calls on a report that cannot be assembled.
+  validateDailyTitleOnlyCandidates(deps);
 
   const slots: DailyPaperSlot[] = [];
   let fallbackCount = 0;
@@ -137,6 +144,7 @@ export async function summarizeDaily(
 
     let result: DailyPaperResult;
     let recovered = false;
+    let lastValidationFailure: string | undefined;
     if (reusable) {
       result = reusable;
       recovered = true;
@@ -154,6 +162,9 @@ export async function summarizeDaily(
         summaryLanguage: deps.summaryLanguage,
         signal: deps.signal,
         onMetrics: deps.onMetrics,
+        onValidationFailure: (error) => {
+          lastValidationFailure = describeValidationFailureForLog(error);
+        },
       });
       throwIfCancelled(deps.signal);
       try {
@@ -173,6 +184,9 @@ export async function summarizeDaily(
       fallbackCount += 1;
       deps.logger.warn(
         `summarizeDaily: fallback for ${paper.id} reason=${result.reasonCode} attempts=${result.attempts}` +
+          (result.reasonCode === "validation-exhausted" && lastValidationFailure
+            ? ` lastFailure=${lastValidationFailure}`
+            : "") +
           (recovered ? " recovered=true" : ""),
       );
     }
@@ -190,6 +204,7 @@ export async function summarizeDaily(
     arxivSettings: deps.arxivSettings,
     summaryLanguage: deps.summaryLanguage,
     ...(deps.omittedByTopic ? { omittedByTopic: deps.omittedByTopic } : {}),
+    ...(deps.titleOnlyCandidates ? { titleOnlyCandidates: deps.titleOnlyCandidates } : {}),
   };
   preflightDailySummaryAssembly(assemblyInput);
 

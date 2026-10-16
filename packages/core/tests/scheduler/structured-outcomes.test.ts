@@ -64,6 +64,49 @@ describe("Structured run outcomes", () => {
     expect((await h.history.readLatest()).find(r => r.event === "completed")).toMatchObject({ outcome });
   });
 
+  it("writes the pipeline's title-only candidate count to completed history", async () => {
+    const h = harness();
+    await h.initialize();
+    h.runForDate.mockResolvedValue({
+      kind: "completed", papersWritten: 2, outcome: "papers_written",
+      titleOnlyCandidates: { count: 3, total: 40 },
+    });
+    await h.scheduler.runForDateNow(date);
+    const completed = (await h.history.readLatest()).find(r => r.event === "completed");
+    expect(completed).toMatchObject({
+      status: "completed", resultKind: "completed", papersWritten: 2,
+      titleOnlyCandidates: { count: 3, total: 40 },
+    });
+    expect(h.store.get(date)).toMatchObject({ status: "completed", papersWritten: 2 });
+    expect(h.store.get(date)).not.toHaveProperty("titleOnlyCandidates");
+    expect(formatRunHistoryRecords(await h.history.readLatest())).toContain("titleOnly=3/40");
+  });
+
+  it("records a zero count (abstract coverage was fine) without rendering it", async () => {
+    const h = harness();
+    await h.initialize();
+    h.runForDate.mockResolvedValue({
+      kind: "completed", papersWritten: 0, outcome: "no_matches",
+      titleOnlyCandidates: { count: 0, total: 40 },
+    });
+    await h.scheduler.runForDateNow(date);
+    const completed = (await h.history.readLatest()).find(r => r.event === "completed");
+    expect(completed?.titleOnlyCandidates).toEqual({ count: 0, total: 40 });
+    expect(formatRunHistoryRecords(await h.history.readLatest())).not.toContain("titleOnly");
+  });
+
+  it("keeps the count when preserved paper counts rewrite the recorded outcome", async () => {
+    const h = harness({ [date]: { status: "completed", lastAttempt: 1, attempts: 1, papersWritten: 5, outcome: "papers_written" } });
+    await h.initialize();
+    h.runForDate.mockResolvedValue({
+      kind: "completed", papersWritten: 0, outcome: "no_matches",
+      titleOnlyCandidates: { count: 4, total: 9 },
+    });
+    await h.scheduler.forceRunForDate(date);
+    const completed = (await h.history.readLatest()).find(r => r.event === "completed");
+    expect(completed?.titleOnlyCandidates).toEqual({ count: 4, total: 9 });
+  });
+
   it("counts a crash after many waits as one real failure", async () => {
     const h = harness({ [date]: { status: "pending", lastAttempt: 1, attempts: 12, failureAttempts: 0, outcome: "awaiting_announcement" } });
     await h.initialize();

@@ -52,6 +52,19 @@ export function omittedPapersText(
   return `因每日总数上限，${additional ? "另有 " : ""}${omittedCount} 篇相关论文未展示。`;
 }
 
+/** Counts are validated at the assembly boundary (0 < count <= total) before reaching display. */
+export function titleOnlyCandidatesText(
+  language: SummaryLanguage | undefined,
+  count: number,
+  total: number,
+): string {
+  if (normalizeSummaryLanguage(language) === "en") {
+    return `${count} of ${total} candidate ${plural(total, "paper")} had no abstract during filtering `
+      + `and ${count === 1 ? "was" : "were"} judged by title only.`;
+  }
+  return `筛选时 ${total} 篇候选中有 ${count} 篇没有摘要，只依据标题判断。`;
+}
+
 export function noDailyPapersText(
   language: SummaryLanguage | undefined,
 ): string {

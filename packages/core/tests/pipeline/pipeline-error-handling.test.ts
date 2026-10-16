@@ -149,7 +149,11 @@ describe("Pipeline LLM 0 papers handling", () => {
     const llm = {
       call: vi.fn().mockResolvedValue(JSON.stringify({ papers: [] })),
     };
-    const paperFetcher = { fetch: vi.fn() };
+    // These fetchers' Atom maps never match a paper id, so every paper reaches the abs-page fallback.
+    const paperFetcher = {
+      fetch: vi.fn(),
+      fetchListingAbstract: vi.fn(async () => ({ abstract: "abs-page abstract", fromNetwork: false })),
+    };
     const logger = new Logger("error");
 
     const pipeline = new ArxivPipeline({
@@ -219,7 +223,11 @@ describe("Pipeline index 0 papers handling", () => {
         }),
       ),
     };
-    const paperFetcher = { fetch: vi.fn() };
+    // These fetchers' Atom maps never match a paper id, so every paper reaches the abs-page fallback.
+    const paperFetcher = {
+      fetch: vi.fn(),
+      fetchListingAbstract: vi.fn(async () => ({ abstract: "abs-page abstract", fromNetwork: false })),
+    };
     const logger = new Logger("error");
 
     // Create a paper index that returns all papers as ignored

@@ -1,3 +1,4 @@
+import type { TitleOnlyCandidates } from "../../pipeline/pipeline";
 import type { RunOutcome } from "../../settings/types";
 import type { Logger } from "../logger";
 import type {
@@ -39,6 +40,7 @@ export class HistoryRecorder {
       requestedPapersWritten: number;
       preservedPapersWritten: boolean;
       outcome?: RunOutcome;
+      titleOnlyCandidates?: TitleOnlyCandidates;
     },
     at?: Date,
   ): Promise<void> {
@@ -53,6 +55,7 @@ export class HistoryRecorder {
       outcome: detail.outcome,
       requestedPapersWritten: detail.requestedPapersWritten,
       preservedPapersWritten: detail.preservedPapersWritten || undefined,
+      ...(detail.titleOnlyCandidates ? { titleOnlyCandidates: detail.titleOnlyCandidates } : {}),
       attempts: entry.attempts,
       failureAttempts: entry.failureAttempts,
     }, at);

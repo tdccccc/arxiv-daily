@@ -121,6 +121,10 @@ function makeDeps() {
     fetch: vi
       .fn()
       .mockResolvedValue({ abstractConclusion: "## Abstract\nstub", fullSections: null }),
+    // Only reached for papers the (faked) Atom map leaves without an abstract.
+    fetchListingAbstract: vi
+      .fn()
+      .mockResolvedValue({ abstract: "abs-page stub abstract", fromNetwork: false }),
   };
   const writer = {
     writeDaily: vi.fn(async (date: string, content: string, _options?: any) => {
