@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from "vitest";
 import {
   buildPaperFilterRequest,
+  decodePaperFilterResponse,
   filterPapers,
   isPaperFilterResponseValidationError,
   PAPER_FILTER_RESPONSE_VALIDATION_ERROR_CODE,
@@ -75,6 +76,41 @@ const samplePaper: PaperMeta = {
   authors: "X. Author et al.",
   abstract: "We propose ...",
 };
+
+describe("decodePaperFilterResponse", () => {
+  const request = buildPaperFilterRequest([samplePaper], makeArxiv(makeTopics()));
+  const answer = JSON.stringify({
+    papers: [{ id: samplePaper.id, category: "photo-z", directions: ["photo-z#2"], relevanceScore: 77 }],
+  });
+
+  it("validates a response against the request it answers, as the live filter does", () => {
+    expect(decodePaperFilterResponse(answer, request)).toEqual([
+      { id: samplePaper.id, category: "photo-z", directions: ["photo-z#2"], relevanceScore: 77 },
+    ]);
+    expect(decodePaperFilterResponse(JSON.stringify({ papers: [] }), request)).toEqual([]);
+  });
+
+  it("unwraps exactly one JSON code fence", () => {
+    expect(decodePaperFilterResponse("```json\n" + answer + "\n```", request)).toHaveLength(1);
+    expect(() => decodePaperFilterResponse("Here you go:\n```json\n" + answer + "\n```", request))
+      .toThrow(PaperFilterResponseValidationError);
+  });
+
+  it("raises the typed validation errors for bad JSON and contract violations", () => {
+    expect.assertions(4);
+    for (const [raw, reasonCode] of [
+      ["not json", "invalid-json"],
+      [JSON.stringify({ papers: [{ id: "9999.99999", category: "skip", directions: [], relevanceScore: 0 }] }), "invalid-contract"],
+    ] as const) {
+      try {
+        decodePaperFilterResponse(raw, request);
+      } catch (error) {
+        expect(isPaperFilterResponseValidationError(error)).toBe(true);
+        expect((error as PaperFilterResponseValidationError).reasonCode).toBe(reasonCode);
+      }
+    }
+  });
+});
 
 describe("filterPapers", () => {
   it("carries relevance scores from validated model decisions to selected papers", async () => {

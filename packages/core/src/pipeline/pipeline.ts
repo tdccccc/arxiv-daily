@@ -19,6 +19,10 @@ import type { PaperContentFetcher } from "./paper-content";
 import type { MarkdownWriter } from "./markdown-writer";
 import { isPermanentLlmError, type LlmClient } from "../llm/client";
 import type { PaperIndexEntry, PaperIndexStore } from "../services/paper-index";
+import type {
+  FilterDecisionOutcome,
+  FilterDecisionRecordPort,
+} from "../services/filter-decision-record-store";
 import {
   isCancellationError,
   throwIfCancelled,
@@ -29,6 +33,8 @@ import {
   isPaperFilterCheckpointError,
   isPaperFilterResponseValidationError,
   type DailyFilterCheckpointPort,
+  type FilterClassification,
+  type FilterRecord,
   type FilteredPaper,
 } from "./paper-filter";
 import {
@@ -71,6 +77,9 @@ export type PipelineResult =
 
 const CONTENT_FETCH_CONCURRENCY = 6;
 
+const omittedByModel = (id: string): FilterRecord =>
+  ({ id, category: "skip", directions: [], relevanceScore: 0 });
+
 export interface DateScopedCheckpointLifecyclePort {
   removeAll(reportDate: string): Promise<void>;
 }
@@ -95,6 +104,11 @@ export interface PipelineDeps {
   writer: MarkdownWriter;
   paperIndex?: PaperIndexStore;
   checkpointStores?: DailyGenerationCheckpointStores;
+  /**
+   * Durable record of every filter decision, written once the daily report is
+   * committed. Not a checkpoint: it is never read back to skip a model call.
+   */
+  filterDecisionStore?: FilterDecisionRecordPort;
   /** @deprecated Host compatibility until checkpointStores wiring lands. */
   checkpointStore?: DailySummaryCheckpointLifecyclePort;
   llm: LlmClient;
@@ -207,6 +221,7 @@ export class ArxivPipeline {
     stageStart("filter");
     this.progress.setStage("filter");
     let filtered: FilteredPaper[];
+    const classified: { value?: FilterClassification } = {};
     try {
       filtered = await filterPapers(sourcePapers, {
         llm: this.deps.llm,
@@ -215,6 +230,9 @@ export class ArxivPipeline {
         reportDate: dateStr,
         llmSettings: this.deps.llmSettings,
         checkpointStore: this.deps.checkpointStores?.filter,
+        onClassified: this.deps.filterDecisionStore
+          ? (classification) => { classified.value = classification; }
+          : undefined,
         signal,
         onMetrics: (metrics) => runMetrics.record(metrics),
       });
@@ -241,6 +259,13 @@ export class ArxivPipeline {
     stageEnd("filter", ` (${filtered.length}/${sourcePapers.length} kept)`);
     if (filtered.length === 0) {
       throwIfCancelled(signal);
+      // No report is committed, but the decisions are what recall is judged on.
+      if (classified.value) {
+        await this.recordFilterDecisions(dateStr, classified.value, sourcePapers, {
+          visibleIds: new Set(),
+          ignoredIds: new Set(),
+        });
+      }
       // Don't write empty file - show "0" in calendar
       return {
         kind: "completed",
@@ -255,6 +280,9 @@ export class ArxivPipeline {
     if (indexed.kind !== "ok") return indexed.result;
     const eligiblePapers = indexed.papers.filter(
       (p) => p.indexEntry?.status !== "ignored",
+    );
+    const ignoredIds = new Set(
+      indexed.papers.filter((p) => p.indexEntry?.status === "ignored").map(({ id }) => id),
     );
     // Rank globally after ignored papers are removed, before any body fetch,
     // detail selection, or summary cost. All later consumers (including report
@@ -274,6 +302,12 @@ export class ArxivPipeline {
     }
     if (visiblePapers.length === 0) {
       throwIfCancelled(signal);
+      if (classified.value) {
+        await this.recordFilterDecisions(dateStr, classified.value, sourcePapers, {
+          visibleIds: new Set(),
+          ignoredIds,
+        });
+      }
       // Don't write empty file - show "0" in calendar
       return {
         kind: "completed",
@@ -483,6 +517,12 @@ export class ArxivPipeline {
     await this.deps.writer.writeDaily(dateStr, dailySummary, {
       metrics: runMetrics.snapshot(),
     });
+    if (classified.value) {
+      await this.recordFilterDecisions(dateStr, classified.value, sourcePapers, {
+        visibleIds: new Set(visiblePapers.map(({ id }) => id)),
+        ignoredIds,
+      });
+    }
     await this.cleanupCommittedCheckpoints(dateStr);
     if (this.deps.paperIndex) {
       try {
@@ -576,6 +616,55 @@ export class ArxivPipeline {
     } catch (e) {
       if (isCancellationError(e)) throw e;
       this.deps.logger.error(`pipeline: detail index repair failed for ${arxivId}`, e);
+    }
+  }
+
+  /** Best effort: the committed report stands even when the record cannot be kept. */
+  private async recordFilterDecisions(
+    dateStr: string,
+    classification: FilterClassification,
+    papers: readonly PaperMeta[],
+    outcomes: { visibleIds: ReadonlySet<string>; ignoredIds: ReadonlySet<string> },
+  ): Promise<void> {
+    const store = this.deps.filterDecisionStore;
+    if (!store) return;
+    const decided = new Map(classification.records.map((record) => [record.id, record] as const));
+    const directionsByRef = new Map(classification.directions.map((d) => [d.ref, d] as const));
+    const outcomeOf = (record: FilterRecord): FilterDecisionOutcome => {
+      if (record.category === "skip") return "skipped_by_model";
+      if (outcomes.visibleIds.has(record.id)) return "in_report";
+      return outcomes.ignoredIds.has(record.id) ? "excluded_ignored" : "cut_by_limit";
+    };
+    try {
+      await store.save({
+        reportDate: dateStr,
+        directions: classification.directions,
+        promptContractVersion: classification.promptContractVersion,
+        resultContractVersion: classification.resultContractVersion,
+        generation: classification.generation,
+        // Every paper offered to the classifier, in source order. The prompt lets
+        // the model leave out papers that are not relevant, so omission counts as skip.
+        candidates: papers.map((paper) => {
+          const record = decided.get(paper.id) ?? omittedByModel(paper.id);
+          return {
+            id: paper.id,
+            title: paper.title,
+            category: record.category,
+            directions: record.directions.flatMap((ref) => {
+              const direction = directionsByRef.get(ref);
+              return direction ? [{ id: direction.id, text: direction.text, tag: direction.tag }] : [];
+            }),
+            relevanceScore: record.relevanceScore,
+            outcome: outcomeOf(record),
+            hadAbstract: paper.abstract.trim().length > 0,
+          };
+        }),
+      });
+    } catch (error) {
+      this.deps.logger.warn(
+        `pipeline: filter decision record write failed for ${dateStr}`,
+        error,
+      );
     }
   }
 

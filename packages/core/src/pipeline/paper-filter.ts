@@ -1,16 +1,24 @@
 import type { LlmClient } from "../llm/client";
 import type { Logger } from "../services/logger";
+import {
+  buildCheckpointGenerationIdentity,
+  type CheckpointGenerationIdentity,
+} from "../services/daily-summary-checkpoint-store";
 import { isCancellationError, throwIfCancelled } from "../services/cancellation";
 import type { ArxivSettings, LlmSettings, Topic } from "../settings/types";
 import type { PaperMeta } from "./arxiv-parser";
 import type { MetricsObserver } from "../metrics/generation";
 import type { PaperDiscoveryProvenance } from "./discovery-provenance-marker";
 import {
+  DAILY_FILTER_PROMPT_CONTRACT_VERSION,
+  DAILY_FILTER_RESULT_CONTRACT_VERSION,
   buildPaperFilterRequest,
   classifiableTopics,
   decodePaperFilterRecords,
   prepareDailyFilterCheckpoint,
+  type FilterDirectionRef,
   type FilterRecord,
+  type PaperFilterRequest,
   type PreparedDailyFilterCheckpoint,
 } from "./paper-filter-contract";
 import type { TopicDirectionHit } from "./topic-direction-hits";
@@ -45,6 +53,21 @@ export interface FilteredPaper extends PaperMeta {
   discoveryProvenance?: PaperDiscoveryProvenance;
 }
 
+/**
+ * The validated classification a filter run acted on — every candidate the
+ * model returned, `skip` included — whether it was just generated or reused
+ * from a checkpoint. `filterPapers` returns only the kept papers, so this is
+ * how a caller learns what was decided about the rest.
+ */
+export interface FilterClassification {
+  records: FilterRecord[];
+  /** Directions the classifier was offered, from the frozen request. */
+  directions: FilterDirectionRef[];
+  generation: CheckpointGenerationIdentity;
+  promptContractVersion: number;
+  resultContractVersion: number;
+}
+
 export interface DailyFilterCheckpointPort {
   lookupReusable(
     reportDate: string,
@@ -64,6 +87,8 @@ export interface PaperFilterDeps {
   reportDate: string;
   llmSettings: LlmSettings;
   checkpointStore?: DailyFilterCheckpointPort;
+  /** Called once the classification is validated; never affects the result. */
+  onClassified?: (classification: FilterClassification) => void;
   signal?: AbortSignal;
   onMetrics?: MetricsObserver;
 }
@@ -207,29 +232,7 @@ export async function filterPapers(
     }
     throwIfCancelled(deps.signal);
 
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(unwrapSingleCodeFence(raw));
-    } catch {
-      throw new PaperFilterResponseValidationError(
-        "response is not strict JSON",
-        "invalid-json",
-      );
-    }
-
-    const records = decodePaperFilterRecords(
-      parsed,
-      new Set(request.identity.knownIds),
-      new Set(request.identity.validTags),
-      request.identity.directions,
-    );
-    if (!records.ok) {
-      throw new PaperFilterResponseValidationError(
-        `response violates the filter contract: ${records.reason}`,
-        "invalid-contract",
-      );
-    }
-    validatedRecords = records.value;
+    validatedRecords = decodePaperFilterResponse(raw, request);
     try {
       await deps.checkpointStore?.save(
         deps.reportDate,
@@ -251,6 +254,8 @@ export async function filterPapers(
       );
     }
   }
+
+  reportClassification(deps, request.options.temperature, prepared, request.identity.directions, validatedRecords);
 
   const idMap = new Map(papers.map((p) => [p.id, p] as const));
   const out: FilteredPaper[] = [];
@@ -284,6 +289,62 @@ export async function filterPapers(
   const skipped = papers.length - out.length;
   logger.info(`paper-filter: ${breakdown}${skipped > 0 ? `, skipped=${skipped}` : ""}`);
   return out;
+}
+
+function reportClassification(
+  deps: PaperFilterDeps,
+  temperature: number,
+  prepared: PreparedDailyFilterCheckpoint | undefined,
+  directions: FilterDirectionRef[],
+  records: FilterRecord[],
+): void {
+  if (!deps.onClassified) return;
+  try {
+    deps.onClassified({
+      records: records.map((record) => ({ ...record, directions: [...record.directions] })),
+      directions: directions.map((direction) => ({ ...direction })),
+      generation: prepared?.fingerprintInput.generation
+        ?? buildCheckpointGenerationIdentity(deps.llmSettings, temperature),
+      promptContractVersion: prepared?.fingerprintInput.promptContractVersion
+        ?? DAILY_FILTER_PROMPT_CONTRACT_VERSION,
+      resultContractVersion: prepared?.fingerprintInput.resultContractVersion
+        ?? DAILY_FILTER_RESULT_CONTRACT_VERSION,
+    });
+  } catch (error) {
+    deps.logger.warn("paper-filter: classification observer failed", error);
+  }
+}
+
+/**
+ * Validate a raw model answer against the request it answers: strict JSON
+ * (one surrounding code fence is tolerated), then the filter contract. Papers
+ * the model left out are simply absent from the result; by the prompt's
+ * contract that means not relevant. Throws `PaperFilterResponseValidationError`.
+ */
+export function decodePaperFilterResponse(raw: string, request: PaperFilterRequest): FilterRecord[] {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(unwrapSingleCodeFence(raw));
+  } catch {
+    throw new PaperFilterResponseValidationError(
+      "response is not strict JSON",
+      "invalid-json",
+    );
+  }
+
+  const records = decodePaperFilterRecords(
+    parsed,
+    new Set(request.identity.knownIds),
+    new Set(request.identity.validTags),
+    request.identity.directions,
+  );
+  if (!records.ok) {
+    throw new PaperFilterResponseValidationError(
+      `response violates the filter contract: ${records.reason}`,
+      "invalid-contract",
+    );
+  }
+  return records.value;
 }
 
 /**

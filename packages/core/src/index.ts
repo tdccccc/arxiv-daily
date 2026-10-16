@@ -102,6 +102,7 @@ export {
   type DailySummaryCheckpointStoreOptions,
 } from "./services/daily-summary-checkpoint-store";
 export * from "./services/diagnostics";
+export * from "./services/filter-decision-record-store";
 export * from "./services/logger";
 export * from "./services/manual-fetch";
 export * from "./services/operations";

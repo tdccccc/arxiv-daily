@@ -17,6 +17,7 @@ import { PaperIndexStore } from "@arxiv-daily/core";
 import {
   DailyFilterCheckpointStore,
   DailySummaryCheckpointStore,
+  FilterDecisionRecordStore,
 } from "@arxiv-daily/core";
 import { RunHistoryStore } from "@arxiv-daily/core";
 import { DAILY_RUN_LOCK_KEY, RunLock } from "@arxiv-daily/core";
@@ -132,6 +133,11 @@ export async function buildCliRuntime(
     config.settings.output,
     checkpointStoreOptions,
   );
+  const filterDecisionStore = new FilterDecisionRecordStore(
+    host.storage,
+    config.settings.output,
+    checkpointStoreOptions,
+  );
   const stateStore = createStorageStateStore(
     host.storage,
     config.settings.output,
@@ -152,6 +158,7 @@ export async function buildCliRuntime(
       filter: filterCheckpointStore,
       summary: summaryCheckpointStore,
     },
+    filterDecisionStore,
     llm,
     logger,
     arxiv: config.settings.arxiv,

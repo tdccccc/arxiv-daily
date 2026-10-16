@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import { describe, it, expect } from "vitest";
 import {
   classifySection,
+  extractAbsPageAbstract,
   extractAbstractConclusion,
   extractSections,
 } from "../src/pipeline/section-extractor";
@@ -208,5 +209,27 @@ describe("section-extractor", () => {
     }, markupParser);
     expect(out).toContain("## Introduction");
     expect(out).not.toContain("## Notation");
+  });
+});
+
+describe("extractAbsPageAbstract", () => {
+  const page = (blockquote: string) => `<html><body><h1>Title</h1>${blockquote}</body></html>`;
+
+  it("reads the abstract block without its label and collapses edge whitespace", () => {
+    const html = page('<blockquote class="abstract mathjax">\n  <span class="descriptor">Abstract:</span>  We measure a redshift.  \n</blockquote>');
+    expect(extractAbsPageAbstract(html, markupParser)).toBe("We measure a redshift.");
+  });
+
+  it("keeps mathematical objects as TeX instead of MathML text", () => {
+    const fixture = readFileSync(new URL("./fixtures/arxiv-scientific-math.html", import.meta.url), "utf8");
+    const abstract = markupParser.parseFromString(fixture, "text/html").querySelector(".ltx_abstract")!.innerHTML;
+    const text = extractAbsPageAbstract(page(`<blockquote class="abstract">Abstract: ${abstract}</blockquote>`), markupParser);
+    expect(text).toContain("HE0435$-$1223, PG1115$+$080, and WFI2033$-$4723");
+    expect(text).toMatch(/^We extract stellar kinematics/);
+  });
+
+  it("returns an empty string when the page has no abstract", () => {
+    expect(extractAbsPageAbstract(page("<p>nothing</p>"), markupParser)).toBe("");
+    expect(extractAbsPageAbstract(page('<blockquote class="abstract"> Abstract: </blockquote>'), markupParser)).toBe("");
   });
 });

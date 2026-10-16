@@ -130,6 +130,23 @@ describe("PaperContentFetcher source fallback", () => {
     },
   );
 
+  it("reports N/A when the abs-page fallback finds no abstract block", async () => {
+    const { storage } = makeStorage();
+    const cache = new HtmlCache({ rootDir: "cache", expiryDays: 7, storage });
+    const fetcher = {
+      fetchPaperHtml: vi.fn(async () => ({ ok: false, status: 404 })),
+      fetchSource: vi.fn(async () => { throw new Error("unexpected source request"); }),
+      fetchPaperAbsPage: vi.fn(async () => "<html><body><p>withdrawn</p></body></html>"),
+    };
+    const paperFetcher = new PaperContentFetcher(
+      fetcher as any, cache, new Logger("error"), markupParser,
+    );
+
+    const result = await paperFetcher.fetch("2609.03089", { ...opts, isDetail: false });
+
+    expect(result.abstractConclusion).toBe("## Abstract\nN/A");
+  });
+
   it.each(["network", "cache"])(
     "preserves mathematical object identifiers in the abs-page fallback from %s",
     async (source) => {

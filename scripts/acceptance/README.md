@@ -1,6 +1,6 @@
 # 功能与交互自动验收
 
-运行真实 Reading workbench 和 Obsidian，检查用户操作、页面反馈及保存结果。论文、业务模型和邮件接口使用固定响应；这里不评估筛选相关性或摘要质量。
+运行真实 Reading workbench 和 Obsidian，检查用户操作、页面反馈及保存结果。论文、业务模型和邮件接口使用固定响应；这里不评估筛选相关性或摘要质量；筛选相关性的评估见 [../quality-eval/README.md](../quality-eval/README.md)。
 
 ## 运行
 

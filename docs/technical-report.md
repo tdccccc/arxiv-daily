@@ -275,6 +275,7 @@ namespace guard 在 provider 调用前同步验证。原生资产缺失时，Lin
 | `arxiv-daily/.index/delivery-state.json` | v1-compatible 邮件阻断投影；为旧 reader 保留 recipient，受支持宿主按 `0600` 处理 |
 | `arxiv-daily/.index/delivery-state.json.claims/` | 不可变 claim/decision/result generation；使用哈希 recipient identity |
 | `arxiv-daily/.index/filter-checkpoints/` | 过滤 checkpoint |
+| `arxiv-daily/.index/filter-decisions/` | 筛选决定记录（日报提交后保留，按日期保留 180 天；不是 checkpoint，不参与缓存复用） |
 | `arxiv-daily/.index/daily-summary-checkpoints/` | 日总结 checkpoint |
 | 兼容 `arxiv-daily/index/papers.json` | 旧索引路径可读 |
 

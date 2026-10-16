@@ -8,6 +8,8 @@ import {
   DailyFilterCheckpointStore,
   DailySummaryCheckpointStore,
   DEFAULT_SETTINGS,
+  FilterDecisionRecordStore,
+  buildCheckpointGenerationIdentity,
   derivePaperInboxPaths,
   prepareDailyFilterCheckpoint,
   type DailyFilterCheckpointCompatibilityInput,
@@ -221,6 +223,38 @@ describe("CLI data portability", () => {
     const { archive } = await exportAndImportCheckpoint();
     expect(archive.file(`.index/filter-checkpoints/${reportDate}.json`)).not.toBeNull();
     expect(archive.file(`.index/daily-summary-checkpoints/${reportDate}.json`)).not.toBeNull();
+  });
+
+  it("round-trips filter decision records with the rest of .index", async () => {
+    const sourceRoot = await tempDir("decision-export");
+    const destinationRoot = await tempDir("decision-import");
+    const archivePath = path.join(await tempDir("decision-archive"), "vault.zip");
+    const sourceConfig = config(sourceRoot);
+    const destinationConfig = config(destinationRoot);
+    const saved = await new FilterDecisionRecordStore(
+      new NodeStorageAdapter(sourceRoot),
+      sourceConfig.settings.output,
+    ).save({
+      reportDate,
+      directions: [{ ref: "topic-a#1", tag: "topic-a", id: "da", text: "Topic A" }],
+      promptContractVersion: 4,
+      resultContractVersion: 3,
+      generation: buildCheckpointGenerationIdentity(filterCompatibility.llm, 0),
+      candidates: [{
+        id: "2608.00001", title: "First", category: "skip", directions: [],
+        relevanceScore: 0, outcome: "skipped_by_model", hadAbstract: true,
+      }],
+    });
+
+    await dataExport(sourceConfig, captureIo().io, archivePath);
+    const archive = await JSZip.loadAsync(await fs.readFile(archivePath));
+    expect(archive.file(`.index/filter-decisions/${reportDate}.json`)).not.toBeNull();
+    await dataImport(destinationConfig, captureIo().io, archivePath, { yes: true });
+
+    await expect(new FilterDecisionRecordStore(
+      new NodeStorageAdapter(destinationRoot),
+      destinationConfig.settings.output,
+    ).load(reportDate)).resolves.toEqual(saved);
   });
 
   it("round-trips a checkpoint under a custom output root and ignores stale default data", async () => {

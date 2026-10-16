@@ -188,6 +188,17 @@ export function preserveMathText(doc: Document) {
   }
 }
 
+/**
+ * Abstract text of an arxiv.org/abs page, without the "Abstract:" label and with
+ * mathematical objects kept as TeX. Empty when the page carries no abstract.
+ */
+export function extractAbsPageAbstract(html: string, parser: MarkupParser): string {
+  const doc = parser.parseFromString(html, "text/html");
+  preserveMathText(doc);
+  const block = doc.querySelector("blockquote.abstract");
+  return (block?.textContent ?? "").replace(/^\s*Abstract:?\s*/, "").trim();
+}
+
 function stripNoise(doc: Document) {
   preserveMathText(doc);
   preserveFigureAndTableText(doc);

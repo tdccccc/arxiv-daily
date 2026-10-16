@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import {
   DailyFilterCheckpointStore,
   DailySummaryCheckpointStore,
+  FilterDecisionRecordStore,
   Logger,
   normalizeTopic,
   parseDailyReportTopicDirections,
@@ -158,6 +159,17 @@ describe("CLI runtime", () => {
 
     expect(await runtime.pipeline.runForDate("2026-09-08")).toMatchObject({ kind: "completed", papersWritten: 1 });
     const markdown = await host.storage.readText("arxiv-daily/daily/2026-09-08.md");
+    // The filter checkpoint is transient; the decision record outlives the committed report.
+    expect(await host.storage.exists("arxiv-daily/.index/filter-checkpoints/2026-09-08.json")).toBe(false);
+    const decisions = JSON.parse(await host.storage.readText("arxiv-daily/.index/filter-decisions/2026-09-08.json"));
+    expect(decisions).toMatchObject({ reportDate: "2026-09-08", generation: { model: "m" } });
+    expect(decisions.candidates.map((c: { id: string; category: string; outcome: string }) =>
+      [c.id, c.category, c.outcome])).toEqual([
+      [ids[0], "active", "in_report"],
+      [ids[1], "limited", "cut_by_limit"],
+    ]);
+    expect(JSON.stringify(decisions)).not.toContain("test-key");
+    expect(JSON.stringify(decisions)).not.toContain("api.example.com");
     expect(await runtime.pipeline.runForDate("2026-09-07")).toMatchObject({ kind: "completed" });
     expect(await host.storage.readText(oldPath)).toBe(oldMarkdown);
     expect((await runtime.paperIndex.get(ids[0]!))?.summary).toEqual({
@@ -227,6 +239,15 @@ describe("CLI runtime", () => {
     expect(logger.getBuffer().filter((entry) =>
       entry.includes("checkpoint warning") && entry.includes("store failed")
     )).toHaveLength(2);
+
+    const decisionStore = (runtime.pipeline as any).deps.filterDecisionStore;
+    expect(decisionStore).toBeInstanceOf(FilterDecisionRecordStore);
+    expect(decisionStore.storage).toBe(host.storage);
+    expect(decisionStore.output).toBe(config.settings.output);
+    decisionStore.options.onWarning("decision warning", new Error("store failed"));
+    expect(logger.getBuffer().filter((entry) =>
+      entry.includes("decision warning") && entry.includes("store failed")
+    )).toHaveLength(1);
 
     expect(await host.storage.exists("arxiv-daily/.index/papers.json")).toBe(
       true,

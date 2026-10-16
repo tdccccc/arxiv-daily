@@ -3,6 +3,7 @@ import type { HtmlCache } from "./html-cache";
 import type { Logger } from "../services/logger";
 import type { MarkupParser, StorageAdapter } from "../core/adapters";
 import {
+  extractAbsPageAbstract,
   extractAbstractConclusion,
   extractSections,
   preserveMathText,
@@ -165,11 +166,7 @@ export class PaperContentFetcher {
         abs = await this.fetcher.fetchPaperAbsPage(arxivId, signal);
         await this.cache.set(absKey, "abs", abs);
       }
-      const doc = this.markupParser.parseFromString(abs, "text/html");
-      preserveMathText(doc);
-      const bq = doc.querySelector("blockquote.abstract");
-      const text =
-        (bq?.textContent ?? "").replace(/^\s*Abstract:?\s*/, "").trim() || "N/A";
+      const text = extractAbsPageAbstract(abs, this.markupParser) || "N/A";
       return { abstract: `## Abstract\n${text}` };
     } catch (e) {
       if (isCancellationError(e)) throw e;
