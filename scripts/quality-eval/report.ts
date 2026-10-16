@@ -11,7 +11,7 @@ const withCount = (ratio: Ratio): string => (ratio.value === null ? `${NA}（n=$
 const estimate = (ratio: Ratio): string => (ratio.value === null ? NA : percent(ratio));
 
 function cell(text: string): string {
-  return text.replace(/\s+/g, " ").replace(/\|/g, "\\|").trim() || " ";
+  return text.replace(/\s+/g, " ").replace(/\\/g, "\\\\").replace(/\|/g, "\\|").trim() || " ";
 }
 
 function numbers(values: readonly number[]): string {
