@@ -25,11 +25,13 @@ import {
   type GenerationObjectReference,
   type LexicalDictionaryBlock,
   type LexicalDictionaryEntry,
+  type LexicalNamespace,
   type LexicalOccurrence,
   type LexicalPostingsBlock,
   type PaperMetadataBlock,
   type VectorBlock,
   GENERATION_DESCRIPTOR_SCHEMA_VERSION,
+  lexicalTermBucket,
 } from "./generation-index-format";
 
 export const CURRENT_GENERATION_POINTER_FORMAT_VERSION = 1 as const;
@@ -2293,8 +2295,9 @@ function validateDictionaryRouting(block: LexicalDictionaryBlock, reference: Gen
   if (actual.size !== routed.size || [...actual].some((bucket) => !routed.has(bucket))) throw new Error("dictionary routing membership does not exactly match queryCatalog buckets");
 }
 
-function lexicalBucket(namespace: string, term: string): number {
-  const encoder = new TextEncoder(); const a = encoder.encode(namespace); const b = encoder.encode(term); const bytes = new Uint8Array(a.length + 1 + b.length); bytes.set(a); bytes.set(b, a.length + 1); return Number.parseInt(sha256Hex(bytes).slice(0, 2), 16);
+/** Entries here come from an already decoded dictionary block, so namespace and term are valid; the shared cached derivation returns the same bucket as hashing them directly. */
+function lexicalBucket(namespace: LexicalNamespace, term: string): number {
+  return lexicalTermBucket(namespace, term);
 }
 
 function validatePairedObjectCoverage(descriptor: GenerationDescriptor): void {

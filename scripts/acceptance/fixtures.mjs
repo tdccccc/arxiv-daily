@@ -20,9 +20,9 @@ function recentHtml(empty) {
   }).join("")}</body></html>`;
 }
 
-function atom(ids) {
+function atom(ids, extraPapers = []) {
   return `<?xml version="1.0"?><feed xmlns="http://www.w3.org/2005/Atom" xmlns:arxiv="http://arxiv.org/schemas/atom">${ids.map(id => {
-    const p = PAPERS.find(paper => paper.id === id.replace(/v\d+$/, "")) ?? { id, title: `Research paper ${id}`, abstract: "A controlled research measurement and its reproducible evidence." };
+    const p = [...PAPERS, ...extraPapers].find(paper => paper.id === id.replace(/v\d+$/, "")) ?? { id, title: `Research paper ${id}`, abstract: "A controlled research measurement and its reproducible evidence." };
     return `<entry><id>https://arxiv.org/abs/${p.id}v1</id><title>${xml(p.title)}</title><author><name>A. Researcher</name></author><summary>${xml(p.abstract)}</summary><published>${ACCEPTANCE_DATE}T00:00:00Z</published><updated>${ACCEPTANCE_DATE}T00:00:00Z</updated><arxiv:primary_category term="cs.AI"/><category term="cs.AI"/></entry>`;
   }).join("")}</feed>`;
 }
@@ -59,6 +59,15 @@ function completion(payload) {
     const raw = /<paper_data>\s*([\s\S]*?)\s*<\/paper_data>/.exec(user)?.[1];
     const data = JSON.parse(raw ?? "{}");
     if (!Array.isArray(data.groups)) throw new Error("Proposal fixture requires supplied evidence groups");
+    // A new-papers update (ADR 0015 section 4): one single-paper group per new paper, compared with the
+    // existing directions. The first is covered by the first existing direction; the rest become one
+    // proposed direction in a new topic, so a run exercises both outcomes.
+    if (data.groups.length > 0 && data.groups.every(group => /^new-\d+$/.test(group.id)) && data.existingTopics?.[0]?.directions?.[0]) {
+      const [covered, ...rest] = data.groups, topic = data.existingTopics[0];
+      const response = { topics: [], coveredGroups: [{ groupId: covered.id, topicId: topic.id, directionId: topic.directions[0].id }] };
+      if (rest.length) response.topics.push({ suggestedName: "Newly added methods", directions: [{ text: "Methods from newly added library papers", discoveryCues: ["new library papers"], groupIds: rest.map(group => group.id), representativePaperKeys: rest.flatMap(group => group.papers.map(paper => paper.paperKey)).slice(0, 3) }] });
+      return { ...evidence, kind: "proposal-new-papers", groupTitles: data.groups.flatMap(group => group.papers.map(paper => paper.title)), content: JSON.stringify(response) };
+    }
     return { ...evidence, kind: "proposal", content: JSON.stringify({ topics: data.groups.map((group, i) => ({ suggestedName: `Research evidence ${i + 1}`, directions: [{ text: "Reliable research methods", discoveryCues: ["controlled experiments", "reproducibility"], groupIds: [group.id], representativePaperKeys: group.papers.slice(0, 3).map(p => p.paperKey) }] })) }) };
   }
   if (system.includes("详细的中文论文总结") || system.includes("detailed") && system.includes("paper")) {
@@ -82,7 +91,7 @@ async function readBody(request) {
 
 /** Owned loopback service. There is deliberately no upstream forwarding path. */
 export async function startFixtureServer(options = {}) {
-  const requests = [], held = new Set();
+  const requests = [], held = new Set(), extraPapers = [];
   let origin, closed;
   const mode = { llm: "normal", arxiv: "normal", ...options.mode };
   const setMode = update => {
@@ -109,7 +118,7 @@ export async function startFixtureServer(options = {}) {
       if (isArxiv && /^\/list\/[^/]+\/recent$/.test(target.pathname)) { record.kind = "recent"; return send(200, recentHtml(mode.arxiv === "empty"), "text/html"); }
       if (isArxiv && target.pathname === "/api/query") {
         record.kind = "metadata";
-        return send(200, atom(mode.arxiv === "empty" ? [] : (target.searchParams.get("id_list")?.split(",") ?? PAPERS.map(p => p.id))), "application/atom+xml");
+        return send(200, atom(mode.arxiv === "empty" ? [] : (target.searchParams.get("id_list")?.split(",") ?? PAPERS.map(p => p.id)), extraPapers), "application/atom+xml");
       }
       if (isArxiv && /^\/html\/\d{4}\.\d{4,5}(?:v\d+)?$/.test(target.pathname)) { record.kind = "content"; return send(200, paperHtml(target.pathname.slice(6)), "text/html"); }
       if (isArxiv && /^\/abs\/\d{4}\.\d{4,5}(?:v\d+)?$/.test(target.pathname)) { record.kind = "abstract"; return send(200, `<blockquote class="abstract">Abstract: ${PAPERS[0].abstract}</blockquote>`, "text/html"); }
@@ -148,7 +157,7 @@ export async function startFixtureServer(options = {}) {
   });
   await new Promise((resolve, reject) => { server.once("error", reject); server.listen(0, "127.0.0.1", resolve); });
   origin = `http://127.0.0.1:${server.address().port}`;
-  return { url: origin, requests, setMode, releaseHeld, get mode() { return { ...mode }; }, close() {
+  return { url: origin, requests, setMode, releaseHeld, addPapers: papers => { extraPapers.push(...papers); }, get mode() { return { ...mode }; }, close() {
     if (!closed) { releaseHeld(); closed = new Promise(resolve => { server.close(resolve); server.closeAllConnections(); }); }
     return closed;
   } };

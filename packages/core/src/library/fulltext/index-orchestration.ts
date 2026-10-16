@@ -35,7 +35,7 @@ import { FullTextKnowledgeBaseStoreError } from "./knowledge-base-store";
 import { searchKnowledgeBase, type KnowledgeBasePaperMatch } from "./retrieval";
 import { searchKnowledgeBaseBm25 } from "./bm25-retrieval";
 import { fusePaperRankingsRrf } from "./hybrid-retrieval";
-import { searchGenerationBm25 } from "./generation-bm25-index";
+import { limitBm25QueryTerms, searchGenerationBm25 } from "./generation-bm25-index";
 import { FullTextGenerationIndexStoreError, type FullTextGenerationIndexStore } from "./generation-index-store";
 import { searchGenerationDense } from "./retrieval";
 import { extractTitleFromFirstPage } from "./title-extraction";
@@ -942,7 +942,9 @@ async function searchOpenedGeneration(
   const candidateLimit = input.candidateLimit ?? Math.max(50, limit * 5);
   const lexical = mode === "dense" ? [] : await searchGenerationBm25({
     generation,
-    queryText: input.lexicalQueryText ?? input.queryText,
+    // Free text (a pasted abstract) can carry more unique terms than one BM25
+    // query may; limitBm25QueryTerms returns text within the limit unchanged.
+    queryText: limitBm25QueryTerms([input.lexicalQueryText ?? input.queryText]),
     titles: input.titles,
     limit: mode === "lexical" ? limit : candidateLimit,
     maxHitsPerPaper: input.maxHitsPerPaper,

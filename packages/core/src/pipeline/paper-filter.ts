@@ -13,7 +13,6 @@ import {
   type FilterRecord,
   type PreparedDailyFilterCheckpoint,
 } from "./paper-filter-contract";
-import type { PersonalNoveltyWithBasis } from "./personalized-novelty";
 import type { TopicDirectionHit } from "./topic-direction-hits";
 
 export {
@@ -44,13 +43,6 @@ export interface FilteredPaper extends PaperMeta {
    * already on disk carry the provenance and are still read back.
    */
   discoveryProvenance?: PaperDiscoveryProvenance;
-  /**
-   * Read-only legacy field. Personal novelty lost its comparison basis when
-   * the profile document retired (ADR 0012 §Consequences); choosing a new
-   * basis is a decision deliberately left open, so the stage no longer runs
-   * and nothing sets this.
-   */
-  personalNovelty?: PersonalNoveltyWithBasis;
 }
 
 export interface DailyFilterCheckpointPort {

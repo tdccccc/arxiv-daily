@@ -110,14 +110,14 @@ function memoryStorage(): StorageAdapter {
 }
 
 /** Four indexed PDFs form two evidence groups through the real clusterer. */
-function indexedKnowledgeBase(): FullTextKnowledgeBaseStore {
+function indexedKnowledgeBase(indices: readonly number[] = [1, 2, 3, 4]): FullTextKnowledgeBaseStore {
   const documents = new Map<string, FullTextPaperDocument>();
   const manifest: FullTextKnowledgeBaseManifest = {
     schemaVersion: FULLTEXT_KNOWLEDGE_BASE_SCHEMA_VERSION,
     revision: 1, scopeFingerprint, identificationFingerprint,
     modelId: "fixture-model", dimension: 2, updatedAt: "2026-09-07T00:00:00.000Z", papers: {},
   };
-  for (const index of [1, 2, 3, 4]) {
+  for (const index of indices) {
     const indexed = paper(index);
     const textHash = `sha256:${String(index).padStart(64, "0")}`;
     const content = {
@@ -169,6 +169,7 @@ function generationPlugin(pauseResponse?: () => Promise<void>) {
     createLibraryConnection("/private/library", "1:2"),
     { llmBaseUrl: settings.llm.baseUrl },
   );
+  const indexed = [1, 2, 3, 4];
   const requests: OrganizationRequest[] = [];
   const http: HttpClient = {
     request: async (request) => {
@@ -210,9 +211,14 @@ function generationPlugin(pauseResponse?: () => Promise<void>) {
     libraryProposal: null, libraryConnectionRevision: 0, libraryOutputRevision: 0,
     libraryMutationQueue: Promise.resolve(), libraryIndexedPapers: [1, 2, 3, 4].map(paper),
     buildPersonalLibraryProfileStores: () => ({ proposal: store }),
-    buildFullTextKnowledgeBaseStore: () => indexedKnowledgeBase(),
+    buildFullTextKnowledgeBaseStore: () => indexedKnowledgeBase(indexed),
   });
-  return { plugin, settings, requests, store };
+  /** Adds papers to the index the way a later index run would. */
+  const addIndexedPapers = (...indices: number[]) => {
+    indexed.push(...indices);
+    (plugin as unknown as { libraryIndexedPapers: unknown }).libraryIndexedPapers = indexed.map(paper);
+  };
+  return { plugin, settings, requests, store, addIndexedPapers, connection };
 }
 
 describe("direction generation uses current research settings", () => {
@@ -268,7 +274,7 @@ describe("direction generation uses current research settings", () => {
 
   it.each([false, true])("previews local evidence without writes and rejects category changes: %s", async (changeCategories) => {
     const { plugin, store } = generationPlugin();
-    const proposal = await plugin.generatePersonalLibraryDirections();
+    const { proposal } = await plugin.generatePersonalLibraryDirections();
     const before = JSON.stringify(plugin.settings);
     const candidate = proposal.topics[0]!.directions[0]!;
     const http: HttpClient = { request: async (request) => {
@@ -300,7 +306,7 @@ describe("direction generation uses current research settings", () => {
 
   it("persists edits to directions generated from non-arXiv PDFs through the actual review controller", async () => {
     const { plugin, store } = generationPlugin();
-    const proposal = await plugin.generatePersonalLibraryDirections();
+    const { proposal } = await plugin.generatePersonalLibraryDirections();
     const candidate = proposal.topics[0]!.directions[0]!;
     const representativePaperKeys = candidate.representatives.map(({ paperKey }) => paperKey);
     expect(representativePaperKeys[0]).toMatch(/^file:sha256:/);
@@ -314,7 +320,7 @@ describe("direction generation uses current research settings", () => {
 
   it("sends every existing topic and direction identity with its reviewed text to the actual LLM request", async () => {
     const { plugin, requests, store } = generationPlugin();
-    const proposal = await plugin.generatePersonalLibraryDirections();
+    const { proposal } = await plugin.generatePersonalLibraryDirections();
     expect(await store.load()).toEqual(proposal);
     expect(requests).toHaveLength(1);
     expect(requests[0]!.existingTopics).toEqual([{
@@ -346,5 +352,62 @@ describe("direction generation uses current research settings", () => {
       response.resolve();
       await generating;
     }
+  });
+});
+
+describe("direction generation scope", () => {
+  const sentPaperKeys = (request: OrganizationRequest) =>
+    request.groups.flatMap(({ papers }) => papers.map(({ paperKey }) => paperKey)).sort();
+
+  it("sends only the new papers when asked for new-papers after a full scan", async () => {
+    const { plugin, requests, store, addIndexedPapers } = generationPlugin();
+    const first = await plugin.generatePersonalLibraryDirections();
+    expect(first).toMatchObject({ outcome: "generated", scope: "full", fellBackToFull: false });
+    expect(requests).toHaveLength(1);
+    expect(sentPaperKeys(requests[0]!)).toHaveLength(4);
+
+    addIndexedPapers(5, 6, 7);
+    const second = await plugin.generatePersonalLibraryDirections(undefined, undefined, { scope: "new-papers" });
+
+    expect(second).toMatchObject({ outcome: "generated", scope: "new-papers", fellBackToFull: false });
+    expect(requests).toHaveLength(2);
+    expect(sentPaperKeys(requests[1]!)).toEqual([5, 6, 7].map((index) => paper(index).paperKey).sort());
+    // The existing topics and direction text travel with the new papers.
+    expect(requests[1]!.existingTopics[0]!.directions.map(({ text }) => text))
+      .toEqual(["First research direction", "Second research direction"]);
+    const saved = (await store.load())!;
+    expect(saved.catalogInputPapers.map(({ paperKey }) => paperKey).sort())
+      .toEqual([5, 6, 7].map((index) => paper(index).paperKey).sort());
+    expect(saved.accountedPaperKeys).toHaveLength(7);
+    // Nothing is new any more.
+    expect(plugin.getPersonalLibraryProfileSnapshot().newPaperKeys).toEqual([]);
+  });
+
+  it("falls back to a full scan, and says so, when there is nothing to compare with", async () => {
+    const { plugin, requests, settings } = generationPlugin();
+    settings.arxiv.topics = [];
+    const result = await plugin.generatePersonalLibraryDirections(undefined, undefined, { scope: "new-papers" });
+    expect(result).toMatchObject({ outcome: "generated", scope: "full", fellBackToFull: true });
+    expect(requests).toHaveLength(1);
+    expect(sentPaperKeys(requests[0]!)).toHaveLength(4);
+  });
+
+  it("reports nothing new, with no model call and no saved change", async () => {
+    const { plugin, requests, store } = generationPlugin();
+    await plugin.generatePersonalLibraryDirections();
+    const before = await store.load();
+    const result = await plugin.generatePersonalLibraryDirections(undefined, undefined, { scope: "new-papers" });
+    expect(result).toEqual({ outcome: "nothing-new" });
+    expect(requests).toHaveLength(1);
+    expect(await store.load()).toEqual(before);
+    expect(plugin.operations.snapshot()).toEqual([]);
+  });
+
+  it("still requires model processing consent before an update for new papers", async () => {
+    const { plugin, requests } = generationPlugin();
+    (plugin as unknown as { libraryConnection: unknown }).libraryConnection = createLibraryConnection("/private/library", "1:2");
+    await expect(plugin.generatePersonalLibraryDirections(undefined, undefined, { scope: "new-papers" }))
+      .rejects.toThrow(/authorize/i);
+    expect(requests).toHaveLength(0);
   });
 });

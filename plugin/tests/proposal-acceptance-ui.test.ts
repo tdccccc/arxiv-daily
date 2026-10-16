@@ -86,9 +86,8 @@ function snapshot(overrides: Partial<ReviewSnapshot> = {}): ReviewSnapshot {
       catalogInputPapers, generationContractFingerprint: fingerprint, generatedAt: at,
       topics: [{ id: "proposed-topic", suggestedName: "Research agents", directions: [first, second] }],
     },
-    suggestions: null,
     authorization: { kind: "authorized", rootLabel: "papers", grantedAt: at },
-    catalogLoadError: null, proposalLoadError: null, suggestionsLoadError: null,
+    catalogLoadError: null, proposalLoadError: null,
     settingsTopicNames: [], settingsTopics: [], proposalAcceptance: null, acceptanceLoadError: null,
     ...overrides,
   };
@@ -187,7 +186,7 @@ describe("review progress", () => {
     ctrl.port.generate = vi.fn(async () => { ctrl.set(snapshot({ settingsTopics: initial.settingsTopics })); });
     const root = open(ctrl.port).contentEl;
     const update = root.querySelector<HTMLButtonElement>(".mod-cta");
-    expect(update?.textContent).toBe("Update suggestions");
+    expect(update?.textContent).toBe("Recheck coverage");
     expect(update?.closest("details")).toBeNull();
     update!.click();
     await vi.waitFor(() => expect(ctrl.port.generate).toHaveBeenCalledOnce());
@@ -203,10 +202,10 @@ describe("review progress", () => {
     const ctrl = controller(initial);
     ctrl.port.authorize = vi.fn(async () => false);
     const root = open(ctrl.port).contentEl;
-    button(root, "Update suggestions").click();
+    button(root, "Recheck coverage").click();
     await vi.waitFor(() => expect(ctrl.port.authorize).toHaveBeenCalledOnce());
     expect(ctrl.port.generate).not.toHaveBeenCalled();
-    expect(button(root, "Update suggestions").disabled).toBe(false);
+    expect(button(root, "Recheck coverage").disabled).toBe(false);
     expect(ctrl.snapshot().settingsTopics).toEqual([]);
   });
 
@@ -808,7 +807,7 @@ describe("proposal evidence is explanatory", () => {
     };
     const root = open(controller(initial).port).contentEl;
     expect(root.textContent).not.toContain("no new directions are needed");
-    expect(root.querySelector(".mod-cta")?.textContent).toBe("Update suggestions");
+    expect(root.querySelector(".mod-cta")?.textContent).toBe("Recheck coverage");
     expect(root.querySelector(".arxiv-daily-interest-review__coverage")?.textContent)
       .toMatch(change === "legacy" ? /4 unverified/ : /4 changed/);
   });

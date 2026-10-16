@@ -5,9 +5,15 @@ import type { MetricsObserver } from "../metrics/generation";
 import { renderPrompt } from "../prompts/render";
 import { throwIfCancelled } from "../services/cancellation";
 import { clusterPaperVectors, type ClusteringOptions, type PaperCluster } from "./clustering/clusterer";
-import { buildClusteringInput, type MergedDuplicatePapers } from "./clustering/paper-vector";
-import type { FullTextKnowledgeBaseStore, FullTextPaperKnowledgeRecord } from "./fulltext/knowledge-base";
+import { buildClusteringInput, comparePaperKeysByRecency, type MergedDuplicatePapers } from "./clustering/paper-vector";
+import { listUnaccountedLibraryPapers } from "./personal-library-change";
+import type {
+  FullTextKnowledgeBaseManifest,
+  FullTextKnowledgeBaseStore,
+  FullTextPaperKnowledgeRecord,
+} from "./fulltext/knowledge-base";
 import {
+  PERSONAL_LIBRARY_MAX_ACCOUNTED_PAPERS,
   PERSONAL_LIBRARY_MAX_CLUSTER_MEMBERS,
   PERSONAL_LIBRARY_MAX_DESCRIPTION_LENGTH,
   PERSONAL_LIBRARY_MAX_DISCOVERY_CUES,
@@ -22,6 +28,7 @@ import {
   createPersonalLibraryCatalogInputManifest,
   createPersonalLibraryGenerationContractFingerprint,
   createPersonalLibraryRepresentativeSetFingerprint,
+  accountedPaperKeysOf,
   decodePersonalLibraryDirectionProposal,
   type PersonalLibraryClusterMember,
   type PersonalLibraryDirectionProposal,
@@ -46,9 +53,9 @@ import {
 } from "./personal-library-topic-organization";
 
 export const PERSONAL_LIBRARY_CLUSTERED_DIRECTION_PROPOSER_VERSION =
-  "personal-library-clustered-direction-proposer-v4" as const;
+  "personal-library-clustered-direction-proposer-v5" as const;
 export const PERSONAL_LIBRARY_DIRECTION_ORGANIZATION_PROMPT_VERSION =
-  "personal-library-topic-organization-v3" as const;
+  "personal-library-topic-organization-v4" as const;
 export const PERSONAL_LIBRARY_DIRECTION_MAX_SELECTED_PAPERS = 200 as const;
 export const PERSONAL_LIBRARY_DIRECTION_MAX_BATCH_CODE_UNITS = 60_000 as const;
 export const PERSONAL_LIBRARY_DIRECTION_MAX_ABSTRACT_CODE_UNITS = 6_000 as const;
@@ -69,7 +76,11 @@ export type PersonalLibraryDirectionProposerErrorCode =
   | "no-evidence"
   | "evidence-too-large"
   | "output-too-large"
-  | "proposal-invariant";
+  | "proposal-invariant"
+  /** A new-papers update needs a previous proposal and existing topics to compare against. */
+  | "no-baseline"
+  /** Every library paper a scan could see has already been accounted for. */
+  | "nothing-new";
 
 export class PersonalLibraryDirectionProposerError extends Error {
   constructor(readonly code: PersonalLibraryDirectionProposerErrorCode) {
@@ -119,6 +130,18 @@ export interface ProposeClusteredDirectionsOptions extends ProposePersonalLibrar
   onProgress?: (progress: DirectionProposalProgress) => void;
   /** A title-based duplicate merge changes evidence and must be surfaced. */
   onDuplicatesMerged?: (merged: readonly MergedDuplicatePapers[]) => void;
+  /**
+   * The proposal this one replaces. Its accounted papers still in the library
+   * are carried forward, so replacing it does not make them look new again.
+   */
+  previous?: PersonalLibraryDirectionProposal | null;
+}
+
+export interface ProposeNewPapersDirectionsOptions extends ProposePersonalLibraryDirectionsOptions {
+  knowledgeBase: FullTextKnowledgeBaseStore;
+  /** The current proposal: it defines which papers are already accounted for. */
+  previous: PersonalLibraryDirectionProposal | null | undefined;
+  onProgress?: (progress: DirectionProposalProgress) => void;
 }
 
 export interface DirectionProposalProgress {
@@ -279,7 +302,7 @@ interface OrganizationWorkGroup extends OrganizationEvidenceGroup {
 /** Only the transmitted summary shrinks; membership stays complete locally. */
 async function organizeBoundedEvidence(
   original: readonly OrganizationEvidenceGroup[],
-  options: ProposeClusteredDirectionsOptions,
+  options: ProposePersonalLibraryDirectionsOptions & { onProgress?: (progress: DirectionProposalProgress) => void },
 ): Promise<{ organized: OrganizedTopicsResult; groups: OrganizationEvidenceGroup[] }> {
   const render = (groups: readonly OrganizationEvidenceGroup[]) =>
     renderPersonalLibraryOrganizationUserMessage(groups, options.existingTopics, true);
@@ -378,11 +401,39 @@ export function resolvePersonalLibraryClusteringOptions(options?: ClusteringOpti
 export function createPersonalLibraryClusteredDirectionGenerationContract(
   clustering: Required<ClusteringOptions>,
 ): string {
+  return generationContract({
+    scope: "full-library",
+    strategy: "knowledge-base-tight-clustering-bounded-complete-evidence-and-thread-organization",
+    clustering,
+  });
+}
+
+/**
+ * The new-papers update shares the organization contract but not the evidence
+ * grouping: every unaccounted paper is its own group, so no clustering runs.
+ * The scope marker keeps its fingerprint distinct from a full-library scan.
+ */
+export function createPersonalLibraryNewPapersDirectionGenerationContract(): string {
+  return generationContract({
+    scope: "new-papers",
+    strategy: "unaccounted-papers-single-paper-evidence-groups-bounded-complete-evidence-and-thread-organization",
+    clustering: "none",
+  });
+}
+
+function generationContract(variant: {
+  scope: "full-library" | "new-papers";
+  strategy: string;
+  clustering: Required<ClusteringOptions> | "none";
+}): string {
   return JSON.stringify({
     version: PERSONAL_LIBRARY_CLUSTERED_DIRECTION_PROPOSER_VERSION,
     organizationPrompt: PERSONAL_LIBRARY_DIRECTION_ORGANIZATION_PROMPT_VERSION,
-    strategy: "knowledge-base-tight-clustering-bounded-complete-evidence-and-thread-organization",
-    clustering,
+    scope: variant.scope,
+    strategy: variant.strategy,
+    clustering: variant.clustering,
+    accountedPapers: "scan-input-and-merged-duplicates-plus-inherited-in-scope",
+    maxAccountedPapers: PERSONAL_LIBRARY_MAX_ACCOUNTED_PAPERS,
     selection: "knowledge-base-ready-papers-newest-arxiv-first-file-hash-order",
     maxClusteringInputPapers: PERSONAL_LIBRARY_MAX_SELECTED_CATALOG_PAPERS,
     minTopics: PERSONAL_LIBRARY_ORGANIZATION_MIN_TOPICS,
@@ -487,15 +538,8 @@ export async function proposeClusteredPersonalLibraryDirections(
       "clustering produced no evidence groups; every paper fell into the outlier pool");
   }
 
-  const inputPaperByKey = new Map<string, PersonalLibraryProposalPaper>();
-  for (const { paperKey } of clusteringInput) {
-    const evidence = catalog.papers[paperKey] ?? fallbackPaperFromManifest(manifest.papers[paperKey]);
-    if (!evidence) {
-      throw new ClusteredDirectionsProposerError("catalog-invalid",
-        "knowledge base paper " + paperKey + " has neither catalog metadata nor an indexed title");
-    }
-    inputPaperByKey.set(paperKey, evidence);
-  }
+  const inputPaperByKey = resolveInputPapers(
+    clusteringInput.map(({ paperKey }) => paperKey), catalog, manifest);
   for (const group of clustering.clusters) {
     if (group.paperKeys.length > PERSONAL_LIBRARY_MAX_CLUSTER_MEMBERS) {
       throw new ClusteredDirectionsProposerError("evidence-too-large",
@@ -507,23 +551,164 @@ export async function proposeClusteredPersonalLibraryDirections(
     papers: group.paperKeys.map((paperKey) => inputPaperByKey.get(paperKey)!),
   }));
   const inputPapers = clusteringInput.map(({ paperKey }) => inputPaperByKey.get(paperKey)!);
-  const evidenceManifest = createPersonalLibraryCatalogInputManifest(inputPapers);
-  const evidenceByKey = new Map(evidenceManifest.map((entry) => [entry.paperKey, entry.evidenceFingerprint]));
-  let proposalId: string;
-  let generatedAt: string;
-  try {
-    proposalId = options.createId("proposal", 0);
-    generatedAt = Date.prototype.toISOString.call(options.now?.() ?? new Date());
-  } catch {
-    throw new ClusteredDirectionsProposerError("proposal-invariant", "proposal identity or timestamp provider failed");
-  }
+  const { proposalId, generatedAt } = proposalIdentity(options);
 
   options.onProgress?.({ phase: "organization", completed: 0, total: 1 });
   const organization = await organizeBoundedEvidence(groups, { ...options, existingTopics });
-  const organized = organization.organized;
   throwIfCancelled(options.signal);
   const confidenceByKey = new Map(clustering.clusters.flatMap((group) =>
     group.paperKeys.map((key) => [key, group.memberConfidence[key] ?? 0] as const)));
+  const decoded = assembleProposal({
+    catalog, existingTopics, inputPapers, organization, confidenceByKey, proposalId, generatedAt,
+    contract: createPersonalLibraryClusteredDirectionGenerationContract(clusteringOptions),
+    accountedPaperKeys: mergeAccountedPapers({
+      previous: options.previous, manifest,
+      inputKeys: inputPapers.map(({ paperKey }) => paperKey),
+      mergedKeys: mergedDuplicates.flatMap(({ droppedPaperKeys }) => droppedPaperKeys),
+    }),
+    createId: options.createId,
+  });
+  options.onProgress?.({ phase: "organization", completed: 1, total: 1 });
+  return decoded;
+}
+
+/**
+ * Update the proposal for papers no scan has accounted for yet (ADR 0015
+ * section 4). Each such paper is its own evidence group, so nothing is
+ * clustered and no vector is read: the model decides which new papers an
+ * existing direction already covers, which belong to a proposed direction in
+ * an existing topic, and which to a proposed new topic. The result is an
+ * ordinary proposal for the existing review flow. Throws `no-baseline` when
+ * there is nothing to compare with (the host then falls back to a full scan)
+ * and `nothing-new` when every paper is already accounted for.
+ */
+export async function proposeNewPapersPersonalLibraryDirections(
+  options: ProposeNewPapersDirectionsOptions,
+): Promise<PersonalLibraryDirectionProposal> {
+  throwIfCancelled(options.signal);
+  const catalog = decodePersonalLibraryCatalog(options.catalog);
+  if (!catalog) {
+    throw new ClusteredDirectionsProposerError("catalog-invalid", "catalog is not a valid personal library catalog");
+  }
+  const existingTopics = (options.existingTopics ?? []).map(({ id, name, directions }) => ({
+    id, name, directions: directions.map(({ id, text }) => ({ id, text })),
+  }));
+  const previous = options.previous;
+  if (!previous || existingTopics.length === 0
+    || previous.scopeFingerprint !== catalog.scopeFingerprint
+    || previous.identificationFingerprint !== catalog.identificationFingerprint) {
+    throw new ClusteredDirectionsProposerError("no-baseline",
+      "an update for new papers needs a current proposal and existing topics to compare with");
+  }
+  const manifest = await options.knowledgeBase.loadManifest();
+  throwIfCancelled(options.signal);
+  if (manifest.scopeFingerprint !== catalog.scopeFingerprint
+    || manifest.identificationFingerprint !== catalog.identificationFingerprint) {
+    throw new ClusteredDirectionsProposerError("catalog-invalid",
+      "knowledge base manifest scope/identification fingerprints do not match the catalog; rebuild the knowledge base for this catalog");
+  }
+  const unaccounted = listUnaccountedLibraryPapers({ manifest, proposal: previous, catalog }) ?? [];
+  if (unaccounted.length === 0) {
+    throw new ClusteredDirectionsProposerError("nothing-new", "every library paper is already accounted for");
+  }
+  const paperByKey = resolveInputPapers(unaccounted, catalog, manifest);
+  const inputPapers = unaccounted.map((paperKey) => paperByKey.get(paperKey)!);
+  const groups: OrganizationEvidenceGroup[] = inputPapers.map((paper, index) => ({
+    id: `new-${index + 1}`, papers: [paper],
+  }));
+  const { proposalId, generatedAt } = proposalIdentity(options);
+
+  options.onProgress?.({ phase: "organization", completed: 0, total: 1 });
+  const organization = await organizeBoundedEvidence(groups, { ...options, existingTopics });
+  throwIfCancelled(options.signal);
+  // No similarity was computed, so a paper's membership in its own group is total.
+  const decoded = assembleProposal({
+    catalog, existingTopics, inputPapers, organization, proposalId, generatedAt,
+    confidenceByKey: new Map(inputPapers.map(({ paperKey }) => [paperKey, 1] as const)),
+    contract: createPersonalLibraryNewPapersDirectionGenerationContract(),
+    accountedPaperKeys: mergeAccountedPapers({
+      previous, manifest, inputKeys: inputPapers.map(({ paperKey }) => paperKey), mergedKeys: [],
+    }),
+    createId: options.createId,
+  });
+  options.onProgress?.({ phase: "organization", completed: 1, total: 1 });
+  return decoded;
+}
+
+function resolveInputPapers(
+  paperKeys: readonly string[],
+  catalog: PersonalLibraryCatalog,
+  manifest: FullTextKnowledgeBaseManifest,
+): Map<string, PersonalLibraryProposalPaper> {
+  const papers = new Map<string, PersonalLibraryProposalPaper>();
+  for (const paperKey of paperKeys) {
+    const evidence = catalog.papers[paperKey] ?? fallbackPaperFromManifest(manifest.papers[paperKey]);
+    if (!evidence) {
+      throw new ClusteredDirectionsProposerError("catalog-invalid",
+        "knowledge base paper " + paperKey + " has neither catalog metadata nor an indexed title");
+    }
+    papers.set(paperKey, evidence);
+  }
+  return papers;
+}
+
+function proposalIdentity(options: Pick<ProposePersonalLibraryDirectionsOptions, "createId" | "now">): {
+  proposalId: string;
+  generatedAt: string;
+} {
+  try {
+    return {
+      proposalId: options.createId("proposal", 0),
+      generatedAt: Date.prototype.toISOString.call(options.now?.() ?? new Date()),
+    };
+  } catch {
+    throw new ClusteredDirectionsProposerError("proposal-invariant", "proposal identity or timestamp provider failed");
+  }
+}
+
+/**
+ * Papers this scan has accounted for: its input and the same-title files it
+ * merged away, plus what the proposal it replaces had accounted for that is
+ * still in the library (a removed paper must not linger). Bounded: when the
+ * union is too large the input comes first, then merged files, then inherited
+ * papers newest first.
+ */
+function mergeAccountedPapers(input: {
+  previous: Pick<PersonalLibraryDirectionProposal, "catalogInputPapers" | "accountedPaperKeys"> | null | undefined;
+  manifest: FullTextKnowledgeBaseManifest;
+  inputKeys: readonly string[];
+  mergedKeys: readonly string[];
+}): string[] {
+  const kept = new Set<string>(input.inputKeys);
+  const add = (keys: Iterable<string>) => {
+    for (const key of [...keys].sort(comparePaperKeysByRecency)) {
+      if (kept.size >= PERSONAL_LIBRARY_MAX_ACCOUNTED_PAPERS) return;
+      kept.add(key);
+    }
+  };
+  add(input.mergedKeys);
+  add((input.previous ? accountedPaperKeysOf(input.previous) : []).filter((key) =>
+    input.manifest.papers[key]?.status === "ready"));
+  return [...kept].sort(codeUnitCompare);
+}
+
+/** Turn an organization result into a strictly decoded proposal. */
+function assembleProposal(input: {
+  catalog: PersonalLibraryCatalog;
+  existingTopics: readonly PersonalLibraryExistingTopic[];
+  inputPapers: readonly PersonalLibraryProposalPaper[];
+  organization: { organized: OrganizedTopicsResult; groups: OrganizationEvidenceGroup[] };
+  confidenceByKey: ReadonlyMap<string, number>;
+  proposalId: string;
+  generatedAt: string;
+  contract: string;
+  accountedPaperKeys: string[];
+  createId: ProposePersonalLibraryDirectionsOptions["createId"];
+}): PersonalLibraryDirectionProposal {
+  const { catalog, existingTopics, inputPapers, organization, confidenceByKey, createId } = input;
+  const organized = organization.organized;
+  const evidenceManifest = createPersonalLibraryCatalogInputManifest(inputPapers);
+  const evidenceByKey = new Map(evidenceManifest.map((entry) => [entry.paperKey, entry.evidenceFingerprint]));
   const groupById = new Map<string, PaperCluster>(organization.groups.map((group) => [group.id, {
     id: group.id, paperKeys: group.papers.map(({ paperKey }) => paperKey),
     memberConfidence: Object.fromEntries(group.papers.map(({ paperKey }) => [paperKey, confidenceByKey.get(paperKey) ?? 0])),
@@ -549,11 +734,11 @@ export async function proposeClusteredPersonalLibraryDirections(
   let proposal: PersonalLibraryDirectionProposal;
   try {
     const topics: PersonalLibraryProposedTopic[] = organized.topics.map((topic, topicOrdinal) => ({
-      id: options.createId("topic", topicOrdinal),
+      id: createId("topic", topicOrdinal),
       suggestedName: topic.suggestedName,
       ...(topic.targetTopicId !== undefined ? { targetTopicId: topic.targetTopicId } : {}),
       directions: topic.directions.map((direction) => {
-        const id = options.createId("candidate", candidateOrdinal++);
+        const id = createId("candidate", candidateOrdinal++);
         const representatives = direction.representativePaperKeys.map((paperKey) => ({
           paperKey,
           evidenceFingerprint: evidenceByKey.get(paperKey)!,
@@ -572,24 +757,23 @@ export async function proposeClusteredPersonalLibraryDirections(
     proposal = {
       schemaVersion: PERSONAL_LIBRARY_PROPOSAL_SCHEMA_VERSION,
       revision: 0,
-      proposalId,
+      proposalId: input.proposalId,
       scopeFingerprint: catalog.scopeFingerprint,
       identificationFingerprint: catalog.identificationFingerprint,
       catalogInputFingerprint: createPersonalLibraryCatalogInputFingerprint({
         scopeFingerprint: catalog.scopeFingerprint,
         identificationFingerprint: catalog.identificationFingerprint,
-        papers: inputPapers,
+        papers: [...inputPapers],
       }),
       catalogInputPapers: evidenceManifest,
-      generationContractFingerprint: createPersonalLibraryGenerationContractFingerprint(
-        createPersonalLibraryClusteredDirectionGenerationContract(clusteringOptions),
-      ),
-      generatedAt,
+      generationContractFingerprint: createPersonalLibraryGenerationContractFingerprint(input.contract),
+      generatedAt: input.generatedAt,
       topics,
       coverageEvidence,
       coveredPaperKeys: [...new Set((organized.coveredGroups ?? []).flatMap(({ groupId }) =>
         groupById.get(groupId)!.paperKeys,
       ))].sort(codeUnitCompare),
+      accountedPaperKeys: input.accountedPaperKeys,
     };
   } catch {
     throw new ClusteredDirectionsProposerError("proposal-invariant", "proposal construction failed");
@@ -598,7 +782,6 @@ export async function proposeClusteredPersonalLibraryDirections(
   if (!decoded) {
     throw new ClusteredDirectionsProposerError("proposal-invariant", "proposal failed strict decode");
   }
-  options.onProgress?.({ phase: "organization", completed: 1, total: 1 });
   return decoded;
 }
 

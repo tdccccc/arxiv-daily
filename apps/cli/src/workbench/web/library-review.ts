@@ -1,5 +1,5 @@
 import {
-  isThinEvidenceDirectionCandidate, matchingProposalAcceptance, resolveProposedTopicTarget,
+  accountedPaperKeysOf, countNewPapersCoveredByExistingDirections, isThinEvidenceDirectionCandidate, matchingProposalAcceptance, resolveProposedTopicTarget,
   type LibraryReviewSnapshot, type LibraryPreviewPaper, type LibraryDirectionPreview,
   type PersonalLibraryDirectionCandidate, type PersonalLibraryProposedTopic, type LibraryAuthorizationDisclosure,
 } from "@arxiv-daily/core";
@@ -132,8 +132,12 @@ export function mountLibraryReview(root: HTMLElement, options: Options) {
   function proposedView(): Node[] {
     const proposal = snapshot!.proposal;
     if (!proposal) return [h("div", { class: "review-empty" }, h("h2", null, t("尚无候选方向")), h("p", null, t("先建立文献库索引，再生成候选方向；审核接受后才参与每日发现。")))];
-    if (!proposal.topics.length) return [h("div", { class: "review-empty" }, h("p", null, t("本次分析没有新增候选方向。请查看文献库概览。")))];
+    // After an update of new papers: how many of them needed no new direction.
+    const coveredNew = countNewPapersCoveredByExistingDirections(proposal);
+    const coveredLine = coveredNew > 0 ? [h("p", { class: "review-covered-new", role: "status" }, t("其中 {0} 篇新论文已被你现有的方向覆盖", coveredNew))] : [];
+    if (!proposal.topics.length) return [...coveredLine, h("div", { class: "review-empty" }, h("p", null, t("本次分析没有新增候选方向。请查看文献库概览。")))];
     return [
+      ...coveredLine,
       h("div", { class: "review-selection" },
         button("select-all", "选择全部可审核方向"),
         button("select-none", "取消选择"),
@@ -165,14 +169,25 @@ export function mountLibraryReview(root: HTMLElement, options: Options) {
       }),
     ];
   }
+  /** Indexed papers no analysis has accounted for. */
+  function addedKeys(): string[] {
+    const proposal = snapshot?.proposal;
+    if (!snapshot || !proposal) return [];
+    const accounted = new Set(accountedPaperKeysOf(proposal));
+    // newPaperKeys also drops papers outside the scan window, merged duplicates and papers a scan cannot use.
+    const fresh = snapshot.newPaperKeys ? new Set(snapshot.newPaperKeys) : null;
+    return snapshot.indexedPapers.filter(paper => !accounted.has(paper.paperKey) && (!fresh || fresh.has(paper.paperKey))).map(paper => paper.paperKey);
+  }
   function overviewView(): HTMLElement {
     const proposal = snapshot!.proposal;
     if (!proposal) return h("p", { class: "review-empty" }, t("尚无文献库分析"));
     const analyzed = new Set(proposal.catalogInputPapers.map(item => item.paperKey));
+    // An update of new papers only analyses a few papers but accounts for the whole library.
+    const accounted = new Set(accountedPaperKeysOf(proposal));
     const represented = new Set(proposal.topics.flatMap(topic => topic.directions.flatMap(candidate => (candidate.clusterMembers?.length ? candidate.clusterMembers : candidate.representatives).map(item => item.paperKey))));
     const covered = new Set(proposal.coveredPaperKeys ?? []);
     const uncovered = [...analyzed].filter(key => !covered.has(key) && !represented.has(key));
-    const added = snapshot!.indexedPapers.filter(paper => !analyzed.has(paper.paperKey)).map(paper => paper.paperKey);
+    const added = addedKeys();
     const coverage = (proposal.coverageEvidence ?? []).map(item => {
       const topic = snapshot!.topics.find(topic => topic.id === item.topicId);
       const current = topic?.directions.find(direction => direction.id === item.directionId)?.text === item.directionText;
@@ -183,7 +198,7 @@ export function mountLibraryReview(root: HTMLElement, options: Options) {
       );
     });
     return h("div", { class: "review-overview" },
-      h("p", null, t("分析了 {0} 篇论文", analyzed.size), " · ", h("time", { datetime: proposal.generatedAt }, proposal.generatedAt)),
+      h("p", null, t("分析了 {0} 篇论文", accounted.size), analyzed.size < accounted.size ? ` · ${t("本次新增 {0} 篇", analyzed.size)}` : "", " · ", h("time", { datetime: proposal.generatedAt }, proposal.generatedAt)),
       h("section", null,
         h("h2", null, t("已有方向覆盖")),
         coverage.length ? h("ul", null, ...coverage) : h("p", null, t("暂无已确认的覆盖记录")),
@@ -200,7 +215,8 @@ export function mountLibraryReview(root: HTMLElement, options: Options) {
         )),
       ),
       h("section", null, h("h2", null, t("暂未归入方向的论文")), paperList(uncovered), !uncovered.length ? h("p", null, t("暂无")) : null),
-      h("section", null, h("h2", null, t("分析之后新增的论文")), paperList(added), !added.length ? h("p", null, t("暂无")) : null),
+      h("section", null, h("h2", null, t("分析之后新增的论文")), paperList(added), !added.length ? h("p", null, t("暂无")) : null,
+        added.length ? button("update-new", "更新方向建议", jobs.size > 0 || dirtyAny()) : null),
     );
   }
   function disclosureSection(disclosure: LibraryAuthorizationDisclosure): HTMLElement {
@@ -292,7 +308,7 @@ export function mountLibraryReview(root: HTMLElement, options: Options) {
     } catch (reason) { if (!disposed && token === sequence) error = t(reason instanceof Error ? reason.message : String(reason)); }
     finally { if (!disposed && token === sequence) { busy = false; render(); } }
   }
-  async function requestJob(kind: "propose" | "preview", candidateId?: string): Promise<void> {
+  async function requestJob(kind: "propose" | "preview", candidateId?: string, scope: "full" | "new-papers" = "full"): Promise<void> {
     if (!snapshot || disposed || busy || jobs.size) return;
     busy = true; error = ""; render();
     try {
@@ -309,22 +325,26 @@ export function mountLibraryReview(root: HTMLElement, options: Options) {
             try {
               const value = await options.request<LibraryReviewViewSnapshot>("api/library/authorize", { configRevision: snapshot!.configRevision, fingerprint: disclosure.authorizationFingerprint });
               if (disposed) return;
-              apply(value); busy = false; await startJob(kind, candidateId);
+              apply(value); busy = false; await startJob(kind, candidateId, scope);
             } catch (reason) { if (!disposed) error = t(reason instanceof Error ? reason.message : String(reason)); }
             finally { if (!disposed) { busy = false; render(); } }
           },
         }; render(); return;
       }
-      if (kind === "propose") { confirmation = { title: t("生成候选方向"), description: t("将使用已授权的模型分析索引证据。重新生成会替换当前候选，请先保存需要保留的修改。"), execute: () => startJob("propose") }; render(); }
+      if (kind === "propose" && scope === "new-papers") {
+        // Without an accepted topic to compare with, the host scans the whole library, so the copy must say that.
+        confirmation = { title: t("更新方向建议"), description: snapshot!.topics.length ? t("只会把 {0} 篇新增论文的标题和摘要，连同现有研究方向的文字发送给已授权的模型；其余文献库论文不会重新发送。新的候选方向会替换当前候选，请先保存需要保留的修改；之后仍需另行审核接受。", addedKeys().length)
+          : t("还没有可供对比的研究主题，将改为分析整个文献库的标题和摘要。新的候选方向会替换当前候选，请先保存需要保留的修改。"), execute: () => startJob("propose", undefined, "new-papers") }; render();
+      } else if (kind === "propose") { confirmation = { title: t("生成候选方向"), description: t("将使用已授权的模型分析索引证据。重新生成会替换当前候选，请先保存需要保留的修改。"), execute: () => startJob("propose") }; render(); }
       else await startJob(kind, candidateId);
     } catch (reason) { if (!disposed) error = t(reason instanceof Error ? reason.message : String(reason)); }
     finally { if (!disposed) { busy = false; render(); } }
   }
-  async function startJob(kind: "propose" | "preview", candidateId?: string): Promise<void> {
+  async function startJob(kind: "propose" | "preview", candidateId?: string, scope: "full" | "new-papers" = "full"): Promise<void> {
     if (!snapshot || busy || disposed || jobs.size) return;
     busy = true; error = ""; confirmation = null; render();
     try {
-      const result = await options.request<{ run: WorkbenchRun }>(`api/library/${kind}`, { ...guards(), ...(candidateId ? { candidateId } : {}) });
+      const result = await options.request<{ run: WorkbenchRun }>(`api/library/${kind}`, { ...guards(), ...(candidateId ? { candidateId } : {}), ...(scope === "new-papers" ? { scope } : {}) });
       if (disposed) return;
       jobs.set(result.run.id, kind); options.onRun(result.run);
       if (result.run.status !== "running") { busy = false; await handleRun(result.run); }
@@ -416,6 +436,7 @@ export function mountLibraryReview(root: HTMLElement, options: Options) {
       confirmation = { title: t("接受所选方向"), description: t("将 {0} 个方向加入研究主题，之后参与每日发现。", selected.size), execute: () => mutate("accept-topics", { topicIds, candidateIds }) }; render();
     } else if (action === "rename" && topicId) void mutate("rename-topic", { topicId, suggestedName: names.get(topicId) ?? snapshot!.proposal!.topics.find(topic => topic.id === topicId)!.suggestedName }, () => names.delete(topicId));
     else if (action === "propose" && !dirtyAny()) void requestJob("propose");
+    else if (action === "update-new" && !dirtyAny() && snapshot?.proposal && addedKeys().length) void requestJob("propose", undefined, "new-papers");
     else if (id) {
       const candidate = candidateById(id); if (!candidate || processed().has(id)) return;
       if (action === "save") { const value = draft(candidate); void mutate("update-candidate", { candidateId: id, patch: { text: value.text, discoveryCues: value.cues.split("\n").map(cue => cue.trim()).filter(Boolean) }, representativePaperKeys: value.representatives }, () => drafts.delete(id)); }

@@ -7,7 +7,8 @@ import { FullTextKnowledgeBaseFileStore } from "../src/library/fulltext/knowledg
 import { LibraryWorkflow, type LibraryTopicSettingsSnapshot, type LibraryWorkflowOptions } from "../src/library/library-workflow";
 import { createLibraryConnection } from "../src/library/library-connection";
 import { decodePersonalLibraryCatalog, PersonalLibraryCatalogStore } from "../src/library/personal-library-catalog";
-import { decodePersonalLibraryDirectionProposal } from "../src/library/personal-library-interest-profile";
+import { accountedPaperKeysOf, decodePersonalLibraryDirectionProposal } from "../src/library/personal-library-interest-profile";
+import { PersonalLibraryDirectionProposalStore } from "../src/library/personal-library-proposal-store";
 import { DEFAULT_SETTINGS } from "../src/settings/defaults";
 import { PDF_IDENTIFICATION_HEAD_BYTES, PDF_IDENTIFICATION_TAIL_BYTES } from "../src/library/pdf-library-file-identifier";
 
@@ -102,6 +103,118 @@ async function prepareDirections() {
   } };
   return { ...f, proposal, candidate, confirmInput };
 }
+
+function addPapers(f: ReturnType<typeof fixture>, serials: number[]): string[] {
+  for (const serial of serials) {
+    f.documents.set(`2610.${String(serial).padStart(5, "0")}.pdf`,
+      new TextEncoder().encode(`agents paper ${serial}: meaningful experimental evidence. `.repeat(30)));
+  }
+  return serials.map(serial => `arxiv:2610.${String(serial).padStart(5, "0")}`);
+}
+
+/** A reviewed baseline: proposal accepted into settings, then three new papers indexed. */
+async function prepareLibraryChange() {
+  const f = await prepareDirections();
+  await f.workflow.confirm(f.confirmInput);
+  const added = addPapers(f, [7, 8, 9]);
+  await f.workflow.scan();
+  await f.workflow.index();
+  return { ...f, added };
+}
+
+type SentGroup = { id: string; papers: { paperKey: string }[] };
+function paperGroups(messages: { role: string; content: string }[]): SentGroup[] {
+  const content = messages.find(message => message.role === "user")!.content;
+  return (JSON.parse(/<paper_data>\n([\s\S]*)\n<\/paper_data>/.exec(content)![1]!) as { groups: SentGroup[] }).groups;
+}
+/** Answers any organization request with one new topic that holds every group. */
+async function oneNewTopic(messages: { role: string; content: string }[]): Promise<string> {
+  const groups = paperGroups(messages);
+  return JSON.stringify({ topics: [{
+    suggestedName: "Fresh arrivals",
+    directions: [{ text: "Whatever these papers have in common", discoveryCues: ["new"], groupIds: groups.map(group => group.id),
+      representativePaperKeys: [groups[0]!.papers[0]!.paperKey] }],
+  }] });
+}
+function sentGroups(f: { options: LibraryWorkflowOptions }): SentGroup[] {
+  const calls = vi.mocked(f.options.llm.call).mock.calls;
+  return paperGroups(calls[calls.length - 1]![0]);
+}
+
+describe("LibraryWorkflow library change", () => {
+  it("reports the papers no scan has accounted for in the review snapshot", async () => {
+    const f = await prepareDirections();
+    expect((await f.workflow.review()).newPaperKeys).toEqual([]);
+    const added = addPapers(f, [7, 8, 9]);
+    await f.workflow.scan();
+    await f.workflow.index();
+    const review = await f.workflow.review();
+    expect([...review.newPaperKeys!].sort()).toEqual(added);
+    const fresh = fixture();
+    await fresh.workflow.scan();
+    expect((await fresh.workflow.review()).newPaperKeys).toBeNull();
+  });
+
+  it("sends only the new papers on a new-papers update and carries the accounted set forward", async () => {
+    const f = await prepareLibraryChange();
+    const before = (await f.workflow.review()).proposal!;
+    vi.mocked(f.options.llm.call).mockImplementationOnce(oneNewTopic);
+    const saved = await f.workflow.propose({ scope: "new-papers" });
+    expect(sentGroups(f).flatMap(group => group.papers.map(paper => paper.paperKey)).sort()).toEqual(f.added);
+    expect(saved.catalogInputPapers.map(paper => paper.paperKey)).toEqual(f.added);
+    expect(saved.revision).toBe(before.revision + 1);
+    expect(accountedPaperKeysOf(saved)).toHaveLength(9);
+    const review = await f.workflow.review();
+    expect(review.proposal!.proposalId).toBe(saved.proposalId);
+    expect(review.newPaperKeys).toEqual([]);
+  });
+
+  it("keeps the full scan as the default and lets a full rescan carry earlier accounted papers", async () => {
+    const f = await prepareLibraryChange();
+    // A ready paper with no vectors is never scan input but an earlier scan accounted for it.
+    const { catalog, proposal } = await f.workflow.review();
+    const knowledgeBase = new FullTextKnowledgeBaseFileStore(f.storage, f.options.output, catalog.scopeFingerprint, catalog.identificationFingerprint);
+    const manifest = await knowledgeBase.loadManifest();
+    const extra = `file:sha256:${"7".repeat(64)}`;
+    await knowledgeBase.replaceManifest({ ...manifest, revision: manifest.revision + 1, papers: { ...manifest.papers, [extra]: {
+      paperKey: extra, status: "ready", modelId: manifest.modelId, dimension: manifest.dimension, filePaths: ["extra.pdf"],
+      observationFingerprints: [`sha256:${"e".repeat(64)}`], textHash: `sha256:${"d".repeat(64)}`, chunkCount: 0, title: "Earlier accounted local report", updatedAt: manifest.updatedAt,
+    } } }, manifest.revision);
+    await new PersonalLibraryDirectionProposalStore(f.storage, f.options.output, catalog.scopeFingerprint, catalog.identificationFingerprint)
+      .replace({ ...proposal!, accountedPaperKeys: [...accountedPaperKeysOf(proposal!), extra].sort() }, proposal!.revision);
+    vi.mocked(f.options.llm.call).mockImplementation(oneNewTopic);
+    const rescanned = await f.workflow.propose();
+    expect(rescanned.catalogInputPapers).toHaveLength(9);
+    expect(accountedPaperKeysOf(rescanned)).toContain(extra);
+    const explicit = await f.workflow.propose({ scope: "full" });
+    expect(explicit.catalogInputPapers).toHaveLength(9);
+    expect(accountedPaperKeysOf(explicit)).toContain(extra);
+  });
+
+  it("reports no-baseline without a proposal or topics and nothing-new when nothing changed", async () => {
+    const f = fixture();
+    await f.workflow.scan(); await f.workflow.index();
+    await expect(f.workflow.propose({ scope: "new-papers" })).rejects.toMatchObject({ code: "no-baseline" });
+    await f.workflow.propose();
+    // A proposal exists but no topic is accepted into settings yet.
+    await expect(f.workflow.propose({ scope: "new-papers" })).rejects.toMatchObject({ code: "no-baseline" });
+    expect(vi.mocked(f.options.llm.call)).toHaveBeenCalledTimes(1);
+    const accepted = await prepareDirections();
+    await accepted.workflow.confirm(accepted.confirmInput);
+    await expect(accepted.workflow.propose({ scope: "new-papers" })).rejects.toMatchObject({ code: "nothing-new" });
+    expect(vi.mocked(accepted.options.llm.call)).toHaveBeenCalledTimes(1);
+  });
+
+  it("requires model authorization for a new-papers update and saves nothing when denied", async () => {
+    const f = await prepareLibraryChange();
+    const before = (await f.workflow.review()).proposal!;
+    const calls = vi.mocked(f.options.llm.call).mock.calls.length;
+    vi.mocked(f.options.assertAuthorized).mockImplementation(() => { throw new Error("authorization required"); });
+    await expect(f.workflow.propose({ scope: "new-papers" })).rejects.toThrow("authorization required");
+    expect(vi.mocked(f.options.llm.call)).toHaveBeenCalledTimes(calls);
+    expect((await f.workflow.review()).proposal!.revision).toBe(before.revision);
+  });
+});
 
 describe("shared LibraryWorkflow", () => {
   it("scans, indexes and accepts proposals into normal topic settings with a durable receipt", async () => {

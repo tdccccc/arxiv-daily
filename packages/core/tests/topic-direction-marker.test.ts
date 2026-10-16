@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import {
   parseDailyReportTopicDirections,
@@ -146,5 +147,57 @@ describe("topic direction marker", () => {
       .toEqual({ kind: "valid", occurrences: [] });
     expect(parseDailyReportDiscoveryProvenance(legacy, reportDate))
       .toEqual({ kind: "valid", occurrences: [] });
+  });
+});
+
+/**
+ * Characterization of reports written while the (since withdrawn) daily
+ * personal novelty feature existed: provenance marker + visible line, a v1 or
+ * v2 personal-novelty marker + visible line, then the topic-direction callout.
+ * The fixture is frozen text, so this pins what the readers must keep doing
+ * for old reports no matter what happens to the novelty code.
+ */
+describe("reports that carry legacy personal-novelty lines", () => {
+  const legacyReport = readFileSync(
+    new URL("./fixtures/legacy-personal-novelty-report.md", import.meta.url),
+    "utf8",
+  );
+  const legacyHits = [{ tag: "photo-z", id: "d1", text: "photo-z methods" }];
+
+  it("carries both marker versions and the visible novelty lines", () => {
+    expect(legacyReport).toContain("<!-- arxiv-daily-personal-novelty:v1:");
+    expect(legacyReport).toContain("<!-- arxiv-daily-personal-novelty:v2:");
+    expect(legacyReport).toContain("> Personal novelty:");
+    expect(legacyReport).toContain("> 个人新颖性：");
+  });
+
+  it("still reads the topic directions of every paper", () => {
+    expect(parseDailyReportTopicDirections(legacyReport, "2026-06-10")).toEqual({
+      kind: "valid",
+      occurrences: [
+        { arxivId: "2606.00001", hits: legacyHits },
+        { arxivId: "2606.00002", hits: legacyHits },
+      ],
+    });
+  });
+
+  it("reads the same topic directions with the novelty lines removed", () => {
+    const withoutNovelty = legacyReport
+      .split("\n")
+      .filter((line) => !line.startsWith("<!-- arxiv-daily-personal-novelty:")
+        && !line.startsWith("> Personal novelty:") && !line.startsWith("> 个人新颖性："))
+      .join("\n");
+
+    expect(parseDailyReportTopicDirections(withoutNovelty, "2026-06-10"))
+      .toEqual(parseDailyReportTopicDirections(legacyReport, "2026-06-10"));
+  });
+
+  it("still reads the discovery provenance of every paper", () => {
+    const result = parseDailyReportDiscoveryProvenance(legacyReport, "2026-06-10");
+
+    expect(result.kind).toBe("valid");
+    if (result.kind !== "valid") return;
+    expect(result.occurrences.map((occurrence) => occurrence.arxivId))
+      .toEqual(["2606.00001", "2606.00002"]);
   });
 });
