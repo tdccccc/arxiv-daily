@@ -46,6 +46,28 @@ test("fixture serves the real arXiv and model wire formats and records effective
   assert.doesNotMatch(JSON.stringify(server.requests), /never-log-this/);
 });
 
+test("fixture answers a new-papers update with one covered group and one proposed direction, and serves added papers", async t => {
+  const server = await serverFor(t);
+  server.addPapers([{ id: "2611.20001", title: "An added library paper", abstract: "Added through the fixture registry." }]);
+  const atom = await (await proxy(server, "https://export.arxiv.org/api/query?id_list=2611.20001")).text();
+  assert.match(atom, /An added library paper/);
+  const paper = (n) => ({ paperKey: `arxiv:2611.2000${n}`, title: `New paper ${n}`, abstract: "abstract" });
+  const data = {
+    existingTopics: [{ id: "topic-1", name: "Research", directions: [{ id: "direction-1", text: "Reliable research methods" }] }],
+    groups: [1, 2, 3].map(n => ({ id: `new-${n}`, paperCount: 1, papers: [paper(n)] })),
+  };
+  const response = await proxy(server, "https://fixture-model.test/v1/chat/completions", {
+    method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({
+      model: "fixture-model", stream: false,
+      messages: [{ role: "system", content: "You organize a personal literature library." }, { role: "user", content: `<paper_data>\n${JSON.stringify(data)}\n</paper_data>` }],
+    }),
+  });
+  const parsed = JSON.parse((await response.json()).choices[0].message.content);
+  assert.deepEqual(parsed.coveredGroups, [{ groupId: "new-1", topicId: "topic-1", directionId: "direction-1" }]);
+  assert.deepEqual(parsed.topics[0].directions[0].groupIds, ["new-2", "new-3"]);
+  assert.deepEqual(server.requests.find(r => r.kind === "proposal-new-papers").groupTitles, ["New paper 1", "New paper 2", "New paper 3"]);
+});
+
 test("unknown external requests fail locally and are visible in evidence", async t => {
   const server = await serverFor(t);
   const response = await proxy(server, "https://unexpected.invalid/no-real-network");

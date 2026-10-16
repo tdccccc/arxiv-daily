@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  PERSONAL_LIBRARY_MAX_ACCOUNTED_PAPERS,
   PERSONAL_LIBRARY_MAX_CANDIDATE_LINEAGE_IDS,
   PERSONAL_LIBRARY_MAX_DIRECTIONS,
   PERSONAL_LIBRARY_MAX_PROPOSAL_CANDIDATES,
@@ -11,6 +12,7 @@ import {
   createPersonalLibraryGenerationContractFingerprint,
   createPersonalLibraryPaperEvidenceFingerprint,
   createPersonalLibraryRepresentativeSetFingerprint,
+  accountedPaperKeysOf,
   decodeDurablePersonalLibraryInterestProfile,
   decodePersonalLibraryDirectionProposal,
   decodePersonalLibraryInterestProfile,
@@ -316,5 +318,59 @@ describe("reviewed proposal contract", () => {
     expect(decodePersonalLibraryDirectionProposal(value)).toEqual(value);
     value.topics[1]!.directions.push({ ...template, id: "candidate.1.6", lineage: { candidateIds: ["candidate.1.6"] } });
     expect(decodePersonalLibraryDirectionProposal(value)).toBeNull();
+  });
+});
+
+describe("accounted papers (ADR 0015 section 3)", () => {
+  const extra = `file:sha256:${"c".repeat(64)}`;
+  const fileKey = (index: number) => `file:sha256:${index.toString(16).padStart(64, "0")}`;
+
+  it("keeps schema 6 and decodes an existing v6 document without the field unchanged", () => {
+    expect(PERSONAL_LIBRARY_PROPOSAL_SCHEMA_VERSION).toBe(6);
+    const decoded = decodePersonalLibraryDirectionProposal(proposal());
+    expect(decoded).toEqual(proposal());
+    expect(decoded).not.toHaveProperty("accountedPaperKeys");
+    expect(JSON.parse(JSON.stringify(decoded))).toEqual(JSON.parse(JSON.stringify(proposal())));
+  });
+
+  it("round-trips a sorted unique set that is a superset of the input papers", () => {
+    const value = { ...proposal(), accountedPaperKeys: ["arxiv:2608.00001", "arxiv:2608.00002", extra] };
+    expect(decodePersonalLibraryDirectionProposal(value)).toEqual(value);
+  });
+
+  it.each([
+    ["missing an input paper", ["arxiv:2608.00001", extra]],
+    ["unsorted", ["arxiv:2608.00002", "arxiv:2608.00001"]],
+    ["duplicated", ["arxiv:2608.00001", "arxiv:2608.00001", "arxiv:2608.00002"]],
+    ["non-canonical", ["arxiv:2608.00001", "arxiv:2608.00002v2"]],
+    ["not an array", "arxiv:2608.00001"],
+    ["null", null],
+    ["not keys", ["arxiv:2608.00001", "arxiv:2608.00002", 7]],
+  ])("rejects an accounted set that is %s", (_label, accountedPaperKeys) => {
+    expect(decodePersonalLibraryDirectionProposal({ ...proposal(), accountedPaperKeys })).toBeNull();
+  });
+
+  it("is bounded at the documented maximum", () => {
+    expect(PERSONAL_LIBRARY_MAX_ACCOUNTED_PAPERS).toBe(10_000);
+    const inputKeys = proposal().catalogInputPapers.map(({ paperKey }) => paperKey);
+    const fill = (count: number) => [...inputKeys, ...Array.from({ length: count - inputKeys.length }, (_, i) => fileKey(i + 1))]
+      .sort();
+    expect(decodePersonalLibraryDirectionProposal({
+      ...proposal(), accountedPaperKeys: fill(PERSONAL_LIBRARY_MAX_ACCOUNTED_PAPERS),
+    })).not.toBeNull();
+    expect(decodePersonalLibraryDirectionProposal({
+      ...proposal(), accountedPaperKeys: fill(PERSONAL_LIBRARY_MAX_ACCOUNTED_PAPERS + 1),
+    })).toBeNull();
+  });
+
+  it("falls back to the analysed input papers when the field is absent", () => {
+    expect(accountedPaperKeysOf(proposal())).toEqual(["arxiv:2608.00001", "arxiv:2608.00002"]);
+    const withField = { ...proposal(), accountedPaperKeys: ["arxiv:2608.00001", "arxiv:2608.00002", extra] };
+    expect(accountedPaperKeysOf(withField)).toEqual(["arxiv:2608.00001", "arxiv:2608.00002", extra]);
+  });
+
+  it("counts ungrouped and covered input papers as accounted when the field is absent", () => {
+    const value = { ...proposal(), coveredPaperKeys: ["arxiv:2608.00002"] };
+    expect(accountedPaperKeysOf(value)).toEqual(["arxiv:2608.00001", "arxiv:2608.00002"]);
   });
 });

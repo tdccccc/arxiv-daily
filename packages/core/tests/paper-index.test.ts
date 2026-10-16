@@ -462,158 +462,6 @@ describe("PaperIndexStore", () => {
       .toEqual({ "arxiv-daily/daily/2026-06-12.md": second });
   });
 
-  it("persists occurrence novelty per repeated committed report and preserves user fields", async () => {
-    const { store } = makeStore();
-    await store.upsertFromDailyPaper({
-      arxivId: "2606.12345", title: "A paper", authors: "A", date: "2026-06-11",
-      arxivCategory: "astro-ph", primaryTopic: "photo-z", detail: false,
-      dailyReport: "arxiv-daily/daily/2026-06-11.md",
-    });
-    await store.setStatus("2606.12345", "saved");
-    const first = {
-      differenceType: "new-method",
-      comparisonBasis: ["arxiv:2501.00001"],
-      evidenceDepth: "metadata-and-abstract" as const,
-      explanation: "First explanation.",
-    };
-    const second = {
-      differenceType: "new-task",
-      comparisonBasis: ["arxiv:2501.00001", "arxiv:2501.00002"],
-      evidenceDepth: "metadata-and-abstract" as const,
-      explanation: "Second explanation.",
-    };
-    await store.reconcileDailyReportOccurrenceNovelty(
-      "arxiv-daily/daily/2026-06-11.md",
-      [{ arxivId: "2606.12345", novelty: first }],
-    );
-    await store.upsertFromDailyPaper({
-      arxivId: "2606.12345", title: "A paper", authors: "A", date: "2026-06-12",
-      arxivCategory: "astro-ph", primaryTopic: "photo-z", detail: false,
-      dailyReport: "arxiv-daily/daily/2026-06-12.md",
-    });
-    await store.reconcileDailyReportOccurrenceNovelty(
-      "arxiv-daily/daily/2026-06-12.md",
-      [{ arxivId: "2606.12345", novelty: second }],
-    );
-    const entry = (await store.load()).papers["arxiv:2606.12345"]!;
-    expect(entry.status).toBe("saved");
-    expect(entry.dailyReports).toHaveLength(2);
-    expect(entry.noveltyByReport).toEqual({
-      "arxiv-daily/daily/2026-06-11.md": first,
-      "arxiv-daily/daily/2026-06-12.md": second,
-    });
-    await store.reconcileDailyReportOccurrenceNovelty(
-      "arxiv-daily/daily/2026-06-11.md", [],
-    );
-    expect((await store.load()).papers["arxiv:2606.12345"]!.noveltyByReport)
-      .toEqual({ "arxiv-daily/daily/2026-06-12.md": second });
-  });
-
-  it("rejects malformed novelty occurrences without mutating the index", async () => {
-    const { store } = makeStore();
-    await store.upsertFromDailyPaper({
-      arxivId: "2606.12345", title: "A paper", authors: "A", date: "2026-06-11",
-      arxivCategory: "astro-ph", primaryTopic: "photo-z", detail: false,
-    });
-    await expect(store.reconcileDailyReportOccurrenceNovelty(
-      "arxiv-daily/daily/2026-06-11.md",
-      [{ arxivId: "2606.12345", novelty: {
-        differenceType: "breakthrough",
-        comparisonBasis: ["arxiv:2501.00001"],
-        evidenceDepth: "metadata-and-abstract",
-        explanation: "Invalid type.",
-      } }],
-    )).rejects.toThrow(PaperIndexError);
-    expect((await store.load()).papers["arxiv:2606.12345"]!.noveltyByReport).toEqual({});
-  });
-
-  it("normalizes novelty by report strictly on load and round-trips through schema 5", async () => {
-    const valid = {
-      differenceType: "new-method",
-      comparisonBasis: ["arxiv:2501.00001"],
-      evidenceDepth: "metadata-and-abstract",
-      explanation: "Valid explanation.",
-    };
-    const { files, store } = makeStore({
-      "arxiv-daily/.index/papers.json": JSON.stringify({
-        schemaVersion: 5,
-        updatedAt: "2026-06-11T00:00:00.000Z",
-        papers: {
-          "arxiv:2606.12345": {
-            paperKey: "arxiv:2606.12345",
-            source: "arxiv",
-            externalId: "2606.12345",
-            arxivId: "2606.12345",
-            title: "Novelty paper",
-            noveltyByReport: {
-              "arxiv-daily/daily/2026-06-11.md": valid,
-              "arxiv-daily/daily/bad-type.md": {
-                ...valid,
-                differenceType: "breakthrough",
-              },
-              "arxiv-daily/daily/bad-basis.md": {
-                ...valid,
-                comparisonBasis: ["arxiv:2501.00001", "arxiv:2501.00001"],
-              },
-              "arxiv-daily/daily/bad-depth.md": {
-                ...valid,
-                evidenceDepth: "full-text",
-              },
-              "arxiv-daily/daily/padded.md": {
-                ...valid,
-                explanation: "  padded  ",
-              },
-              "": valid,
-            },
-          },
-        },
-      }),
-    });
-
-    const inbox = await store.load();
-    expect(inbox.papers["arxiv:2606.12345"]!.noveltyByReport).toEqual({
-      "arxiv-daily/daily/2026-06-11.md": valid,
-    });
-    await store.setStatus("2606.12345", "saved");
-    const saved = JSON.parse(files["arxiv-daily/.index/papers.json"]);
-    expect(saved.schemaVersion).toBe(5);
-    expect(saved.papers["arxiv:2606.12345"].noveltyByReport).toEqual({
-      "arxiv-daily/daily/2026-06-11.md": valid,
-    });
-  });
-
-  it("preserves novelty by report across repeated upserts", async () => {
-    const { store } = makeStore();
-    await store.upsertFromDailyPaper({
-      arxivId: "2606.12345", title: "A paper", authors: "A", date: "2026-06-11",
-      arxivCategory: "astro-ph", primaryTopic: "photo-z", detail: false,
-      dailyReport: "arxiv-daily/daily/2026-06-11.md",
-    });
-    const novelty = {
-      differenceType: "new-method",
-      comparisonBasis: ["arxiv:2501.00001"],
-      evidenceDepth: "metadata-and-abstract" as const,
-      explanation: "Persisted explanation.",
-    };
-    await store.reconcileDailyReportOccurrenceNovelty(
-      "arxiv-daily/daily/2026-06-11.md",
-      [{ arxivId: "2606.12345", novelty }],
-    );
-    const { entry, wasNew } = await store.upsertFromDailyPaper({
-      arxivId: "2606.12345",
-      title: "Updated title",
-      authors: "B",
-      date: "2026-06-12",
-      arxivCategory: "astro-ph",
-      primaryTopic: "galaxy-cluster",
-      detail: true,
-    });
-    expect(wasNew).toBe(false);
-    expect(entry.noveltyByReport).toEqual({
-      "arxiv-daily/daily/2026-06-11.md": novelty,
-    });
-  });
-
   it("normalizes and preserves abstracts during upsert", async () => {
     const { store } = makeStore();
     await store.upsertFromDailyPaper({
@@ -765,6 +613,8 @@ describe("PaperIndexStore", () => {
     const { entry } = await store.upsertFromDailyPaper(input);
     expect(entry.seenDates).toEqual(["2026-06-11"]);
     expect(entry.dailyReports).toEqual(["arxiv-daily/daily/2026-06-11.md"]);
+    // The withdrawn field is tolerated on load and not carried in memory.
+    expect(entry).not.toHaveProperty("noveltyByReport");
   });
 
   it("stores and merges source arXiv categories", async () => {
@@ -1546,5 +1396,68 @@ describe("PaperIndexStore", () => {
     expect(reloaded.papers["arxiv:2606.12345"]?.paperPath).not.toContain(
       "arxiv:",
     );
+  });
+});
+
+describe("paper index files written while daily personal novelty existed", () => {
+  const legacyEntry = {
+    paperKey: "arxiv:2606.12345",
+    source: "arxiv",
+    externalId: "2606.12345",
+    arxivId: "2606.12345",
+    title: "Legacy novelty paper",
+    status: "inbox",
+    dailyReports: ["arxiv-daily/daily/2026-06-11.md"],
+    noveltyByReport: {
+      "arxiv-daily/daily/2026-06-11.md": {
+        differenceType: "new-method",
+        comparisonBasis: ["arxiv:2501.00001", "arxiv:2501.00002"],
+        evidenceDepth: "metadata-and-abstract",
+        explanation: "Legacy explanation.",
+        comparisonBasisTitles: { "arxiv:2501.00001": "Prior one", "arxiv:2501.00002": "Prior two" },
+      },
+      "arxiv-daily/daily/2026-06-10.md": {
+        differenceType: "new-method",
+        comparisonBasis: ["arxiv:2501.00001"],
+        evidenceDepth: "metadata-and-abstract",
+        explanation: "Legacy explanation without titles.",
+      },
+      "arxiv-daily/daily/garbage.md": { unexpected: true },
+      "not-a-record": 42,
+    },
+  };
+  const legacyFile = () => JSON.stringify({
+    schemaVersion: 5,
+    updatedAt: "2026-06-11T00:00:00.000Z",
+    papers: { "arxiv:2606.12345": legacyEntry },
+  });
+
+  it("loads a v5 file that still carries a noveltyByReport field", async () => {
+    const { store } = makeStore({ "arxiv-daily/.index/papers.json": legacyFile() });
+
+    const inbox = await store.load();
+
+    const entry = inbox.papers["arxiv:2606.12345"]!;
+    expect(entry.title).toBe("Legacy novelty paper");
+    expect(entry.status).toBe("inbox");
+    expect(entry.dailyReports).toEqual(["arxiv-daily/daily/2026-06-11.md"]);
+  });
+
+  it("keeps working on such an entry: later edits save without error and keep its other fields", async () => {
+    const { files, store } = makeStore({ "arxiv-daily/.index/papers.json": legacyFile() });
+
+    await store.setStatus("2606.12345", "saved");
+
+    const saved = JSON.parse(files["arxiv-daily/.index/papers.json"]);
+    expect(saved.schemaVersion).toBe(5);
+    expect(saved.papers["arxiv:2606.12345"]).toMatchObject({
+      title: "Legacy novelty paper",
+      status: "saved",
+      dailyReports: ["arxiv-daily/daily/2026-06-11.md"],
+    });
+    expect((await store.load()).papers["arxiv:2606.12345"]!.status).toBe("saved");
+    // No migration or schema bump: the legacy key just disappears at the next save.
+    expect(saved.papers["arxiv:2606.12345"]).not.toHaveProperty("noveltyByReport");
+    expect(files["arxiv-daily/.index/papers.json"]).not.toContain("noveltyByReport");
   });
 });

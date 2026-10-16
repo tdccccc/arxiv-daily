@@ -37,7 +37,6 @@ import {
   type FilterRecord,
   type FilteredPaper,
 } from "./paper-filter";
-import type { NoveltyCheckpointPort } from "./personalized-novelty";
 import {
   summarizeDaily,
   summarizePaperDetail,
@@ -45,7 +44,6 @@ import {
 } from "./summarizer";
 import {
   parseDailyReportDiscoveryProvenance,
-  parseDailyReportPersonalNovelty,
   extractPaperSummaries,
 } from "./daily-summary-parser";
 import { dailySelectionMarkerRegExp } from "../services/daily-selection-marker";
@@ -107,14 +105,8 @@ export interface DailySummaryCheckpointLifecyclePort
   extends DailySummaryCheckpointPort,
     DateScopedCheckpointLifecyclePort {}
 
-/**
- * `NoveltyCheckpointPort` stays in the union although the novelty stage is not
- * wired up: the store still owns those checkpoint files on disk, and dropping
- * the port would make it unable to clean them up.
- */
 export interface DailyFilterCheckpointLifecyclePort
   extends DailyFilterCheckpointPort,
-    NoveltyCheckpointPort,
     DateScopedCheckpointLifecyclePort {}
 
 export interface DailyGenerationCheckpointStores {
@@ -309,13 +301,6 @@ export class ArxivPipeline {
         titleOnlyCandidates,
       };
     }
-
-    // Personal novelty used to run here for library-derived papers. It lost
-    // its comparison basis when the profile document retired (ADR 0012
-    // §Consequences): novelty was defined relative to a named representative
-    // set that no longer exists. Choosing a new basis is a decision left open
-    // on purpose, so the stage is not wired up rather than pointed at a basis
-    // nobody chose. `personalized-novelty.ts` is kept intact for that decision.
 
     throwIfCancelled(signal);
     const indexed = await this.indexFilteredPapers(filtered, dateStr);
@@ -586,16 +571,6 @@ export class ArxivPipeline {
           logger.warn(`pipeline: committed provenance projection invalid: ${provenance.reason}`);
         }
         throwIfCancelled(signal);
-        const novelty = parseDailyReportPersonalNovelty(dailySummary, dateStr);
-        if (novelty.kind === "valid") {
-          await this.deps.paperIndex.reconcileDailyReportOccurrenceNovelty?.(
-            dailyPath,
-            novelty.occurrences,
-          );
-        } else {
-          logger.warn(`pipeline: committed novelty projection invalid: ${novelty.reason}`);
-        }
-        throwIfCancelled(signal);
         await this.deps.paperIndex.setSummaries(
           extractPaperSummaries(dailySummary),
         );
@@ -778,16 +753,6 @@ export class ArxivPipeline {
         );
       } else {
         this.deps.logger.warn(`pipeline: existing daily provenance invalid: ${provenance.reason}`);
-      }
-      throwIfCancelled(signal);
-      const novelty = parseDailyReportPersonalNovelty(markdown, dateStr);
-      if (novelty.kind === "valid") {
-        await this.deps.paperIndex.reconcileDailyReportOccurrenceNovelty?.(
-          dailyPath,
-          novelty.occurrences,
-        );
-      } else {
-        this.deps.logger.warn(`pipeline: existing daily novelty invalid: ${novelty.reason}`);
       }
       throwIfCancelled(signal);
       await this.deps.paperIndex.setSummaries(summaries);

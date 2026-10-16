@@ -114,7 +114,6 @@ export async function summarizeDaily(
     paperPath: paper.paperPath,
     detailLink: paper.detailLink,
     discoveryProvenance: paper.discoveryProvenance,
-    personalNovelty: paper.personalNovelty,
     topicDirections: paper.topicDirections,
   }));
   preflightDailySummaryPapers(assemblyPapers, deps.arxivSettings);

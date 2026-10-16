@@ -4,7 +4,7 @@ import type { ArxivFetcher } from "../pipeline/arxiv-fetcher";
 import type { Logger } from "../services/logger";
 import type { OutputSettings } from "../settings/types";
 import type { PersistedLibraryConnection } from "./library-connection";
-import type { ScopedLibrarySource } from "./scoped-library-source";
+import type { LibraryInventory, ScopedLibrarySource } from "./scoped-library-source";
 import type { EmbeddingModel } from "./fulltext/ports";
 import type { FullTextIndexProgressReporter, FullTextIndexRunSummary } from "./fulltext/index-orchestration";
 import type { PersonalLibraryDirectionLlmPort } from "./personal-library-direction-proposer";
@@ -17,7 +17,7 @@ import { parsedDocumentToPdfExtractionResult } from "./fulltext/pdf-text-compat"
 import { throwIfCancelled } from "../services/cancellation";
 import { sha256Hex } from "../utils/digest";
 import { createPersonalLibraryScopeFingerprint, createPersonalLibraryIdentificationFingerprint, PersonalLibraryCatalogStore } from "./personal-library-catalog";
-import { reconcilePersonalLibraryCatalog } from "./personal-library-reconciliation";
+import { detectPersonalLibraryFolderChange, reconcilePersonalLibraryCatalog, type PersonalLibraryFolderChange } from "./personal-library-reconciliation";
 import { ArxivLibraryMetadataResolver } from "./arxiv-library-metadata-resolver";
 import { createPdfLibraryFileIdentifier } from "./pdf-library-file-identifier";
 import { PersonalLibraryDirectionProposalStore, PersonalLibraryDirectionProposalStoreError } from "./personal-library-proposal-store";
@@ -25,7 +25,8 @@ import { FullTextKnowledgeBaseFileStore } from "./fulltext/knowledge-base-store"
 import { FullTextGenerationIndexStore, type FullTextLegacyMigrationLease } from "./fulltext/generation-index-store";
 import { indexPersonalLibraryFullText } from "./fulltext/index-orchestration";
 import { preflightFullTextGenerationSynchronization, synchronizeFullTextGenerationIndex } from "./fulltext/generation-index-orchestration";
-import { proposeClusteredPersonalLibraryDirections } from "./personal-library-direction-proposer";
+import { proposeClusteredPersonalLibraryDirections, proposeNewPapersPersonalLibraryDirections } from "./personal-library-direction-proposer";
+import { listUnaccountedLibraryPapers } from "./personal-library-change";
 import { updatePersonalLibraryDirectionCandidate, renamePersonalLibraryProposedTopic, movePersonalLibraryDirectionCandidate, removePersonalLibraryDirectionCandidate } from "./personal-library-proposal-review";
 import { previewPersonalLibraryDirection, type LibraryDirectionPreview, type LibraryPreviewPaper } from "./personal-library-direction-preview";
 import { acceptProposedTopics, type ProposalAcceptanceReceipt } from "../settings/accept-proposed-topics";
@@ -61,8 +62,21 @@ export interface LibraryReviewSnapshot extends LibraryTopicSettingsSnapshot {
   catalog: PersonalLibraryCatalog;
   proposal: PersonalLibraryDirectionProposal | null;
   indexedPapers: LibraryPreviewPaper[];
+  /**
+   * Indexed papers that no scan has accounted for, newest first (a scan could
+   * not use papers without metadata, so they are left out); null without a proposal.
+   */
+  newPaperKeys: string[] | null;
 }
 export interface LibraryWorkflowRunOptions { signal?: AbortSignal }
+export interface LibraryProposeInput extends LibraryWorkflowRunOptions {
+  /**
+   * `full` rescans the whole library; `new-papers` sends only papers no scan has
+   * accounted for. The latter throws a proposer error with code `no-baseline`
+   * (no proposal or topics to compare with) or `nothing-new`.
+   */
+  scope?: "full" | "new-papers";
+}
 export interface LibraryReviewVersions { expectedProposalRevision?: number | null }
 export interface LibraryAcceptTopicsInput extends LibraryWorkflowRunOptions, LibraryReviewVersions {
   topicIds: readonly string[];
@@ -121,27 +135,67 @@ export class LibraryWorkflow {
   }
 
   async scan(run: LibraryWorkflowRunOptions = {}): Promise<PersonalLibraryCatalog> {
-    return this.mutate(async () => {
-      await this.check(run.signal);
-      const inventory = await this.options.source.inventory({ signal: run.signal });
-      await this.check(run.signal);
-      const current = await this.loadCatalog();
-      const reconciled = await reconcilePersonalLibraryCatalog({
-        current, inventory, eligibleExtensions: this.options.connection.eligibleExtensions,
-        resolver: new ArxivLibraryMetadataResolver(this.options.arxivFetcher),
-        identifyFile: createPdfLibraryFileIdentifier({ source: this.options.source, http: this.options.http }),
-        now: this.now(), signal: run.signal,
-      });
-      await this.check(run.signal);
-      const saved = await this.catalogStore.replace(reconciled.catalog);
-      // Cancellation after the atomic promotion does not undo a committed scan.
-      await this.options.assertCurrent();
-      return saved;
-    });
+    return this.mutate(() => this.scanFolder(run));
   }
 
-  async index(run: LibraryWorkflowRunOptions & { onProgress?: FullTextIndexProgressReporter } = {}): Promise<FullTextIndexRunSummary> {
+  /** `inventory` is a listing the caller just took; without it the folder is listed here. */
+  private async scanFolder(run: LibraryWorkflowRunOptions, listed?: LibraryInventory): Promise<PersonalLibraryCatalog> {
+    await this.check(run.signal);
+    const inventory = listed ?? await this.options.source.inventory({ signal: run.signal });
+    await this.check(run.signal);
+    const current = await this.loadCatalog();
+    const reconciled = await reconcilePersonalLibraryCatalog({
+      current, inventory, eligibleExtensions: this.options.connection.eligibleExtensions,
+      resolver: new ArxivLibraryMetadataResolver(this.options.arxivFetcher),
+      identifyFile: createPdfLibraryFileIdentifier({ source: this.options.source, http: this.options.http }),
+      now: this.now(), signal: run.signal,
+    });
+    await this.check(run.signal);
+    const saved = await this.catalogStore.replace(reconciled.catalog);
+    // Cancellation after the atomic promotion does not undo a committed scan.
+    await this.options.assertCurrent();
+    return saved;
+  }
+
+  /**
+   * Scan first when the library folder differs from the last scan, judged from a
+   * local listing alone. An unchanged folder costs the listing and nothing else:
+   * no scan, no network. A listing that fails (other than by cancellation) leaves
+   * the stored catalog in use, as indexing did before it looked at the folder.
+   */
+  private async scanIfFolderChanged(
+    run: LibraryWorkflowRunOptions & { onFolderChange?: (change: PersonalLibraryFolderChange) => void },
+  ): Promise<void> {
+    let inventory: LibraryInventory;
+    let change: PersonalLibraryFolderChange;
+    try {
+      inventory = await this.options.source.inventory({ signal: run.signal });
+      change = detectPersonalLibraryFolderChange({
+        catalog: await this.loadCatalog(), inventory, eligibleExtensions: this.options.connection.eligibleExtensions,
+      });
+    } catch (error) {
+      throwIfCancelled(run.signal);
+      this.options.logger?.warn("library: could not check the folder for changes before indexing", error);
+      return;
+    }
+    if (!change.changed) return;
+    run.onFolderChange?.(change);
+    await this.scanFolder(run, inventory);
+  }
+
+  /**
+   * Index titles and abstracts. When the library folder differs from the last
+   * scan (files added, removed, renamed or modified; or never scanned), it is
+   * scanned first, and `onFolderChange` is told why. The scan asks arXiv only
+   * about papers the catalog does not know; an unchanged folder is not scanned.
+   */
+  async index(run: LibraryWorkflowRunOptions & {
+    onProgress?: FullTextIndexProgressReporter;
+    onFolderChange?: (change: PersonalLibraryFolderChange) => void;
+  } = {}): Promise<FullTextIndexRunSummary> {
     return this.mutate(async () => {
+      await this.check(run.signal);
+      await this.scanIfFolderChanged(run);
       await this.check(run.signal);
       const catalog = await this.loadCatalog();
       await this.checkEmbedding(run.signal);
@@ -209,17 +263,20 @@ export class LibraryWorkflow {
     });
   }
 
-  async propose(run: LibraryWorkflowRunOptions = {}): Promise<PersonalLibraryDirectionProposal> {
+  async propose(run: LibraryProposeInput = {}): Promise<PersonalLibraryDirectionProposal> {
     return this.mutate(async () => {
       await this.check(run.signal);
       await this.options.assertAuthorized("directions");
       const catalog = await this.loadCatalog();
       const previous = await this.proposalStore.load();
       const settings = await this.readTopicSettings();
-      const proposal = await proposeClusteredPersonalLibraryDirections({
+      const proposerOptions = {
         catalog, knowledgeBase: this.knowledgeBase, llm: this.guardedLlm(run.signal),
-        existingTopics: settings.topics, now: this.now, createId: this.createId, signal: run.signal,
-      });
+        existingTopics: settings.topics, previous, now: this.now, createId: this.createId, signal: run.signal,
+      };
+      const proposal = run.scope === "new-papers"
+        ? await proposeNewPapersPersonalLibraryDirections(proposerOptions)
+        : await proposeClusteredPersonalLibraryDirections(proposerOptions);
       await this.check(run.signal);
       await this.options.assertAuthorized("directions");
       if ((await this.loadCatalog()).revision !== catalog.revision) throw new Error("Personal library catalog changed during direction generation");
@@ -243,7 +300,8 @@ export class LibraryWorkflow {
       return [{ paperKey: record.paperKey, title, abstract: paper?.abstract ?? record.abstract ?? "", categories: [...(paper?.categories ?? [])] }];
     }).sort((left, right) => left.paperKey.localeCompare(right.paperKey));
     await this.check();
-    return { catalog, proposal, indexedPapers, ...settings };
+    const newPaperKeys = listUnaccountedLibraryPapers({ manifest, proposal, catalog });
+    return { catalog, proposal, indexedPapers, newPaperKeys, ...settings };
   }
 
   async updateCandidate(input: LibraryCandidateUpdateInput): Promise<LibraryReviewSnapshot> {

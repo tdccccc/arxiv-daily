@@ -8,8 +8,8 @@
  *     provenance (manual-only / library-only / both);
  *   - library-only papers, which are exactly the candidates the same manual
  *     topics would have missed, with direction names, representative prior
- *     papers, and validated personal novelty;
- *   - provenance/novelty integrity checks (occurrence counts vs reports).
+ *     papers;
+ *   - provenance integrity checks (occurrence counts vs reports).
  *
  * Usage:
  *   VAULT_ROOT=/path/to/vault node scripts/personalization/run-analyze-dogfood.mjs
@@ -91,7 +91,7 @@ async function main(): Promise<void> {
 
   const renderLibraryOnly = (bucket: unknown[]): string => bucket.map((item: unknown) => {
     const { paper, latestReport, provenance } = item as {
-      paper: { arxivId: string; title: string; topics: string[]; noveltyByReport: Record<string, unknown>; summary?: Record<string, unknown> };
+      paper: { arxivId: string; title: string; topics: string[]; summary?: Record<string, unknown> };
       latestReport: string;
       provenance: { directions: Array<{ id: string; name?: string; representatives: Array<{ paperKey?: string; title?: string }> }> };
     };
@@ -99,11 +99,7 @@ async function main(): Promise<void> {
       const reps = (d.representatives ?? []).map((r) => r.title ?? r.paperKey ?? "?").join("; ");
       return `    direction: ${directionNames.get(d.id) ?? d.name ?? d.id}\n    representatives: ${reps}`;
     }).join("\n");
-    const novelty = paper.noveltyByReport?.[latestReport];
-    const noveltyLine = novelty
-      ? `difference: ${(novelty as { differenceType?: string }).differenceType}\n    basis: ${((novelty as { comparisonBasis?: string[] }).comparisonBasis ?? []).join(", ")}\n    evidenceDepth: ${(novelty as { evidenceDepth?: string }).evidenceDepth}\n    explanation: ${(novelty as { explanation?: string }).explanation}`
-      : "no novelty evidence";
-    return `- ${paper.arxivId} — ${paper.title}\n  report: ${latestReport}\n${directions}\n  novelty: ${noveltyLine}\n  summary: ${summaryOf(paper)}`;
+    return `- ${paper.arxivId} — ${paper.title}\n  report: ${latestReport}\n${directions}\n  summary: ${summaryOf(paper)}`;
   }).join("\n");
 
   const report = {

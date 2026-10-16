@@ -4,7 +4,7 @@ import { describe, it, expect, vi } from "vitest";
 import { ArxivPipeline } from "../src/pipeline/pipeline";
 import { assembleDailySummary } from "../src/pipeline/daily-summary-assembler";
 import { renderDiscoveryProvenanceMarker } from "../src/pipeline/discovery-provenance-marker";
-import { renderPersonalNoveltyMarker } from "../src/pipeline/personal-novelty-marker";
+import { readFileSync } from "node:fs";
 import { parseRecent } from "../src/pipeline/arxiv-parser";
 import { RunCancelledError } from "../src/services/cancellation";
 import { Logger } from "../src/services/logger";
@@ -841,25 +841,20 @@ describe("ArxivPipeline", () => {
     expect(paperIndex.reconcileDailyReportOccurrenceProvenance).not.toHaveBeenCalled();
   });
 
-  it("restores occurrence novelty from committed Markdown during existing-daily repair", async () => {
+  it("repairs the index from a legacy report carrying withdrawn personal-novelty lines without warnings", async () => {
+    // Reports written while daily personal novelty existed keep their v1/v2 marker
+    // and visible lines; repair must still index them and never flag them.
     const d = makeDeps();
-    const id = "2607.00001";
-    const novelty = {
-      differenceType: "new-method",
-      comparisonBasis: ["arxiv:2501.00001"],
-      evidenceDepth: "metadata-and-abstract",
-      explanation: "Repaired validated novelty.",
-    };
+    const legacyReport = readFileSync(
+      new URL("./fixtures/legacy-personal-novelty-report.md", import.meta.url), "utf8",
+    );
+    const warn = vi.spyOn(d.logger, "warn");
     d.writer.dailyExists.mockResolvedValue(true);
-    d.writer.readDaily.mockResolvedValue([
-      "## Topic", "### Existing paper", renderPersonalNoveltyMarker(novelty, id, "2026-05-11"),
-      `- **arXiv**: [${id}](https://arxiv.org/abs/${id})`,
-    ].join("\n"));
+    d.writer.readDaily.mockResolvedValue(legacyReport);
     const paperIndex = {
       reconcilePaperDetails: vi.fn(async () => 0),
       addDailyReports: vi.fn(async () => undefined),
       reconcileDailyReportOccurrenceProvenance: vi.fn(async () => 0),
-      reconcileDailyReportOccurrenceNovelty: vi.fn(async () => 1),
       setSummaries: vi.fn(async () => 0),
     };
     const pipeline = new ArxivPipeline({
@@ -869,59 +864,22 @@ describe("ArxivPipeline", () => {
       output: DEFAULT_SETTINGS.output, llmSettings: DEFAULT_SETTINGS.llm,
       detailSelection: testDetailSelection,
     });
-    await expect(pipeline.runForDate("2026-05-11")).resolves.toMatchObject({ kind: "completed" });
-    expect(paperIndex.reconcileDailyReportOccurrenceNovelty).toHaveBeenCalledWith(
-      "daily/2026-05-11.md", [{ arxivId: id, novelty }],
+    await expect(pipeline.runForDate("2026-06-10")).resolves.toMatchObject({ kind: "completed", papersWritten: 2 });
+    expect(warn).not.toHaveBeenCalled();
+    expect(paperIndex.addDailyReports).toHaveBeenCalledWith(
+      expect.arrayContaining(["2606.00001", "2606.00002"]), "daily/2026-06-10.md",
     );
-  });
-
-  it("reconciles provenance but skips novelty mutation when committed novelty markers are invalid", async () => {
-    const d = makeDeps();
-    const id = "2607.00001";
-    const provenance = { manualTopicTags: ["photo-z"], directions: [] };
-    const noveltyMarker = renderPersonalNoveltyMarker(
-      { differenceType: "new-method", comparisonBasis: ["arxiv:2501.00001"],
-        evidenceDepth: "metadata-and-abstract", explanation: "Repaired." },
-      id, "2026-05-11",
-    );
-    d.writer.dailyExists.mockResolvedValue(true);
-    d.writer.readDaily.mockResolvedValue([
-      "## Topic", "### Existing paper",
-      renderDiscoveryProvenanceMarker(provenance, id, "2026-05-11"),
-      noveltyMarker, noveltyMarker,
-      `- **arXiv**: [${id}](https://arxiv.org/abs/${id})`,
-    ].join("\n"));
-    const paperIndex = {
-      reconcilePaperDetails: vi.fn(async () => 0),
-      addDailyReports: vi.fn(async () => undefined),
-      reconcileDailyReportOccurrenceProvenance: vi.fn(async () => 0),
-      reconcileDailyReportOccurrenceNovelty: vi.fn(async () => 0),
-      setSummaries: vi.fn(async () => 0),
-    };
-    const pipeline = new ArxivPipeline({
-      markupParser, fetcher: d.fetcher as any, paperFetcher: d.paperFetcher as any,
-      writer: d.writer as any, paperIndex: paperIndex as any, llm: d.llm as any,
-      logger: d.logger, arxiv: testArxiv, advanced: DEFAULT_SETTINGS.advanced,
-      output: DEFAULT_SETTINGS.output, llmSettings: DEFAULT_SETTINGS.llm,
-      detailSelection: testDetailSelection,
-    });
-    await expect(pipeline.runForDate("2026-05-11")).resolves.toMatchObject({ kind: "completed" });
     expect(paperIndex.reconcileDailyReportOccurrenceProvenance).toHaveBeenCalledWith(
-      "daily/2026-05-11.md", [{ arxivId: id, provenance }],
+      "daily/2026-06-10.md",
+      expect.arrayContaining([expect.objectContaining({ arxivId: "2606.00001" })]),
     );
-    expect(paperIndex.reconcileDailyReportOccurrenceNovelty).not.toHaveBeenCalled();
+    expect(paperIndex).not.toHaveProperty("reconcileDailyReportOccurrenceNovelty");
   });
 
-  it("recovers committed occurrence novelty through existing-daily repair after a post-commit index interruption", async () => {
+  it("recovers the committed occurrence projection through existing-daily repair after a post-commit index interruption", async () => {
     const d = makeDeps();
     const date = firstDateFromFixture();
     const id = firstBucketPapersFromFixture()[0]!.id;
-    const novelty = {
-      differenceType: "new-method",
-      comparisonBasis: ["arxiv:2501.00001"],
-      evidenceDepth: "metadata-and-abstract",
-      explanation: "Committed validated novelty.",
-    };
     let dailyExists = false;
     d.writer.dailyExists = vi.fn(async () => dailyExists);
     d.writer.writeDaily = vi.fn(async (writtenDate: string, markdown: string) => {
@@ -949,12 +907,10 @@ describe("ArxivPipeline", () => {
         }
       }),
       reconcileDailyReportOccurrenceProvenance: vi.fn(async () => 0),
-      reconcileDailyReportOccurrenceNovelty: vi.fn(async () => 1),
       setSummaries: vi.fn(async () => 1),
     };
     const committed = [
       "### Paper",
-      renderPersonalNoveltyMarker(novelty, id, date),
       `- **arXiv**: [${id}](https://arxiv.org/abs/${id})`,
       "- **核心问题**: Problem.",
     ].join("\n");
@@ -985,13 +941,7 @@ describe("ArxivPipeline", () => {
       kind: "completed",
       papersWritten: 1,
     });
-    expect(paperIndex.reconcileDailyReportOccurrenceNovelty).toHaveBeenCalledWith(
-      `daily/${date}.md`,
-      [{ arxivId: id, novelty }],
-    );
-    // The post-commit interruption happened before novelty reconciliation on
-    // the first run; the repair run recovered it from the committed Markdown.
-    expect(paperIndex.reconcileDailyReportOccurrenceNovelty).toHaveBeenCalledTimes(1);
+    // The first run was interrupted before the projection; the repair run rebuilt it from the committed Markdown.
     expect(paperIndex.reconcileDailyReportOccurrenceProvenance).toHaveBeenCalled();
   });
 

@@ -14,10 +14,34 @@ const DEFAULT_B = 0.75;
 const MAX_LIMIT = 1_000;
 const MAX_HITS = 100;
 const MAX_QUERY_BYTES = 64 * 1024;
-const MAX_QUERY_TERMS = 64;
+/** Most unique normalized terms one BM25 query may carry; more throws. */
+export const MAX_BM25_QUERY_TERMS = 64;
+const MAX_QUERY_TERMS = MAX_BM25_QUERY_TERMS;
 const MAX_ROUTE_REFS = MAX_QUERY_TERMS * 4096;
 const SHORT_ALIAS_MAX_CHARS = 80;
 const HAN_SINGLE = /^\p{Script=Han}$/u;
+
+/**
+ * Fits free text to the BM25 query term limit, counted exactly as
+ * searchGenerationBm25 counts it (same tokenizer and normalization, unique
+ * terms). Parts are taken in order, each part's terms in order of appearance,
+ * until the limit is reached, so put the most telling part (a title) first.
+ * Text already within the limit is returned unchanged.
+ */
+export function limitBm25QueryTerms(parts: readonly string[], maxTerms: number = MAX_BM25_QUERY_TERMS): string {
+  const text = parts.join("\n");
+  const terms = new Set<string>();
+  const kept = new Set<string>();
+  for (const part of parts) {
+    for (const token of tokenizeUnicode(part)) {
+      terms.add(token);
+      if (kept.size < maxTerms) kept.add(token);
+    }
+  }
+  if (terms.size <= maxTerms) return text;
+  // Normalized tokens re-tokenize to themselves, so the joined text keeps exactly `kept`.
+  return [...kept].join(" ");
+}
 
 export interface GenerationBm25Stats {
   dictionaryReads: number;
@@ -95,12 +119,21 @@ export async function searchGenerationBm25(input: SearchGenerationBm25Input): Pr
     if (input.stats) input.stats.dictionaryReads += 1;
     afterRead(input.signal);
     const block = object.block;
+    // Derived at most once per dictionary block, not once per (target, entry) pair.
+    let catalogBuckets: Uint8Array | null = null;
     for (const target of targets) {
       const bucket = lexicalTermBucket(target.namespace, target.term);
       if (!descriptor.lexicalRouting[bucket]!.includes(ordinal)) continue;
-      for (const catalogIndex of block.queryCatalog) {
-        const entry = block.entries[catalogIndex]!;
-        const entryBucket = lexicalTermBucket(entry.namespace, entry.term);
+      if (catalogBuckets === null) {
+        catalogBuckets = new Uint8Array(block.queryCatalog.length);
+        for (let position = 0; position < block.queryCatalog.length; position += 1) {
+          const catalogEntry = block.entries[block.queryCatalog[position]!]!;
+          catalogBuckets[position] = lexicalTermBucket(catalogEntry.namespace, catalogEntry.term);
+        }
+      }
+      for (let position = 0; position < block.queryCatalog.length; position += 1) {
+        const entry = block.entries[block.queryCatalog[position]!]!;
+        const entryBucket = catalogBuckets[position]!;
         if (entryBucket < bucket) continue;
         if (entryBucket > bucket) break;
         if (entry.namespace !== target.namespace || entry.term !== target.term) continue;

@@ -12,8 +12,6 @@ import type {
   FullTextLegacyMigrationLease,
   FullTextGenerationMaintenanceReport,
   KnowledgeBaseChunkHit,
-  IncrementalSuggestionsDocument,
-  ClusteringInputPaper,
   ProposalAcceptanceReceipt,
   Topic,
   AcceptProposedTopicsResult,
@@ -45,6 +43,11 @@ buildChatCompletionsUrl,
 createPersonalLibraryCatalogInputFingerprint,
 type DirectionProposalProgress,
 proposeClusteredPersonalLibraryDirections,
+proposeNewPapersPersonalLibraryDirections,
+PersonalLibraryDirectionProposerError,
+listUnaccountedLibraryPapers,
+shouldNudgeLibraryChange,
+type FullTextKnowledgeBaseManifest,
 previewPersonalLibraryDirection,
 PERSONAL_LIBRARY_SIMILARITY_QUANTILE,
 mergePersonalLibraryDirectionCandidates,
@@ -57,6 +60,7 @@ topicNameKey,
 updatePersonalLibraryDirectionCandidate,
 selectPersonalLibraryDirectionPapers,
 reconcilePersonalLibraryCatalog,
+detectPersonalLibraryFolderChange,
 RunCancellationService,
 normalizeArxivId,
 FullTextKnowledgeBaseFileStore,
@@ -65,9 +69,6 @@ indexPersonalLibraryFullText as indexFullTextKnowledgeBase,
 searchFullTextKnowledgeBase as searchFullTextKnowledgeBaseCore,
 preflightFullTextGenerationSynchronization,
 synchronizeFullTextGenerationIndex,
-IncrementalSuggestionsStore,
-centerCorpusChunks,
-loadClusteringInput,
 sha256Hex,
 type OperationHandle,
 type OperationKind,
@@ -161,6 +162,7 @@ import {
 import { LibraryIndexStatusStore } from "./src/library/index-status";
 import type { TransformersEmbeddingModelOptions } from "./src/hosts/obsidian/embedding-model";
 import type { FullTextIndexLibraryContext } from "./src/library/index-completion";
+import { buildLibraryChangeNudgeFragment } from "./src/library/change-nudge";
 import { decodeProposalAcceptanceReceipts } from "./src/library/proposal-acceptance-state";
 
 const LIBRARY_MODEL_PREPARATION_REQUIRED = "The embedding model changed. Retry preparation to rebuild this library safely.";
@@ -175,7 +177,7 @@ interface PersistedData {
 }
 
 export interface PersonalLibraryReviewLoadError {
-  kind: "catalog" | "proposal" | "profile" | "suggestions";
+  kind: "catalog" | "proposal" | "profile";
   code: string;
   message: string;
 }
@@ -195,6 +197,26 @@ class CodedError extends Error {
   }
 }
 
+/** What a direction scan reads: the whole library, or only papers no scan accounted for. */
+export type PersonalLibraryDirectionScope = "full" | "new-papers";
+
+export interface GeneratedPersonalLibraryDirections {
+  outcome: "generated";
+  proposal: PersonalLibraryDirectionProposal;
+  /** What actually ran; "full" even when "new-papers" was asked for and fell back. */
+  scope: PersonalLibraryDirectionScope;
+  /** True when "new-papers" had no proposal or topics to compare against and the full scan ran instead. */
+  fellBackToFull: boolean;
+}
+
+/** Every library paper was already accounted for: no model call, nothing saved. */
+export interface NothingNewForPersonalLibraryDirections {
+  outcome: "nothing-new";
+}
+
+export type PersonalLibraryDirectionGeneration =
+  GeneratedPersonalLibraryDirections | NothingNewForPersonalLibraryDirections;
+
 /** One indexed paper the catalog has no record of, named by the index. */
 export interface PersonalLibraryIndexedPaper {
   paperKey: string;
@@ -206,11 +228,15 @@ export interface PersonalLibraryProfileSnapshot {
   /** Fallback-indexed papers, empty when every indexed paper is in the catalog. */
   indexedPapers: PersonalLibraryIndexedPaper[];
   proposal: PersonalLibraryDirectionProposal | null;
-  suggestions: IncrementalSuggestionsDocument | null;
+  /**
+   * Library papers that no scan has accounted for (ADR 0015 section 3), newest
+   * first. Empty when there is no proposal to be out of date against, or when
+   * the count could not be made.
+   */
+  newPaperKeys: string[];
   authorization: LibraryConnectionStatus;
   catalogLoadError: PersonalLibraryReviewLoadError | null;
   proposalLoadError: PersonalLibraryReviewLoadError | null;
-  suggestionsLoadError: PersonalLibraryReviewLoadError | null;
   /**
    * Names of topics already in `settings.arxiv.topics`. The review page uses
    * this to mark proposed topics that a prior accept already added, since the
@@ -224,16 +250,6 @@ export interface PersonalLibraryProfileSnapshot {
   acceptanceLoadError?: string | null;
 }
 
-/**
- * One immutable daily discovery snapshot captured from the currently
- * authorized eligibility join: the personalized discovery input plus, when
- * novelty preparation succeeds, the library-derived novelty representative
- * evidence and the direction→representative mapping. Discovery and novelty
- * share the same gate and lifecycle guards; per-run daily paper evidence for
- * novelty is derived inside the pipeline from the fetched source papers, never
- * here. A novelty-preparation failure degrades to a discovery-only snapshot
- * and never drops personalized discovery.
- */
 class SettingsOperationRegistry extends OperationRegistry {
   private outputTransitionActive = false;
 
@@ -273,15 +289,6 @@ class SettingsOperationRegistry extends OperationRegistry {
 }
 
 let lastCacheCleanupDate: string | null = null;
-
-/**
- * Minimum buffer-pool size before the incremental direction update runs the
- * low-frequency recluster + LLM diff pass; below it only deterministic
- * placement attach suggestions are recorded.
- */
-export const INCREMENTAL_BUFFER_TRIGGER = 3 as const;
-
-/** Fixed reason attached to deterministic placement attach suggestions. */
 
 function cacheCleanupDateKey(now: Date, timezone: string): string {
   return formatDate(todayInTz(now, timezone));
@@ -369,12 +376,11 @@ export default class ArxivDailyPlugin extends Plugin {
    */
   private libraryMutationRevision = 0;
   private libraryProposal: PersonalLibraryDirectionProposal | null = null;
+  private libraryNewPaperKeys: string[] = [];
   private libraryProposalAcceptances: ProposalAcceptanceReceipt[] = [];
   private libraryProposalAcceptanceRaw: unknown;
   private libraryProposalAcceptanceLoadError: string | null = null;
-  private librarySuggestions: IncrementalSuggestionsDocument | null = null;
   private libraryProposalLoadError: PersonalLibraryReviewLoadError | null = null;
-  private librarySuggestionsLoadError: PersonalLibraryReviewLoadError | null = null;
 
   getHttpClient(): HttpClient {
     if (!this.host) throw new Error("Obsidian host adapters are not initialized");
@@ -995,16 +1001,84 @@ export default class ArxivDailyPlugin extends Plugin {
     return structuredClone(catalog);
   }
 
+  /**
+   * Recount the library papers no scan has accounted for (ADR 0015 section 3).
+   *
+   * Local by construction: it reads manifest records only, so there is no
+   * vector read, no model and no consent involved, and it is cheap enough to
+   * run after every index and every proposal change. It never throws; a count
+   * that cannot be made means "no nudge", never a failed index. Edits to a
+   * proposal cannot change the accounted set, so only loads and replacements
+   * call it.
+   */
+  private async recomputeLibraryNewPaperKeys(manifest?: FullTextKnowledgeBaseManifest): Promise<void> {
+    const connection = this.libraryConnection;
+    const connectionRevision = this.libraryConnectionRevision;
+    const proposal = this.libraryProposal;
+    try {
+      if (!connection || !proposal) {
+        this.libraryNewPaperKeys = [];
+        return;
+      }
+      const loaded = manifest ?? await this.buildFullTextKnowledgeBaseStore(connection).loadManifest();
+      // A newer connection or proposal has its own recount coming.
+      if (this.libraryConnection !== connection || this.libraryConnectionRevision !== connectionRevision
+        || this.libraryProposal !== proposal) return;
+      // The catalog lets the count leave out papers an update could not use,
+      // so the number shown is the number an update would send. An index run
+      // can finish before the catalog was ever loaded for review, so it is
+      // read here, best effort and without touching the review state; if it
+      // cannot be read the count is the plain manifest one.
+      let catalog: PersonalLibraryCatalog | null = this.libraryCatalog;
+      if (!catalog) {
+        try {
+          const { scopeFingerprint, identificationFingerprint } = this.libraryFingerprints(connection);
+          catalog = await this.buildPersonalLibraryCatalogStore().load(scopeFingerprint, identificationFingerprint);
+        } catch (error) {
+          this.logger?.warn?.("library: could not load the catalog to count new papers", error);
+        }
+        if (this.libraryConnection !== connection || this.libraryConnectionRevision !== connectionRevision
+          || this.libraryProposal !== proposal) return;
+      }
+      this.libraryNewPaperKeys = listUnaccountedLibraryPapers({
+        manifest: loaded, proposal, ...(catalog ? { catalog } : {}),
+      }) ?? [];
+    } catch (error) {
+      this.libraryNewPaperKeys = [];
+      this.logger?.warn?.("library: could not count papers new since the direction suggestions", error);
+    }
+  }
+
+  /**
+   * One notice, once an index run has finished, when enough library papers are
+   * missing from the direction suggestions. It only offers: the button opens
+   * the review, where the researcher starts the update; nothing is scanned and
+   * no model is called from here.
+   */
+  private showLibraryChangeNudge(): void {
+    try {
+      const count = this.libraryNewPaperKeys?.length ?? 0;
+      if (!shouldNudgeLibraryChange(count)) return;
+      let notice: Notice | undefined;
+      const fragment = buildLibraryChangeNudgeFragment(count, () => {
+        notice?.hide();
+        this.openPersonalLibraryDirectionReview();
+      });
+      if (fragment) notice = new Notice(fragment, 15_000);
+    } catch (error) {
+      this.logger?.warn?.("library: could not show the library change notice", error);
+    }
+  }
+
   getPersonalLibraryProfileSnapshot(): PersonalLibraryProfileSnapshot {
     return structuredClone({
       catalog: this.libraryCatalog,
       indexedPapers: this.libraryIndexedPapers,
       proposal: this.libraryProposal,
-      suggestions: this.librarySuggestions,
+      newPaperKeys: this.libraryNewPaperKeys ?? [],
       authorization: this.getLibraryConnectionStatus(),
       catalogLoadError: this.libraryCatalogLoadError,
       proposalLoadError: this.libraryProposalLoadError,
-      suggestionsLoadError: this.librarySuggestionsLoadError,
       settingsTopicNames: this.settings.arxiv.topics.map(({ name }) => name),
       settingsTopics: this.settings.arxiv.topics,
       arxivCategories: arxivCategories(this.settings.arxiv),
@@ -1026,9 +1100,8 @@ export default class ArxivDailyPlugin extends Plugin {
     const connection = this.libraryConnection;
     if (!connection) {
       this.libraryProposal = null;
-      this.librarySuggestions = null;
+      this.libraryNewPaperKeys = [];
       this.libraryProposalLoadError = null;
-      this.librarySuggestionsLoadError = null;
       return this.getPersonalLibraryProfileSnapshot();
     }
     const connectionRevision = this.libraryConnectionRevision;
@@ -1049,17 +1122,8 @@ export default class ArxivDailyPlugin extends Plugin {
           this.logger?.error("personal library direction proposal load failed", error);
         }
       }),
-      stores.suggestions.load().then((suggestions) => {
-        this.assertPersonalLibraryDocumentLoadCurrent(connection, connectionRevision, outputRevision);
-        this.librarySuggestions = suggestions;
-        this.librarySuggestionsLoadError = null;
-      }).catch((error) => {
-        this.assertPersonalLibraryDocumentLoadCurrent(connection, connectionRevision, outputRevision);
-        this.librarySuggestions = null;
-        this.librarySuggestionsLoadError = this.safeProfileLoadError("suggestions", error);
-        this.logger?.error("incremental suggestions load failed", error);
-      }),
     ]);
+    await this.recomputeLibraryNewPaperKeys();
     return this.getPersonalLibraryProfileSnapshot();
   }
 
@@ -1130,11 +1194,34 @@ export default class ArxivDailyPlugin extends Plugin {
     }
   }
 
+  /**
+   * `scope: "full"` (the default) re-reads the whole library and carries the
+   * accounted set forward from the proposal it replaces. `"new-papers"` sends
+   * only the papers no scan has accounted for, with the existing topics and
+   * directions (ADR 0015 section 4). Without a current proposal and topics to
+   * compare against it runs the full scan instead and says so in the result;
+   * with nothing new it calls no model and saves nothing.
+   */
   async generatePersonalLibraryDirections(
     onProgress?: (progress: DirectionProposalProgress) => void,
     callerSignal?: AbortSignal,
-    options?: { regenerateRetired?: boolean },
-  ): Promise<PersonalLibraryDirectionProposal> {
+    options?: { regenerateRetired?: boolean; scope?: "full" },
+  ): Promise<GeneratedPersonalLibraryDirections>;
+  async generatePersonalLibraryDirections(
+    onProgress: ((progress: DirectionProposalProgress) => void) | undefined,
+    callerSignal: AbortSignal | undefined,
+    options: { regenerateRetired?: boolean; scope: PersonalLibraryDirectionScope },
+  ): Promise<PersonalLibraryDirectionGeneration>;
+  async generatePersonalLibraryDirections(
+    onProgress?: (progress: DirectionProposalProgress) => void,
+    callerSignal?: AbortSignal,
+    options?: { regenerateRetired?: boolean; scope?: PersonalLibraryDirectionScope },
+  ): Promise<PersonalLibraryDirectionGeneration>;
+  async generatePersonalLibraryDirections(
+    onProgress?: (progress: DirectionProposalProgress) => void,
+    callerSignal?: AbortSignal,
+    options?: { regenerateRetired?: boolean; scope?: PersonalLibraryDirectionScope },
+  ): Promise<PersonalLibraryDirectionGeneration> {
     throwIfCancelled(callerSignal);
     const connection = this.libraryConnection;
     if (!connection) throw new Error("Choose a personal library first");
@@ -1155,6 +1242,7 @@ export default class ArxivDailyPlugin extends Plugin {
     const existingTopicsFingerprint = JSON.stringify(existingTopics);
     const expectedProposalRevision = this.libraryProposal?.revision ?? null;
     const llmSettings = structuredClone(this.settings.llm);
+    const previous = this.libraryProposal ? structuredClone(this.libraryProposal) : null;
     const store = this.buildPersonalLibraryProfileStores(connection).proposal;
     const operation = this.operations.begin(
       "personal-library-direction-generation",
@@ -1170,17 +1258,54 @@ export default class ArxivDailyPlugin extends Plugin {
         connection, connectionRevision, outputRevision, authorizationFingerprint,
         catalog, selectedInputFingerprint, expectedProposalRevision, existingTopicsFingerprint,
       });
-      const proposal = await proposeClusteredPersonalLibraryDirections({
-        catalog: structuredClone(catalog),
-        existingTopics,
-        knowledgeBase: this.buildFullTextKnowledgeBaseStore(connection),
-        // Tight groups provide evidence; the model organizes their topic scope.
-        clustering: { similarityQuantile: PERSONAL_LIBRARY_SIMILARITY_QUANTILE },
-        llm: new LlmClient(llmSettings, this.logger, this.host.http),
-        signal: operation.signal,
-        createId: () => crypto.randomUUID(),
-        onProgress: this.proposalProgressReporter(onProgress),
-      });
+      const knowledgeBase = this.buildFullTextKnowledgeBaseStore(connection);
+      const llm = new LlmClient(llmSettings, this.logger, this.host.http);
+      const reportProgress = this.proposalProgressReporter(onProgress);
+      let scope: PersonalLibraryDirectionScope = options?.scope ?? "full";
+      let fellBackToFull = false;
+      let proposal: PersonalLibraryDirectionProposal | undefined;
+      if (scope === "new-papers") {
+        try {
+          proposal = await proposeNewPapersPersonalLibraryDirections({
+            catalog: structuredClone(catalog),
+            existingTopics,
+            knowledgeBase,
+            previous,
+            llm,
+            signal: operation.signal,
+            createId: () => crypto.randomUUID(),
+            onProgress: reportProgress,
+          });
+        } catch (error) {
+          if (!(error instanceof PersonalLibraryDirectionProposerError)) throw error;
+          if (error.code === "nothing-new") {
+            this.progress?.setComplete("No new library papers to add to the direction suggestions");
+            return { outcome: "nothing-new" };
+          }
+          // Nothing to compare the new papers with: the first scan is the
+          // ordinary full scan, and the caller is told that is what ran.
+          if (error.code !== "no-baseline") throw error;
+          scope = "full";
+          fellBackToFull = true;
+        }
+      }
+      if (!proposal) {
+        proposal = await proposeClusteredPersonalLibraryDirections({
+          catalog: structuredClone(catalog),
+          existingTopics,
+          knowledgeBase,
+          // Tight groups provide evidence; the model organizes their topic scope.
+          clustering: { similarityQuantile: PERSONAL_LIBRARY_SIMILARITY_QUANTILE },
+          // Carries the accounted papers forward, so a full scan that does not
+          // see some of them (beyond the scan window) does not make them look new.
+          previous,
+          llm,
+          signal: operation.signal,
+          createId: () => crypto.randomUUID(),
+          onProgress: reportProgress,
+        });
+      }
+      const generated = proposal;
       operation.signal.throwIfAborted();
       this.assertPersonalLibraryGenerationCurrent({
         connection, connectionRevision, outputRevision, authorizationFingerprint,
@@ -1193,10 +1318,11 @@ export default class ArxivDailyPlugin extends Plugin {
           catalog, selectedInputFingerprint, expectedProposalRevision, existingTopicsFingerprint,
         });
         const saved = options?.regenerateRetired
-          ? await store.replace(proposal, expectedProposalRevision, { regenerateRetired: true })
-          : await store.replace(proposal, expectedProposalRevision);
+          ? await store.replace(generated, expectedProposalRevision, { regenerateRetired: true })
+          : await store.replace(generated, expectedProposalRevision);
         this.libraryProposal = saved;
         this.libraryProposalLoadError = null;
+        await this.recomputeLibraryNewPaperKeys();
         return structuredClone(saved);
       });
       // Whoever wrote a task into the status bar has to take it back out. This
@@ -1204,7 +1330,7 @@ export default class ArxivDailyPlugin extends Plugin {
       // the bar showing "naming directions (5/9)" until the next task replaced
       // it — scanning and indexing both close theirs the same way.
       this.progress?.setComplete("Personal library directions generated");
-      return result;
+      return { outcome: "generated", proposal: result, scope, fellBackToFull };
     } catch (error) {
       if (!operation.signal.aborted) {
         this.progress?.setError("Personal library direction generation failed");
@@ -1301,10 +1427,6 @@ export default class ArxivDailyPlugin extends Plugin {
     }
   }
 
-  getIncrementalSuggestions(): IncrementalSuggestionsDocument | null {
-    return this.librarySuggestions ? structuredClone(this.librarySuggestions) : null;
-  }
-
   async scanPersonalLibrary(): Promise<PersonalLibraryCatalog> {
     const connection = this.libraryConnection;
     if (!connection) throw new Error("Choose a personal library first");
@@ -1349,6 +1471,26 @@ export default class ArxivDailyPlugin extends Plugin {
     }
   }
 
+  /** The connected folder's scoped source, checked to still be the folder that was chosen. */
+  private async verifiedLibrarySource(
+    connection: PersistedLibraryConnection,
+    revision: number,
+    operation: OperationHandle,
+  ): Promise<OpenedScopedLibrarySource> {
+    const source = this.librarySource
+      ?? await this.openLibrarySource(connection.selectedRoot);
+    operation.signal.throwIfAborted();
+    this.assertLibraryConnectionCurrent(connection, revision);
+    if (
+      source.canonicalRoot !== connection.selectedRoot
+      || source.rootIdentity !== connection.rootIdentity
+    ) {
+      throw new Error("Library folder identity changed; choose it again");
+    }
+    this.librarySource = source;
+    return source;
+  }
+
   /**
    * Walk the library folder, re-identify files and persist the reconciled
    * catalog. Shared by `scanPersonalLibrary` (its own operation, its own
@@ -1365,20 +1507,12 @@ export default class ArxivDailyPlugin extends Plugin {
     store: PersonalLibraryCatalogStore,
     scopeFingerprint: string,
     identificationFingerprint: string,
+    /** A listing the caller just took (the index build's change check); otherwise the folder is listed here. */
+    listed?: LibraryInventory,
   ): Promise<PersonalLibraryCatalog> {
     operation.signal.throwIfAborted();
-    const source = this.librarySource
-      ?? await this.openLibrarySource(connection.selectedRoot);
-    operation.signal.throwIfAborted();
-    this.assertLibraryConnectionCurrent(connection, revision);
-    if (
-      source.canonicalRoot !== connection.selectedRoot
-      || source.rootIdentity !== connection.rootIdentity
-    ) {
-      throw new Error("Library folder identity changed; choose it again");
-    }
-    this.librarySource = source;
-    const inventory = await source.inventory({ signal: operation.signal });
+    const source = await this.verifiedLibrarySource(connection, revision, operation);
+    const inventory = listed ?? await source.inventory({ signal: operation.signal });
     operation.signal.throwIfAborted();
     this.assertLibraryConnectionCurrent(connection, revision);
     const current = await store.load(scopeFingerprint, identificationFingerprint);
@@ -1545,14 +1679,42 @@ export default class ArxivDailyPlugin extends Plugin {
       let catalog = await catalogStore.load(scopeFingerprint, identificationFingerprint);
       operation.signal.throwIfAborted();
       this.assertLibraryConnectionCurrent(connection, revision);
-      // `lastScan === null` is the one safe signal that this exact folder (this
-      // scope/identification fingerprint) has never been scanned: `load` above
-      // already folds "no catalog file", "corrupt catalog" and "catalog from a
-      // different folder/extension set" into the same empty, unscanned
-      // catalog. A library that has been scanned before keeps reading the
-      // stored catalog exactly as before — no surprise network rescan on every
-      // build.
-      const scannedBeforeIndexing = catalog.lastScan === null;
+      // Scan first when the folder is not the one the stored catalog describes.
+      // `lastScan === null` means this exact folder (this scope/identification
+      // fingerprint) was never scanned: `load` above already folds "no catalog
+      // file", "corrupt catalog" and "catalog from a different folder/extension
+      // set" into the same empty, unscanned catalog. Otherwise a local listing
+      // of the folder (no file reads, no network) is compared with the files
+      // the last scan recorded; only a difference (added, removed, renamed or
+      // modified PDFs) triggers a scan, and the scan asks arXiv only about
+      // papers the catalog does not hold. An unchanged folder reads the stored
+      // catalog exactly as before — no network rescan on every build.
+      let scannedBeforeIndexing = catalog.lastScan === null;
+      let listing: LibraryInventory | undefined;
+      if (!scannedBeforeIndexing) {
+        if (updateProgress) {
+          this.progress?.setTask("Indexing library titles and abstracts", "Checking the library folder for changes");
+        }
+        this.libraryIndexStatus.report({ phase: "checking the library folder for changes" });
+        try {
+          const checked = await this.verifiedLibrarySource(connection, revision, operation);
+          listing = await checked.inventory({ signal: operation.signal });
+          operation.signal.throwIfAborted();
+          scannedBeforeIndexing = detectPersonalLibraryFolderChange({
+            catalog, inventory: listing, eligibleExtensions: connection.eligibleExtensions,
+          }).changed;
+        } catch (error) {
+          // The check is an optimization of freshness, not a precondition:
+          // when the folder cannot be listed, index the stored catalog as
+          // before (reading papers will report an unreachable folder itself).
+          if (operation.signal.aborted) throw error;
+          this.assertLibraryConnectionCurrent(connection, revision);
+          this.logger?.warn?.("library: could not check the folder for changes before indexing", error);
+          listing = undefined;
+        }
+        operation.signal.throwIfAborted();
+        this.assertLibraryConnectionCurrent(connection, revision);
+      }
       if (scannedBeforeIndexing) {
         if (updateProgress) {
           this.progress?.setTask("Indexing library titles and abstracts", "Scanning the library folder");
@@ -1566,6 +1728,7 @@ export default class ArxivDailyPlugin extends Plugin {
             catalogStore,
             scopeFingerprint,
             identificationFingerprint,
+            listing,
           );
         } catch (error) {
           // Cancellation is an outcome, not a scan fault: let it propagate
@@ -1580,22 +1743,12 @@ export default class ArxivDailyPlugin extends Plugin {
         }
         operation.signal.throwIfAborted();
         this.assertLibraryConnectionCurrent(connection, revision);
-        if (updateProgress) {
-          this.progress?.setTask("Indexing library titles and abstracts", "Extracting and embedding titles and abstracts");
-        }
-        this.libraryIndexStatus.report({ phase: "reading the library catalog" });
       }
-      const source = this.librarySource
-        ?? await this.openLibrarySource(connection.selectedRoot);
-      operation.signal.throwIfAborted();
-      this.assertLibraryConnectionCurrent(connection, revision);
-      if (
-        source.canonicalRoot !== connection.selectedRoot
-        || source.rootIdentity !== connection.rootIdentity
-      ) {
-        throw new Error("Library folder identity changed; choose it again");
+      if (updateProgress) {
+        this.progress?.setTask("Indexing library titles and abstracts", "Extracting and embedding titles and abstracts");
       }
-      this.librarySource = source;
+      this.libraryIndexStatus.report({ phase: "reading the library catalog" });
+      const source = await this.verifiedLibrarySource(connection, revision, operation);
       // Obsidian's built-in pdf.js becomes reachable via `window.pdfjsLib`
       // after the official loader resolves; the extractor defaults to it.
       await loadPdfJs();
@@ -1738,6 +1891,8 @@ export default class ArxivDailyPlugin extends Plugin {
           .filter((file) => file.status === "failed" && file.reason === "metadata-fetch-failed").length,
         scannedBeforeIndexing,
       };
+      // The count was refreshed above from the manifest this run committed.
+      this.showLibraryChangeNudge();
       return summary;
     } catch (error) {
       // AbortSignal.throwIfAborted can throw a plain-string reason; normalize
@@ -1807,12 +1962,17 @@ export default class ArxivDailyPlugin extends Plugin {
       this.libraryIndexStatus.setLastRun(undefined);
       this.libraryIndexStatus.setPreparationError(undefined);
       this.libraryIndexedPapers = [];
+      this.libraryNewPaperKeys = [];
       return;
     }
     const connectionRevision = this.libraryConnectionRevision;
     try {
       const manifest = await this.buildFullTextKnowledgeBaseStore(connection).loadManifest();
       if (this.libraryConnection !== connection || this.libraryConnectionRevision !== connectionRevision) return;
+      // Counted from the manifest just read, before any of the preparation
+      // checks below can return: the count says what the library holds, not
+      // whether search is ready.
+      await this.recomputeLibraryNewPaperKeys(manifest);
       const expected = this.buildEmbeddingModel();
       const readyPapers = Object.values(manifest.papers).filter((paper) => paper.status === "ready");
       this.libraryIndexStatus.setLastRun(
@@ -1857,6 +2017,7 @@ export default class ArxivDailyPlugin extends Plugin {
       if (this.libraryConnection !== connection || this.libraryConnectionRevision !== connectionRevision) return;
       this.libraryIndexStatus.setPreparationError(LIBRARY_INDEX_READ_FAILED);
       this.libraryIndexedPapers = [];
+      this.libraryNewPaperKeys = [];
       // A row that cannot read the manifest says nothing about past runs; it
       // must not say the index is gone.
       this.logger.warn("fulltext: could not read the index manifest for the settings row", error);
@@ -2372,7 +2533,6 @@ export default class ArxivDailyPlugin extends Plugin {
 
   private buildPersonalLibraryProfileStores(connection: PersistedLibraryConnection): {
     proposal: PersonalLibraryDirectionProposalStore;
-    suggestions: IncrementalSuggestionsStore;
   } {
     if (!this.host?.storage.writeTextAtomic) {
       throw new Error("Personal library review requires atomic storage writes");
@@ -2381,9 +2541,6 @@ export default class ArxivDailyPlugin extends Plugin {
     const options = { onWarning: (message: string, error?: unknown) => this.logger.warn(message, error) };
     return {
       proposal: new PersonalLibraryDirectionProposalStore(
-        this.host.storage, this.settings.output, scopeFingerprint, identificationFingerprint, options,
-      ),
-      suggestions: new IncrementalSuggestionsStore(
         this.host.storage, this.settings.output, scopeFingerprint, identificationFingerprint, options,
       ),
     };
@@ -2544,34 +2701,6 @@ export default class ArxivDailyPlugin extends Plugin {
     }
   }
 
-  private buildIncrementalSuggestionsStore(connection: PersistedLibraryConnection): IncrementalSuggestionsStore {
-    if (!this.host?.storage.writeTextAtomic) {
-      throw new Error("Incremental suggestions require atomic storage writes");
-    }
-    const { scopeFingerprint, identificationFingerprint } = this.libraryFingerprints(connection);
-    return new IncrementalSuggestionsStore(
-      this.host.storage,
-      this.settings.output,
-      scopeFingerprint,
-      identificationFingerprint,
-      { onWarning: (message, error) => this.logger.warn(message, error) },
-    );
-  }
-
-  /**
-   * Load the ready papers and apply the corpus-centered chunk transform —
-   * the same transform the placement pass applies internally. Core exports
-   * the transform (`centerCorpusChunks`) so the recluster pass cannot drift
-   * from the clustering implementation.
-   */
-  private async loadCenteredClusteringInput(
-    knowledgeBase: FullTextKnowledgeBaseFileStore,
-    signal?: AbortSignal,
-  ): Promise<ClusteringInputPaper[]> {
-    const papers = await loadClusteringInput(knowledgeBase, signal);
-    return centerCorpusChunks(papers);
-  }
-
   private assertPersonalLibraryDocumentLoadCurrent(
     connection: PersistedLibraryConnection,
     connectionRevision: number,
@@ -2587,13 +2716,12 @@ export default class ArxivDailyPlugin extends Plugin {
     this.libraryCatalog = null;
     this.libraryCatalogLoadError = null;
     this.libraryProposal = null;
-    this.librarySuggestions = null;
+    this.libraryNewPaperKeys = [];
     this.libraryProposalLoadError = null;
-    this.librarySuggestionsLoadError = null;
   }
 
   private safeProfileLoadError(
-    kind: "catalog" | "proposal" | "profile" | "suggestions",
+    kind: "catalog" | "proposal" | "profile",
     error: unknown,
   ): PersonalLibraryReviewLoadError {
     const code = typeof error === "object" && error !== null && "code" in error
@@ -2603,7 +2731,6 @@ export default class ArxivDailyPlugin extends Plugin {
     const label = kind === "catalog"
       ? "catalog"
       : kind === "proposal" ? "direction proposal"
-        : kind === "suggestions" ? "incremental suggestions"
         : "confirmed profile";
     return { kind, code, message: `Personal library ${label} could not be loaded (${code}).` };
   }
@@ -2978,10 +3105,6 @@ function latestCompletedDate(store: StateStore): string | undefined {
     .sort();
   return completed[completed.length - 1];
 }
-
-// ---------------------------------------------------------------------------
-// Incremental direction update helpers (plugin-internal).
-// ---------------------------------------------------------------------------
 
 function createFullTextGenerationWriterToken(): string {
   return `writer-${crypto.randomUUID().replaceAll("-", "")}`;

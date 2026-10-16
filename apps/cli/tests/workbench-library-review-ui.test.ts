@@ -8,7 +8,7 @@ const candidate = (id: string, keys = ["p1", "p2"]) => ({ id, text: `Direction $
 const fixture = (): LibraryReviewViewSnapshot => ({
  configRevision: "config-1", connected: true, topics: [{ id: "existing", name: "Cosmology", tag: "cosmo", detail: false, description: "Changed direction", directions: [{ id: "old", text: "Changed direction", origin: "manual" }] }], acceptances: [{ proposalId: "proposal-1", scopeFingerprint: "scope", topicTargets: {}, processedCandidateIds: ["processed"] }],
  catalog: { schemaVersion: 1, revision: 1, scopeFingerprint: "scope", identificationFingerprint: "identity", updatedAt: "2026-10-05", lastScan: null, files: {}, papers: {} },
- indexedPapers: ["p1", "p2", "p3", "p4"].map(paperKey => ({ paperKey, title: `Paper ${paperKey}`, abstract: "abstract", categories: ["astro-ph.CO"] })),
+ indexedPapers: ["p1", "p2", "p3", "p4"].map(paperKey => ({ paperKey, title: `Paper ${paperKey}`, abstract: "abstract", categories: ["astro-ph.CO"] })), newPaperKeys: ["p4"],
  proposal: { schemaVersion: 6, revision: 4, proposalId: "proposal-1", scopeFingerprint: "scope", identificationFingerprint: "identity", catalogInputFingerprint: "input", catalogInputPapers: ["p1", "p2", "p3"].map(evidence), generationContractFingerprint: "contract", generatedAt: "2026-10-05T00:00:00Z", topics: [{ id: "topic", suggestedName: "Stars", directions: [candidate("strong"), candidate("thin", ["p1"]), candidate("processed")] }], coveredPaperKeys: ["p3"], coverageEvidence: [{ topicId: "existing", directionId: "old", directionText: "Original direction", paperKeys: ["p3"] }] }
 });
 const run: WorkbenchRun = { id: "run-1", label: "preview", date: null, status: "running", output: "", exitCode: null, startedAt: "2026-10-05T00:00:00Z", finishedAt: null };
@@ -217,4 +217,85 @@ it("keeps a restored preview when the initial proposal snapshot arrives afterwar
  await view.handleRun({...run,label:"预览研究方向",status:"completed"});
  resolveSnapshot(fixture()); await settle();
  expect(root.querySelector(".review-preview")?.textContent).toContain("Restored before snapshot");
+});
+
+
+/** A rescan of new papers only: its input is p4, but p1..p3 stay accounted for. */
+const rescanned = (): LibraryReviewViewSnapshot => {
+ const value = fixture();
+ value.indexedPapers = ["p1", "p2", "p3", "p4", "p5"].map(paperKey => ({ paperKey, title: `Paper ${paperKey}`, abstract: "abstract", categories: ["astro-ph.CO"] }));
+ value.proposal = { ...value.proposal!, catalogInputPapers: [evidence("p4")], accountedPaperKeys: ["p1", "p2", "p3", "p4"], coveredPaperKeys: [], coverageEvidence: [] };
+ value.newPaperKeys = ["p5"];
+ return value;
+};
+const addedSection = (root: HTMLElement) => [...root.querySelectorAll("section")].find(section => /分析之后新增的论文|added after this analysis/i.test(section.querySelector("h2")?.textContent ?? ""))!;
+
+it("lists only genuinely new papers after a rescan of new papers, not the whole library", async () => {
+ const {root} = setup(vi.fn().mockResolvedValue(rescanned())); await settle(); click(root,"overview");
+ const added = addedSection(root);
+ expect(added.textContent).toContain("Paper p5");
+ for (const old of ["p1","p2","p3","p4"]) expect(added.textContent).not.toContain(`Paper ${old}`);
+ expect(root.textContent).toContain("分析了 4 篇论文");
+});
+
+it("offers an update that sends only the new papers, after a confirmation that says so", async () => {
+ const {root,request,onRun} = setup(vi.fn().mockResolvedValueOnce(rescanned()).mockResolvedValueOnce({run})); await settle(); click(root,"overview");
+ expect(addedSection(root).querySelector('[data-review="update-new"]')).toBeTruthy();
+ click(root,"update-new"); await settle();
+ const confirmation = root.querySelector("[data-confirmation]")!;
+ expect(confirmation.textContent).toContain("只会把 1 篇新增论文");
+ expect(confirmation.textContent).toContain("其余文献库论文不会重新发送");
+ expect(request).toHaveBeenCalledTimes(1);
+ click(root,"confirm"); await settle();
+ expect(request).toHaveBeenLastCalledWith("api/library/propose",{configRevision:"config-1",expectedProposalRevision:4,scope:"new-papers"});
+ expect(onRun).toHaveBeenCalledWith(run);
+});
+
+it("says the whole library is analysed when there are no research topics to compare with", async () => {
+ const value = rescanned(); value.topics = [];
+ const {root} = setup(vi.fn().mockResolvedValue(value)); await settle(); click(root,"overview");
+ click(root,"update-new"); await settle();
+ const text = root.querySelector("[data-confirmation]")!.textContent!;
+ expect(text).toContain("整个文献库");
+ expect(text).not.toContain("其余文献库论文不会重新发送");
+});
+
+it("shows no update button when nothing is new and localizes the update copy", async () => {
+ const none = rescanned(); none.newPaperKeys = []; none.indexedPapers = none.indexedPapers.slice(0, 4);
+ const {root} = setup(vi.fn().mockResolvedValue(none)); await settle(); click(root,"overview");
+ expect(root.querySelector('[data-review="update-new"]')).toBeNull();
+ setUiLanguage("en");
+ const second = setup(vi.fn().mockResolvedValue(rescanned())); await settle(); click(second.root,"overview");
+ expect(second.root.querySelector('[data-review="update-new"]')!.textContent).toBe("Update direction suggestions");
+ click(second.root,"update-new"); await settle();
+ const text = second.root.querySelector("[data-confirmation]")!.textContent!;
+ expect(text).toContain("Only the 1 new paper");
+ expect(text).not.toMatch(/[\u4e00-\u9fff]/);
+});
+
+const coveredLine = (root: HTMLElement) => [...root.querySelectorAll("p")].find(p => /已被你现有的方向覆盖|already covered by your existing directions/.test(p.textContent ?? ""));
+
+it("tells how many of the new papers existing directions already cover, in both languages, and nothing at zero", async () => {
+ const covered = rescanned();
+ covered.proposal = { ...covered.proposal!, catalogInputPapers: ["p4", "p5", "p6"].map(evidence), accountedPaperKeys: ["p1", "p2", "p3", "p4", "p5", "p6"], coveredPaperKeys: ["p4", "p6", "p1"] };
+ const zh = setup(vi.fn().mockResolvedValue(covered)); await settle();
+ expect(coveredLine(zh.root)?.textContent).toBe("其中 2 篇新论文已被你现有的方向覆盖");
+ expect(coveredLine(zh.root)?.closest("details")).toBeNull();
+ setUiLanguage("en");
+ const en = setup(vi.fn().mockResolvedValue(covered)); await settle();
+ expect(coveredLine(en.root)?.textContent).toBe("New papers already covered by your existing directions: 2");
+ const none = rescanned();
+ none.proposal = { ...none.proposal!, coveredPaperKeys: ["p1"] };
+ const quiet = setup(vi.fn().mockResolvedValue(none)); await settle();
+ expect(coveredLine(quiet.root)).toBeUndefined();
+ const full = setup(vi.fn().mockResolvedValue(fixture())); await settle();
+ expect(coveredLine(full.root)).toBeUndefined();
+});
+
+it("still tells how many new papers were covered when the update proposed no new direction", async () => {
+ const value = rescanned();
+ value.proposal = { ...value.proposal!, topics: [], coveredPaperKeys: ["p4"] };
+ const {root} = setup(vi.fn().mockResolvedValue(value)); await settle();
+ expect(coveredLine(root)?.textContent).toBe("其中 1 篇新论文已被你现有的方向覆盖");
+ expect(root.textContent).toContain("本次分析没有新增候选方向");
 });

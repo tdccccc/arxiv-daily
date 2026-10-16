@@ -20,7 +20,7 @@ Not deferred, not backlogged. ADR 0004's steps 7 and 9 are closed as will-not-do
 
 ### 2. The research signal is confirmation and correction of directions
 
-Refinement of library-guided discovery comes from the researcher confirming, correcting, disabling, and merging proposed directions — and from the incremental suggestions of ADR 0007. Reading feedback is not a source of research signal.
+Refinement of library-guided discovery comes from the researcher confirming, correcting, disabling, and merging proposed directions — and from the incremental suggestions of ADR 0007 (superseded by ADR 0015: a local library-change nudge and a new-papers-only rescan reviewed like any proposal). Reading feedback is not a source of research signal.
 
 ### 3. Discovery source stays
 
@@ -28,7 +28,7 @@ The per-paper record of why a paper entered a report is retained. It serves the 
 
 ## Consequences
 
-- The glossary terms *reading candidate*, *direction review*, and *reading disposition* are removed; *direction suggestion* remains and now carries the whole of the review queue.
+- The glossary terms *reading candidate*, *direction review*, and *reading disposition* are removed; *direction suggestion* remains and now carries the whole of the review queue (since reshaped by ADR 0015: no review queue of attach/split/merge suggestions).
 - ADR 0004 keeps its original text as the record of what was planned; this ADR is where its steps 7 and 9 are resolved.
 - Reversing this means designing the storage format afresh. That is the intended cost: the format was withdrawn precisely so it would not become a compatibility obligation. The removed implementation remains in history if it is ever wanted as a starting point.
 - A test library that once saved candidates may hold orphaned documents under its index directory. Nothing reads or writes them; no released version ever created them.

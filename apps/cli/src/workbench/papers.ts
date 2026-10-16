@@ -1,5 +1,5 @@
 import path from "node:path";
-import { splitGenerationMetrics, type GenerationMetrics, modernArxivResources, PaperIndexStore, PaperSearchIndex, queryDashboard, projectDashboardOccurrenceProvenance, projectDashboardOccurrenceNovelty, type PaperIndexEntry, type PaperPriority, type PaperStatus, type PaperSummary, type DashboardOccurrenceProvenance, type DashboardPersonalNovelty, type DashboardSortKey } from "@arxiv-daily/core";
+import { splitGenerationMetrics, type GenerationMetrics, modernArxivResources, PaperIndexStore, PaperSearchIndex, queryDashboard, projectDashboardOccurrenceProvenance, type PaperIndexEntry, type PaperPriority, type PaperStatus, type PaperSummary, type DashboardOccurrenceProvenance, type DashboardSortKey } from "@arxiv-daily/core";
 import { NodeStorageAdapter } from "@arxiv-daily/node-runtime";
 import type { CliRuntimeConfig } from "../config";
 import { WorkbenchError, type DocumentEntry, type WorkbenchDocuments } from "./documents";
@@ -13,7 +13,7 @@ export interface WorkbenchPaper {
   reports: Array<{ path: string; date: string; title: string; available: boolean }>;
   originalUrl: string | null; pdfUrl: string | null;
   generation?: { scope: "daily" | "paper"; metrics: GenerationMetrics | null; sourcePath: string } | null;
-  provenance: DashboardOccurrenceProvenance | null; novelty: DashboardPersonalNovelty | null;
+  provenance: DashboardOccurrenceProvenance | null;
 }
 export type PaperScope = "all" | "inbox" | "to_read" | "read" | "starred";
 export interface WorkbenchPaperList {
@@ -98,7 +98,7 @@ export class WorkbenchPapers {
     }).sort((a, b) => b.date.localeCompare(a.date));
     const occurrence = { ...entry, dailyReports: reports.filter(report => !date || report.date === date).map(report => report.path) };
     const resources = entry.source === "arxiv" ? modernArxivResources(entry.arxivId) : null;
-    return { key: entry.paperKey, arxivId: entry.arxivId, title: entry.title, authors: entry.authors, published: entry.published, topics: [...new Set([entry.primaryTopic, ...entry.topics].filter(Boolean))], category: entry.category, status: entry.status, priority: entry.priority, starred: entry.priority === "high", abstract: entry.abstract || "", summary: entry.summary ?? null, detailPath: catalog.some(item => item.path === entry.paperPath && item.kind === "papers") ? entry.paperPath : null, reports, originalUrl: resources?.absUrl ?? safeHttp(entry.arxivUrl), pdfUrl: resources?.pdfUrl ?? safeHttp(entry.pdfUrl), provenance: projectDashboardOccurrenceProvenance(occurrence, this.config.settings.arxiv.topics).occurrenceProvenance ?? null, novelty: projectDashboardOccurrenceNovelty(occurrence).personalNovelty ?? null };
+    return { key: entry.paperKey, arxivId: entry.arxivId, title: entry.title, authors: entry.authors, published: entry.published, topics: [...new Set([entry.primaryTopic, ...entry.topics].filter(Boolean))], category: entry.category, status: entry.status, priority: entry.priority, starred: entry.priority === "high", abstract: entry.abstract || "", summary: entry.summary ?? null, detailPath: catalog.some(item => item.path === entry.paperPath && item.kind === "papers") ? entry.paperPath : null, reports, originalUrl: resources?.absUrl ?? safeHttp(entry.arxivUrl), pdfUrl: resources?.pdfUrl ?? safeHttp(entry.pdfUrl), provenance: projectDashboardOccurrenceProvenance(occurrence, this.config.settings.arxiv.topics).occurrenceProvenance ?? null };
   }
 }
 function reportDate(value: string): string { return /^(\d{4}-\d{2}-\d{2})\.md$/.exec(path.posix.basename(value))?.[1] || ""; }

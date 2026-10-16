@@ -77,6 +77,17 @@ function normalizeTitle(title: string): string {
 }
 
 /**
+ * The normalized title two files must share to be treated as the same work,
+ * or null when the title is absent or too generic to identify one. Shared with
+ * the library-change count so it merges exactly the files the scan merged.
+ */
+export function identifyingTitleKey(title: string | undefined): string | null {
+  if (title === undefined) return null;
+  const normalized = normalizeTitle(title);
+  return normalized.length >= MIN_IDENTIFYING_TITLE_CHARS ? normalized : null;
+}
+
+/**
  * Load every ready paper's chunk vectors from the knowledge base,
  * deterministically (newest arXiv papers first, fallback keys last), up to
  * `limit`. Papers without usable chunks are skipped; long papers are
@@ -111,8 +122,8 @@ export async function buildClusteringInput(
     }
     if (chunks.length === 0) continue;
 
-    const normalized = document.title === undefined ? "" : normalizeTitle(document.title);
-    if (normalized.length >= MIN_IDENTIFYING_TITLE_CHARS) {
+    const normalized = identifyingTitleKey(document.title);
+    if (normalized !== null) {
       const keptPaperKey = seenTitles.get(normalized);
       if (keptPaperKey !== undefined) {
         const group = merges.get(normalized);

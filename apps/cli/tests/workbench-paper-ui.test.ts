@@ -3,7 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { mountWorkbench } from "../src/workbench/web/app";
 import { renderMarkdown } from "../src/workbench/markdown";
 
-const paper = { key: "arxiv:2609.12345", arxivId: "2609.12345", title: "Efficient inference", authors: ["Ada"], published: "2026-09-29", topics: ["Inference"], category: "cs.AI", status: "inbox", priority: "normal", starred: false, abstract: "Original abstract", summary: { coreProblem: "The existing problem", keyMethod: "The saved method", whyRelevant: "Relevant to efficient models" }, detailPath: null, reports: [{ path: "daily/2026-10-01.md", date: "2026-10-01", title: "研究日报", available: true }], originalUrl: "https://arxiv.org/abs/2609.12345", pdfUrl: "https://arxiv.org/pdf/2609.12345", provenance: null, novelty: null };
+const paper = { key: "arxiv:2609.12345", arxivId: "2609.12345", title: "Efficient inference", authors: ["Ada"], published: "2026-09-29", topics: ["Inference"], category: "cs.AI", status: "inbox", priority: "normal", starred: false, abstract: "Original abstract", summary: { coreProblem: "The existing problem", keyMethod: "The saved method", whyRelevant: "Relevant to efficient models" }, detailPath: null, reports: [{ path: "daily/2026-10-01.md", date: "2026-10-01", title: "研究日报", available: true }], originalUrl: "https://arxiv.org/abs/2609.12345", pdfUrl: "https://arxiv.org/pdf/2609.12345", provenance: null };
 const day = { date: "2026-10-01", state: "has-report", reportPath: "daily/2026-10-01.md", reportTitle: "研究日报", papers: 1, message: "日报已保存。", canGenerate: false, actionLabel: null };
 const status = { configPath: "/test/config.toml", vaultRoot: "/test/vault", output: { summaryLanguage: "zh" }, llm: { provider: "openai", model: "test", ready: true, keyConfigured: true }, topics: [], categories: [], emailEnabled: false };
 const list = (papers = [paper], extra = {}) => ({ papers, total: papers.length, offset: 0, limit: 20, nextOffset: null, counts: { all: 1, inbox: 1, to_read: 0, read: 0, starred: 0 }, libraryCount: 1, topics: ["Inference"], day: null, ...extra });
@@ -32,6 +32,16 @@ function setup(override?: (url: URL, init?: RequestInit) => Response | Promise<R
 const click = (root: HTMLElement, selector: string) => root.querySelector<HTMLButtonElement>(selector)!.click();
 const ready = async (root: HTMLElement) => vi.waitFor(() => expect(root.querySelector(".reading-pane [data-paper]")?.textContent).toContain(paper.title));
 const change = (root: HTMLElement, selector: string, value: string) => { const input = root.querySelector<HTMLInputElement | HTMLSelectElement>(selector)!; input.value = value; input.dispatchEvent(new Event(input.tagName === "SELECT" ? "change" : "input", { bubbles: true })); };
+
+describe("reading pane after personal novelty was withdrawn", () => {
+  it("shows no relationship-to-literature section even if the API still sends a legacy novelty field", async () => {
+    const legacy = { ...paper, novelty: { reportPath: "daily/2026-10-01.md", reportDate: "2026-10-01", differenceType: "new-method", comparisonBasis: [{ paperKey: "arxiv:2501.00001", title: "Prior paper one" }], evidenceDepth: "metadata-and-abstract", explanation: "Legacy explanation." } };
+    const { root } = setup(url => url.pathname.endsWith("api/paper") ? json({ paper: legacy }) : undefined);
+    await ready(root); click(root, "[data-paper]");
+    await vi.waitFor(() => expect(root.querySelector(".reading-pane")?.textContent).toBeTruthy());
+    expect(root.querySelector(".reading-pane")!.textContent).not.toMatch(/与已有文献的关系|Relationship to prior literature|Prior paper one|Legacy explanation/);
+  });
+});
 
 describe("right-side paper workspace", () => {
   it("starts with every indexed discovery on the right, without auto-opening or duplicating the list on the left", async () => {

@@ -203,6 +203,16 @@ it("previews with authorization without changing proposal or settings and genera
   const generated=await f.service.propose(f.versions);
   expect(generated.proposal!.revision).toBeGreaterThan(before!.revision);
 });
+it("validates the proposal scope and scans the whole library when a new-papers update has nothing to compare with",async()=>{
+  const f=await reviewFixture(true); const before=await f.store.load();
+  await expect(f.service.propose({...f.versions,scope:"everything"})).rejects.toMatchObject({status:400});
+  expect(await f.store.load()).toEqual(before);
+  const notes:string[]=[];
+  const result=await f.service.propose({...f.versions,scope:"new-papers"},undefined,note=>notes.push(note));
+  expect(result.proposal!.revision).toBeGreaterThan(before!.revision);
+  expect(notes.join("\n")).toMatch(/整个文献库/);
+  expect(result.newPaperKeys).toEqual([]);
+});
 it("runs proposal and preview HTTP jobs then persists accepted directions and rejects stale pages",async()=>{
   const f=await reviewFixture(true);
   const app=await startWorkbench({config:f.config,libraryOptions:f.options});

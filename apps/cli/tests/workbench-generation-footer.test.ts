@@ -3,7 +3,7 @@ import { expect, it } from "vitest";
 import { overview } from "../src/workbench/web/papers";
 import type { WorkbenchPaper } from "../src/workbench/papers";
 
-const paper: WorkbenchPaper = { key: "arxiv:2609.12345", arxivId: "2609.12345", title: "Title", authors: [], published: "", topics: [], category: "", status: "inbox", priority: "normal", starred: false, abstract: "Original abstract", summary: { coreProblem: "Main argument", sourceSections: "Section 2" }, detailPath: null, reports: [], originalUrl: null, pdfUrl: null, provenance: null, novelty: null };
+const paper: WorkbenchPaper = { key: "arxiv:2609.12345", arxivId: "2609.12345", title: "Title", authors: [], published: "", topics: [], category: "", status: "inbox", priority: "normal", starred: false, abstract: "Original abstract", summary: { coreProblem: "Main argument", sourceSections: "Section 2" }, detailPath: null, reports: [], originalUrl: null, pdfUrl: null, provenance: null };
 it("separates sources and subsequent reference content from the argument and puts generation details last", () => {
   document.body.innerHTML = overview(paper, false);
   expect(document.querySelector(".overview-content > section")?.textContent).toContain("Main argument");

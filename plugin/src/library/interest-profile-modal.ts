@@ -7,11 +7,12 @@ import {
   PERSONAL_LIBRARY_MAX_NAME_LENGTH,
   PERSONAL_LIBRARY_MAX_REPRESENTATIVES,
   PERSONAL_LIBRARY_MIN_REPRESENTATIVES,
+  accountedPaperKeysOf,
+  countNewPapersCoveredByExistingDirections,
   isThinEvidenceDirectionCandidate,
   matchingProposalAcceptance,
   resolveProposedTopicTarget,
   type DirectionProposalProgress,
-  type DirectionDiffSuggestion,
   type PersonalLibraryCatalog,
   type PersonalLibraryClusterMember,
   type PersonalLibraryDirectionCandidate,
@@ -27,6 +28,7 @@ import {
 import type { PersonalLibraryProfileSnapshot } from "../../main";
 import type { LibraryConnectionStatus } from "./connection";
 import { chooseModal } from "../services/modal";
+import { describeCoveredNewPapers, describeLibraryChangeLine, describeNewLibraryPapers } from "./change-nudge";
 
 export interface InterestProfileReviewSnapshot
   extends Omit<PersonalLibraryProfileSnapshot, "authorization"> {
@@ -60,7 +62,7 @@ export interface InterestProfileReviewController {
   generate(
     onProgress?: (progress: DirectionProposalProgress) => void,
     signal?: AbortSignal,
-    options?: { regenerateRetired?: boolean },
+    options?: { regenerateRetired?: boolean; scope?: "full" | "new-papers" },
   ): Promise<unknown>;
   updateProposal(input: {
     candidateId: string;
@@ -131,6 +133,8 @@ export class PersonalLibraryInterestProfileModal extends ArxivDailyModal {
   private acceptedFeedback = "";
   private automaticGenerationChecked = false;
   private generationRequest: AbortController | null = null;
+  /** What the last update of new papers did when it produced no new proposal page to show for itself. */
+  private updateMessage = "";
 
   constructor(
     app: App,
@@ -244,7 +248,6 @@ export class PersonalLibraryInterestProfileModal extends ArxivDailyModal {
       cls: "arxiv-daily-interest-review__hint",
       text: "Suggestions use paper titles and abstracts. Only directions you add affect your daily reports.",
     });
-    if (snapshot.proposal) this.renderIncrementalNotice(options);
 
     const error = root.createDiv({
       cls: "arxiv-daily-interest-review__error",
@@ -264,6 +267,7 @@ export class PersonalLibraryInterestProfileModal extends ArxivDailyModal {
         attr: { role: "status" }, text: this.acceptedFeedback,
       });
     }
+    if (this.tab === "proposed") this.renderLibraryChange(root, snapshot);
 
     const panel = root.createEl("section", {
       cls: "arxiv-daily-interest-review__panel",
@@ -522,9 +526,16 @@ export class PersonalLibraryInterestProfileModal extends ArxivDailyModal {
       return;
     }
     const indexedKeys = new Set(snapshot.indexedPapers.map(({ paperKey }) => paperKey));
-    const analyzedKeys = new Set(proposal.catalogInputPapers.map(({ paperKey }) => paperKey));
-    const outside = [...indexedKeys].filter((key) => !analyzedKeys.has(key)).length;
-    parent.createEl("p", { text: `${analyzedKeys.size} papers analyzed on ${new Date(proposal.generatedAt).toLocaleDateString()}.${outside ? ` ${outside} currently indexed papers were not in this analysis.` : ""}` });
+    // An update of new papers sends only a few papers but accounts for the
+    // whole library, so "analysed" reads what the proposal has accounted for.
+    const accountedKeys = new Set(accountedPaperKeysOf(proposal));
+    // Only papers a scan could use count (same set as the workbench overview):
+    // newPaperKeys drops papers outside the scan window, merged duplicates and
+    // papers without usable metadata.
+    const scannable = new Set(snapshot.newPaperKeys);
+    const outside = [...indexedKeys].filter((key) => !accountedKeys.has(key) && scannable.has(key)).length;
+    const added = proposal.catalogInputPapers.length < accountedKeys.size ? proposal.catalogInputPapers.length : 0;
+    parent.createEl("p", { text: `${accountedKeys.size} papers analyzed on ${new Date(proposal.generatedAt).toLocaleDateString()}.${added ? ` ${added} added in this update.` : ""}${outside ? ` ${outside} currently indexed papers were not in this analysis.` : ""}` });
     const coverage = currentCoverage(snapshot);
     const processed = processedCandidateIds(snapshot);
     const rows = new Map<string, { name: string; directions: Array<{ text: string; keys: string[]; status: string }> }>();
@@ -962,13 +973,42 @@ export class PersonalLibraryInterestProfileModal extends ArxivDailyModal {
     section.createEl("p", { text: bufferPoolHeading(count) });
   }
 
-  /** Explain the available path from newly added papers to reviewed changes. */
-  private renderIncrementalNotice(parent: HTMLElement): void {
-    parent.createEl("p", {
-      cls: "arxiv-daily-interest-review__hint",
-      attr: { role: "status" },
-      text: "After adding papers, rebuild the library index and regenerate proposals to review new directions. Your accepted directions stay in research settings.",
+  /**
+   * The live answer to "has my library moved on since these suggestions?".
+   * Shown for any number of new papers, even one: the review is already open,
+   * so unlike the indexing notice there is nothing here to interrupt. The
+   * button runs the update from the new papers only; a full re-run stays under
+   * More options.
+   */
+  private renderLibraryChange(parent: HTMLElement, snapshot: InterestProfileReviewSnapshot): void {
+    const count = snapshot.proposal ? snapshot.newPaperKeys?.length ?? 0 : 0;
+    // After an update of new papers, say how many of them needed no new
+    // direction; otherwise they are visible only under More options.
+    const covered = snapshot.proposal ? countNewPapersCoveredByExistingDirections(snapshot.proposal) : 0;
+    if (!this.updateMessage && count === 0 && covered === 0) return;
+    const section = parent.createDiv({ cls: "arxiv-daily-interest-review__library-change" });
+    if (this.updateMessage) {
+      section.createEl("p", {
+        cls: "arxiv-daily-interest-review__hint",
+        attr: { role: "status" }, text: this.updateMessage,
+      });
+    }
+    if (covered > 0) section.createEl("p", { text: describeCoveredNewPapers(covered), attr: { role: "status" } });
+    if (count === 0) return;
+    section.createEl("p", { text: describeLibraryChangeLine(count), attr: { role: "status" } });
+    const generation = generationAvailability(snapshot);
+    const update = section.createEl("button", {
+      cls: "mod-cta arxiv-daily-interest-review__update-new",
+      text: `Update direction suggestions (${describeNewLibraryPapers(count)})`,
+      attr: {
+        type: "button",
+        title: generation.allowed
+          ? "Sends only the new papers' titles and abstracts, with the text of your current directions, to your configured model."
+          : generation.reason,
+      },
     });
+    update.disabled = this.pending || this.generationRequest !== null || !generation.allowed;
+    update.addEventListener("click", () => void this.generate(snapshot, false, false, "new-papers"));
   }
 
   private textField(parent: HTMLElement, labelText: string, value: string, maxLength: number): HTMLInputElement {
@@ -1051,9 +1091,15 @@ export class PersonalLibraryInterestProfileModal extends ArxivDailyModal {
     return { text: draft.text, discoveryCues: draft.discoveryCues };
   }
 
-  private async generate(snapshot: InterestProfileReviewSnapshot, onlyIfMissing = false, regenerateRetired = false): Promise<void> {
+  private async generate(
+    snapshot: InterestProfileReviewSnapshot,
+    onlyIfMissing = false,
+    regenerateRetired = false,
+    scope: "full" | "new-papers" = "full",
+  ): Promise<void> {
     if (this.closed || this.pending || this.generationRequest) return;
     if (snapshot.proposalLoadError && !(regenerateRetired && needsRetiredProposalRegeneration(snapshot))) return;
+    this.updateMessage = "";
     const request = new AbortController();
     this.generationRequest = request;
     this.render();
@@ -1066,10 +1112,15 @@ export class PersonalLibraryInterestProfileModal extends ArxivDailyModal {
       const hasUnreviewedDirections = snapshot.proposal?.topics.some(({ directions }) =>
         directions.some(({ id }) => !processed.has(id)));
       if (hasUnreviewedDirections || this.drafts.size > 0) {
-        const choice = await chooseModal(this.app, "Regenerate proposed directions", "Replace the current proposal and all unconfirmed edits with newly generated directions?", [
-          { label: "Cancel", value: "cancel" },
-          { label: "Regenerate", value: "regenerate", warning: true },
-        ]);
+        const choice = scope === "new-papers"
+          ? await chooseModal(this.app, "Update direction suggestions", newPapersConfirmation(snapshot), [
+            { label: "Cancel", value: "cancel" },
+            { label: "Update", value: "regenerate", warning: true },
+          ])
+          : await chooseModal(this.app, "Regenerate proposed directions", "Replace the current proposal and all unconfirmed edits with newly generated directions?", [
+            { label: "Cancel", value: "cancel" },
+            { label: "Regenerate", value: "regenerate", warning: true },
+          ]);
         if (choice !== "regenerate" || request.signal.aborted || this.closed) return;
       }
       // Consent is asked here rather than gating the button, so declining leaves
@@ -1102,9 +1153,12 @@ export class PersonalLibraryInterestProfileModal extends ArxivDailyModal {
               this.generationProgress = progress;
               this.updateGenerationLabel();
             };
-            if (regenerateRetired) await this.controller.generate(report, request.signal, { regenerateRetired: true });
-            else await this.controller.generate(report, request.signal);
+            let result: unknown;
+            if (regenerateRetired) result = await this.controller.generate(report, request.signal, { regenerateRetired: true });
+            else if (scope === "new-papers") result = await this.controller.generate(report, request.signal, { scope });
+            else result = await this.controller.generate(report, request.signal);
             if (request.signal.aborted || this.closed) return;
+            this.updateMessage = updateOutcomeMessage(result);
             return await this.controller.reload();
           } catch (error) {
             if (!request.signal.aborted) throw error;
@@ -1132,7 +1186,7 @@ export class PersonalLibraryInterestProfileModal extends ArxivDailyModal {
     if (progress) return `Generating… (${progress.completed}/${progress.total})`;
     if (this.generating) return "Generating topics…";
     if (needsRetiredProposalRegeneration(snapshot)) return "Regenerate suggestions";
-    if (needsCoverageUpdate(snapshot)) return "Update suggestions";
+    if (needsCoverageUpdate(snapshot)) return "Recheck coverage";
     return snapshot.proposal ? "Generate again" : "Generate topics";
   }
 
@@ -1267,6 +1321,28 @@ function processedCandidateIds(snapshot: InterestProfileReviewSnapshot): Set<str
   return new Set(receipt?.processedCandidateIds ?? []);
 }
 
+/** What the researcher is told before an update of new papers replaces the current proposal. */
+function newPapersConfirmation(snapshot: InterestProfileReviewSnapshot): string {
+  // With no research topics there is nothing to compare the new papers with,
+  // and the update falls back to a scan of the whole library.
+  if (Array.isArray(snapshot.settingsTopics) && snapshot.settingsTopics.length === 0) {
+    return "There are no research topics to compare with yet, so the titles and abstracts of the whole library will be analysed instead. The new suggestions replace the current proposal and all unconfirmed edits.";
+  }
+  const count = snapshot.newPaperKeys?.length ?? 0;
+  return `Only the ${describeNewLibraryPapers(count)} will be sent (titles and abstracts, plus the text of your existing research directions) to your model; other library papers are not sent again. The new suggestions replace the current proposal and all unconfirmed edits.`;
+}
+
+/** The line an update of new papers leaves behind when the page itself does not explain what happened. */
+function updateOutcomeMessage(result: unknown): string {
+  if (typeof result !== "object" || result === null) return "";
+  const { outcome, fellBackToFull } = result as { outcome?: unknown; fellBackToFull?: unknown };
+  if (outcome === "nothing-new") return "No new papers since your direction suggestions; nothing was sent to the model.";
+  if (outcome === "generated" && fellBackToFull === true) {
+    return "There were no earlier direction suggestions to compare with, so the whole library was analysed.";
+  }
+  return "";
+}
+
 function needsCoverageUpdate(snapshot: InterestProfileReviewSnapshot): boolean {
   if (!snapshot.proposal || snapshot.proposal.topics.some(({ directions }) => directions.length > 0)) return false;
   const coverage = currentCoverage(snapshot);
@@ -1348,6 +1424,7 @@ export function describeClusterMembers(members: readonly PersonalLibraryClusterM
   return `Cluster members ${members.length} · avg. confidence ${formatConfidence(average)}`;
 }
 
+/** Name kept from ADR 0007's "buffer pool"; it now means papers no proposed direction covers. */
 export function bufferPoolHeading(count: number): string {
   return `No proposed direction covers ${count} ${count === 1 ? "paper" : "papers"} in your library.`;
 }
@@ -1374,29 +1451,6 @@ export function unclassifiedBufferPoolPapers(
     }
   }
   return proposal.catalogInputPapers.filter((entry) => !covered.has(entry.paperKey));
-}
-
-/**
- * Content key of one incremental suggestion; must match the plugin's key
- * scheme (kind:directionId:firstPaperKey). Keys are only ever compared
- * against keys computed the same way, never parsed.
- */
-export function incrementalSuggestionKey(suggestion: DirectionDiffSuggestion): string {
-  switch (suggestion.kind) {
-    case "attach":
-      return `attach:${suggestion.directionId}:${suggestion.paperKeys[0]}`;
-    case "new":
-      return `new::${suggestion.paperKeys[0]}`;
-    case "split":
-      return `split:${suggestion.directionId}:${suggestion.paperKeys[0]}`;
-    case "merge":
-      return `merge:${suggestion.directionIds[0]}:${suggestion.directionIds[1]}`;
-  }
-}
-
-export function incrementalSuggestionPaperCount(suggestion: DirectionDiffSuggestion): string {
-  if (suggestion.kind === "merge") return "2 directions";
-  return `${suggestion.paperKeys.length} paper(s)`;
 }
 
 export function truncateReason(reason: string, maximum = 160): string {

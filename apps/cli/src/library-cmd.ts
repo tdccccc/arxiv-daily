@@ -3,13 +3,14 @@ import { watch } from "node:fs";
 import * as path from "node:path";
 import {
   ArxivFetcher, LibraryWorkflow, Logger, LlmClient,
-  FullTextKnowledgeBaseFileStore, FullTextGenerationIndexStore,
+  FullTextKnowledgeBaseFileStore, FullTextGenerationIndexStore, ClusteredDirectionsProposerError,
+  shouldNudgeLibraryChange,
   createPersonalLibraryScopeFingerprint,
   createPersonalLibraryIdentificationFingerprint, createRemoteEmbeddingModel,
   searchFullTextKnowledgeBase, redactText,
   validateLlmConfig, validateEmbeddingConfig,
   type HttpClient, type DocumentParser, type DocumentParserSelector, type EmbeddingModel,
-  type LibraryReviewSnapshot, type PersonalLibraryDirectionTextPatch,
+  type LibraryReviewSnapshot, type PersonalLibraryDirectionTextPatch, type PersonalLibraryDirectionProposal,
 } from "@arxiv-daily/core";
 import {
   NodeStorageAdapter, NodeHttpClient, LinkedomMarkupParser, openScopedLibrarySource,
@@ -79,14 +80,35 @@ export async function runCliLibrary(config: CliRuntimeConfig, args: string[], io
     });
     watcher.on("error", error => controller.abort(error));
     stopWatch = () => watcher.close();
-    if (["scan", "index", "propose", "directions"].includes(command) && rest.length) throw new CliConfigError(`library ${command} takes no arguments`);
+    const onlyNew = command === "propose" && rest.length === 1 && rest[0] === "--new";
+    if (["scan", "index", "propose", "directions"].includes(command) && rest.length && !onlyNew) throw new CliConfigError(`library ${command} takes no arguments${command === "propose" ? " except --new" : ""}`);
     if (command === "scan") {
       const catalog = await context.workflow.scan({ signal });
       print({ revision: catalog.revision, lastScan: catalog.lastScan, paperCount: Object.keys(catalog.papers).length });
     } else if (command === "index") {
-      print(await context.workflow.index({ signal, onProgress: detail => io.stderr.write(redactText(detail, { secrets }) + "\n") }));
+      const summary = await context.workflow.index({
+        signal,
+        onProgress: detail => io.stderr.write(redactText(detail, { secrets }) + "\n"),
+        onFolderChange: change => io.stderr.write(change.neverScanned
+          ? "The library folder has not been scanned yet; scanning it before indexing.\n"
+          : `The library folder changed since the last scan (${change.added.length} added, ${change.removed.length} removed, ${change.modified.length} modified); scanning it before indexing. Only papers not already in the catalog are looked up on arXiv.\n`),
+      });
+      // The count is advisory: it must never turn a finished index into a failure.
+      const newPapersSinceSuggestions = await countNewPapers(context.workflow, signal);
+      print({ ...summary, newPapersSinceSuggestions });
+      if (newPapersSinceSuggestions !== null && shouldNudgeLibraryChange(newPapersSinceSuggestions)) {
+        io.stderr.write(`${newPapersSinceSuggestions} library papers are not covered by your direction suggestions yet. Run \`arxiv-daily library propose --new\` to update them (only the new papers are sent to the model).\n`);
+      }
     } else if (command === "propose") {
-      print(await context.workflow.propose({ signal }));
+      if (!onlyNew) print(await context.workflow.propose({ signal }));
+      else {
+        const result = await proposeNewPapersOrFull(context.workflow, signal);
+        if (result.kind === "fallback-full") io.stderr.write("No earlier direction suggestions to compare with; scanning the whole library instead.\n");
+        if (result.kind === "nothing-new") {
+          io.stderr.write("No new papers since your direction suggestions; nothing was sent to the model.\n");
+          print({ updated: false, newPapersSinceSuggestions: 0 });
+        } else print(result.proposal);
+      }
     } else if (command === "directions") {
       print(reviewView(await context.workflow.review()));
 
@@ -191,7 +213,39 @@ export async function createCliLibraryContext(config: CliRuntimeConfig, options:
 }
 
 function reviewView(snapshot: LibraryReviewSnapshot) {
-  return { catalogSummary: snapshot.catalog.lastScan, topics: snapshot.topics, proposal: snapshot.proposal, acceptances: snapshot.acceptances };
+  return {
+    catalogSummary: snapshot.catalog.lastScan, topics: snapshot.topics, proposal: snapshot.proposal, acceptances: snapshot.acceptances,
+    newPapersSinceSuggestions: snapshot.newPaperKeys?.length ?? null,
+  };
+}
+
+async function countNewPapers(workflow: LibraryWorkflow, signal: AbortSignal): Promise<number | null> {
+  try {
+    signal.throwIfAborted();
+    return (await workflow.review()).newPaperKeys?.length ?? null;
+  } catch { return null; }
+}
+
+export type LibraryUpdateResult =
+  | { kind: "updated"; proposal: PersonalLibraryDirectionProposal }
+  | { kind: "fallback-full"; proposal: PersonalLibraryDirectionProposal }
+  | { kind: "nothing-new" };
+
+/**
+ * Send only the papers no scan has accounted for. With nothing to compare with
+ * (no proposal or no accepted topics) the whole library is scanned instead, as
+ * a first run would; with nothing new, nothing is sent.
+ */
+export async function proposeNewPapersOrFull(workflow: LibraryWorkflow, signal?: AbortSignal): Promise<LibraryUpdateResult> {
+  try {
+    return { kind: "updated", proposal: await workflow.propose({ scope: "new-papers", signal }) };
+  } catch (error) {
+    if (error instanceof ClusteredDirectionsProposerError && error.code === "nothing-new") return { kind: "nothing-new" };
+    if (error instanceof ClusteredDirectionsProposerError && error.code === "no-baseline") {
+      return { kind: "fallback-full", proposal: await workflow.propose({ signal }) };
+    }
+    throw error;
+  }
 }
 function parseFlags(args: string[], accepted: string[]) {
   const flags: Record<string, string> = {};

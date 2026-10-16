@@ -95,6 +95,64 @@ export function createLibraryFileObservationFingerprint(
   }))}`;
 }
 
+export interface PersonalLibraryFolderChange {
+  changed: boolean;
+  /** The catalog has no completed scan, so there is nothing to compare with. */
+  neverScanned: boolean;
+  /** Eligible files the last scan did not see. */
+  added: string[];
+  /** Eligible files the last scan saw that are no longer listed (a complete listing only). */
+  removed: string[];
+  /** Eligible files whose size or modification time differs from the last scan. */
+  modified: string[];
+}
+
+/**
+ * Whether a scan would find anything new in the folder, from a local listing
+ * alone (no file reads, no network). It applies the same rules as
+ * `reconcilePersonalLibraryCatalog`: only eligible regular files matter, a file
+ * is unchanged when its observation fingerprint (path, size, modification time
+ * under the catalog's identification strategy) matches the stored record, and a
+ * truncated listing cannot show removals. A renamed or moved file is a removal
+ * plus an addition. Files a scan could not resolve or fetch metadata for are
+ * "unchanged" while the folder is: retrying them is an explicit scan's job.
+ */
+export function detectPersonalLibraryFolderChange(input: {
+  catalog: PersonalLibraryCatalog;
+  inventory: LibraryInventory;
+  eligibleExtensions: readonly string[];
+}): PersonalLibraryFolderChange {
+  if (input.catalog.lastScan === null) {
+    return { changed: true, neverScanned: true, added: [], removed: [], modified: [] };
+  }
+  const eligibleExtensions = normalizeExtensions(input.eligibleExtensions);
+  const added: string[] = [];
+  const modified: string[] = [];
+  const listed = new Set<string>();
+  for (const entry of input.inventory.entries) {
+    if (entry.type !== "file" || !eligibleExtensions.has(extensionOf(entry.path))) continue;
+    listed.add(entry.path);
+    const previous = Object.hasOwn(input.catalog.files, entry.path)
+      ? input.catalog.files[entry.path]
+      : undefined;
+    if (!previous || previous.status === "unrelated") added.push(entry.path);
+    else if (previous.observationFingerprint
+      !== createLibraryFileObservationFingerprint(entry, input.catalog.identificationFingerprint)) {
+      modified.push(entry.path);
+    }
+  }
+  const removed = input.inventory.truncated
+    ? []
+    : Object.values(input.catalog.files)
+      .filter((record) => record.status !== "unrelated" && !listed.has(record.path))
+      .map((record) => record.path);
+  added.sort(); modified.sort(); removed.sort();
+  return {
+    changed: added.length + modified.length + removed.length > 0,
+    neverScanned: false, added, removed, modified,
+  };
+}
+
 export async function reconcilePersonalLibraryCatalog(
   input: ReconcilePersonalLibraryCatalogInput,
 ): Promise<ReconcilePersonalLibraryCatalogResult> {
@@ -191,10 +249,15 @@ export async function reconcilePersonalLibraryCatalog(
     }
   }
 
+  // Metadata is looked up on arXiv only for papers the catalog does not hold
+  // yet. A paper it already holds (kept by an unchanged file, or reached by a
+  // renamed, moved or touched file) keeps its stored record: the arXiv id is
+  // what identifies the paper, so the lookup would only ask the same question.
   const reusedPaperIds = new Set<string>();
   for (const record of Object.values(files)) {
     if (record.status === "ready") reusedPaperIds.add(record.arxivId);
   }
+  for (const paper of Object.values(input.current.papers)) reusedPaperIds.add(paper.externalId);
   const idsToResolve = Array.from(new Set(
     identified
       .map(({ arxivId }) => arxivId)

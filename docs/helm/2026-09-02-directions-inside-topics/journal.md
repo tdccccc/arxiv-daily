@@ -516,3 +516,9 @@
 - desktop: 使用用户实际旧提案（165 篇未核实覆盖、无新增方向）、196 条索引标题，以及之前真实生成的 4 主题/7 条长方向进行隔离 Obsidian 1.13.7 检查；新版 9 项通过，宽窄窗口与长文本截图已保存，renderer error 为 0。前后对照清楚复现旧页没有主要动作、新页直接提供更新。初始验收夹具漏了空目录之外的索引记录，以及对原生窗口 DOM 的假设，均修正后重验，不计为产品通过证据。
 - delivery: 测试库 main.js/styles.css 已备份更新并校验；data.json 与原 direction-proposal.json 的 SHA-256 均未变。备份位于 `/tmp/arxiv-review-next-step-before-install-20260911-001955-p2pvchq1/`，证据和脚本在 `.artifacts/review-next-step/`。没有调用用户真实模型，也没有改写库建议。
 - status / next: 本轮修正已交付，尚未提交。P6/goal 仍 active、P12 仍等待用户确认；用户重载后，当前这份旧分析应直接从 Update suggestions 继续。默认页/详情页的范围询问未收到答复，本轮优先解决已复现的默认入口并改善长方向的文字层级。
+
+## 2026-10-15 — note（novelty 基准已由用户决定）
+
+- evidence: 用户在 2026-10-15 决定 personal novelty 的新对比基准：每篇日报论文按需检索最相似库论文（至多 5 篇），覆盖全部日报论文；同时以本地提醒+只扫新增的重扫取代 ADR 0007。记录于 ADR 0015。
+- change: 本 goal 的「将 novelty 基准决定交还用户」一项已完成；实现由 `2026-10-15-library-novelty-and-change-nudge` 承担，本 goal 状态与阶段不变。
+- next: 无（本 goal 原有 P6/P12 待确认事项不受影响）。

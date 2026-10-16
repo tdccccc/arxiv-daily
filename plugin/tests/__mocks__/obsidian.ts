@@ -16,11 +16,50 @@ if (typeof HTMLElement !== "undefined") {
   };
 }
 
-export class Notice {
-  static calls: Array<{ message: string; timeoutMs?: number }> = [];
+// Obsidian's global fragment helpers, enough for a notice that carries a button.
+if (typeof document !== "undefined" && typeof DocumentFragment !== "undefined") {
+  const globals = globalThis as unknown as {
+    createFragment?: (callback?: (fragment: DocumentFragment) => void) => DocumentFragment;
+  };
+  globals.createFragment ??= (callback) => {
+    const fragment = document.createDocumentFragment();
+    callback?.(fragment);
+    return fragment;
+  };
+  const proto = DocumentFragment.prototype as unknown as {
+    createEl?: (tag: string, options?: { text?: string; cls?: string }) => HTMLElement;
+    createDiv?: (options?: { text?: string; cls?: string }) => HTMLElement;
+  };
+  proto.createEl ??= function (this: DocumentFragment, tag, options = {}) {
+    const element = document.createElement(tag);
+    if (options.text !== undefined) element.textContent = options.text;
+    if (options.cls) element.className = options.cls;
+    this.appendChild(element);
+    return element;
+  };
+  proto.createDiv ??= function (this: { createEl: NonNullable<typeof proto.createEl> }, options) {
+    return this.createEl("div", options);
+  };
+}
 
-  constructor(message: string, timeoutMs?: number) {
-    Notice.calls.push({ message, timeoutMs });
+export class Notice {
+  static calls: Array<{
+    message: string;
+    timeoutMs?: number;
+    /** Set when the notice was built from a fragment (for example one carrying a button). */
+    fragment?: DocumentFragment;
+    notice: Notice;
+  }> = [];
+  hidden = false;
+
+  constructor(message: string | DocumentFragment, timeoutMs?: number) {
+    Notice.calls.push(typeof message === "string"
+      ? { message, timeoutMs, notice: this }
+      : { message: message.textContent ?? "", timeoutMs, fragment: message, notice: this });
+  }
+
+  hide(): void {
+    this.hidden = true;
   }
 }
 
