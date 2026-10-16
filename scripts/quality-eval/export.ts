@@ -377,7 +377,7 @@ async function fillFromAbsPages(
 }
 
 function renderGuide(legend: readonly LegendEntry[], dates: readonly string[]): string {
-  const rows = legend.map((entry) => `| ${entry.number} | ${entry.tag} | ${entry.text.replace(/\|/g, "\\|").replace(/\s+/g, " ")} |`);
+  const rows = legend.map((entry) => `| ${entry.number} | ${entry.tag} | ${entry.text.replace(/\\/g, "\\\\").replace(/\|/g, "\\|").replace(/\s+/g, " ")} |`);
   return `# 筛选标注说明
 
 这份表格用来检查日报的论文筛选准不准。每一行是一篇论文：先读标题和摘要，再告诉我们“这篇是否应该被选进日报”。覆盖的日报日期：${dates.join("、")}。

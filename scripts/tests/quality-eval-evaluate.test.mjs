@@ -174,6 +174,13 @@ test("disagreements list missed and wrongly selected papers with their details",
   assert.match(markdown, /needs the full text/);
 });
 
+test("report table cells escape backslashes before pipes so a note cannot split the row", async () => {
+  const rows = FIXTURE.map(row => (row[0] === "k1" ? [...row.slice(0, 7), String.raw`see a\|b`, row[8]] : row));
+  const { markdown } = await evaluate(await writeSheet(rows));
+  assert.ok(markdown.includes(String.raw`see a\\\|b`), "backslash doubled, then the pipe escaped");
+  assert.ok(!markdown.includes(String.raw`see a\\|b`), "an escaped pipe must not end up unescaped");
+});
+
 test("the report names its sources and says what was and was not run", async () => {
   const { json, markdown, result } = await evaluate(await writeSheet());
 
