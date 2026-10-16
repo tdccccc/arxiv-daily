@@ -82,7 +82,7 @@ jobs:
         run: node scripts/native-assets.mjs export ${{ matrix.target }}
       - name: Upload native binary
         # actions/upload-artifact v7.0.1
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: native-storage-${{ matrix.target }}
           path: |
@@ -93,7 +93,7 @@ jobs:
           retention-days: 14
       - name: Upload native verification evidence
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: native-evidence-${{ matrix.target }}
           path: |
