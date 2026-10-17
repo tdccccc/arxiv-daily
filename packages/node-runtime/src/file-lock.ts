@@ -1,14 +1,36 @@
+import { readFileSync } from "node:fs";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { createHash, randomUUID } from "node:crypto";
 import { clearTimer, setTimer, throwIfCancelled, type StorageLock, type StorageLockOptions } from "@arxiv-daily/core";
 
+/**
+ * What makes a PID refer to one particular process. A bare PID is recycled
+ * quickly (always after a reboot), so a lock whose owner died would otherwise
+ * look held by whatever unrelated process now has that number.
+ */
+type ProcessIdentity =
+  | { kind: "linux"; bootId: string; startTime: string }
+  | { kind: "boot-time"; host: string; bootTimeMs: number };
+
 interface Owner {
   version: 1;
   generation: number;
   pid: number;
   token: string;
+  /** Absent in records written by older versions; those keep PID-only liveness. */
+  identity?: ProcessIdentity;
+}
+
+/** Wall-clock drift tolerated when comparing approximate boot times (non-Linux). */
+const BOOT_TIME_TOLERANCE_MS = 5 * 60 * 1000;
+
+export interface NodeFileLockOptions {
+  lockRoot?: string;
+  beforeOwnerPublish?: () => Promise<void>;
+  /** Told when a lock is taken over because its recorded owner can no longer be that process. */
+  onStaleOwner?: (message: string) => void;
 }
 interface Decision {
   version: 1;
@@ -20,7 +42,7 @@ interface Decision {
 export class NodeFileLock {
   constructor(
     private readonly root: string,
-    private readonly options: { lockRoot?: string; beforeOwnerPublish?: () => Promise<void> } = {},
+    private readonly options: NodeFileLockOptions = {},
   ) {}
 
   async acquire(key: string, options: StorageLockOptions = {}): Promise<StorageLock | null> {
@@ -84,7 +106,13 @@ export class NodeFileLock {
       const previous = await readOwner(dir, latest);
       let decision = await readDecision(dir, previous);
       if (!decision) {
-        if (pidIsAlive(previous.pid)) return null;
+        if (pidIsAlive(previous.pid)) {
+          const staleReason = staleIdentityReason(previous);
+          if (!staleReason) return null;
+          (this.options.onStaleOwner ?? defaultStaleOwnerNotice)(
+            `recovering stale lock: recorded owner pid ${previous.pid} is no longer that process (${staleReason})`,
+          );
+        }
         await assertCurrent();
         await publish(path.join(dir, `g${latest}.decision.json`), {
           version: 1, token: previous.token, kind: "recovered",
@@ -93,7 +121,14 @@ export class NodeFileLock {
         if (!decision) throw new Error("shared lock recovery decision is missing");
       }
     }
-    const owner: Owner = { version: 1, generation: latest + 1, pid: process.pid, token: randomUUID() };
+    const identity = captureProcessIdentity(process.pid);
+    const owner: Owner = {
+      version: 1,
+      generation: latest + 1,
+      pid: process.pid,
+      token: randomUUID(),
+      ...(identity ? { identity } : {}),
+    };
     await assertCurrent();
     await this.options.beforeOwnerPublish?.();
     if (!await publish(path.join(dir, `g${owner.generation}.owner.json`), owner)) return null;
@@ -152,11 +187,90 @@ function pidIsAlive(pid: number): boolean {
   }
 }
 
+function defaultStaleOwnerNotice(message: string): void {
+  console.warn(`[arxiv-daily] ${message}`);
+}
+
+function captureProcessIdentity(pid: number): ProcessIdentity | undefined {
+  try {
+    if (process.platform === "linux") {
+      const bootId = readBootId();
+      const startTime = readLinuxStartTime(pid);
+      if (bootId && startTime) return { kind: "linux", bootId, startTime };
+    }
+    return {
+      kind: "boot-time",
+      host: os.hostname(),
+      bootTimeMs: Math.round(Date.now() - os.uptime() * 1000),
+    };
+  } catch {
+    return undefined;
+  }
+}
+
+/** Why the recorded owner cannot be the live process that now has its PID; null when it may be. */
+function staleIdentityReason(owner: Owner): string | null {
+  const recorded = owner.identity;
+  if (!recorded) return null;
+  try {
+    if (recorded.kind === "linux") {
+      const bootId = readBootId();
+      if (!bootId) return null;
+      if (bootId !== recorded.bootId) return "the machine has rebooted since";
+      const startTime = readLinuxStartTime(owner.pid);
+      if (startTime === undefined) return null;
+      return startTime !== recorded.startTime ? "the PID was reused by a newer process" : null;
+    }
+    // Without /proc a reused PID within one boot cannot be told apart, but a
+    // reboot can. The host name is recorded for diagnosis only: it changes
+    // with DHCP and renames, which must not break a lock held by a live run.
+    const bootTimeMs = Date.now() - os.uptime() * 1000;
+    return Math.abs(bootTimeMs - recorded.bootTimeMs) > BOOT_TIME_TOLERANCE_MS
+      ? "the machine has rebooted since"
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+function readBootId(): string | undefined {
+  try {
+    return readFileSync("/proc/sys/kernel/random/boot_id", "utf8").trim() || undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/** Field 22 of /proc/<pid>/stat (clock ticks since boot at process start). */
+function readLinuxStartTime(pid: number): string | undefined {
+  try {
+    const stat = readFileSync(`/proc/${pid}/stat`, "utf8");
+    // The command name is parenthesised and may itself contain spaces or ')'.
+    const fields = stat.slice(stat.lastIndexOf(")") + 2).split(" ");
+    return fields[19] || undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function isProcessIdentity(value: unknown): value is ProcessIdentity {
+  if (!value || typeof value !== "object") return false;
+  const identity = value as Record<string, unknown>;
+  if (identity.kind === "linux") {
+    return typeof identity.bootId === "string" && typeof identity.startTime === "string";
+  }
+  return identity.kind === "boot-time"
+    && typeof identity.host === "string"
+    && typeof identity.bootTimeMs === "number"
+    && Number.isFinite(identity.bootTimeMs);
+}
+
 async function readOwner(dir: string, generation: number): Promise<Owner> {
   const ownerPath = path.join(dir, `g${generation}.owner.json`);
   if (!(await fs.lstat(ownerPath)).isFile()) throw new Error("unsafe shared lock record");
   const value = JSON.parse(await fs.readFile(ownerPath, "utf8")) as Owner;
-  if (value?.version !== 1 || value.generation !== generation || !Number.isSafeInteger(value.pid) || value.pid < 1 || typeof value.token !== "string" || !value.token) {
+  if (value?.version !== 1 || value.generation !== generation || !Number.isSafeInteger(value.pid) || value.pid < 1 || typeof value.token !== "string" || !value.token
+    || (value.identity !== undefined && !isProcessIdentity(value.identity))) {
     throw new Error("shared lock ownership record is invalid");
   }
   return value;

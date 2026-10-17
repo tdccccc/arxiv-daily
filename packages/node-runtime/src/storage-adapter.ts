@@ -22,6 +22,8 @@ export interface NodeStorageAdapterOptions {
   nativeBinding?: NativeStorageBinding;
   /** Override the machine-local coordination directory (primarily for tests). */
   lockRoot?: string;
+  /** Receives the notice when a lock left by a dead run (reboot, reused PID) is recovered; defaults to console.warn. */
+  onStaleOwner?: (message: string) => void;
   /** Test-only deterministic seam after the final parent fd is opened. */
   afterFinalParentOpened?: () => Promise<void> | void;
   /** Test-only deterministic seam after the target is created but before write. */
