@@ -9,6 +9,7 @@ import {
   PERSONAL_LIBRARY_MIN_REPRESENTATIVES,
   accountedPaperKeysOf,
   countNewPapersCoveredByExistingDirections,
+  isNewPapersUpdate,
   isThinEvidenceDirectionCandidate,
   matchingProposalAcceptance,
   resolveProposedTopicTarget,
@@ -525,17 +526,20 @@ export class PersonalLibraryInterestProfileModal extends ArxivDailyModal {
       parent.createEl("p", { text: "No library analysis yet." });
       return;
     }
-    const indexedKeys = new Set(snapshot.indexedPapers.map(({ paperKey }) => paperKey));
+    const accountedKeys = new Set(accountedPaperKeysOf(proposal));
     // An update of new papers sends only a few papers but accounts for the
     // whole library, so "analysed" reads what the proposal has accounted for.
-    const accountedKeys = new Set(accountedPaperKeysOf(proposal));
-    // Only papers a scan could use count (same set as the workbench overview):
-    // newPaperKeys drops papers outside the scan window, merged duplicates and
-    // papers without usable metadata.
-    const scannable = new Set(snapshot.newPaperKeys);
-    const outside = [...indexedKeys].filter((key) => !accountedKeys.has(key) && scannable.has(key)).length;
-    const added = proposal.catalogInputPapers.length < accountedKeys.size ? proposal.catalogInputPapers.length : 0;
-    parent.createEl("p", { text: `${accountedKeys.size} papers analyzed on ${new Date(proposal.generatedAt).toLocaleDateString()}.${added ? ` ${added} added in this update.` : ""}${outside ? ` ${outside} currently indexed papers were not in this analysis.` : ""}` });
+    // A full scan analysed exactly its input: merged duplicates and inherited
+    // papers are accounted for without having been part of this run.
+    const update = isNewPapersUpdate(proposal);
+    // `newPaperKeys` is already every paper no scan has accounted for, the same
+    // set the update would send and the workbench overview lists. It includes
+    // catalog/arXiv papers, which `indexedPapers` omits (it holds only papers
+    // the index itself named).
+    const outside = snapshot.newPaperKeys.length;
+    const added = update ? proposal.catalogInputPapers.length : 0;
+    const analyzed = update ? accountedKeys.size : proposal.catalogInputPapers.length;
+    parent.createEl("p", { text: `${analyzed} papers analyzed on ${new Date(proposal.generatedAt).toLocaleDateString()}.${added ? ` ${added} added in this update.` : ""}${outside ? ` ${outside} currently indexed papers were not in this analysis.` : ""}` });
     const coverage = currentCoverage(snapshot);
     const processed = processedCandidateIds(snapshot);
     const rows = new Map<string, { name: string; directions: Array<{ text: string; keys: string[]; status: string }> }>();

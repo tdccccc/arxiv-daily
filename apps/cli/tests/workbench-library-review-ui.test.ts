@@ -224,7 +224,7 @@ it("keeps a restored preview when the initial proposal snapshot arrives afterwar
 const rescanned = (): LibraryReviewViewSnapshot => {
  const value = fixture();
  value.indexedPapers = ["p1", "p2", "p3", "p4", "p5"].map(paperKey => ({ paperKey, title: `Paper ${paperKey}`, abstract: "abstract", categories: ["astro-ph.CO"] }));
- value.proposal = { ...value.proposal!, catalogInputPapers: [evidence("p4")], accountedPaperKeys: ["p1", "p2", "p3", "p4"], coveredPaperKeys: [], coverageEvidence: [] };
+ value.proposal = { ...value.proposal!, scope: "new-papers", catalogInputPapers: [evidence("p4")], accountedPaperKeys: ["p1", "p2", "p3", "p4"], coveredPaperKeys: [], coverageEvidence: [] };
  value.newPaperKeys = ["p5"];
  return value;
 };
@@ -236,6 +236,22 @@ it("lists only genuinely new papers after a rescan of new papers, not the whole 
  expect(added.textContent).toContain("Paper p5");
  for (const old of ["p1","p2","p3","p4"]) expect(added.textContent).not.toContain(`Paper ${old}`);
  expect(root.textContent).toContain("分析了 4 篇论文");
+});
+
+it("does not call a full scan an update of new papers", async () => {
+ // The accounted set outgrew the input through merged duplicates and
+ // inherited papers; that alone must not read as an update.
+ const value = fixture();
+ value.indexedPapers = ["p1", "p2", "p3", "p4"].map(paperKey => ({ paperKey, title: `Paper ${paperKey}`, abstract: "abstract", categories: ["astro-ph.CO"] }));
+ value.proposal = {
+  ...value.proposal!, scope: "full",
+  catalogInputPapers: [evidence("p4")],
+  accountedPaperKeys: ["p1", "p2", "p3", "p4"],
+  coveredPaperKeys: ["p4"], coverageEvidence: [],
+ };
+ const {root} = setup(vi.fn().mockResolvedValue(value)); await settle(); click(root,"overview");
+ expect(root.textContent).toContain("分析了 1 篇论文");
+ expect(root.textContent).not.toContain("本次新增");
 });
 
 it("offers an update that sends only the new papers, after a confirmation that says so", async () => {

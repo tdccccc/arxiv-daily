@@ -10,7 +10,7 @@ import {
   resolvePersonalLibraryClusteringOptions,
   type PersonalLibraryDirectionLlmPort,
 } from "../src/library/personal-library-direction-proposer";
-import { listUnaccountedLibraryPapers } from "../src/library/personal-library-change";
+import { countNewPapersCoveredByExistingDirections, listUnaccountedLibraryPapers } from "../src/library/personal-library-change";
 import {
   FULLTEXT_KNOWLEDGE_BASE_SCHEMA_VERSION,
   type FullTextKnowledgeBaseManifest,
@@ -329,6 +329,7 @@ describe("proposeNewPapersPersonalLibraryDirections", () => {
     const contract = createPersonalLibraryNewPapersDirectionGenerationContract();
     expect(JSON.parse(contract)).toMatchObject({ scope: "new-papers", clustering: "none" });
     expect(contract.length).toBeLessThanOrEqual(4096);
+    expect(result.scope).toBe("new-papers");
     expect(result.generationContractFingerprint).toBe(createPersonalLibraryGenerationContractFingerprint(contract));
     const full = createPersonalLibraryClusteredDirectionGenerationContract(resolvePersonalLibraryClusteringOptions());
     expect(JSON.parse(full)).toMatchObject({ scope: "full-library" });
@@ -433,6 +434,7 @@ describe("the full scan records and carries the accounted set", () => {
       now: () => new Date(time), createId: ids, clustering: { similarityQuantile: 0.5, centerCorpus: false },
     });
     const accounted = accountedPaperKeysOf(result);
+    expect(result.scope).toBe("full");
     // The outlier is in no group (ungrouped) yet is still in the scan input and accounted.
     expect(result.catalogInputPapers.map(({ paperKey }) => paperKey)).toContain(outlier);
     expect(accounted).toContain(outlier);
@@ -440,6 +442,10 @@ describe("the full scan records and carries the accounted set", () => {
     expect(accounted).toContain(drop);
     expect(accounted).toContain(inherited);
     expect(accounted).not.toContain(removed);
+    expect(accounted.length).toBeGreaterThan(result.catalogInputPapers.length);
+    // The regression: a full scan whose accounted set outgrew its input is
+    // still not an update of new papers.
+    expect(countNewPapersCoveredByExistingDirections(result)).toBe(0);
     for (const key of result.catalogInputPapers.map(({ paperKey }) => paperKey)) expect(accounted).toContain(key);
     expect(accounted).toEqual([...accounted].sort());
     // The merged duplicate is not a new paper to the change count either.
@@ -455,5 +461,6 @@ describe("the full scan records and carries the accounted set", () => {
       now: () => new Date(time), createId: ids, clustering: { similarityQuantile: 0.5, centerCorpus: false },
     });
     expect(result.accountedPaperKeys).toEqual(papers.map(({ paperKey }) => paperKey).sort());
+    expect(result.scope).toBe("full");
   });
 });

@@ -14,6 +14,7 @@ import {
   PERSONAL_LIBRARY_PROPOSAL_SCHEMA_VERSION,
   createPersonalLibraryCatalogInputManifestFingerprint,
   createPersonalLibraryGenerationContractFingerprint,
+  isNewPapersUpdate,
   type PersonalLibraryDirectionProposal,
 } from "../src/library/personal-library-interest-profile";
 
@@ -203,23 +204,46 @@ describe("countNewPapersCoveredByExistingDirections", () => {
 
   it("counts the update's input papers that existing directions already cover", () => {
     expect(countNewPapersCoveredByExistingDirections({
+      scope: "new-papers",
       catalogInputPapers: input(a, b, c), accountedPaperKeys: [a, b, c, old], coveredPaperKeys: [a, c, old],
     })).toBe(2);
   });
 
   it("is zero when no new paper is covered, or the coverage record is missing", () => {
     expect(countNewPapersCoveredByExistingDirections({
+      scope: "new-papers",
       catalogInputPapers: input(a), accountedPaperKeys: [a, old], coveredPaperKeys: [old],
     })).toBe(0);
-    expect(countNewPapersCoveredByExistingDirections({ catalogInputPapers: input(a), accountedPaperKeys: [a, old] })).toBe(0);
+    expect(countNewPapersCoveredByExistingDirections({
+      scope: "new-papers", catalogInputPapers: input(a), accountedPaperKeys: [a, old],
+    })).toBe(0);
   });
 
   it("is zero for a scan of the whole library, where nothing is 'new'", () => {
     expect(countNewPapersCoveredByExistingDirections({
+      scope: "full",
       catalogInputPapers: input(a, b), accountedPaperKeys: [a, b], coveredPaperKeys: [a],
     })).toBe(0);
+    // Proposals saved before the scope field existed read as full scans.
     expect(countNewPapersCoveredByExistingDirections({
       catalogInputPapers: input(a, b), coveredPaperKeys: [a],
     })).toBe(0);
+  });
+
+  it("is zero for a full scan whose accounted set outgrew its input", () => {
+    // Merged same-title duplicates and inherited papers are accounted for
+    // without having been part of this run, so no "new paper" was covered.
+    expect(countNewPapersCoveredByExistingDirections({
+      scope: "full",
+      catalogInputPapers: input(a, b), accountedPaperKeys: [a, b, old], coveredPaperKeys: [a, old],
+    })).toBe(0);
+  });
+});
+
+describe("isNewPapersUpdate", () => {
+  it("treats only an explicit new-papers proposal as an update", () => {
+    expect(isNewPapersUpdate({ scope: "new-papers" })).toBe(true);
+    expect(isNewPapersUpdate({ scope: "full" })).toBe(false);
+    expect(isNewPapersUpdate({})).toBe(false);
   });
 });
