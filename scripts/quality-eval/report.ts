@@ -231,6 +231,11 @@ export function renderRerunReport(report: RerunReport): string {
     "同一批已标注的行；加权估计按抽样时的分层计算，与新判定无关。比较提示词或模型的改动时，请看加权列。",
     "",
     ...comparisonTable(report.comparison),
+    "### 只看筛选时有摘要的行",
+    "",
+    "这里只比较筛选时已有摘要的论文：记录的判定和重跑看到的是同一批论文、同样的输入，可以直接对照。这些行没有加权估计。",
+    "",
+    ...comparisonTable(report.comparisonWithAbstract),
     "## 运行之间是否稳定",
     "",
   );
@@ -267,7 +272,7 @@ export function renderRerunReport(report: RerunReport): string {
       "",
       ...metricSections({
         sets: run.sets, topics: run.topics ?? null, topicsWithoutDirection: run.topicsWithoutDirection ?? null,
-        disagreements: run.disagreements, skipped: source.skipped, withAbstractLabel: "排除表中没有摘要的行",
+        disagreements: run.disagreements, skipped: source.skipped, withAbstractLabel: "排除筛选时无摘要的行",
       }, 3),
     );
   }

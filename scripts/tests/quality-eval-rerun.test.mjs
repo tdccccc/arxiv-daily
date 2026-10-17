@@ -252,6 +252,28 @@ test("a skipped row filed under a topic by the new model is weighted in that top
   assert.match(markdown, /9\.1% \/ 100\.0%/);
 });
 
+test("title-only papers keep their filter-time abstract flag and the report explains the input change", async () => {
+  const { json, markdown } = await rerun(await writeSheet(), fakeLlm([RUN_1]));
+  const run = json.runs[0];
+  const decisions = Object.fromEntries(run.decisions.map(decision => [decision.id, decision]));
+
+  // s3 was judged on its title alone by the recorded filter, but export fetched an abstract
+  // and the rerun sent it. The request fact is recorded apart from the filter-time fact.
+  assert.equal(decisions.s3.requestHadAbstract, true);
+  const missed = run.disagreements.falseNegatives.find(row => row.id === "s3");
+  assert.equal(missed.hadAbstractAtFilter, false, "the divergence list keeps the filter-time value");
+  assert.match(markdown, /3 篇已标注论文在筛选时只看到标题/);
+  assert.match(markdown, /输入变化/);
+  const s3Line = markdown.split("\n").find(line => line.startsWith("|") && line.includes("Wrong topic"));
+  assert.ok(s3Line.includes("| 否 |"), "the divergence row says there was no abstract at filter time");
+
+  // The input-comparable comparison uses the same rows on both sides (s1 s2 s4 s6 k1 k2).
+  assert.equal(json.recorded.withAbstract.rows, 6);
+  assert.equal(run.sets.withAbstract.rows, 6);
+  assert.deepEqual(json.comparisonWithAbstract.map(entry => [entry.name, entry.rows]), [["recorded", 6], ["run 1", 6]]);
+  assert.match(markdown, /### 只看筛选时有摘要的行/);
+});
+
 test("a failing run is reported in its own section while the others continue, and flip-flopping papers are listed", async () => {
   const llm = fakeLlm([RUN_1, new Error(`upstream 500 for ${API_KEY} at https://user:hunter2@api.example.com/v1?token=tok-abc`), RUN_3]);
   const { json, markdown, jsonText, result } = await rerun(await writeSheet(), llm, { runs: 3 });
@@ -298,7 +320,7 @@ test("the CLI config's topics can replace the snapshot and a mismatch withholds 
   const same = await rerun(await writeSheet(), fakeLlm([RUN_1]), { topicsFromConfig: true, configPath: await writeConfig(configTopics()) });
   assert.equal(same.json.current.topicSource, "config");
   assert.equal(same.json.directionWithheld, null);
-  assert.deepEqual(same.json.warnings, []);
+  assert.ok(!same.json.warnings.some(warning => /方向列表与标注时不同/.test(warning)));
   assert.deepEqual([same.json.runs[0].sets.all.direction.correct, same.json.runs[0].sets.all.direction.n], [3, 3]);
 
   const edited = await rerun(await writeSheet(), fakeLlm([RUN_1]), { topicsFromConfig: true, configPath: await writeConfig(configTopics("Photometric redshifts, rewritten.")) });
