@@ -1864,11 +1864,8 @@ class ArxivDailyDashboardView extends ItemView {
       item
         .setTitle(enabled ? "Disable scheduler" : "Enable scheduler")
         .setIcon(enabled ? "pause" : "play")
-        .onClick(async () => {
-          const applied = await this.plugin.setScheduleEnabled(!enabled);
-          if (applied) {
-            this.notice(`arXiv Daily: ${!enabled ? "enabled" : "disabled"}`);
-          }
+        .onClick(() => {
+          this.runDetached(this.toggleScheduler(), "change the scheduler state");
         }),
     );
 
@@ -2133,6 +2130,19 @@ class ArxivDailyDashboardView extends ItemView {
       return false;
     }
     return true;
+  }
+
+  /**
+   * Flip the scheduler from the dashboard menu. The target state is read when
+   * the item is clicked, not when the menu was built, and a failed save reaches
+   * runDetached's error notice instead of vanishing as an unhandled rejection.
+   */
+  private async toggleScheduler(): Promise<void> {
+    const next = !this.plugin.settings.schedule.enabled;
+    const applied = await this.plugin.setScheduleEnabled(next);
+    if (applied) {
+      this.notice(`arXiv Daily: ${next ? "enabled" : "disabled"}`);
+    }
   }
 
   private openRunForDatePicker(force: boolean): void {

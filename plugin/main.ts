@@ -741,29 +741,6 @@ export default class ArxivDailyPlugin extends Plugin {
     });
   }
 
-  async setLlmBaseUrl(next: string): Promise<void> {
-    const normalized = next.trim();
-    const requestedEndpointChanged = this.effectiveLlmEndpoint(this.settings.llm.baseUrl)
-      !== this.effectiveLlmEndpoint(normalized);
-    if (requestedEndpointChanged) {
-      this.beginLibraryMutation();
-      this.cancelPersonalLibraryDirectionGeneration("model endpoint changed");
-    }
-    await this.enqueueLibraryMutation(async () => {
-      const previous = this.settings.llm.baseUrl;
-      this.settings.llm.baseUrl = normalized;
-      this.settings.detailSelection = sanitizeDetailSelection(this.settings.detailSelection);
-      this.refreshSensitiveValues();
-      try {
-        await this.persistSettings();
-      } catch (error) {
-        this.settings.llm.baseUrl = previous;
-        this.refreshSensitiveValues();
-        throw error;
-      }
-    });
-  }
-
   async previewLibraryInventory(signal?: AbortSignal): Promise<LibraryInventoryPreview> {
     const connection = this.libraryConnection;
     if (!connection) throw new Error("Choose a personal library first");

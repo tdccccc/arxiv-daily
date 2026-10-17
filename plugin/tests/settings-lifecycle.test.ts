@@ -15,6 +15,7 @@ import {
   RunLock,
   SchedulerService,
   StateStore,
+  type PluginSettings,
   type StorageAdapter,
 } from "@arxiv-daily/core";
 import * as obsidianHost from "../src/hosts/obsidian";
@@ -91,6 +92,37 @@ async function installStoresForCurrentOutput(plugin: ArxivDailyPlugin): Promise<
     installOutputStores(prepared: unknown): void;
   };
   internals.installOutputStores(await internals.prepareOutputStores(plugin.settings));
+}
+
+/** A plugin whose onload wired the real SettingsChangeService (it stops at addSettingTab). */
+async function pluginWithSettingsChanges(saveData: (data: any) => Promise<void>) {
+  const plugin = new ArxivDailyPlugin();
+  const storage: StorageAdapter = {
+    ...memoryStorage(),
+    writeTextAtomic: async () => {},
+    acquireLock: vi.fn(async () => null),
+    list: vi.fn(async () => []),
+  };
+  const buildHost = vi.spyOn(obsidianHost, "buildObsidianHostAdapters")
+    .mockReturnValue({ storage, http: {}, markupParser: {} } as any);
+  Object.assign(plugin, {
+    settings: structuredClone(DEFAULT_SETTINGS),
+    app: {},
+    manifest: { id: "arxiv-daily" },
+    loadSettingsAndState: vi.fn(async () => []),
+    cleanupCachesIfDue: vi.fn(),
+    saveData,
+    addStatusBarItem: () => document.createElement("div"),
+    addSettingTab: () => { throw new Error("stop after settingsChanges is wired"); },
+  });
+  await expect(plugin.onload()).rejects.toThrow("stop after settingsChanges is wired");
+  return {
+    plugin,
+    dispose: () => {
+      plugin.onunload();
+      buildHost.mockRestore();
+    },
+  };
 }
 
 describe("plugin directory resolution", () => {
@@ -203,71 +235,65 @@ describe("plugin settings reload lifecycle", () => {
   });
 
   it("routes base URL persistence through effective-endpoint cancellation", async () => {
-    const plugin = Object.create(ArxivDailyPlugin.prototype) as ArxivDailyPlugin;
-    const settings = structuredClone(DEFAULT_SETTINGS);
-    const cancel = vi.fn();
-    Object.assign(plugin, {
-      settings,
-      operations: {
-        snapshot: () => [{ id: "generation:1", kind: "personal-library-direction-generation" }],
-        cancel,
-      },
-      logger: { setSensitiveValues: vi.fn() },
-      saveData: vi.fn().mockResolvedValue(undefined),
-    });
-
-    await plugin.setLlmBaseUrl(`${settings.llm.baseUrl}/`);
-    expect(cancel).not.toHaveBeenCalled();
-    await plugin.setLlmBaseUrl("https://other.example/v1");
-    expect(cancel).toHaveBeenCalledWith("generation:1", "model endpoint changed");
+    const { plugin, dispose } = await pluginWithSettingsChanges(vi.fn().mockResolvedValue(undefined));
+    try {
+      const generation = plugin.operations.begin(
+        "personal-library-direction-generation",
+        "Personal library direction generation",
+        "scope",
+      );
+      // A trailing slash is the same effective endpoint: nothing is cancelled.
+      await plugin.settingsChanges.changeValue("llm.baseUrl", `${plugin.settings.llm.baseUrl}/`);
+      expect(generation.signal.aborted).toBe(false);
+      await plugin.settingsChanges.changeValue("llm.baseUrl", "https://other.example/v1");
+      expect(generation.signal.aborted).toBe(true);
+      expect(generation.signal.reason).toBe("model endpoint changed");
+      expect(plugin.settings.llm.baseUrl).toBe("https://other.example/v1");
+    } finally {
+      dispose();
+    }
   });
 
-  it("rolls back base URL when persistence fails", async () => {
-    const plugin = Object.create(ArxivDailyPlugin.prototype) as ArxivDailyPlugin;
-    const settings = structuredClone(DEFAULT_SETTINGS);
-    const previous = settings.llm.baseUrl;
-    Object.assign(plugin, {
-      settings,
-      operations: { snapshot: () => [], cancel: vi.fn() },
-      logger: { setSensitiveValues: vi.fn() },
-      saveData: vi.fn().mockRejectedValue(new Error("disk full")),
-    });
-
-    await expect(plugin.setLlmBaseUrl("https://other.example/v1")).rejects.toThrow("disk full");
-    expect(settings.llm.baseUrl).toBe(previous);
+  it("leaves the base URL unchanged when persistence fails", async () => {
+    const { plugin, dispose } = await pluginWithSettingsChanges(
+      vi.fn().mockRejectedValue(new Error("disk full")),
+    );
+    try {
+      const previous = plugin.settings.llm.baseUrl;
+      await expect(plugin.settingsChanges.changeValue("llm.baseUrl", "https://other.example/v1"))
+        .rejects.toThrow("disk full");
+      expect(plugin.settings.llm.baseUrl).toBe(previous);
+    } finally {
+      dispose();
+    }
   });
 
-  it("serializes overlapping base URL setters without stale rollback", async () => {
-    const plugin = Object.create(ArxivDailyPlugin.prototype) as ArxivDailyPlugin;
-    const settings = structuredClone(DEFAULT_SETTINGS);
+  it("serializes overlapping base URL changes without stale rollback", async () => {
     const persisted: string[] = [];
     let releaseFirst!: () => void;
-    const saveData = vi.fn(async (data: { settings: typeof settings }) => {
-      const value = data.settings.llm.baseUrl;
+    const saveData = vi.fn(async (data: { settings: PluginSettings }) => {
       if (saveData.mock.calls.length === 1) {
         await new Promise<void>((resolve) => { releaseFirst = resolve; });
         throw new Error("first failed");
       }
-      persisted.push(value);
+      persisted.push(data.settings.llm.baseUrl);
     });
-    Object.assign(plugin, {
-      settings,
-      operations: { snapshot: () => [], cancel: vi.fn() },
-      logger: { setSensitiveValues: vi.fn() },
-      saveData,
-    });
+    const { plugin, dispose } = await pluginWithSettingsChanges(saveData);
+    try {
+      const first = plugin.settingsChanges.changeValue("llm.baseUrl", "https://first.example/v1");
+      const firstRejected = expect(first).rejects.toThrow("first failed");
+      await vi.waitFor(() => expect(saveData).toHaveBeenCalledTimes(1));
+      const second = plugin.settingsChanges.changeValue("llm.baseUrl", "https://second.example/v1");
+      expect(plugin.settings.llm.baseUrl).not.toBe("https://first.example/v1");
+      releaseFirst();
+      await firstRejected;
+      await second;
 
-    const first = plugin.setLlmBaseUrl("https://first.example/v1");
-    const firstRejected = expect(first).rejects.toThrow("first failed");
-    await vi.waitFor(() => expect(saveData).toHaveBeenCalledTimes(1));
-    const second = plugin.setLlmBaseUrl("https://second.example/v1");
-    expect(settings.llm.baseUrl).toBe("https://first.example/v1");
-    releaseFirst();
-    await firstRejected;
-    await second;
-
-    expect(settings.llm.baseUrl).toBe("https://second.example/v1");
-    expect(persisted).toEqual(["https://second.example/v1"]);
+      expect(plugin.settings.llm.baseUrl).toBe("https://second.example/v1");
+      expect(persisted).toEqual(["https://second.example/v1"]);
+    } finally {
+      dispose();
+    }
   });
 
   it("passes the exact candidate to saveData instead of capturing live settings", async () => {

@@ -106,3 +106,30 @@ describe("dashboard reloadIndex with unchanged markdown files", () => {
     expect(readSpy).toHaveBeenCalled();
   });
 });
+
+describe("dashboard scheduler toggle", () => {
+  it("reads the setting at click time and reports a failed save instead of dropping it", async () => {
+    const { plugin, view } = setup();
+    const toggle = view as unknown as { toggleScheduler(): Promise<void>; runDetached(p: Promise<unknown>, action: string): void };
+    const state = plugin as unknown as {
+      settings: { schedule: { enabled: boolean } };
+      setScheduleEnabled?: (enabled: boolean) => Promise<boolean>;
+      logger: { error: ReturnType<typeof vi.fn> };
+    };
+    state.settings = { ...state.settings, schedule: { ...state.settings.schedule, enabled: true } };
+    const setScheduleEnabled = vi.fn(async (_enabled: boolean) => {
+      throw new Error("disk full");
+    });
+    state.setScheduleEnabled = setScheduleEnabled;
+
+    // The menu was built while the scheduler was off, but it is on by the time of the click.
+    toggle.runDetached(toggle.toggleScheduler(), "change the scheduler state");
+    await vi.waitFor(() => expect(state.logger.error).toHaveBeenCalled());
+
+    expect(setScheduleEnabled).toHaveBeenCalledWith(false);
+    expect(state.logger.error).toHaveBeenCalledWith(
+      "dashboard: failed to change the scheduler state",
+      expect.objectContaining({ message: "disk full" }),
+    );
+  });
+});
