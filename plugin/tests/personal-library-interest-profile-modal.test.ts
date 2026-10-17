@@ -1367,6 +1367,7 @@ describe("papers new since the direction suggestions", () => {
       return reviewed({
         proposal: {
           ...base.proposal!,
+          scope: "new-papers",
           catalogInputPapers: [5, 6, 7].map((n) => ({ paperKey: key(n), evidenceFingerprint: evidence })),
           accountedPaperKeys: [1, 2, 3, 4, 5, 6, 7].map(key),
           coveredPaperKeys: covered,
@@ -1391,11 +1392,22 @@ describe("papers new since the direction suggestions", () => {
     });
 
     it("does not call a full analysis an update of new papers", () => {
-      const base = reviewed();
+      const input = [{ paperKey: "arxiv:2608.00001", evidenceFingerprint: evidence }];
       const modal = open(controller(reviewed({
-        proposal: { ...base.proposal!, accountedPaperKeys: undefined, coveredPaperKeys: ["arxiv:2608.00001"] },
+        proposal: {
+          ...reviewed().proposal!,
+          scope: "full",
+          catalogInputPapers: input,
+          // Accounted for, but not part of this run: merged duplicates and
+          // inherited papers make the accounted set outgrow the input.
+          accountedPaperKeys: ["arxiv:2608.00001", key(1), key(2), key(3)],
+          coveredPaperKeys: ["arxiv:2608.00001"],
+        },
       })).mock);
       expect(modal.contentEl.textContent).not.toContain("already covered by your existing directions");
+      button(modal.contentEl, "Library overview").click();
+      expect(modal.contentEl.textContent).toContain("1 papers analyzed");
+      expect(modal.contentEl.textContent).not.toContain("added in this update");
     });
 
     it("sits beside the update-button line when more papers arrived since", () => {
@@ -1412,6 +1424,7 @@ describe("papers new since the direction suggestions", () => {
       return reviewed({
         proposal: {
           ...base.proposal!,
+          scope: "new-papers",
           catalogInputPapers: [{ paperKey: key(4), evidenceFingerprint: evidence }],
           accountedPaperKeys: keys,
         },
@@ -1439,6 +1452,18 @@ describe("papers new since the direction suggestions", () => {
       snap.indexedPapers = [...snap.indexedPapers, { paperKey: key(9), title: "Late arrival" }];
       snap.newPaperKeys = [key(9)];
       expect(overviewText(snap)).toContain("1 currently indexed papers were not in this analysis.");
+    });
+
+    it("counts newly indexed arXiv papers that indexedPapers never lists", () => {
+      // Real plugin snapshots hold only papers the index itself named (no
+      // arXiv papers, whose titles come from the catalog), while newPaperKeys
+      // includes every paper no scan has accounted for.
+      const local = `file:sha256:${"e".repeat(64)}`;
+      const snap = overviewSnapshot({
+        indexedPapers: [{ paperKey: local, title: "A local paper" }],
+        newPaperKeys: [key(8), key(9)],
+      });
+      expect(overviewText(snap)).toContain("2 currently indexed papers were not in this analysis.");
     });
 
     it("leaves out unaccounted papers a scan could not use, like the workbench overview", () => {
