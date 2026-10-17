@@ -70,6 +70,9 @@ export class DailyFilterCheckpointStoreError extends Error {
   }
 }
 
+/** Batches probed on adapters that cannot list a directory. */
+const FILTER_CHECKPOINT_UNLISTED_BATCH_SCAN = 64;
+
 const mutationQueues = new WeakMap<StorageAdapter, Map<string, Promise<unknown>>>();
 
 type DocumentReadResult =
@@ -78,15 +81,27 @@ type DocumentReadResult =
   | { kind: "unreadable"; error: unknown }
   | { kind: "valid"; document: DailyFilterCheckpointDocument };
 
+/**
+ * A day whose candidates exceed the single-request budget is classified in
+ * several batches. Batch 0 keeps the historical `<date>.json` path, so an
+ * ordinary one-request day is stored exactly as before; later batches use
+ * `<date>.batch-<n>.json`.
+ */
 export function deriveDailyFilterCheckpointPaths(
   storage: Pick<StorageAdapter, "normalizePath">,
   output: OutputSettings,
   reportDate: string,
+  batch = 0,
 ): DailyFilterCheckpointPaths {
   requireReportDate(reportDate);
+  if (!Number.isSafeInteger(batch) || batch < 0) {
+    throw new DailyFilterCheckpointStoreError(`invalid checkpoint batch: ${batch}`);
+  }
   const { indexDir } = derivePaperInboxPaths(output, (path) => storage.normalizePath(path));
   const directory = storage.normalizePath(`${indexDir}/filter-checkpoints`);
-  const documentPath = storage.normalizePath(`${directory}/${reportDate}.json`);
+  const documentPath = storage.normalizePath(
+    batch === 0 ? `${directory}/${reportDate}.json` : `${directory}/${reportDate}.batch-${batch}.json`,
+  );
   const personalizedDocumentPath = storage.normalizePath(
     `${directory}/${reportDate}.personalized.json`,
   );
@@ -131,12 +146,12 @@ export class DailyFilterCheckpointStore {
     private readonly options: DailyFilterCheckpointStoreOptions = {},
   ) {}
 
-  pathsFor(reportDate: string): DailyFilterCheckpointPaths {
-    return deriveDailyFilterCheckpointPaths(this.storage, this.output, reportDate);
+  pathsFor(reportDate: string, batch = 0): DailyFilterCheckpointPaths {
+    return deriveDailyFilterCheckpointPaths(this.storage, this.output, reportDate, batch);
   }
 
-  async load(reportDate: string): Promise<DailyFilterCheckpointDocument | null> {
-    const paths = this.pathsFor(reportDate);
+  async load(reportDate: string, batch = 0): Promise<DailyFilterCheckpointDocument | null> {
+    const paths = this.pathsFor(reportDate, batch);
     const primary = await this.readDocument(paths.documentPath, reportDate);
     if (primary.kind === "valid") return primary.document;
     if (primary.kind === "unreadable") {
@@ -162,9 +177,10 @@ export class DailyFilterCheckpointStore {
   async lookupReusable(
     reportDate: string,
     prepared: PreparedDailyFilterCheckpoint,
+    batch = 0,
   ): Promise<FilterRecord[] | null> {
     requirePrepared(prepared);
-    const document = await this.load(reportDate);
+    const document = await this.load(reportDate, batch);
     if (!document) return null;
     if (document.fingerprint !== createDailyFilterCompatibilityFingerprint(prepared)) return null;
     return clone(document.result);
@@ -174,11 +190,12 @@ export class DailyFilterCheckpointStore {
     reportDate: string,
     prepared: PreparedDailyFilterCheckpoint,
     result: unknown,
+    batch = 0,
   ): Promise<DailyFilterCheckpointDocument> {
-    const paths = this.pathsFor(reportDate);
+    const paths = this.pathsFor(reportDate, batch);
     return this.enqueue(paths.documentPath, async () => {
       requirePrepared(prepared);
-      await this.assertMutable(reportDate);
+      await this.assertMutable(reportDate, batch);
       const fingerprintInput = buildDailyFilterCheckpointFingerprintInput(prepared);
       if (
         fingerprintInput.promptContractVersion !== DAILY_FILTER_PROMPT_CONTRACT_VERSION ||
@@ -232,10 +249,39 @@ export class DailyFilterCheckpointStore {
       await removeIfExists(this.storage, `${paths.legacyNoveltyDocumentPath}.tmp`);
       await removeIfExists(this.storage, `${paths.legacyNoveltyBackupPath}.tmp`);
     });
+    for (const batchPath of await this.batchDocumentPaths(reportDate, paths.directory)) {
+      await this.enqueue(batchPath, async () => {
+        for (const path of [batchPath, `${batchPath}.bak`, `${batchPath}.tmp`, `${batchPath}.bak.tmp`]) {
+          await removeIfExists(this.storage, path);
+        }
+      });
+    }
   }
 
-  private async assertMutable(reportDate: string): Promise<void> {
-    const paths = this.pathsFor(reportDate);
+  /** Every `<date>.batch-<n>.json` left by a multi-batch day, however many there were. */
+  private async batchDocumentPaths(reportDate: string, directory: string): Promise<string[]> {
+    const prefix = `${reportDate}.batch-`;
+    if (this.storage.list) {
+      if (!(await this.storage.exists(directory))) return [];
+      const bases = new Set<string>();
+      for (const entry of await this.storage.list(directory)) {
+        const name = entry.path.slice(entry.path.lastIndexOf("/") + 1);
+        if (!name.startsWith(prefix)) continue;
+        const base = /^(.*\.json)(?:\.bak)?(?:\.tmp)?$/.exec(entry.path)?.[1];
+        if (base) bases.add(base);
+      }
+      return [...bases];
+    }
+    const found: string[] = [];
+    for (let batch = 1; batch <= FILTER_CHECKPOINT_UNLISTED_BATCH_SCAN; batch += 1) {
+      const path = this.pathsFor(reportDate, batch).documentPath;
+      if (await this.storage.exists(path)) found.push(path);
+    }
+    return found;
+  }
+
+  private async assertMutable(reportDate: string, batch = 0): Promise<void> {
+    const paths = this.pathsFor(reportDate, batch);
     const primary = await this.readDocument(paths.documentPath, reportDate);
     if (primary.kind === "valid") return;
     if (primary.kind === "unreadable") {

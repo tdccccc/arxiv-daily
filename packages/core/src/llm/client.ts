@@ -533,13 +533,16 @@ export function isUnsupportedStreamOptionsError(err: unknown): boolean {
     /unsupported|unknown|unrecognized|not (?:allowed|supported)|extra fields?|invalid/i.test(message);
 }
 
+/** Client-error statuses a later attempt can legitimately succeed on. */
+const TRANSIENT_CLIENT_STATUSES: ReadonlySet<number> = new Set([408, 409, 425, 429]);
+
 export function isPermanentLlmError(err: unknown): boolean {
   const status = (err as LlmStatusError | undefined)?.status;
   return (
     typeof status === "number" &&
     status >= 400 &&
     status < 500 &&
-    status !== 429
+    !TRANSIENT_CLIENT_STATUSES.has(status)
   );
 }
 

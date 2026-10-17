@@ -7,6 +7,7 @@ import {
   LlmOutputTruncatedError,
   LlmTransientExhaustedError,
   isLlmOutputTruncatedError,
+  isPermanentLlmError,
   isUnsupportedStreamOptionsError,
 } from "../../src/llm/client";
 import {
@@ -267,6 +268,22 @@ describe("LLM stream metrics", () => {
       ].map((e) => `data: ${JSON.stringify(e)}\n\n`).join(""))) },
     );
     await expect(anthropic.call([{ role: "user", content: "x" }])).rejects.toBeInstanceOf(LlmOutputTruncatedError);
+  });
+
+  it.each([408, 409, 425, 429])("treats HTTP %i as transient and retries it", async (status) => {
+    vi.useFakeTimers();
+    const request = vi.fn(async () => response(status, "try again"));
+
+    const call = client(request).call([{ role: "user", content: "x" }]).catch((e) => e);
+    await vi.runAllTimersAsync();
+
+    expect(await call).toBeInstanceOf(LlmTransientExhaustedError);
+    expect(request).toHaveBeenCalledTimes(3);
+    expect(isPermanentLlmError(Object.assign(new Error("x"), { status }))).toBe(false);
+  });
+
+  it.each([400, 401, 403, 404, 413, 422])("keeps HTTP %i permanent", (status) => {
+    expect(isPermanentLlmError(Object.assign(new Error("x"), { status }))).toBe(true);
   });
 
   it("does not treat generic client errors as unsupported options and sanitizes provider errors", async () => {
