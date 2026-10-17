@@ -181,6 +181,32 @@ test("report table cells escape backslashes before pipes so a note cannot split 
   assert.ok(!markdown.includes(String.raw`see a\\|b`), "an escaped pipe must not end up unescaped");
 });
 
+test("F1 is 0 when one side is empty, and n/a only when there is nothing to score", async () => {
+  // Nothing selected, two papers should have been: TP 0, FP 0, FN 2.
+  const skippedOnly = [
+    ["k1", "true", "skip", "", "0", "y", "", "", "Missed"],
+    ["k2", "true", "skip", "", "0", "y", "", "", "Missed"],
+    ["k3", "true", "skip", "", "0", "n", "", "", "Correctly skipped"],
+    ["k4", "true", "skip", "", "0", "n", "", "", "Correctly skipped"],
+  ];
+  const first = await evaluate(await writeSheet(skippedOnly, metaOf({ rows: 4, selected: 0, skippedSampled: 4, skippedAvailable: 4, withoutAbstract: 0, hadAbstractAtFilter: 4 })));
+  assert.equal(first.json.sets.all.precision.value, null);
+  close(first.json.sets.all.recall.value, 0);
+  close(first.json.sets.all.f1.value, 0);
+  close(first.json.sets.all.weighted.f1.value, 0, "weighted F1 follows the same counts");
+
+  // Nothing should have been selected, but two were: TP 0, FP 2, FN 0.
+  const selectedOnly = [
+    ["s1", "true", "photo-z", "1", "90", "n", "", "", "Not relevant"],
+    ["s2", "true", "photo-z", "1", "80", "n", "", "", "Not relevant"],
+  ];
+  const second = await evaluate(await writeSheet(selectedOnly, metaOf({ rows: 2, selected: 2, skippedSampled: 0, skippedAvailable: 0, withoutAbstract: 0, hadAbstractAtFilter: 2 })));
+  assert.equal(second.json.sets.all.recall.value, null);
+  close(second.json.sets.all.precision.value, 0);
+  close(second.json.sets.all.f1.value, 0);
+  assert.equal(second.json.sets.all.weighted, null, "no skipped rows to weight");
+});
+
 test("the report names its sources and says what was and was not run", async () => {
   const { json, markdown, result } = await evaluate(await writeSheet());
 

@@ -77,10 +77,14 @@ function ratio(hits: number, n: number): Ratio {
   return { value: n > 0 ? hits / n : null, n, hits };
 }
 
-function f1Of(precision: Ratio, recall: Ratio, tp: number, fp: number, fn: number): Ratio {
-  if (precision.value === null || recall.value === null) return { value: null, n: 0, hits: 0 };
+/**
+ * F1 is undefined only when there is nothing to score at all (TP, FP and FN are all zero).
+ * With no true positives but some errors the F1 is 0, even though precision or recall alone
+ * may be undefined; showing n/a there would hide a rerun that selected nothing.
+ */
+function f1Of(tp: number, fp: number, fn: number): Ratio {
   const denominator = 2 * tp + fp + fn;
-  return { value: denominator > 0 ? (2 * tp) / denominator : 0, n: denominator, hits: 2 * tp };
+  return { value: denominator > 0 ? (2 * tp) / denominator : null, n: denominator, hits: 2 * tp };
 }
 
 /** Weighted confusion sums for a rule that decides which rows count as selected. */
@@ -98,7 +102,7 @@ function confuse(rows: readonly LabelledRow[], selected: (row: SheetRow) => bool
 function summarize(counts: Confusion): ScoreSummary {
   const precision = ratio(counts.tp, counts.tp + counts.fp);
   const recall = ratio(counts.tp, counts.tp + counts.fn);
-  return { precision, recall, f1: f1Of(precision, recall, counts.tp, counts.fp, counts.fn), counts };
+  return { precision, recall, f1: f1Of(counts.tp, counts.fp, counts.fn), counts };
 }
 
 /**
