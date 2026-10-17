@@ -39,6 +39,27 @@ await storage.writeText(PAPER_INDEX_PATH, '{"schemaVersion":2}');
 assert.equal(await storage.exists(PAPER_INDEX_PATH), true);
 assert.equal(await storage.readText(PAPER_INDEX_PATH), '{"schemaVersion":2}');
 
+// Atomic replace: the target is swapped from a temporary sibling that never
+// survives, even when the rename fails.
+await storage.writeTextAtomic(PAPER_INDEX_PATH, '{"schemaVersion":5}');
+assert.equal(await storage.readText(PAPER_INDEX_PATH), '{"schemaVersion":5}');
+assert.deepEqual(
+  (await storage.list("arxiv-daily/.index")).map((entry) => entry.path),
+  [PAPER_INDEX_PATH],
+);
+const realRename = vscodeApi.fs.rename;
+vscodeApi.fs.rename = async () => {
+  throw new Error("rename failed");
+};
+await assert.rejects(storage.writeTextAtomic(PAPER_INDEX_PATH, "partial"), /rename failed/);
+vscodeApi.fs.rename = realRename;
+assert.equal(await storage.readText(PAPER_INDEX_PATH), '{"schemaVersion":5}');
+assert.deepEqual(
+  (await storage.list("arxiv-daily/.index")).map((entry) => entry.path),
+  [PAPER_INDEX_PATH],
+);
+await storage.writeText(PAPER_INDEX_PATH, '{"schemaVersion":2}');
+
 await storage.writeBinary("arxiv-daily/pdfs/example.pdf", new Uint8Array([1, 2]).buffer);
 assert.deepEqual(
   Array.from(new Uint8Array(await storage.readBinary("arxiv-daily/pdfs/example.pdf"))),

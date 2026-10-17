@@ -109,6 +109,9 @@ function buildTabCounts(entries) {
 
 function toRow(entry) {
   return {
+    // The map key in papers.json ("arxiv:<id>" since schema 4, the bare id
+    // before); the host resolves row actions by it.
+    key: entry.key,
     arxivId: entry.arxivId,
     title: entry.title,
     authors: entry.authors.join(", "),
@@ -158,8 +161,10 @@ function searchableText(entry) {
     .toLowerCase();
 }
 
-function normalizeEntry(arxivId, entry) {
+function normalizeEntry(key, entry) {
+  const arxivId = key;
   return {
+    key,
     arxivId: stringOr(entry?.arxivId, arxivId),
     title: stringOr(entry?.title, arxivId),
     authors: arrayOfStrings(entry?.authors),

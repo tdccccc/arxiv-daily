@@ -32,6 +32,24 @@ function createVsCodeStorageAdapter(vscodeApi, rootUri) {
         new TextEncoder().encode(content),
       );
     },
+    // Temporary sibling + rename: a crash or a failed write never leaves a
+    // truncated target. There is still no cross-process lock (see dashboard.js).
+    async writeTextAtomic(storagePath, content) {
+      const normalized = normalizeStoragePath(storagePath);
+      const tmp = `${normalized}.tmp-${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
+      const tmpUri = toUri(vscodeApi, rootUri, tmp);
+      try {
+        await fs.writeFile(tmpUri, new TextEncoder().encode(content));
+        await fs.rename(tmpUri, toUri(vscodeApi, rootUri, normalized), { overwrite: true });
+      } catch (error) {
+        try {
+          await fs.delete(tmpUri, { useTrash: false });
+        } catch {
+          // The temporary file may never have been created.
+        }
+        throw error;
+      }
+    },
     async exists(storagePath) {
       return await existsUri(fs, toUri(vscodeApi, rootUri, storagePath));
     },
