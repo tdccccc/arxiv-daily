@@ -303,6 +303,19 @@ export class LlmClient {
     let attempts = 0;
     let finalUsage: TokenUsage | undefined;
     let hadRetriedGenerationFailure = false;
+    // One blind re-send is allowed after an ambiguous mid-request network
+    // failure (e.g. ECONNRESET): bounded duplicate-billing risk for a flaky link.
+    let ambiguousResends = 0;
+    const shouldResendAfterTransportFailure = (err: unknown): boolean => {
+      if (!isHttpTransportError(err)) return true;
+      // Provably never sent (connect/TLS phase): always safe to repeat.
+      if (err.retryableAttempt) return true;
+      // A timeout means the request may still be generating at the provider.
+      if (err.kind === "timeout") return false;
+      if (ambiguousResends >= 1) return false;
+      ambiguousResends += 1;
+      return true;
+    };
     try {
       try {
         return await retry(
@@ -354,10 +367,7 @@ export class LlmClient {
             shouldRetry: (err) => !isCancellationError(err)
               && !isDeterministicOutputFailure(err)
               && !isPermanentLlmError(err)
-              // A transport failure whose physical attempt may still be running
-              // (e.g. a timeout) is not re-sent: the provider could generate and
-              // bill the same request twice.
-              && !(isHttpTransportError(err) && !err.retryableAttempt),
+              && shouldResendAfterTransportFailure(err),
             onRetry: (err, attempt, wait) => {
               hadRetriedGenerationFailure = true;
               this.logger.warn(

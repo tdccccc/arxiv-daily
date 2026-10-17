@@ -190,6 +190,45 @@ describe("LLM stream metrics", () => {
     expect(request).toHaveBeenCalledTimes(1);
   });
 
+  it("re-sends an ambiguous mid-request network failure exactly once", async () => {
+    vi.useFakeTimers();
+    const request = vi.fn(async (): Promise<HttpResponse> => {
+      throw new HttpTransportError("network", "socket hang up", { retryableAttempt: false });
+    });
+
+    const call = client(request).call([{ role: "user", content: "x" }]).catch((e) => e);
+    await vi.runAllTimersAsync();
+
+    expect(await call).toBeInstanceOf(LlmTransientExhaustedError);
+    expect(request).toHaveBeenCalledTimes(2);
+  });
+
+  it("recovers when the single re-send after a connection reset succeeds", async () => {
+    vi.useFakeTimers();
+    const request = vi.fn()
+      .mockRejectedValueOnce(new HttpTransportError("network", "ECONNRESET", { retryableAttempt: false }))
+      .mockResolvedValueOnce(response(200, sse([{ choices: [{ delta: { content: "ok" } }] }])));
+
+    const call = client(request).call([{ role: "user", content: "x" }]);
+    await vi.runAllTimersAsync();
+
+    await expect(call).resolves.toBe("ok");
+    expect(request).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps retrying failures that provably happened before the request was sent", async () => {
+    vi.useFakeTimers();
+    const request = vi.fn(async (): Promise<HttpResponse> => {
+      throw new HttpTransportError("network", "ECONNREFUSED", { retryableAttempt: true });
+    });
+
+    const call = client(request).call([{ role: "user", content: "x" }]).catch((e) => e);
+    await vi.runAllTimersAsync();
+
+    expect(await call).toBeInstanceOf(LlmTransientExhaustedError);
+    expect(request).toHaveBeenCalledTimes(3);
+  });
+
   it("retries a transport failure the host marked as safe to repeat", async () => {
     vi.useFakeTimers();
     const request = vi.fn()
