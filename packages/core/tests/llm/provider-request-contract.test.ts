@@ -24,6 +24,21 @@ function fixture(provider: string, thinkingMode = true, overrides: Partial<LlmSe
 }
 
 describe("provider request contract", () => {
+  it("registers its API key without dropping secrets other components registered", () => {
+    const logger = new Logger("error");
+    logger.setSensitiveValues(["re_ResendSecretKey9999"]);
+    new LlmClient({
+      ...DEFAULT_SETTINGS.llm, baseUrl: "https://provider.example/v1", model: "m", apiKey: "llm-key-123456",
+    }, logger, { request: vi.fn() });
+    vi.spyOn(console, "error").mockImplementation(() => {});
+
+    logger.error("re_ResendSecretKey9999 llm-key-123456");
+
+    const joined = logger.getBuffer().join("\n");
+    expect(joined).not.toContain("re_ResendSecretKey9999");
+    expect(joined).not.toContain("llm-key-123456");
+  });
+
   it("uses native Anthropic adaptive thinking and decodes only answer text with usage", async () => {
     const { client, request, body } = fixture("anthropic", true, {
       baseUrl: "https://api.anthropic.com/v1", model: "claude-opus-4-7",
@@ -142,6 +157,23 @@ describe("provider request contract", () => {
     await client.call(prompt);
     expect(body().thinking.budget_tokens).toBe(16384);
     expect(body().max_tokens).toBeGreaterThan(16384);
+  });
+
+  it("does not cap Anthropic adaptive thinking answers at 4096 tokens by default", async () => {
+    const { client, body } = fixture("anthropic", true, {
+      baseUrl: "https://api.anthropic.com/v1", model: "claude-opus-4-7",
+    });
+    await client.call(prompt);
+    expect(body().thinking).toEqual({ type: "adaptive" });
+    expect(body().max_tokens).toBeGreaterThanOrEqual(32_000);
+  });
+
+  it("raises the Anthropic default budget without thinking", async () => {
+    const { client, body } = fixture("anthropic", false, {
+      baseUrl: "https://api.anthropic.com/v1", model: "claude-sonnet-4-6",
+    });
+    await client.call(prompt);
+    expect(body().max_tokens).toBe(8192);
   });
 
   it("rejects an impossible Anthropic thinking budget before making a request", async () => {

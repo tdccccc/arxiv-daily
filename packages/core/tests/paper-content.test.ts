@@ -1,5 +1,6 @@
 import { markupParser } from "./markup-parser";
 import { readFileSync } from "node:fs";
+import { gzipSync } from "node:zlib";
 import { describe, expect, it, vi } from "vitest";
 import {
   cleanupSourceCache,
@@ -8,6 +9,7 @@ import {
 import { Logger } from "../src/services/logger";
 import type { StorageAdapter } from "../src/core/adapters";
 import { HtmlCache } from "../src/pipeline/html-cache";
+import { SOURCE_EXTRACTION_LIMITS } from "../src/pipeline/source-extractor";
 
 const opts = {
   isDetail: true,
@@ -305,6 +307,26 @@ The results include a measured improvement, uncertainty estimates, and a compari
       }
     },
   );
+
+  it("treats an over-budget source package as unavailable and falls back to the abs page", async () => {
+    const bomb = gzipSync(Buffer.alloc(SOURCE_EXTRACTION_LIMITS.maxInflatedBytes + 1024 * 1024));
+    const fetcher = {
+      fetchPaperHtml: vi.fn(async () => ({ ok: false, status: 404 })),
+      fetchSource: vi.fn(async () => ({ ok: true, body: toArrayBuffer(bomb) })),
+      fetchPaperAbsPage: vi.fn(async () => "<html><blockquote class=\"abstract\">Abstract: A short abstract.</blockquote></html>"),
+    };
+    const paperFetcher = new PaperContentFetcher(
+      fetcher as any,
+      makeCache() as any,
+      new Logger("error"),
+      markupParser,
+    );
+
+    const result = await paperFetcher.fetch("2606.13359", opts);
+
+    expect(result.fullSections).toBeNull();
+    expect(result.fullTextFailure).toContain("exceeds the extraction budget");
+  });
 
   it("aggregates HTML, source, and abs failure reasons", async () => {
     const fetcher = {

@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 import { gzipSync } from "node:zlib";
-import { extractLatexSource } from "../src/pipeline/source-extractor";
+import {
+  extractLatexSource,
+  SOURCE_EXTRACTION_LIMITS,
+  SourceBudgetExceededError,
+} from "../src/pipeline/source-extractor";
 
 const opts = {
   sectionCharLimit: 2000,
@@ -141,5 +145,49 @@ ${limitation}
     const full = result.fullSections ?? "";
     expect(full).toContain("## Limitations");
     expect(full).not.toContain("## Introduction");
+  });
+  describe("extraction budgets", () => {
+    it("rejects a gzip bomb without materialising the inflated data", () => {
+      const bomb = gzipSync(Buffer.alloc(SOURCE_EXTRACTION_LIMITS.maxInflatedBytes + 1024 * 1024));
+      expect(bomb.byteLength).toBeLessThan(1024 * 1024);
+      expect(() => extractLatexSource(toArrayBuffer(bomb), opts)).toThrow(SourceBudgetExceededError);
+    });
+
+    it("bounds a deeply nested \\input fan-out in time and memory", () => {
+      const depth = 12;
+      const files: Record<string, string> = {};
+      for (let level = 0; level < depth; level += 1) {
+        const include = `\\input{f${level + 1}}\n`;
+        const fan = level + 1 < depth ? include.repeat(3) : "";
+        files[level === 0 ? "main.tex" : `f${level}.tex`] = level === 0
+          ? String.raw`\documentclass{article}\begin{document}\section{Intro}` + "\n" + fan + String.raw`\end{document}`
+          : "filler text for expansion. ".repeat(20) + "\n" + fan;
+      }
+      const archive = gzipSync(tarBuffer(files));
+      expect(archive.byteLength).toBeLessThan(2000);
+      const started = Date.now();
+      expect(() => extractLatexSource(toArrayBuffer(archive), opts)).toThrow(SourceBudgetExceededError);
+      expect(Date.now() - started).toBeLessThan(5000);
+    });
+
+    it("rejects archives with too many entries", () => {
+      const files: Record<string, string> = {};
+      for (let i = 0; i <= SOURCE_EXTRACTION_LIMITS.maxTarEntries; i += 1) files[`n${i}.txt`] = "x";
+      expect(() => extractLatexSource(toArrayBuffer(tarBuffer(files)), opts)).toThrow(SourceBudgetExceededError);
+    });
+
+    it("rejects oversized archives before parsing", () => {
+      const huge = new ArrayBuffer(SOURCE_EXTRACTION_LIMITS.maxArchiveBytes + 1);
+      expect(() => extractLatexSource(huge, opts)).toThrow(SourceBudgetExceededError);
+    });
+
+    it("keeps a normal multi-file package unchanged", () => {
+      const archive = gzipSync(tarBuffer({
+        "main.tex": String.raw`\documentclass{article}\begin{document}\section{Introduction}\input{intro}\end{document}`,
+        "intro.tex": "A sufficiently long introduction paragraph that explains the problem, the data and the approach in detail for readers.",
+      }));
+      const result = extractLatexSource(toArrayBuffer(archive), opts);
+      expect(result.fullSections).toContain("sufficiently long introduction");
+    });
   });
 });

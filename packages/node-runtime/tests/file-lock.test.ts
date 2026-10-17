@@ -1,9 +1,10 @@
-import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { fork, type ChildProcess } from "node:child_process";
 import { fileURLToPath } from "node:url";
+import { createHash } from "node:crypto";
 import { build } from "esbuild";
 import { NodeFileLock } from "../src/file-lock";
 import { NodeStorageAdapter } from "../src/storage-adapter";
@@ -184,5 +185,80 @@ describe("machine-local file lock", () => {
     const next = await locks.acquire("counter");
     expect(next).not.toBeNull();
     await next!.release();
+  });
+  describe("owner process identity", () => {
+    async function heldByForgedOwner(mutate: (owner: Record<string, any>) => void) {
+      const { vault, lockRoot } = await fixture();
+      const holderLocks = new NodeFileLock(vault, { lockRoot });
+      const first = await holderLocks.acquire("daily-run");
+      expect(first).not.toBeNull();
+      const dir = path.join(lockRoot, createHash("sha256").update(`${await fs.realpath(vault)}\0daily-run`).digest("hex"));
+      const ownerFile = path.join(dir, "g0.owner.json");
+      const owner = JSON.parse(await fs.readFile(ownerFile, "utf8"));
+      // The owner "crashed"; its PID now belongs to an unrelated live process (this test runner's parent).
+      owner.pid = process.ppid;
+      mutate(owner);
+      await fs.writeFile(ownerFile, JSON.stringify(owner));
+      return { vault, lockRoot, ownerFile };
+    }
+
+    it("records a process identity in the owner record", async () => {
+      const { vault, lockRoot } = await fixture();
+      const lock = await new NodeFileLock(vault, { lockRoot }).acquire("daily-run");
+      const dir = path.join(lockRoot, createHash("sha256").update(`${await fs.realpath(vault)}\0daily-run`).digest("hex"));
+      const owner = JSON.parse(await fs.readFile(path.join(dir, "g0.owner.json"), "utf8"));
+      expect(owner.identity).toBeDefined();
+      await lock!.release();
+    });
+
+    it("recovers a lock whose PID is alive but belongs to a different boot or process", async () => {
+      if (process.platform !== "linux") return;
+      for (const mutate of [
+        (owner: Record<string, any>) => { owner.identity.bootId = "00000000-0000-0000-0000-000000000000"; },
+        (owner: Record<string, any>) => { owner.identity.startTime = "1"; },
+      ]) {
+        const { vault, lockRoot } = await heldByForgedOwner(mutate);
+        const notices: string[] = [];
+        const lock = await new NodeFileLock(vault, { lockRoot, onStaleOwner: (m) => notices.push(m) }).acquire("daily-run");
+        expect(lock).not.toBeNull();
+        expect(notices).toHaveLength(1);
+        expect(notices[0]).toContain("recovering stale lock");
+        await lock!.release();
+      }
+    });
+
+    it("recovers on a boot-time mismatch where /proc identity is unavailable", async () => {
+      const { vault, lockRoot } = await heldByForgedOwner((owner) => {
+        owner.identity = { kind: "boot-time", host: os.hostname(), bootTimeMs: Date.now() - os.uptime() * 1000 - 3_600_000 };
+      });
+      const onStaleOwner = vi.fn();
+      const lock = await new NodeFileLock(vault, { lockRoot, onStaleOwner }).acquire("daily-run");
+      expect(lock).not.toBeNull();
+      expect(onStaleOwner).toHaveBeenCalledOnce();
+      await lock!.release();
+    });
+
+    it("keeps a lock whose live owner identity still matches", async () => {
+      const { vault, lockRoot } = await fixture();
+      const holder = child(vault, lockRoot, "hold");
+      await holder.acquired;
+      const onStaleOwner = vi.fn();
+      expect(await new NodeFileLock(vault, { lockRoot, onStaleOwner }).acquire("counter")).toBeNull();
+      expect(onStaleOwner).not.toHaveBeenCalled();
+      holder.process.send("release");
+      await holder.done;
+    });
+
+    it("keeps legacy records without identity on PID-only liveness", async () => {
+      const { vault, lockRoot } = await heldByForgedOwner((owner) => { delete owner.identity; });
+      const onStaleOwner = vi.fn();
+      expect(await new NodeFileLock(vault, { lockRoot, onStaleOwner }).acquire("daily-run")).toBeNull();
+      expect(onStaleOwner).not.toHaveBeenCalled();
+    });
+
+    it("rejects a malformed identity as an invalid ownership record", async () => {
+      const { vault, lockRoot } = await heldByForgedOwner((owner) => { owner.identity = { kind: "linux" }; });
+      await expect(new NodeFileLock(vault, { lockRoot }).acquire("daily-run")).rejects.toThrow("invalid");
+    });
   });
 });

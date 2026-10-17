@@ -180,6 +180,63 @@ describe("NodeHttpClient", () => {
   });
 });
 
+describe("NodeHttpClient failure phase", () => {
+  const withCode = (code: string) => Object.assign(new TypeError("fetch failed"), {
+    cause: Object.assign(new Error(code), { code }),
+  });
+
+  it.each([
+    "ENOTFOUND", "EAI_AGAIN", "ECONNREFUSED", "EHOSTUNREACH", "UND_ERR_CONNECT_TIMEOUT",
+    "EPROTO", "ERR_TLS_CERT_ALTNAME_INVALID", "UNABLE_TO_VERIFY_LEAF_SIGNATURE",
+  ])("marks %s as safe to repeat because nothing was sent", async (code) => {
+    const client = new NodeHttpClient(async () => { throw withCode(code); });
+    await expect(client.request({ url: "https://example.test" })).rejects.toMatchObject({
+      name: "HttpTransportError", kind: "network", retryableAttempt: true,
+    });
+  });
+
+  it.each(["ECONNRESET", "UND_ERR_SOCKET", "EPIPE", "ETIMEDOUT"])(
+    "keeps %s ambiguous because the request may have reached the server",
+    async (code) => {
+      const client = new NodeHttpClient(async () => { throw withCode(code); });
+      await expect(client.request({ url: "https://example.test" })).rejects.toMatchObject({
+        kind: "network", retryableAttempt: false,
+      });
+    },
+  );
+
+  it("finds a connect-phase code nested in an AggregateError cause", async () => {
+    const aggregate = new AggregateError([Object.assign(new Error("x"), { code: "ECONNREFUSED" })]);
+    const client = new NodeHttpClient(async () => { throw new TypeError("fetch failed", { cause: aggregate }); });
+    await expect(client.request({ url: "https://example.test" })).rejects.toMatchObject({ retryableAttempt: true });
+  });
+
+  it("classifies a real refused connection as safe to repeat", async () => {
+    const { createServer } = await import("node:net");
+    const server = createServer().listen(0, "127.0.0.1");
+    await new Promise((resolve) => server.once("listening", resolve));
+    const port = (server.address() as { port: number }).port;
+    await new Promise((resolve) => server.close(resolve));
+    await expect(new NodeHttpClient().request({ url: `http://127.0.0.1:${port}/` })).rejects.toMatchObject({
+      kind: "network", retryableAttempt: true,
+    });
+  });
+
+  it("classifies a connection dropped mid-request as ambiguous", async () => {
+    const { createServer } = await import("node:net");
+    const server = createServer((socket) => socket.destroy()).listen(0, "127.0.0.1");
+    await new Promise((resolve) => server.once("listening", resolve));
+    const port = (server.address() as { port: number }).port;
+    try {
+      await expect(new NodeHttpClient().request({ url: `http://127.0.0.1:${port}/` })).rejects.toMatchObject({
+        kind: "network", retryableAttempt: false,
+      });
+    } finally {
+      await new Promise((resolve) => server.close(resolve));
+    }
+  });
+});
+
 describe("NodeStorageAdapter", () => {
   it("reads and writes text and binary files under a root directory", async () => {
     const root = await makeTempDir();

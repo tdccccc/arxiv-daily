@@ -97,6 +97,18 @@ const CONTENT_FETCH_CONCURRENCY = 6;
 const omittedByModel = (id: string): FilterRecord =>
   ({ id, category: "skip", directions: [], relevanceScore: 0 });
 
+export interface PipelineRunOptions {
+  /**
+   * When a paper summary ends as `transport-exhausted` (the model endpoint was
+   * unreachable), stop before writing the report and return failed_transient so
+   * a later attempt retries only those papers from the kept checkpoints. Hosts
+   * set it unless this is the last transient attempt the state store allows,
+   * where committing a report with fallbacks beats losing the day. Unset keeps
+   * the commit-with-fallbacks behavior.
+   */
+  retryTransportFallbacks?: boolean;
+}
+
 export interface DateScopedCheckpointLifecyclePort {
   removeAll(reportDate: string): Promise<void>;
 }
@@ -164,10 +176,11 @@ export class ArxivPipeline {
   async runForDate(
     dateStr: string,
     signal?: AbortSignal,
+    options: PipelineRunOptions = {},
   ): Promise<PipelineResult> {
     const runSignal = signal;
     try {
-      return await this.runForDateInner(dateStr, runSignal);
+      return await this.runForDateInner(dateStr, runSignal, options);
     } catch (e) {
       if (isCancellationError(e)) {
         return { kind: "cancelled", reason: (e as Error).message };
@@ -179,6 +192,7 @@ export class ArxivPipeline {
   private async runForDateInner(
     dateStr: string,
     signal?: AbortSignal,
+    options: PipelineRunOptions = {},
   ): Promise<PipelineResult> {
     const { logger } = this.deps;
     const t0 = Date.now();
@@ -523,6 +537,7 @@ export class ArxivPipeline {
           onMetrics: (metrics) => runMetrics.record(metrics),
           omittedByTopic,
           titleOnlyCandidates,
+          failOnTransportExhausted: options.retryTransportFallbacks === true,
           onDailyPaperProgress: (completed, total) =>
             this.progress.setStage("summarize-daily", completed, total),
         },

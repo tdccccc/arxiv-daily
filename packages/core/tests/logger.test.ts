@@ -57,6 +57,22 @@ describe("Logger", () => {
     expect(logger.getBuffer().join("\n")).not.toContain("new-secret-value");
   });
 
+  it("accumulates secrets with addSensitiveValues instead of replacing them", () => {
+    const logger = new Logger("info");
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    logger.setSensitiveValues(["re_ResendSecretKey9999"]);
+    logger.addSensitiveValues(["llm-key-123456"]);
+    logger.addSensitiveValues(["llm-key-123456", "hosted-token-abcdef"]);
+
+    logger.warn("re_ResendSecretKey9999 llm-key-123456 hosted-token-abcdef");
+
+    const joined = logger.getBuffer().join("\n");
+    expect(joined).not.toContain("re_ResendSecretKey9999");
+    expect(joined).not.toContain("llm-key-123456");
+    expect(joined).not.toContain("hosted-token-abcdef");
+  });
+
   it("keeps the latest 5000 buffered log entries", () => {
     const logger = new Logger("info");
     const spy = vi.spyOn(console, "log").mockImplementation(() => {});
