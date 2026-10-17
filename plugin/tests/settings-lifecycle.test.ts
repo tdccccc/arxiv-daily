@@ -21,6 +21,7 @@ import * as obsidianHost from "../src/hosts/obsidian";
 import ArxivDailyPlugin, { resolvePluginDir } from "../main.ts";
 import { settingsAndStateFromPersistedData } from "../src/settings/load";
 import { SettingsChangeService } from "../src/settings/change-service";
+import { LibraryIndexStatusStore } from "../src/library/index-status";
 import { ObsidianHttpClient } from "../src/hosts/obsidian/http-client";
 import { ObsidianMarkupParser } from "../src/hosts/obsidian/markup-parser";
 
@@ -81,6 +82,15 @@ function makeStateStore() {
       );
     },
   );
+}
+
+/** The real settings path ends here: prepare stores for settings.output, then install them. */
+async function installStoresForCurrentOutput(plugin: ArxivDailyPlugin): Promise<void> {
+  const internals = plugin as unknown as {
+    prepareOutputStores(settings: unknown): Promise<unknown>;
+    installOutputStores(prepared: unknown): void;
+  };
+  internals.installOutputStores(await internals.prepareOutputStores(plugin.settings));
 }
 
 describe("plugin directory resolution", () => {
@@ -558,6 +568,7 @@ describe("plugin settings reload lifecycle", () => {
       logger: { warn: vi.fn() },
       scheduler,
       progress,
+      libraryIndexStatus: new LibraryIndexStatusStore(),
     });
 
     const prepared = await (plugin as any).prepareOutputStores(candidate);
@@ -1200,7 +1211,7 @@ describe("plugin settings reload lifecycle", () => {
 
     const run = scheduler.runForDateNow("2026-08-10");
     await started;
-    await expect(plugin.reloadStateStoreForOutputPaths()).rejects.toThrow(
+    await expect(installStoresForCurrentOutput(plugin)).rejects.toThrow(
       "cannot replace scheduler store while work is active",
     );
 
@@ -1287,7 +1298,7 @@ describe("plugin settings reload lifecycle", () => {
       kind: "failed_transient",
       reason: "scheduler completion commit failed",
     });
-    await expect(plugin.reloadStateStoreForOutputPaths()).rejects.toThrow(
+    await expect(installStoresForCurrentOutput(plugin)).rejects.toThrow(
       "cannot replace scheduler store while work is active",
     );
 
@@ -1304,5 +1315,67 @@ describe("plugin settings reload lifecycle", () => {
       papersWritten: 3,
     });
     expect(oldHistory.records.at(-1)?.event).toBe("completed");
+  });
+});
+
+describe("output path change through the settings transaction", () => {
+  it("supersedes and reloads personal library state for the new output location", async () => {
+    const plugin = new ArxivDailyPlugin();
+    const storage: StorageAdapter = {
+      ...memoryStorage(),
+      writeTextAtomic: async () => {},
+      acquireLock: vi.fn(async () => null),
+      list: vi.fn(async () => []),
+    };
+    const buildHost = vi.spyOn(obsidianHost, "buildObsidianHostAdapters")
+      .mockReturnValue({ storage, http: {}, markupParser: {} } as any);
+    Object.assign(plugin, {
+      settings: structuredClone(DEFAULT_SETTINGS),
+      app: {},
+      manifest: { id: "arxiv-daily" },
+      loadSettingsAndState: vi.fn(async () => []),
+      cleanupCachesIfDue: vi.fn(),
+      saveData: vi.fn(async () => {}),
+      addStatusBarItem: () => document.createElement("div"),
+      addSettingTab: () => { throw new Error("stop after settingsChanges is wired"); },
+    });
+    try {
+      await expect(plugin.onload()).rejects.toThrow("stop after settingsChanges is wired");
+      const internals = plugin as unknown as Record<string, any>;
+      internals.libraryCatalog = { stale: "catalog of the old location" };
+      internals.libraryProposal = { stale: "proposal of the old location" };
+      internals.libraryNewPaperKeys = ["arxiv:2606.00001"];
+      internals.libraryIndexedPapers = [{ paperKey: "arxiv:2606.00001", title: "stale" }];
+      plugin.libraryIndexStatus.setLastRun({ updatedAt: "2026-10-01T00:00:00.000Z", papers: 4 });
+      const reloadCatalog = vi.spyOn(plugin, "reloadPersonalLibraryCatalog");
+      const revisionBefore = internals.libraryOutputRevision;
+
+      await plugin.settingsChanges.changeValue("output.papersDir", "elsewhere/papers");
+      await plugin.settingsChanges.changeValue("output.dailyDir", "elsewhere/daily");
+
+      expect(plugin.settings.output).toMatchObject({ dailyDir: "elsewhere/daily", papersDir: "elsewhere/papers" });
+      expect(internals.libraryOutputRevision).toBe(revisionBefore + 2);
+      expect(internals.libraryCatalog).toBeNull();
+      expect(internals.libraryProposal).toBeNull();
+      expect(internals.libraryNewPaperKeys).toEqual([]);
+      expect(internals.libraryIndexedPapers).toEqual([]);
+      expect(plugin.libraryIndexStatus.snapshot().lastRun).toBeUndefined();
+      // No library is connected in this fixture, so there is nothing to reload.
+      expect(reloadCatalog).not.toHaveBeenCalled();
+
+      internals.libraryConnection = { selectedRoot: "/lib", rootIdentity: "1:2" };
+      const reloadProfile = vi.spyOn(plugin, "reloadPersonalLibraryProfileDocuments")
+        .mockResolvedValue({} as never);
+      const refreshTrace = vi.spyOn(plugin, "refreshLibraryIndexTrace").mockResolvedValue();
+      reloadCatalog.mockResolvedValue(null);
+      await plugin.settingsChanges.changeValue("output.papersDir", "another/papers");
+      await internals.libraryMutationQueue;
+      expect(reloadCatalog).toHaveBeenCalledTimes(1);
+      expect(reloadProfile).toHaveBeenCalledTimes(1);
+      expect(refreshTrace).toHaveBeenCalledTimes(1);
+    } finally {
+      plugin.onunload();
+      buildHost.mockRestore();
+    }
   });
 });

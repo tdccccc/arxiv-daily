@@ -2341,21 +2341,36 @@ export default class ArxivDailyPlugin extends Plugin {
     } else {
       this.progress.setDisabled();
     }
+    this.transitionLibraryForOutputChange();
   }
 
-  async reloadStateStoreForOutputPaths(): Promise<void> {
+  /**
+   * Personal library documents (catalog, proposals, index manifest) live under
+   * the output root, so new output paths describe a different library state.
+   * Supersede everything held for the old location right away, then load the new
+   * one on the library queue. The load runs after the settings transaction has
+   * committed; a failure is logged (the old state is already gone, so nothing
+   * stale is shown) and a later reload from the review page can retry.
+   */
+  private transitionLibraryForOutputChange(): void {
     this.libraryOutputRevision += 1;
     const mutationRevision = this.beginLibraryMutation();
     this.cancelPersonalLibraryOperations("output paths changed");
-    await this.enqueueLibraryMutation(async () => {
-      this.installOutputStores(await this.prepareOutputStores(this.settings));
-      await this.reloadPersonalLibraryCatalog(mutationRevision);
+    this.resetPersonalLibraryProfileState();
+    this.libraryIndexedPapers = [];
+    this.libraryIndexStatus.setLastRun(undefined);
+    this.libraryIndexStatus.setPreparationError(undefined);
+    if (!this.libraryConnection) return;
+    void this.enqueueLibraryMutation(async () => {
+      await this.reloadPersonalLibraryCatalog(mutationRevision).catch((error) => {
+        this.libraryCatalog = null;
+        this.libraryCatalogLoadError = this.safeProfileLoadError("catalog", error);
+        this.logger.error("personal library catalog load failed after output path change", error);
+      });
       await this.reloadPersonalLibraryProfileDocuments(mutationRevision);
-      if (this.settings.schedule.enabled) {
-        this.progress.setIdle(latestCompletedDate(this.stateStore));
-      } else {
-        this.progress.setDisabled();
-      }
+      await this.refreshLibraryIndexTrace();
+    }).catch((error) => {
+      this.logger.error("settings: failed to reload personal library after output path change", error);
     });
   }
 
