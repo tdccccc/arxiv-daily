@@ -108,10 +108,42 @@ search, which is exactly what happened to 0.5.0 (manifest bumped on main
 targeting it, so a merge PR that would reintroduce the gap fails before it
 can land.
 
+### Release source check
+
+`scripts/check-release-source.mjs` runs before anything is built or published
+and refuses a tag whose commit did not come through review:
+
+- **Reachable.** The tagged commit must be reachable from `origin/main` or from
+  `origin/release/$VERSION`, the branch you pushed for review. A tag on any other
+  branch or a detached commit is refused.
+- **Current** (`release.yml`, and a `dsh-v` tag push). `origin/main`'s tip must be
+  an ancestor of the tagged commit, so a release can never omit a fix that is
+  already merged. If main moved while you prepared the release, merge main into
+  `release/$VERSION`, re-run the verification above, and tag the new head. A tag
+  that never produced a release can be deleted and recreated; a published tag
+  must never be moved.
+- **Manual re-publish.** `publish-cli.yml` (both the automatic run after the
+  release and a manual dispatch) and a dispatched `publish-dsh-plugin.yml` check
+  reachability only. The release already passed the "current" rule, and main
+  legitimately moves on afterwards, so re-publishing an older release keeps
+  working. `publish-cli.yml` runs the checker taken from `origin/main`, not the
+  copy inside the tagged commit.
+
+DSH plugin tags (`dsh-v<version>`) are normally cut from main; a
+`release/dsh-<version>` branch is accepted if you prefer to review first.
+`publish-dsh-plugin.yml` also runs the same audit, lint, workspace test, build
+and smoke gates as `publish-cli.yml`.
+
+The check guards against mistakes and unreviewed commits. It cannot stop someone
+who may push tags and edit workflow files in the tagged commit itself, because a
+tag-triggered workflow runs the definition stored at that commit. Add a GitHub
+tag ruleset (Settings → Rules → Rulesets → target: tags, patterns `*.*.*` and
+`dsh-v*`) restricting who may create them.
+
 Never move or reuse a published tag. If the workflow fails before creating a
 release, fix the underlying commit and publish a new version; do not replace
 assets or mutate an existing release. The workflow verifies the checked-out tag
-target, version metadata, curated-note presence, tests, build, smoke checks, and
+target, its source branch, version metadata, curated-note presence, tests, build, smoke checks, and
 provenance before creating the GitHub release.
 
 After CI succeeds, verify that the release notes are the curated file, the

@@ -71,6 +71,13 @@ jobs:
             exit 1
           fi
           echo "version=$version" >> "$GITHUB_OUTPUT"
+      - name: Verify the tag comes from main or this version's release branch
+        # A tag push must contain current main; a manual re-publish of an existing
+        # tag only has to be reachable, because main moves on after a release.
+        env:
+          VERSION: ${{ steps.release.outputs.version }}
+          MODE: ${{ github.event_name == 'workflow_dispatch' && 'republish' || 'tag' }}
+        run: node scripts/check-release-source.mjs --commit "$(git rev-parse HEAD)" --version "$VERSION" --prefix release/dsh- --mode "$MODE"
       - name: Install workspace dependencies
         run: npm ci
       - name: Install plugin test dependencies
@@ -84,10 +91,17 @@ jobs:
           digest-mismatch: error
       - name: Verify complete native release matrix
         run: node scripts/native-assets.mjs verify
-      - name: Check CLI types and product boundaries
+      - name: Verify release candidate
+        # The same gates publish-cli applies to the CLI this plugin bundles.
         run: |
-          npm run typecheck --workspace apps/cli
+          npm run test:release-tools
+          npm audit --audit-level=moderate
           npm run check:boundaries
+          npm run lint
+          npm run typecheck
+          NODE_OPTIONS=--max-old-space-size=8192 npm run test:workspaces -- --maxWorkers=1
+          npm run build
+          npm run smoke:build
           npm run check:product-units
       - name: Build exact CLI and plugin package with the full native matrix
         run: node extensions/dsh-arxiv-daily/build.mjs
