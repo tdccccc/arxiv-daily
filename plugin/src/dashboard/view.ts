@@ -36,7 +36,7 @@ import {
   SimilarPapersModal,
   type SimilarPapersModalOptions,
 } from "./similar-papers-modal";
-import { renderLibrarySearchBlock } from "./library-search-block";
+import { renderLibrarySearchBlock, type LibrarySearchState } from "./library-search-block";
 import { HubModal } from "./hub-modal";
 import {
   ARXIV_DAILY_DOCS_URL,
@@ -279,6 +279,8 @@ class ArxivDailyDashboardView extends ItemView {
   private resultsEl: HTMLElement | null = null;
   private libraryResultsEl: HTMLElement | null = null;
   private librarySearchToken = 0;
+  private librarySearchCache: { key: string; state: LibrarySearchState } | null = null;
+  private librarySearchPending: { key: string; promise: Promise<LibrarySearchState> } | null = null;
   private recentDatesNotice: string | null = null;
   private recentDatesRefresh: Promise<unknown> | null = null;
   private searchDebounceTimer: number | null = null;
@@ -2339,52 +2341,76 @@ class ArxivDailyDashboardView extends ItemView {
   /**
    * Second result surface of the single search box (ADR 0006): the library
    * full-text knowledge base is queried with the same search text, asynchron-
-   * ously, and its matches render in a block below the filters. Short queries
-   * (< 2 chars) skip the KB; a staleness token drops responses from queries
-   * that were already superseded. Failures (no connection, no index, model
-   * errors) degrade to an inline message and never affect row filtering.
+   * ously, and its matches render in a block below the filters.
+   *
+   * The library is optional, so nothing is searched (and nothing is shown) when
+   * no folder is connected, and a one-line hint replaces the search while the
+   * index is not prepared. Short queries (< 2 chars) skip the KB. The outcome
+   * is remembered per query and index revision, so the re-renders that follow
+   * starring, batch actions or a reload repaint it without embedding the query
+   * again; a staleness token drops responses from superseded queries. Failures
+   * (model errors) degrade to an inline message and never affect row filtering.
    */
   private refreshLibrarySearch(): void {
-    if (!this.libraryResultsEl) return;
+    const container = this.libraryResultsEl;
+    if (!container) return;
     const query = this.query.search?.trim() ?? "";
     const token = ++this.librarySearchToken;
-    if (query.length < 2) {
-      this.libraryResultsEl.empty();
+    if (query.length < 2 || this.plugin.getLibraryConnectionStatus().kind === "disconnected") {
+      container.empty();
       return;
     }
-    renderLibrarySearchBlock(this.libraryResultsEl, { kind: "loading" });
-    void this.plugin.searchPersonalLibraryFullText(query).then(
-      (matches) => {
-        if (token !== this.librarySearchToken || !this.libraryResultsEl) return;
-        if (matches.length === 0) {
-          renderLibrarySearchBlock(this.libraryResultsEl, { kind: "empty" });
-          return;
+    const index = this.plugin.libraryIndexStatus.snapshot();
+    if (!index.lastRun?.papers || index.preparationError) {
+      renderLibrarySearchBlock(container, {
+        kind: "hint",
+        message: "Library search is available once the library index is prepared.",
+      });
+      return;
+    }
+    const key = [query, index.lastRun.updatedAt, index.lastRun.papers, this.plugin.settings.embedding.mode].join("\u0000");
+    const options = {
+      openLibraryPdf: (match: { paperKey: string; filePath?: string }) => this.openLibraryPdf(match),
+      onActionError: (error: unknown, action: string) => this.reportLibraryEvidenceActionError(error, action),
+    };
+    if (this.librarySearchCache?.key === key) {
+      renderLibrarySearchBlock(container, this.librarySearchCache.state, options);
+      return;
+    }
+    renderLibrarySearchBlock(container, { kind: "loading" });
+    let pending = this.librarySearchPending;
+    if (pending?.key !== key) {
+      const promise: Promise<LibrarySearchState> = this.plugin.searchPersonalLibraryFullText(query).then(
+        (matches): LibrarySearchState => matches.length === 0
+          ? { kind: "empty" }
+          : {
+            kind: "matches",
+            matches: matches.slice(0, 5).map((match) => ({
+              paperKey: match.paperKey,
+              title: match.title,
+              score: match.score,
+              scoreKind: match.scoreKind,
+              rankingScore: match.rankingScore,
+              rankingScoreKind: match.rankingScoreKind,
+              filePath: match.filePath,
+              hits: match.hits,
+            })),
+          },
+        (error: unknown): LibrarySearchState => ({ kind: "error", message: errorMessage(error) }),
+      ).then((state) => {
+        if (this.librarySearchPending?.key === key) {
+          this.librarySearchPending = null;
+          this.librarySearchCache = { key, state };
         }
-        renderLibrarySearchBlock(this.libraryResultsEl, {
-          kind: "matches",
-          matches: matches.slice(0, 5).map((match) => ({
-            paperKey: match.paperKey,
-            title: match.title,
-            score: match.score,
-            scoreKind: match.scoreKind,
-            rankingScore: match.rankingScore,
-            rankingScoreKind: match.rankingScoreKind,
-            filePath: match.filePath,
-            hits: match.hits,
-          })),
-        }, {
-          openLibraryPdf: (match) => this.openLibraryPdf(match),
-          onActionError: (error, action) => this.reportLibraryEvidenceActionError(error, action),
-        });
-      },
-      (error: unknown) => {
-        if (token !== this.librarySearchToken || !this.libraryResultsEl) return;
-        renderLibrarySearchBlock(this.libraryResultsEl, {
-          kind: "error",
-          message: errorMessage(error),
-        });
-      },
-    );
+        return state;
+      });
+      pending = { key, promise };
+      this.librarySearchPending = pending;
+    }
+    void pending.promise.then((state) => {
+      if (token !== this.librarySearchToken || !this.libraryResultsEl) return;
+      renderLibrarySearchBlock(this.libraryResultsEl, state, options);
+    });
   }
 
   private async openLibraryPdf(
