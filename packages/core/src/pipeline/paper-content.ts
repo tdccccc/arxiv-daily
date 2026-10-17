@@ -9,7 +9,7 @@ import {
   preserveMathText,
   type ExtractSectionsOpts,
 } from "./section-extractor";
-import { extractLatexSource } from "./source-extractor";
+import { extractLatexSource, SOURCE_EXTRACTION_LIMITS } from "./source-extractor";
 import { isCancellationError, throwIfCancelled } from "../services/cancellation";
 
 export interface PaperContent {
@@ -231,6 +231,15 @@ export class PaperContentFetcher {
           };
         }
         source = fetched.body;
+        // An oversized package is never cached or parsed: it would be re-read
+        // (and re-rejected) on every retry.
+        if (source.byteLength > SOURCE_EXTRACTION_LIMITS.maxArchiveBytes) {
+          return {
+            abstractConclusion: null,
+            fullSections: null,
+            reason: `arXiv source for ${arxivId} is too large to process (${source.byteLength} bytes)`,
+          };
+        }
         await this.writeCachedSource(arxivId, source);
       }
     } catch (e) {
