@@ -68,6 +68,14 @@ async function fixtureVault() {
   return vault;
 }
 
+/** A single day with `count` skipped candidates, for exercising more than one API batch. */
+async function manyCandidatesVault(count) {
+  const vault = await temp("vault");
+  await writeRecord(vault, "2026-10-14", Array.from({ length: count }, (_, index) =>
+    candidate(`2610.${String(index + 1).padStart(5, "0")}`, "skip")));
+  return vault;
+}
+
 function atomEntry(id, abstract) {
   return `<entry><id>http://arxiv.org/abs/${id}v1</id><title>Title of ${id}</title><author><name>A. Author</name></author>` +
     `<summary>${abstract}</summary><published>2026-10-13T00:00:00Z</published><updated>2026-10-13T00:00:00Z</updated>` +
@@ -329,6 +337,79 @@ test("a rate-limited query API request is not retried; the abs-page fallback fil
   assert.ok((await readCsv(outDir)).slice(1).every(row => row[3] !== ""));
 });
 
+test("a header-less 429 stops later batches and gives one summary warning", async () => {
+  const vault = await manyCandidatesVault(255);
+  const outDir = path.join(await temp("out"), "sheet");
+  const { result, http } = await runExport(vault, outDir, { skippedSample: 255 }, fakeHttp({
+    respond: call => (call === 1 ? { status: 429, headers: {}, bodyText: "slow down" } : undefined),
+    abs: id => ({ status: 200, headers: {}, bodyText: absPage(absAbstractOf(id)) }),
+  }));
+
+  assert.equal(http.calls.length, 1, "the throttled query API is not asked again");
+  assert.equal(http.absCalls.length, 255, "every paper falls back to its abs page");
+  assert.equal(result.withoutAbstract, 0);
+  assert.equal(result.warnings.length, 1, "one summary warning instead of one per batch");
+  assert.match(result.warnings[0], /rate-limited/i);
+  assert.match(result.warnings[0], /remaining 255 papers/);
+  assert.match(result.warnings[0], /abs pages/);
+  assert.match(result.warnings[0], /13 minutes/, "255 papers at about 3 s each");
+});
+
+test("a long Retry-After is reported as deferred and also stops the batches", async () => {
+  const vault = await manyCandidatesVault(150);
+  const outDir = path.join(await temp("out"), "sheet");
+  const { result, http } = await runExport(vault, outDir, { skippedSample: 150 }, fakeHttp({
+    respond: () => ({ status: 429, headers: { "retry-after": "3600" }, bodyText: "slow down" }),
+    abs: id => ({ status: 200, headers: {}, bodyText: absPage(absAbstractOf(id)) }),
+  }));
+
+  assert.equal(http.calls.length, 1, "the second batch is never requested");
+  assert.equal(http.absCalls.length, 150);
+  assert.equal(result.withoutAbstract, 0);
+  assert.equal(result.warnings.length, 1);
+  assert.match(result.warnings[0], /later retry/, "the deferred error is explained, not retried");
+});
+
+test("cached abstracts are kept when a later API batch fails", async () => {
+  const vault = await fixtureVault();
+  const outDir = path.join(await temp("out"), "sheet");
+  const first = await runExport(vault, outDir);
+  const firstRows = Object.fromEntries((await readCsv(outDir)).slice(1).map(row => [row[1], row]));
+  assert.equal(first.http.calls.length, 1);
+
+  // A larger sample adds four papers that are not cached yet; the query API then fails.
+  const second = fakeHttp({
+    respond: () => ({ status: 429, headers: {}, bodyText: "slow down" }),
+    abs: id => ({ status: 200, headers: {}, bodyText: absPage(absAbstractOf(id)) }),
+  });
+  const { result } = await runExport(vault, outDir, { force: true, skippedSample: 8 }, second);
+  const secondRows = Object.fromEntries((await readCsv(outDir)).slice(1).map(row => [row[1], row]));
+  const cachedIds = Object.keys(firstRows);
+  const newIds = Object.keys(secondRows).filter(id => !cachedIds.includes(id));
+
+  assert.equal(newIds.length, 4);
+  assert.equal(second.calls.length, 1, "only the uncached papers are requested");
+  assert.deepEqual([...second.absCalls].sort(), [...newIds].sort(), "cached papers never reach the abs fallback");
+  for (const id of cachedIds) assert.equal(secondRows[id][3], firstRows[id][3], "the cached abstract is kept");
+  assert.ok(!second.absCalls.some(id => cachedIds.includes(id)));
+  assert.equal(result.withoutAbstract, 0);
+});
+
+test("the guide escapes topic tags and asks for text-formatted id and date columns", async () => {
+  const vault = await temp("vault");
+  const directions = [{ ...DIRECTIONS[0], tag: "a|b" }];
+  await writeRecord(vault, "2026-10-14", [
+    candidate(idOf("11", 1), "photoz", { directions: [{ id: "dir-photoz", text: DIRECTIONS[0].text, tag: "a|b" }] }),
+  ], { directions });
+  const outDir = path.join(await temp("out"), "sheet");
+  await runExport(vault, outDir, { skippedSample: 0 });
+
+  const guide = await readFile(path.join(outDir, "labels.guide.md"), "utf8");
+  assert.match(guide, /\| 1 \| a\\\|b \| Photometric redshift methods, catalogs\. \|/);
+  assert.match(guide, /文本格式/);
+  assert.match(guide, /`id`、`date`/);
+});
+
 test("export refuses to overwrite a label sheet unless forced", async () => {
   const vault = await fixtureVault();
   const outDir = path.join(await temp("out"), "sheet");
@@ -419,5 +500,9 @@ test("command-line arguments are validated", () => {
   assert.throws(() => qe.parseExportArgs(["--out", "/o", "--bogus"]), /unknown option.*--bogus/i);
   assert.throws(() => qe.parseExportArgs(["--out", "/o", "--skipped", "-3"]), /--skipped/);
   assert.throws(() => qe.parseExportArgs(["--out", "/o", "--from", "10/01"]), /--from/);
+  assert.throws(() => qe.parseExportArgs(["--out", "/o", "--from", "2026-13-01"]), /--from must be a date like 2026-10-14/);
+  assert.throws(() => qe.parseExportArgs(["--out", "/o", "--to", "2026-02-30"]), /--to must be a date like 2026-10-14/);
+  assert.throws(() => qe.parseExportArgs(["--out", "/o", "--from", "2026-10-15", "--to", "2026-10-14"]), /start date is after the end date/);
+  assert.deepEqual(qe.parseExportArgs(["--out", "/o", "--from", "2026-10-14", "--to", "2026-10-14"]), { outDir: "/o", from: "2026-10-14", to: "2026-10-14" });
   assert.throws(() => qe.parseExportArgs(["--out"]), /--out/);
 });
