@@ -1,6 +1,6 @@
 import { afterEach, expect, it, vi } from "vitest";
 import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
 import { DEFAULT_SETTINGS, PaperIndexStore, appendGenerationMetrics } from "@arxiv-daily/core";
 import { NodeStorageAdapter } from "@arxiv-daily/node-runtime";
@@ -101,6 +101,22 @@ it("keeps layout preferences outside Vault data and restores them in another ser
   const another = await startWorkbench({ config }); cleanup.push(another.close);
   expect(await (await fetch(new URL("api/preferences", another.url))).json()).toEqual({ sidebarWidth: 570, sidebarCollapsed: true, appearance: { theme: "light", language: "zh" } });
   expect((await post({ sidebarWidth: 9000, sidebarCollapsed: false })).status).toBe(400);
+});
+
+it("serves defaults for a damaged preferences file and lets the user save over it", async () => {
+  const { get, config } = await fixture();
+  await mkdir(dirname(config.configPath), { recursive: true });
+  await writeFile(join(dirname(config.configPath), "workbench-ui.json"), "{ truncated");
+  const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+  try {
+    const read = await get("api/preferences");
+    expect(read.status).toBe(200);
+    expect(await read.json()).toEqual({ sidebarWidth: null, sidebarCollapsed: false, appearance: { theme: "light", language: "zh" } });
+    const saved = await get("api/preferences", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ sidebarWidth: 600 }) });
+    expect(saved.status).toBe(200);
+    expect((await (await get("api/preferences")).json()).sidebarWidth).toBe(600);
+    expect(stderr.mock.calls.some(([message]) => String(message).includes("workbench-ui.json"))).toBe(true);
+  } finally { stderr.mockRestore(); }
 });
 
 it("serializes competing marks and preserves independent fields across requests", async () => {

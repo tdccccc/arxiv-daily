@@ -7,11 +7,38 @@ import { WorkbenchError } from "./documents";
 export interface WorkbenchPreferences { sidebarWidth: number | null; sidebarCollapsed: boolean; appearance: UiAppearancePreferences }
 const filename = "workbench-ui.json";
 const defaults = (): WorkbenchPreferences => ({ sidebarWidth: null, sidebarCollapsed: false, appearance: { ...DEFAULT_UI_APPEARANCE } });
-export async function readPreferences(configPath: string): Promise<WorkbenchPreferences> {
-  try {
-    const raw: unknown = JSON.parse(await readFile(path.join(path.dirname(configPath), filename), "utf8"));
-    return { ...defaults(), ...validatePatch(raw) };
-  } catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return defaults(); throw error; }
+export async function readPreferences(configPath: string, warn: (message: string) => void = defaultWarn): Promise<WorkbenchPreferences> {
+  const file = path.join(path.dirname(configPath), filename);
+  let text: string;
+  try { text = await readFile(file, "utf8"); }
+  catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return defaults(); throw error; }
+  return { ...defaults(), ...salvage(text, file, warn) };
+}
+
+function defaultWarn(message: string): void { process.stderr.write(`${message}\n`); }
+
+/**
+ * These are cosmetic settings, so a damaged file (hand edit, sync conflict, empty file) must never
+ * take the workbench down or block saving: keep every field that is still valid and warn about the rest.
+ * The next save rewrites the file in full.
+ */
+function salvage(text: string, file: string, warn: (message: string) => void): Partial<WorkbenchPreferences> {
+  let raw: unknown;
+  try { raw = JSON.parse(text); }
+  catch { warn(`Ignoring unreadable workbench preferences ${file}; using defaults until they are saved again.`); return {}; }
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+    warn(`Ignoring workbench preferences ${file}: expected a JSON object; using defaults until they are saved again.`);
+    return {};
+  }
+  const kept: Partial<WorkbenchPreferences> = {};
+  for (const [key, value] of Object.entries(raw)) {
+    try { Object.assign(kept, validatePatch({ [key]: value })); }
+    catch (error) {
+      if (!(error instanceof WorkbenchError)) throw error;
+      warn(`Ignoring invalid "${key}" in workbench preferences ${file}.`);
+    }
+  }
+  return kept;
 }
 
 /** Merge under a shared per-file lock so layout and appearance saves cannot erase each other. */

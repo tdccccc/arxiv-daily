@@ -43,3 +43,34 @@ it.each([{ appearance: { theme: "invalid", language: "en" } }, { appearance: { t
   await expect(savePreferences(config, body)).rejects.toMatchObject({ status: 400 });
   expect(await fs.readFile(path.join(path.dirname(config), "workbench-ui.json"), "utf8")).toBe(before);
 });
+async function writeStored(config: string, text: string) {
+  await fs.mkdir(path.dirname(config), { recursive: true });
+  await fs.writeFile(path.join(path.dirname(config), "workbench-ui.json"), text);
+}
+it.each(["{", "", "   ", "not json", "null", "[]", "42", '"text"'])("reads a damaged preferences file %j as defaults and repairs it on save", async text => {
+  const config = await fixture();
+  await writeStored(config, text);
+  const warnings: string[] = [];
+  expect(await readPreferences(config, message => warnings.push(message))).toEqual({ sidebarWidth: null, sidebarCollapsed: false, appearance: DEFAULT_UI_APPEARANCE });
+  expect(warnings).toHaveLength(1);
+  expect(warnings[0]).toContain("workbench-ui.json");
+  const saved = await savePreferences(config, { sidebarCollapsed: true });
+  expect(saved).toEqual({ sidebarWidth: null, sidebarCollapsed: true, appearance: DEFAULT_UI_APPEARANCE });
+  expect(JSON.parse(await fs.readFile(path.join(path.dirname(config), "workbench-ui.json"), "utf8"))).toEqual(saved);
+  expect(await readPreferences(config, () => { throw new Error("no warning expected after repair"); })).toEqual(saved);
+});
+it("keeps the valid fields of a partly invalid file and warns about each bad one", async () => {
+  const config = await fixture();
+  await writeStored(config, JSON.stringify({ sidebarWidth: 620, sidebarCollapsed: "yes", appearance: { theme: "nope", language: "en" }, futureField: 1 }));
+  const warnings: string[] = [];
+  expect(await readPreferences(config, message => warnings.push(message))).toEqual({ sidebarWidth: 620, sidebarCollapsed: false, appearance: DEFAULT_UI_APPEARANCE });
+  expect(warnings.join("\n")).toContain('"sidebarCollapsed"');
+  expect(warnings.join("\n")).toContain('"appearance"');
+  expect(warnings.join("\n")).toContain('"futureField"');
+  expect(warnings).toHaveLength(3);
+});
+it("still surfaces genuine I/O errors instead of hiding them behind defaults", async () => {
+  const config = await fixture();
+  await fs.mkdir(path.join(path.dirname(config), "workbench-ui.json"), { recursive: true });
+  await expect(readPreferences(config)).rejects.toMatchObject({ code: "EISDIR" });
+});
