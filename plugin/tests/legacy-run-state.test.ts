@@ -34,10 +34,11 @@ describe("migrateLegacyRunState", () => {
     await store.load();
     const warn = vi.fn();
 
-    await migrateLegacyRunState(store, {
+    const pending = await migrateLegacyRunState(store, {
       "2026-09-22": { status: "completed", lastAttempt: 1, attempts: 1 },
       "2026-09-23": { status: "completed", attempts: 1 },
     } as never, warn);
+    expect(pending).toEqual({});
 
     expect(Object.keys(store.snapshot())).toEqual(["2026-09-22"]);
     expect(warn).toHaveBeenCalledWith(expect.stringContaining("2026-09-23"));
@@ -54,5 +55,27 @@ describe("migrateLegacyRunState", () => {
     }, vi.fn());
 
     expect(Object.keys(store.snapshot())).toEqual(["2026-09-24"]);
+  });
+
+  it("returns the whole legacy payload when the copy fails so it can stay in data.json", async () => {
+    const store = createStorageStateStore(memoryStorage(), DEFAULT_SETTINGS.output);
+    await store.load();
+    vi.spyOn(store, "replaceAll").mockRejectedValue(new Error("disk full"));
+    const warn = vi.fn();
+    const legacy = {
+      "2026-09-22": { status: "completed", lastAttempt: 1, attempts: 1 },
+      "2026-09-23": { status: "completed", attempts: 1 },
+    };
+
+    const pending = await migrateLegacyRunState(store, legacy as never, warn);
+
+    expect(pending).toBe(legacy);
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining("disk full"));
+  });
+
+  it("has nothing pending when there is nothing to migrate", async () => {
+    const store = createStorageStateStore(memoryStorage(), DEFAULT_SETTINGS.output);
+    await store.load();
+    await expect(migrateLegacyRunState(store, {}, vi.fn())).resolves.toEqual({});
   });
 });

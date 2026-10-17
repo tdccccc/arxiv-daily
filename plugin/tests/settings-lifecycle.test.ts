@@ -1447,3 +1447,27 @@ describe("work after plugin unload", () => {
     }
   });
 });
+
+describe("legacy run state in data.json", () => {
+  it("is written back while its migration is pending and dropped once migrated", async () => {
+    const plugin = new ArxivDailyPlugin();
+    const saved: any[] = [];
+    const legacy = { "2026-10-01": { status: "completed", lastAttempt: 1, attempts: 1, papersWritten: 5 } };
+    Object.assign(plugin, {
+      settings: structuredClone(DEFAULT_SETTINGS),
+      saveData: vi.fn(async (data: unknown) => { saved.push(structuredClone(data)); }),
+    });
+    const internals = plugin as unknown as {
+      pendingLegacyRunState: unknown;
+      persistSettings(): Promise<void>;
+    };
+
+    internals.pendingLegacyRunState = legacy;
+    await internals.persistSettings();
+    expect(saved.at(-1)).toMatchObject({ runState: legacy });
+
+    internals.pendingLegacyRunState = {};
+    await internals.persistSettings();
+    expect(saved.at(-1)).not.toHaveProperty("runState");
+  });
+});

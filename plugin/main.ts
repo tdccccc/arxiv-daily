@@ -343,6 +343,8 @@ export default class ArxivDailyPlugin extends Plugin {
   private unloading = false;
   private unsubscribeOperations?: () => void;
   private legacyRunState: RunState = {};
+  /** Legacy data.json run state whose migration failed; written back until it is migrated. */
+  private pendingLegacyRunState: RunState = {};
   private scheduleIntentRevision = 0;
   private scheduleIntentQueue: Promise<void> = Promise.resolve();
   private host!: HostAdapters;
@@ -455,7 +457,7 @@ export default class ArxivDailyPlugin extends Plugin {
       this.logger,
     );
     await this.stateStore.load();
-    await migrateLegacyRunState(
+    this.pendingLegacyRunState = await migrateLegacyRunState(
       this.stateStore,
       this.legacyRunState,
       (message) => this.logger.warn(`settings: ${message}`),
@@ -2859,6 +2861,8 @@ export default class ArxivDailyPlugin extends Plugin {
       ? this.libraryProposalAcceptanceRaw : this.libraryProposalAcceptances ?? []);
     const data: PersistedData = {
       settings: settings ?? this.settings,
+      ...(Object.keys(this.pendingLegacyRunState ?? {}).length > 0
+        ? { runState: this.pendingLegacyRunState } : {}),
       ...(this.libraryProposalAcceptanceLoadError || (Array.isArray(reviewState) && reviewState.length > 0)
         ? { libraryProposalAcceptances: reviewState } : {}),
       ...(this.libraryConnection
