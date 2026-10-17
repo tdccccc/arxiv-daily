@@ -74,7 +74,7 @@ type OperationHandle,
 type OperationKind,
 } from "@arxiv-daily/core";
 import { SchedulerService } from "@arxiv-daily/core";
-import { StatusBarController } from "./src/services/status-bar";
+import { StatusBarController, withBusyGuard } from "./src/services/status-bar";
 import { NoopProgressReporter, type ProgressReporter } from "@arxiv-daily/core";
 import { chooseModal } from "./src/services/modal";
 import {
@@ -252,12 +252,28 @@ export interface PersonalLibraryProfileSnapshot {
 
 class SettingsOperationRegistry extends OperationRegistry {
   private outputTransitionActive = false;
+  private closedReason: string | null = null;
+
+  /**
+   * Terminal: after the plugin is unloaded nothing may start. A late caller (an
+   * in-flight scheduler tick, a dashboard continuation) gets an already-aborted
+   * handle, so it unwinds through its normal cancellation path instead of
+   * running work for an instance nothing will ever unload again.
+   */
+  close(reason: string): void {
+    this.closedReason = reason;
+  }
 
   override begin(
     kind: OperationKind,
     label: string,
     key?: string,
   ): OperationHandle {
+    if (this.closedReason !== null) {
+      const controller = new AbortController();
+      controller.abort(this.closedReason);
+      return { id: `${kind}:closed`, signal: controller.signal, finish: () => undefined };
+    }
     if (this.outputTransitionActive) {
       throw new Error(
         "Cannot start an operation while output directories are changing",
@@ -327,6 +343,8 @@ export default class ArxivDailyPlugin extends Plugin {
   private unloading = false;
   private unsubscribeOperations?: () => void;
   private legacyRunState: RunState = {};
+  /** Legacy data.json run state whose migration failed; written back until it is migrated. */
+  private pendingLegacyRunState: RunState = {};
   private scheduleIntentRevision = 0;
   private scheduleIntentQueue: Promise<void> = Promise.resolve();
   private host!: HostAdapters;
@@ -439,7 +457,7 @@ export default class ArxivDailyPlugin extends Plugin {
       this.logger,
     );
     await this.stateStore.load();
-    await migrateLegacyRunState(
+    this.pendingLegacyRunState = await migrateLegacyRunState(
       this.stateStore,
       this.legacyRunState,
       (message) => this.logger.warn(`settings: ${message}`),
@@ -487,9 +505,12 @@ export default class ArxivDailyPlugin extends Plugin {
       lock: this.runLock,
       logger: this.logger,
       runForDate: async (date, signal) => {
+        if (this.unloading) throwIfCancelled(abortedSignal("plugin unloaded"));
         return await this.buildPipeline().runForDate(date, signal);
       },
-      progress: this.progress,
+      // Idle ticks must not replace the progress of a library task or detail
+      // summary that currently owns the status bar.
+      progress: withBusyGuard(this.progress, () => this.operations.snapshot().length > 0),
       cancellation: this.runCancellation,
       recentDates: this.recentDates,
       runHistory: this.runHistoryStore,
@@ -561,6 +582,7 @@ export default class ArxivDailyPlugin extends Plugin {
   onunload() {
     this.unloading = true;
     this.scheduler?.stop();
+    this.operations.close("plugin unloaded");
     this.operations.cancelAll("plugin unloaded");
     this.libraryInventoryController?.abort("plugin unloaded");
     this.unsubscribeOperations?.();
@@ -714,29 +736,6 @@ export default class ArxivDailyPlugin extends Plugin {
         if (this.libraryConnection === revoked) {
           this.libraryConnection = previous;
         }
-        throw error;
-      }
-    });
-  }
-
-  async setLlmBaseUrl(next: string): Promise<void> {
-    const normalized = next.trim();
-    const requestedEndpointChanged = this.effectiveLlmEndpoint(this.settings.llm.baseUrl)
-      !== this.effectiveLlmEndpoint(normalized);
-    if (requestedEndpointChanged) {
-      this.beginLibraryMutation();
-      this.cancelPersonalLibraryDirectionGeneration("model endpoint changed");
-    }
-    await this.enqueueLibraryMutation(async () => {
-      const previous = this.settings.llm.baseUrl;
-      this.settings.llm.baseUrl = normalized;
-      this.settings.detailSelection = sanitizeDetailSelection(this.settings.detailSelection);
-      this.refreshSensitiveValues();
-      try {
-        await this.persistSettings();
-      } catch (error) {
-        this.settings.llm.baseUrl = previous;
-        this.refreshSensitiveValues();
         throw error;
       }
     });
@@ -2341,21 +2340,36 @@ export default class ArxivDailyPlugin extends Plugin {
     } else {
       this.progress.setDisabled();
     }
+    this.transitionLibraryForOutputChange();
   }
 
-  async reloadStateStoreForOutputPaths(): Promise<void> {
+  /**
+   * Personal library documents (catalog, proposals, index manifest) live under
+   * the output root, so new output paths describe a different library state.
+   * Supersede everything held for the old location right away, then load the new
+   * one on the library queue. The load runs after the settings transaction has
+   * committed; a failure is logged (the old state is already gone, so nothing
+   * stale is shown) and a later reload from the review page can retry.
+   */
+  private transitionLibraryForOutputChange(): void {
     this.libraryOutputRevision += 1;
     const mutationRevision = this.beginLibraryMutation();
     this.cancelPersonalLibraryOperations("output paths changed");
-    await this.enqueueLibraryMutation(async () => {
-      this.installOutputStores(await this.prepareOutputStores(this.settings));
-      await this.reloadPersonalLibraryCatalog(mutationRevision);
+    this.resetPersonalLibraryProfileState();
+    this.libraryIndexedPapers = [];
+    this.libraryIndexStatus.setLastRun(undefined);
+    this.libraryIndexStatus.setPreparationError(undefined);
+    if (!this.libraryConnection) return;
+    void this.enqueueLibraryMutation(async () => {
+      await this.reloadPersonalLibraryCatalog(mutationRevision).catch((error) => {
+        this.libraryCatalog = null;
+        this.libraryCatalogLoadError = this.safeProfileLoadError("catalog", error);
+        this.logger.error("personal library catalog load failed after output path change", error);
+      });
       await this.reloadPersonalLibraryProfileDocuments(mutationRevision);
-      if (this.settings.schedule.enabled) {
-        this.progress.setIdle(latestCompletedDate(this.stateStore));
-      } else {
-        this.progress.setDisabled();
-      }
+      await this.refreshLibraryIndexTrace();
+    }).catch((error) => {
+      this.logger.error("settings: failed to reload personal library after output path change", error);
     });
   }
 
@@ -2371,6 +2385,7 @@ export default class ArxivDailyPlugin extends Plugin {
   ): Promise<T> {
     const handle = this.operations.begin(kind, label, key);
     try {
+      throwIfCancelled(handle.signal);
       return await operation();
     } finally {
       handle.finish();
@@ -2406,13 +2421,13 @@ export default class ArxivDailyPlugin extends Plugin {
         return false;
       }
       const selected = await this.chooseScheduleEnableAction();
-      if (revision !== this.scheduleIntentRevision) return false;
+      if (revision !== this.scheduleIntentRevision || this.unloading) return false;
       if (selected === null || selected === "cancel") return false;
       choice = selected === "run" ? "run" : "skip";
     }
 
     return this.enqueueScheduleIntent(async () => {
-      if (revision !== this.scheduleIntentRevision) return false;
+      if (revision !== this.scheduleIntentRevision || this.unloading) return false;
       if (this.settings.schedule.enabled !== enabled) {
         await this.settingsChanges.changeValue("schedule.enabled", enabled);
       }
@@ -2429,7 +2444,7 @@ export default class ArxivDailyPlugin extends Plugin {
         // Today's run can take minutes; it reports through the status bar and
         // notices, so the toggle (and later intents) must not wait for it.
         void Promise.resolve()
-          .then(() => this.scheduler.tickToday())
+          .then(() => (this.unloading ? undefined : this.scheduler.tickToday()))
           .then((result) => {
             if (
               revision === this.scheduleIntentRevision &&
@@ -2823,6 +2838,8 @@ export default class ArxivDailyPlugin extends Plugin {
       ? this.libraryProposalAcceptanceRaw : this.libraryProposalAcceptances ?? []);
     const data: PersistedData = {
       settings: settings ?? this.settings,
+      ...(Object.keys(this.pendingLegacyRunState ?? {}).length > 0
+        ? { runState: this.pendingLegacyRunState } : {}),
       ...(this.libraryProposalAcceptanceLoadError || (Array.isArray(reviewState) && reviewState.length > 0)
         ? { libraryProposalAcceptances: reviewState } : {}),
       ...(this.libraryConnection
@@ -3096,6 +3113,12 @@ export default class ArxivDailyPlugin extends Plugin {
       );
     }
   }
+}
+
+function abortedSignal(reason: string): AbortSignal {
+  const controller = new AbortController();
+  controller.abort(reason);
+  return controller.signal;
 }
 
 function latestCompletedDate(store: StateStore): string | undefined {

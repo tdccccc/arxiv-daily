@@ -34,7 +34,7 @@ function makePlugin() {
     saveData,
     libraryDirectoryPicker: { select: vi.fn() },
     openLibrarySource: vi.fn(),
-    operations: { cancelAll: vi.fn() },
+    operations: { close: vi.fn(), cancelAll: vi.fn() },
     librarySelectionRevision: 0,
     libraryConnectionRevision: 0,
     libraryOutputRevision: 0,

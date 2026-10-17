@@ -1,8 +1,13 @@
 const { buildDashboardState } = require("./dashboard-model");
 const { PAPER_INDEX_PATH, findArxivDailyVault, normalizeStoragePath } = require("./workspace");
+const { normalizeArxivId } = require("./pipeline-commands");
 
 const DASHBOARD_VIEW_TYPE = "arxivDaily.dashboard";
 const VALID_STATUSES = new Set(["inbox", "to_read", "reading", "read", "saved", "ignored"]);
+// papers.json schema versions this companion has been checked against. It
+// edits a single field in place and preserves everything else, so it refuses to
+// write a document written by a format it does not know.
+const SUPPORTED_SCHEMA_VERSIONS = new Set([1, 2, 3, 4, 5]);
 
 async function openDashboard(vscodeApi, context) {
   const vault = await findArxivDailyVault(vscodeApi);
@@ -23,12 +28,24 @@ async function openDashboard(vscodeApi, context) {
     },
   );
 
+  let htmlLoaded = false;
   const render = async () => {
     const index = await loadPaperIndex(vault.storage);
-    panel.webview.html = renderDashboardHtml({
-      nonce: createNonce(),
-      state: buildDashboardState(index),
-      workspaceName: vault.workspaceFolder.name,
+    const state = buildDashboardState(index);
+    if (!htmlLoaded) {
+      htmlLoaded = true;
+      panel.webview.html = renderDashboardHtml({
+        nonce: createNonce(),
+        state,
+        workspaceName: vault.workspaceFolder.name,
+      });
+      return;
+    }
+    // Later updates are posted to the running page, which keeps its tab,
+    // search text and filters; reassigning html would reset them.
+    await panel.webview.postMessage({
+      type: "state",
+      state: { ...state, workspaceName: vault.workspaceFolder.name },
     });
   };
 
@@ -40,13 +57,13 @@ async function openDashboard(vscodeApi, context) {
         return;
       }
       if (message?.type === "setStatus") {
-        await updatePaperStatus(vault.storage, message.arxivId, message.status);
+        await updatePaperStatus(vault.storage, message.key ?? message.arxivId, message.status);
         await render();
         return;
       }
       if (message?.type === "openResource") {
         const index = await loadPaperIndex(vault.storage);
-        await openResource(vscodeApi, vault, index, message.arxivId, message.resource);
+        await openResource(vscodeApi, vault, index, message.key ?? message.arxivId, message.resource);
       }
     } catch (error) {
       void vscodeApi.window.showErrorMessage(`arXiv Daily: ${error.message}`);
@@ -64,24 +81,53 @@ async function loadPaperIndex(storage) {
   return JSON.parse(await storage.readText(PAPER_INDEX_PATH));
 }
 
-async function updatePaperStatus(storage, arxivId, status, now = () => new Date()) {
-  if (!VALID_STATUSES.has(status)) throw new Error(`invalid status: ${status}`);
-  const index = await loadPaperIndex(storage);
-  const entry = index.papers?.[arxivId];
-  if (!entry) throw new Error(`${arxivId} is not in papers.json`);
-  const timestamp = now().toISOString();
-  entry.status = status;
-  index.updatedAt = timestamp;
-  await storage.writeText(PAPER_INDEX_PATH, JSON.stringify(index, null, 2));
-  return entry;
+/**
+ * Find a paper by its papers.json map key or by its arXiv id. Core keys entries
+ * "arxiv:<id>" (schema 4+); older files used the bare id.
+ */
+function findPaper(index, id) {
+  const papers = index?.papers;
+  if (typeof id !== "string" || !id || !papers || typeof papers !== "object") return null;
+  for (const key of [id, `arxiv:${id}`]) {
+    if (Object.hasOwn(papers, key)) return { key, entry: papers[key] };
+  }
+  for (const [key, entry] of Object.entries(papers)) {
+    if (entry && (entry.arxivId === id || entry.paperKey === id)) return { key, entry };
+  }
+  return null;
 }
 
-async function openResource(vscodeApi, vault, index, arxivId, resource) {
-  const entry = index.papers?.[arxivId];
-  if (!entry) throw new Error(`${arxivId} is not in papers.json`);
-  const target = resourceTargetForEntry(entry, resource);
+/**
+ * Edits one field of papers.json in place. There is no cross-process lock here
+ * (core's PaperIndexStore uses a file lock the extension host cannot take), so a
+ * write racing an Obsidian/CLI write can lose one side's change; the write
+ * itself is atomic, so the file is never left truncated.
+ */
+async function updatePaperStatus(storage, id, status, now = () => new Date()) {
+  if (!VALID_STATUSES.has(status)) throw new Error(`invalid status: ${status}`);
+  if (typeof storage.writeTextAtomic !== "function") {
+    throw new Error("storage does not support atomic writes");
+  }
+  const index = await loadPaperIndex(storage);
+  if (!index || typeof index !== "object" || !SUPPORTED_SCHEMA_VERSIONS.has(index.schemaVersion)) {
+    throw new Error(
+      `papers.json schemaVersion ${String(index?.schemaVersion)} is not supported by this extension; update the extension or use Obsidian/the CLI`,
+    );
+  }
+  const found = findPaper(index, id);
+  if (!found) throw new Error(`${id} is not in papers.json`);
+  found.entry.status = status;
+  index.updatedAt = now().toISOString();
+  await storage.writeTextAtomic(PAPER_INDEX_PATH, JSON.stringify(index, null, 2));
+  return found.entry;
+}
+
+async function openResource(vscodeApi, vault, index, id, resource) {
+  const found = findPaper(index, id);
+  if (!found) throw new Error(`${id} is not in papers.json`);
+  const target = resourceTargetForEntry(found.entry, resource);
   if (!target) {
-    void vscodeApi.window.showWarningMessage(`arXiv Daily: no ${resource} for ${arxivId}.`);
+    void vscodeApi.window.showWarningMessage(`arXiv Daily: no ${resource} for ${id}.`);
     return;
   }
 
@@ -97,6 +143,27 @@ async function openResource(vscodeApi, vault, index, arxivId, resource) {
   await vscodeApi.commands.executeCommand("vscode.open", uri);
 }
 
+/**
+ * Web targets are rebuilt from the arXiv id; a stored URL is only used when it
+ * is an https arxiv.org URL. papers.json lives in the workspace and may come
+ * from a cloned repository, so it must not choose the URI scheme that
+ * openExternal is given.
+ */
+function arxivWebUrl(entry, kind) {
+  const id = normalizeArxivId(entry.arxivId ?? "");
+  if (id) return `https://arxiv.org/${kind === "pdf" ? "pdf" : "abs"}/${id}`;
+  const stored = kind === "pdf" ? entry.pdfUrl : entry.arxivUrl;
+  try {
+    const url = new URL(stored);
+    if (url.protocol === "https:" && (url.hostname === "arxiv.org" || url.hostname === "www.arxiv.org")) {
+      return url.href;
+    }
+  } catch {
+    // Not a URL.
+  }
+  return "";
+}
+
 function resourceTargetForEntry(entry, resource) {
   if (resource === "note" && entry.paperPath) {
     return { kind: "file", value: entry.paperPath };
@@ -104,12 +171,14 @@ function resourceTargetForEntry(entry, resource) {
   if (resource === "daily" && entry.dailyReports?.[0]) {
     return { kind: "file", value: entry.dailyReports[0] };
   }
-  if (resource === "arxiv" && entry.arxivUrl) {
-    return { kind: "url", value: entry.arxivUrl };
+  if (resource === "arxiv") {
+    const url = arxivWebUrl(entry, "abs");
+    if (url) return { kind: "url", value: url };
   }
   if (resource === "pdf") {
     if (entry.pdfPath) return { kind: "file", value: entry.pdfPath };
-    if (entry.pdfUrl) return { kind: "url", value: entry.pdfUrl };
+    const url = arxivWebUrl(entry, "pdf");
+    if (url) return { kind: "url", value: url };
   }
   return null;
 }
@@ -166,7 +235,7 @@ function renderDashboardHtml({ nonce, state, workspaceName }) {
   <main id="results"></main>
   <script nonce="${nonce}">
     const vscode = acquireVsCodeApi();
-    const state = ${stateJson};
+    let state = ${stateJson};
     const query = { tab: "watch", search: "", status: "", priority: "" };
     const labels = {
       inbox: "Inbox",
@@ -205,6 +274,12 @@ function renderDashboardHtml({ nonce, state, workspaceName }) {
 
     populateSelect(statusEl, state.statuses, "Any status");
     populateSelect(priorityEl, state.priorities, "Any priority");
+    window.addEventListener("message", (event) => {
+      if (event.data && event.data.type === "state" && event.data.state) {
+        state = event.data.state;
+        render();
+      }
+    });
     render();
 
     function populateSelect(select, values, anyLabel) {
@@ -307,7 +382,7 @@ function renderDashboardHtml({ nonce, state, workspaceName }) {
       populateSelect(select, state.statuses, "");
       select.value = row.entry.status;
       select.addEventListener("change", () => {
-        vscode.postMessage({ type: "setStatus", arxivId: row.arxivId, status: select.value });
+        vscode.postMessage({ type: "setStatus", key: row.key, arxivId: row.arxivId, status: select.value });
       });
       return select;
     }
@@ -320,7 +395,7 @@ function renderDashboardHtml({ nonce, state, workspaceName }) {
         button.type = "button";
         button.textContent = label;
         button.addEventListener("click", () => {
-          vscode.postMessage({ type: "openResource", arxivId: row.arxivId, resource });
+          vscode.postMessage({ type: "openResource", key: row.key, arxivId: row.arxivId, resource });
         });
         wrap.appendChild(button);
       }
