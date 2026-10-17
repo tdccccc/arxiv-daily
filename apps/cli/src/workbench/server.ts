@@ -12,6 +12,7 @@ import { loadCliConfig, type CliRuntimeConfig } from "../config";
 import { inspectWorkbenchLibrary, performSettingsAction } from "./settings-actions";
 import type { CliIo } from "../main-types";
 import { inspectProduct } from "../inspect-cmd";
+import { isCalendarDate } from "../cli-args";
 import { WorkbenchDocuments, WorkbenchError } from "./documents";
 import { inspectCalendar } from "./calendar";
 import { validateFrameOrigin } from "./embedding";
@@ -382,10 +383,7 @@ async function readJson(req: IncomingMessage): Promise<Record<string, unknown>> 
 function parseTask(body: Record<string, unknown>, today: string): { args: string[]; label: string; date: string | null } {
   if (body.kind === "daily") {
     if (body.date === undefined) return { args: ["run", "--today"], label: "生成今日日报", date: today };
-    if (typeof body.date === "string" && /^\d{4}-\d{2}-\d{2}$/.test(body.date)) {
-      const parsed = new Date(body.date);
-      if (Number.isFinite(parsed.valueOf()) && parsed.toISOString().slice(0, 10) === body.date) return { args: ["run", "--date", body.date], label: `${body.date} 日报`, date: body.date };
-    }
+    if (typeof body.date === "string" && isCalendarDate(body.date)) return { args: ["run", "--date", body.date], label: `${body.date} 日报`, date: body.date };
   }
   if (body.kind === "paper" && typeof body.id === "string") {
     const resources = modernArxivResources(body.id);

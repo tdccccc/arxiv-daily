@@ -357,21 +357,18 @@ describe("CLI main", () => {
     const loadConfig = vi.fn(async () => testConfig());
     const runtime = fakeRuntime();
     const code = await runCli({
-      argv: [
-        "run",
-        "--today",
-        "--config-extra=x",
-        "--vault-rooted=/tmp/vault",
-        "--cache-directory=/tmp/cache",
-      ],
+      argv: ["run", "--today", "--config-extra=x"],
       io: io.io,
       now: () => new Date("2026-06-13T12:00:00Z"),
       loadConfig,
       buildRuntime: () => runtime,
     });
-    expect(code, io.stderr.join("")).toBe(0);
-    expect(loadConfig).toHaveBeenCalledOnce();
-    expect(runtime.pipeline.runForDate).toHaveBeenCalledWith("2026-06-13");
+    // Reported as an ordinary unknown option, not as the removed --config override.
+    expect(code).toBe(2);
+    expect(io.stderr.join("")).toContain("unknown option --config-extra=x");
+    expect(io.stderr.join("")).not.toContain("no longer supported");
+    expect(loadConfig).not.toHaveBeenCalled();
+    expect(runtime.pipeline.runForDate).not.toHaveBeenCalled();
   });
 
   it("runs --id for deep dive", async () => {
@@ -435,5 +432,118 @@ describe("CLI main", () => {
     });
     expect(code).toBe(0);
     expect(io.stdout.join("")).toContain("09:30");
+  });
+
+  describe("strict argument parsing", () => {
+    async function run(argv: string[]) {
+      const capture = captureIo();
+      const loadConfig = vi.fn(async () => testConfig());
+      const buildRuntime = vi.fn(() => fakeRuntime());
+      const hooks = {
+        init: vi.fn(async () => 0), update: vi.fn(async () => 0),
+        schedule: { show: vi.fn(async () => 0), install: vi.fn(async () => 0), uninstall: vi.fn(async () => 0) },
+        data: { export: vi.fn(async () => 0), import: vi.fn(async () => 0) },
+      };
+      const code = await runCli({ argv, io: capture.io, loadConfig, buildRuntime, ...hooks });
+      return { code, capture, loadConfig, buildRuntime, hooks };
+    }
+
+    it.each([
+      ["run", "--today", "--bogus"],
+      ["run", "--today", "--dry-run"],
+      ["run", "--today", "extra"],
+      ["run", "--today", "--today"],
+      ["run", "--date", "2026-06-13", "--date", "2026-06-14"],
+      ["run", "--date", "garbage"],
+      ["run", "--date", "2026-02-30"],
+      ["run", "--date", "2026-13-01"],
+      ["run", "--date", "2026-6-1"],
+      ["run", "--id", "notanid"],
+      ["run", "--id", "2606.12345", "--date", "2026-02-30"],
+      ["run", "--id", "2606.12345", "--today"],
+      ["run", "--today", "--date", "2026-06-13"],
+      ["run", "--date"],
+      ["run"],
+      ["run", "--scheduled", "--today"],
+      ["email", "test", "--date", "zzz"],
+      ["email", "test", "extra"],
+      ["email", "status", "--x"],
+      ["email-test", "--bogus"],
+      ["data", "import", "a.zip", "--yses"],
+      ["data", "import", "a.zip", "b.zip"],
+      ["data", "export", "--out", "a.zip", "--force"],
+      ["data", "export", "--out", "a.zip", "--out", "b.zip"],
+      ["schedule", "show", "extra"],
+      ["schedule", "install", "--now"],
+      ["update", "--chek"],
+      ["update", "now"],
+      ["init", "--force"],
+    ])("rejects %j with a usage error and does no work", async (...argv) => {
+      const { code, capture, loadConfig, buildRuntime, hooks } = await run(argv);
+      expect(code).toBe(2);
+      expect(capture.stderr.join("")).toContain("Usage:");
+      expect(loadConfig).not.toHaveBeenCalled();
+      expect(buildRuntime).not.toHaveBeenCalled();
+      expect(hooks.init).not.toHaveBeenCalled();
+      expect(hooks.update).not.toHaveBeenCalled();
+      expect(hooks.data.import).not.toHaveBeenCalled();
+      expect(hooks.data.export).not.toHaveBeenCalled();
+      expect(hooks.schedule.install).not.toHaveBeenCalled();
+    });
+
+    it("names the bad date and the bad option in the message", async () => {
+      expect((await run(["run", "--date", "2026-02-30"])).capture.stderr.join("")).toContain("2026-02-30");
+      expect((await run(["run", "--today", "--bogus"])).capture.stderr.join("")).toContain("unknown option --bogus");
+      expect((await run(["run", "--id", "notanid"])).capture.stderr.join("")).toContain("notanid");
+    });
+
+    it.each([
+      [["run", "--today"], "buildRuntime"],
+      [["run", "--date", "2026-06-13"], "buildRuntime"],
+      [["run", "--date", "2024-02-29"], "buildRuntime"],
+      [["run", "--id", "2606.12345"], "buildRuntime"],
+      [["run", "--id", "2606.12345v2", "--date", "2026-06-13"], "buildRuntime"],
+      [["run", "--id", "https://arxiv.org/abs/2606.12345"], "buildRuntime"],
+      [["run", "--date", "2026-06-13", "--id", "2606.12345"], "buildRuntime"],
+      [["data", "import", "a.zip"], "import"],
+      [["data", "import", "a.zip", "--yes"], "import"],
+      [["data", "import", "--yes", "a.zip"], "import"],
+      [["data", "import", "-y", "a.zip"], "import"],
+      [["data", "export", "--out", "a.zip"], "export"],
+      [["update"], "update"],
+      [["update", "--check"], "update"],
+      [["update", "--yes"], "update"],
+      [["update", "-y", "--check"], "update"],
+      [["init"], "init"],
+      [["schedule", "show"], "show"],
+      [["schedule", "install"], "install"],
+      [["schedule", "uninstall"], "uninstall"],
+    ] as const)("still accepts documented form %j", async (argv, target) => {
+      const { code, capture, buildRuntime, hooks } = await run([...argv]);
+      expect(capture.stderr.join("")).not.toContain("Usage:");
+      expect(code).toBe(0);
+      const handler = target === "buildRuntime" ? buildRuntime
+        : target === "import" ? hooks.data.import : target === "export" ? hooks.data.export
+        : target === "update" ? hooks.update : target === "init" ? hooks.init : hooks.schedule[target];
+      expect(handler).toHaveBeenCalledOnce();
+    });
+
+    it("passes the parsed yes flag and zip path to data import", async () => {
+      const { hooks } = await run(["data", "import", "-y", "a.zip"]);
+      expect(hooks.data.import).toHaveBeenCalledWith(expect.anything(), expect.anything(), "a.zip", expect.objectContaining({ yes: true }));
+    });
+
+    it("accepts the documented companion contract commands", async () => {
+      for (const command of companionCliContract.commands) {
+        const { capture } = await run(command.argv);
+        expect(capture.stderr.join("")).not.toContain("Usage:");
+      }
+    });
+
+    it("accepts the scheduled form the workbench spawns and email test with a date", async () => {
+      expect((await run(["run", "--scheduled"])).capture.stderr.join("")).not.toContain("Usage:");
+      expect((await run(["email", "test", "--date", "2026-06-13"])).capture.stderr.join("")).not.toContain("Usage:");
+      expect((await run(["email-test", "--date", "2026-06-13"])).capture.stderr.join("")).not.toContain("Usage:");
+    });
   });
 });
