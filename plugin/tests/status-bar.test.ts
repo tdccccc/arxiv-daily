@@ -1,7 +1,7 @@
 import { afterEach, describe, it, expect, vi } from "vitest";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
-import { StatusBarController } from "../src/services/status-bar";
+import { StatusBarController, withBusyGuard } from "../src/services/status-bar";
 import { StateStore } from "@arxiv-daily/core";
 import type { RunState } from "@arxiv-daily/core";
 
@@ -200,6 +200,82 @@ describe("StatusBarController", () => {
 
     vi.advanceTimersByTime(2_500);
     expect(panel?.classList.contains("is-hidden")).toBe(true);
+  });
+
+  it("returns to the idle text after a task ends in complete or error", async () => {
+    vi.useFakeTimers();
+    const store = makeStore({
+      "2026-05-10": { status: "completed", lastAttempt: 1, attempts: 1, papersWritten: 3 },
+    });
+    await store.load();
+    const el = makeEl();
+    const ctrl = new StatusBarController(el, store, { initiallyEnabled: true });
+
+    ctrl.setTask("Scanning personal library", "Identifying library papers");
+    ctrl.setComplete("Personal library scan complete");
+    expect(el.textContent).toBe("Complete");
+    vi.advanceTimersByTime(4_000);
+    expect(el.textContent).toBe("arXiv: idle · last 2026-05-10");
+
+    ctrl.setTask("Indexing library titles and abstracts");
+    ctrl.setError("Personal library preparation failed");
+    expect(el.textContent).toBe("Failed");
+    vi.advanceTimersByTime(10_000);
+    expect(el.textContent).toBe("arXiv: idle · last 2026-05-10");
+
+    // The finished task no longer titles a later stage-only update.
+    ctrl.setStage("summarize-detail");
+    expect(document.body.querySelector(".arxiv-daily-progress__title")?.textContent).toBe("arXiv Daily");
+  });
+
+  it("returns to the disabled text when the scheduler is off", async () => {
+    vi.useFakeTimers();
+    const store = makeStore();
+    await store.load();
+    const el = makeEl();
+    const ctrl = new StatusBarController(el, store, { initiallyEnabled: false });
+
+    ctrl.setTask("Scanning personal library");
+    ctrl.setComplete();
+    vi.advanceTimersByTime(4_000);
+
+    expect(el.textContent).toBe("arXiv: disabled");
+  });
+
+  it("does not let a stale hide timer clobber a task started meanwhile", async () => {
+    vi.useFakeTimers();
+    const store = makeStore();
+    await store.load();
+    const el = makeEl();
+    const ctrl = new StatusBarController(el, store, { initiallyEnabled: true });
+
+    ctrl.setComplete();
+    ctrl.setTask("Indexing library titles and abstracts", "embedding");
+    vi.advanceTimersByTime(10_000);
+
+    expect(el.textContent).toBe("arXiv: Indexing library titles and abstracts · embedding");
+  });
+
+  it("withBusyGuard drops idle and disabled updates while another task owns the bar", () => {
+    const inner = {
+      setTask: vi.fn(), setBatch: vi.fn(), setStage: vi.fn(), setComplete: vi.fn(),
+      setError: vi.fn(), setIdle: vi.fn(), setDisabled: vi.fn(),
+    };
+    let busy = true;
+    const guarded = withBusyGuard(inner, () => busy);
+
+    guarded.setIdle("2026-05-10", "weekend");
+    guarded.setDisabled();
+    guarded.setBatch(1, 1, "2026-05-10");
+    expect(inner.setIdle).not.toHaveBeenCalled();
+    expect(inner.setDisabled).not.toHaveBeenCalled();
+    expect(inner.setBatch).toHaveBeenCalledWith(1, 1, "2026-05-10");
+
+    busy = false;
+    guarded.setIdle("2026-05-10", "weekend");
+    guarded.setDisabled();
+    expect(inner.setIdle).toHaveBeenCalledWith("2026-05-10", "weekend");
+    expect(inner.setDisabled).toHaveBeenCalledTimes(1);
   });
 
   it("setDisabled overrides any prior state", async () => {

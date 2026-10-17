@@ -43,8 +43,35 @@ interface StageState {
   total?: number;
 }
 
+/**
+ * A reporter for the scheduler: its idle ticks must not replace the progress of
+ * a task that owns the bar (a library scan or index, a detail summary). While
+ * `isBusy()` holds, idle/disabled updates are dropped; the owner's own
+ * completion restores the resting text.
+ */
+export function withBusyGuard(
+  progress: ProgressReporter,
+  isBusy: () => boolean,
+): ProgressReporter {
+  return {
+    setTask: (title, detail) => progress.setTask(title, detail),
+    setBatch: (currentDay, totalDays, date) => progress.setBatch(currentDay, totalDays, date),
+    setStage: (stage, current, total) => progress.setStage(stage, current, total),
+    setComplete: (message) => progress.setComplete(message),
+    setError: (message) => progress.setError(message),
+    setIdle: (lastCompletedDate, reason) => {
+      if (!isBusy()) progress.setIdle(lastCompletedDate, reason);
+    },
+    setDisabled: () => {
+      if (!isBusy()) progress.setDisabled();
+    },
+  };
+}
+
 export class StatusBarController implements ProgressReporter {
   private disabled: boolean;
+  /** Whether the scheduler is off when nothing is running; what the bar returns to. */
+  private restingDisabled: boolean;
   private batch: BatchState | null = null;
   private stage: StageState | null = null;
   private task: { title: string; detail?: string } | null = null;
@@ -67,6 +94,7 @@ export class StatusBarController implements ProgressReporter {
     opts: StatusBarOpts,
   ) {
     this.disabled = !opts.initiallyEnabled;
+    this.restingDisabled = this.disabled;
     this.lastCompletedDate = pickLastCompleted(store);
     this.render();
   }
@@ -119,6 +147,7 @@ export class StatusBarController implements ProgressReporter {
   setIdle(lastCompletedDate?: string, reason?: IdleReason): void {
     if (this.disposed) return;
     this.disabled = false;
+    this.restingDisabled = false;
     this.batch = null;
     this.stage = null;
     this.task = null;
@@ -133,6 +162,7 @@ export class StatusBarController implements ProgressReporter {
   setDisabled(): void {
     if (this.disposed) return;
     this.disabled = true;
+    this.restingDisabled = true;
     this.batch = null;
     this.stage = null;
     this.task = null;
@@ -277,7 +307,7 @@ export class StatusBarController implements ProgressReporter {
     const view = this.el.ownerDocument.defaultView;
     if (!view) return;
     this.hideTimerView = view;
-    this.hideTimer = view.setTimeout(() => this.hidePanel(), delayMs);
+    this.hideTimer = view.setTimeout(() => this.settleAfterHide(), delayMs);
   }
 
   private clearHideTimer(): void {
@@ -286,6 +316,23 @@ export class StatusBarController implements ProgressReporter {
     }
     this.hideTimer = null;
     this.hideTimerView = null;
+  }
+
+  /**
+   * The completion/failure panel has had its time: drop the finished task and
+   * return the bar text to what it says when nothing is running. Without this a
+   * task that ends in setComplete/setError (library work, detail summaries,
+   * which have no idle call after them) leaves "Complete"/"Failed" up for good.
+   */
+  private settleAfterHide(): void {
+    const finished = this.panelState === "complete" || this.panelState === "error";
+    this.hidePanel();
+    if (!finished || this.disposed) return;
+    this.task = null;
+    this.batch = null;
+    this.stage = null;
+    this.disabled = this.restingDisabled;
+    this.render();
   }
 
   private hidePanel(): void {

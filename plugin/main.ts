@@ -74,7 +74,7 @@ type OperationHandle,
 type OperationKind,
 } from "@arxiv-daily/core";
 import { SchedulerService } from "@arxiv-daily/core";
-import { StatusBarController } from "./src/services/status-bar";
+import { StatusBarController, withBusyGuard } from "./src/services/status-bar";
 import { NoopProgressReporter, type ProgressReporter } from "@arxiv-daily/core";
 import { chooseModal } from "./src/services/modal";
 import {
@@ -506,7 +506,9 @@ export default class ArxivDailyPlugin extends Plugin {
         if (this.unloading) throwIfCancelled(abortedSignal("plugin unloaded"));
         return await this.buildPipeline().runForDate(date, signal);
       },
-      progress: this.progress,
+      // Idle ticks must not replace the progress of a library task or detail
+      // summary that currently owns the status bar.
+      progress: withBusyGuard(this.progress, () => this.operations.snapshot().length > 0),
       cancellation: this.runCancellation,
       recentDates: this.recentDates,
       runHistory: this.runHistoryStore,
