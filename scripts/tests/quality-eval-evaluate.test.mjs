@@ -42,17 +42,17 @@ function metaOf(counts = { rows: 11, selected: 7, skippedSampled: 4, skippedAvai
 
 /** [id, hadAbstract, category, modelDirections, score, label, labelDirection, note, title] */
 const FIXTURE = [
-  ["s1", "true", "photo-z", "1", "90", "y", "1", "", "Quoted \"title\", with comma"],
-  ["s2", "true", "photo-z", "1;2", "70", "y", "2", "", "中文标题"],
-  ["s3", "false", "cluster", "3", "60", "y", "1", "needs the full text", "Wrong topic"],
-  ["s4", "true", "photo-z", "2", "85", "n", "", "", "Looks relevant, is not"],
-  ["s5", "false", "cluster", "3", "40", "n", "", "", "Low score, not relevant"],
-  ["s6", "true", "photo-z", "1", "55", "y", "", "", "Relevant, no direction labelled"],
-  ["s7", "true", "photo-z", "1", "80", "", "", "", "Not labelled yet"],
-  ["k1", "true", "skip", "", "0", "y", "3", "missed", "Missed cluster paper"],
-  ["k2", "true", "skip", "", "0", "n", "", "", "Correctly skipped"],
-  ["k3", "false", "skip", "", "0", "n", "", "", "Correctly skipped, title only"],
-  ["k4", "true", "skip", "", "0", "", "", "", "Not labelled yet, skipped"],
+  ["2610.00001", "true", "photo-z", "1", "90", "y", "1", "", "Quoted \"title\", with comma"],
+  ["2610.00002", "true", "photo-z", "1;2", "70", "y", "2", "", "中文标题"],
+  ["2610.00003", "false", "cluster", "3", "60", "y", "1", "needs the full text", "Wrong topic"],
+  ["2610.00004", "true", "photo-z", "2", "85", "n", "", "", "Looks relevant, is not"],
+  ["2610.00005", "false", "cluster", "3", "40", "n", "", "", "Low score, not relevant"],
+  ["2610.00006", "true", "photo-z", "1", "55", "y", "", "", "Relevant, no direction labelled"],
+  ["2610.00007", "true", "photo-z", "1", "80", "", "", "", "Not labelled yet"],
+  ["2610.00011", "true", "skip", "", "0", "y", "3", "missed", "Missed cluster paper"],
+  ["2610.00012", "true", "skip", "", "0", "n", "", "", "Correctly skipped"],
+  ["2610.00013", "false", "skip", "", "0", "n", "", "", "Correctly skipped, title only"],
+  ["2610.00014", "true", "skip", "", "0", "", "", "", "Not labelled yet, skipped"],
 ];
 
 function sheetText(rows = FIXTURE, header = qe.SHEET_COLUMNS) {
@@ -91,7 +91,7 @@ test("metrics match a hand count on every label, with and without papers the fil
   assert.equal(json.sheet.labelledYes, 5);
   assert.equal(json.sheet.labelledNo, 4);
 
-  // TP s1 s2 s3 s6, FP s4 s5, FN k1, TN k2 k3.
+  // TP 2610.00001 2610.00002 2610.00003 2610.00006, FP 2610.00004 2610.00005, FN 2610.00011, TN 2610.00012 2610.00013.
   const all = json.sets.all;
   assert.equal(all.rows, 9);
   assert.deepEqual([all.counts.tp, all.counts.fp, all.counts.fn, all.counts.tn], [4, 2, 1, 2]);
@@ -105,7 +105,7 @@ test("metrics match a hand count on every label, with and without papers the fil
   close(all.weighted.f1.value, 8 / (8 + 2 + 20 / 3));
   close(all.weighted.precision.value, 4 / 6);
 
-  // Without the three rows the filter saw no abstract for: TP s1 s2 s6, FP s4, FN k1.
+  // Without the three rows the filter saw no abstract for: TP 2610.00001 2610.00002 2610.00006, FP 2610.00004, FN 2610.00011.
   const withAbstract = json.sets.withAbstract;
   assert.equal(withAbstract.rows, 6);
   assert.deepEqual([withAbstract.counts.tp, withAbstract.counts.fp, withAbstract.counts.fn, withAbstract.counts.tn], [3, 1, 1, 1]);
@@ -118,7 +118,7 @@ test("metrics match a hand count on every label, with and without papers the fil
 test("direction accuracy counts a hit when a labelled direction is among the model's", async () => {
   const { json } = await evaluate(await writeSheet());
 
-  // True positives with a labelled direction: s1 (hit), s2 (hit), s3 (miss); s6 has none labelled.
+  // True positives with a labelled direction: 2610.00001 (hit), 2610.00002 (hit), 2610.00003 (miss); 2610.00006 has none labelled.
   const direction = json.sets.all.direction;
   assert.deepEqual([direction.correct, direction.n, direction.withoutLabelledDirection], [2, 3, 1]);
   close(direction.value, 2 / 3);
@@ -150,23 +150,23 @@ test("per-topic precision and recall follow the model's topic and the labelled d
   const { json } = await evaluate(await writeSheet());
   const topics = Object.fromEntries(json.topics.map(topic => [topic.tag, topic]));
 
-  // photo-z: model filed s1 s2 s4 s6 (3 labelled yes); labelled photo-z directions on s1 s2 s3 (model got 2).
+  // photo-z: model filed 2610.00001 2610.00002 2610.00004 2610.00006 (3 labelled yes); labelled photo-z directions on 2610.00001 2610.00002 2610.00003 (model got 2).
   close(topics["photo-z"].precision.value, 3 / 4); assert.equal(topics["photo-z"].precision.n, 4);
   close(topics["photo-z"].recall.value, 2 / 3); assert.equal(topics["photo-z"].recall.n, 3);
-  // cluster: model filed s3 s5 (1 labelled yes); labelled cluster direction on k1, which was skipped.
+  // cluster: model filed 2610.00003 2610.00005 (1 labelled yes); labelled cluster direction on 2610.00011, which was skipped.
   close(topics.cluster.precision.value, 1 / 2);
   close(topics.cluster.recall.value, 0); assert.equal(topics.cluster.recall.n, 1);
-  assert.equal(json.topicsWithoutDirection, 1, "s6 is labelled yes but names no direction");
+  assert.equal(json.topicsWithoutDirection, 1, "2610.00006 is labelled yes but names no direction");
 });
 
 test("topic metrics add weighted estimates that restore the skipped sample", async () => {
-  // a1 was selected; k1 was skipped although its label and direction say photo-z. The skipped
+  // 2610.00001 was selected; 2610.00011 was skipped although its label and direction say photo-z. The skipped
   // stratum stands for 30 candidates with 3 labelled rows, so each skipped row weighs 10.
   const rows = [
-    ["a1", "true", "photo-z", "1", "90", "y", "1", "", "Selected photo-z paper"],
-    ["k1", "true", "skip", "", "0", "y", "1", "", "Missed photo-z paper"],
-    ["k2", "true", "skip", "", "0", "n", "", "", "Correctly skipped"],
-    ["k3", "true", "skip", "", "0", "n", "", "", "Correctly skipped"],
+    ["2610.00001", "true", "photo-z", "1", "90", "y", "1", "", "Selected photo-z paper"],
+    ["2610.00011", "true", "skip", "", "0", "y", "1", "", "Missed photo-z paper"],
+    ["2610.00012", "true", "skip", "", "0", "n", "", "", "Correctly skipped"],
+    ["2610.00013", "true", "skip", "", "0", "n", "", "", "Correctly skipped"],
   ];
   const meta = metaOf({ rows: 4, selected: 1, skippedSampled: 3, skippedAvailable: 30, withoutAbstract: 0, hadAbstractAtFilter: 4 });
   const { json, markdown } = await evaluate(await writeSheet(rows, meta));
@@ -187,20 +187,20 @@ test("disagreements list missed and wrongly selected papers with their details",
   const { json, markdown } = await evaluate(await writeSheet());
   const { falseNegatives, falsePositives, directionMismatches } = json.disagreements;
 
-  assert.deepEqual(falseNegatives.map(row => row.id), ["k1"]);
+  assert.deepEqual(falseNegatives.map(row => row.id), ["2610.00011"]);
   assert.deepEqual(falseNegatives[0], {
-    row: 9, date: "2026-10-14", id: "k1", title: "Missed cluster paper", score: 0, modelCategory: "skip",
+    row: 9, date: "2026-10-14", id: "2610.00011", title: "Missed cluster paper", score: 0, modelCategory: "skip",
     modelDirections: [], labelDirections: [3], note: "missed", hadAbstractAtFilter: true,
   });
-  assert.deepEqual(falsePositives.map(row => [row.id, row.score, row.modelDirections]), [["s4", 85, [2]], ["s5", 40, [3]]]);
-  assert.deepEqual(directionMismatches.map(row => [row.id, row.modelDirections, row.labelDirections]), [["s3", [3], [1]]]);
-  assert.match(markdown, /k1/);
+  assert.deepEqual(falsePositives.map(row => [row.id, row.score, row.modelDirections]), [["2610.00004", 85, [2]], ["2610.00005", 40, [3]]]);
+  assert.deepEqual(directionMismatches.map(row => [row.id, row.modelDirections, row.labelDirections]), [["2610.00003", [3], [1]]]);
+  assert.match(markdown, /2610\.00011/);
   assert.match(markdown, /Missed cluster paper/);
   assert.match(markdown, /needs the full text/);
 });
 
 test("report table cells escape backslashes before pipes so a note cannot split the row", async () => {
-  const rows = FIXTURE.map(row => (row[0] === "k1" ? [...row.slice(0, 7), String.raw`see a\|b`, row[8]] : row));
+  const rows = FIXTURE.map(row => (row[0] === "2610.00011" ? [...row.slice(0, 7), String.raw`see a\|b`, row[8]] : row));
   const { markdown } = await evaluate(await writeSheet(rows));
   assert.ok(markdown.includes(String.raw`see a\\\|b`), "backslash doubled, then the pipe escaped");
   assert.ok(!markdown.includes(String.raw`see a\\|b`), "an escaped pipe must not end up unescaped");
@@ -209,10 +209,10 @@ test("report table cells escape backslashes before pipes so a note cannot split 
 test("F1 is 0 when one side is empty, and n/a only when there is nothing to score", async () => {
   // Nothing selected, two papers should have been: TP 0, FP 0, FN 2.
   const skippedOnly = [
-    ["k1", "true", "skip", "", "0", "y", "", "", "Missed"],
-    ["k2", "true", "skip", "", "0", "y", "", "", "Missed"],
-    ["k3", "true", "skip", "", "0", "n", "", "", "Correctly skipped"],
-    ["k4", "true", "skip", "", "0", "n", "", "", "Correctly skipped"],
+    ["2610.00011", "true", "skip", "", "0", "y", "", "", "Missed"],
+    ["2610.00012", "true", "skip", "", "0", "y", "", "", "Missed"],
+    ["2610.00013", "true", "skip", "", "0", "n", "", "", "Correctly skipped"],
+    ["2610.00014", "true", "skip", "", "0", "n", "", "", "Correctly skipped"],
   ];
   const first = await evaluate(await writeSheet(skippedOnly, metaOf({ rows: 4, selected: 0, skippedSampled: 4, skippedAvailable: 4, withoutAbstract: 0, hadAbstractAtFilter: 4 })));
   assert.equal(first.json.sets.all.precision.value, null);
@@ -222,8 +222,8 @@ test("F1 is 0 when one side is empty, and n/a only when there is nothing to scor
 
   // Nothing should have been selected, but two were: TP 0, FP 2, FN 0.
   const selectedOnly = [
-    ["s1", "true", "photo-z", "1", "90", "n", "", "", "Not relevant"],
-    ["s2", "true", "photo-z", "1", "80", "n", "", "", "Not relevant"],
+    ["2610.00001", "true", "photo-z", "1", "90", "n", "", "", "Not relevant"],
+    ["2610.00002", "true", "photo-z", "1", "80", "n", "", "", "Not relevant"],
   ];
   const second = await evaluate(await writeSheet(selectedOnly, metaOf({ rows: 2, selected: 2, skippedSampled: 0, skippedAvailable: 0, withoutAbstract: 0, hadAbstractAtFilter: 2 })));
   assert.equal(second.json.sets.all.recall.value, null);
@@ -236,7 +236,7 @@ test("direction tags and text are escaped so they cannot break the list or add e
   const directions = [
     { number: 1, tag: "a|b", id: "d1", text: "Line one\nLine two *emph*", dates: ["2026-10-14"] },
   ];
-  const rows = [["s1", "true", "a|b", "1", "90", "y", "1", "", "Title"]];
+  const rows = [["2610.00001", "true", "a|b", "1", "90", "y", "1", "", "Title"]];
   const { markdown } = await evaluate(await writeSheet(rows, metaOf(undefined, { directions })));
 
   const line = markdown.split("\n").find(entry => entry.startsWith("- 方向（编号对应标注表）"));
@@ -271,8 +271,8 @@ test("the report names its sources and says what was and was not run", async () 
 
 test("a metric with an empty denominator is n/a rather than NaN", async () => {
   const rows = [
-    ["a", "true", "skip", "", "0", "n", "", "", "Skipped, not relevant"],
-    ["b", "true", "skip", "", "0", "n", "", "", "Skipped, not relevant"],
+    ["2610.00012", "true", "skip", "", "0", "n", "", "", "Skipped, not relevant"],
+    ["2610.00013", "true", "skip", "", "0", "n", "", "", "Skipped, not relevant"],
   ];
   const { json, markdown } = await evaluate(await writeSheet(rows, metaOf({ rows: 2, selected: 0, skippedSampled: 2, skippedAvailable: 2, withoutAbstract: 0, hadAbstractAtFilter: 2 })));
 
@@ -297,8 +297,8 @@ test("without the skipped counts only unweighted recall is reported", async () =
 });
 
 test("a sheet where every skipped paper is labelled uses the sample size for the weight", async () => {
-  // 20 skipped candidates existed; only k1 and k2 are labelled, so each stands for 10.
-  const rows = FIXTURE.filter(row => !["k3", "k4"].includes(row[0]));
+  // 20 skipped candidates existed; only 2610.00011 and 2610.00012 are labelled, so each stands for 10.
+  const rows = FIXTURE.filter(row => !["2610.00013", "2610.00014"].includes(row[0]));
   const { json } = await evaluate(await writeSheet(rows));
   close(json.sets.all.weighted.skippedWeight, 10);
   close(json.sets.all.weighted.recall.value, 4 / (4 + 10));

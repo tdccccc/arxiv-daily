@@ -44,17 +44,17 @@ function metaOf(overrides = {}) {
 
 /** [id, hadAbstract, category, modelDirections, score, label, labelDirection, note, title] */
 const FIXTURE = [
-  ["s1", "true", "photo-z", "1", "90", "y", "1", "", "Quoted \"title\", with comma"],
-  ["s2", "true", "photo-z", "1;2", "70", "y", "2", "", "中文标题"],
-  ["s3", "false", "cluster", "3", "60", "y", "1", "needs the full text", "Wrong topic"],
-  ["s4", "true", "photo-z", "2", "85", "n", "", "", "Looks relevant, is not"],
-  ["s5", "false", "cluster", "3", "40", "n", "", "", "Low score, not relevant"],
-  ["s6", "true", "photo-z", "1", "55", "y", "", "", "Relevant, no direction labelled"],
-  ["s7", "true", "photo-z", "1", "80", "", "", "", "Not labelled yet"],
-  ["k1", "true", "skip", "", "0", "y", "3", "missed", "Missed cluster paper"],
-  ["k2", "true", "skip", "", "0", "n", "", "", "Correctly skipped"],
-  ["k3", "false", "skip", "", "0", "n", "", "", "Correctly skipped, title only"],
-  ["k4", "true", "skip", "", "0", "", "", "", "Not labelled yet, skipped"],
+  ["2610.00001", "true", "photo-z", "1", "90", "y", "1", "", "Quoted \"title\", with comma"],
+  ["2610.00002", "true", "photo-z", "1;2", "70", "y", "2", "", "中文标题"],
+  ["2610.00003", "false", "cluster", "3", "60", "y", "1", "needs the full text", "Wrong topic"],
+  ["2610.00004", "true", "photo-z", "2", "85", "n", "", "", "Looks relevant, is not"],
+  ["2610.00005", "false", "cluster", "3", "40", "n", "", "", "Low score, not relevant"],
+  ["2610.00006", "true", "photo-z", "1", "55", "y", "", "", "Relevant, no direction labelled"],
+  ["2610.00007", "true", "photo-z", "1", "80", "", "", "", "Not labelled yet"],
+  ["2610.00011", "true", "skip", "", "0", "y", "3", "missed", "Missed cluster paper"],
+  ["2610.00012", "true", "skip", "", "0", "n", "", "", "Correctly skipped"],
+  ["2610.00013", "false", "skip", "", "0", "n", "", "", "Correctly skipped, title only"],
+  ["2610.00014", "true", "skip", "", "0", "", "", "", "Not labelled yet, skipped"],
 ];
 
 function sheetText(rows) {
@@ -98,14 +98,14 @@ const configTopics = (directionText = "Photometric redshift methods.") => [
 const paper = (id, category, directions, relevanceScore) => ({ id, category, directions, relevanceScore });
 const answer = papers => JSON.stringify({ papers });
 
-/** Run 1 omits s3, s5, s6, k2 and k3: TP s1 s2 k1, FP s4, FN s3 s6, TN s5 k2 k3. */
+/** Run 1 omits 2610.00003, 2610.00005, 2610.00006, 2610.00012 and 2610.00013: TP 2610.00001 2610.00002 2610.00011, FP 2610.00004, FN 2610.00003 2610.00006, TN 2610.00005 2610.00012 2610.00013. */
 const RUN_1 = answer([
-  paper("s1", "photo-z", ["photo-z#1"], 90), paper("s2", "photo-z", ["photo-z#2"], 70),
-  paper("s4", "photo-z", ["photo-z#1"], 85), paper("k1", "cluster", ["cluster#1"], 66),
+  paper("2610.00001", "photo-z", ["photo-z#1"], 90), paper("2610.00002", "photo-z", ["photo-z#2"], 70),
+  paper("2610.00004", "photo-z", ["photo-z#1"], 85), paper("2610.00011", "cluster", ["cluster#1"], 66),
 ]);
-/** Run 3 selects s1 s2 s3 only. */
+/** Run 3 selects 2610.00001 2610.00002 2610.00003 only. */
 const RUN_3 = answer([
-  paper("s1", "photo-z", ["photo-z#1"], 90), paper("s2", "photo-z", ["photo-z#2"], 70), paper("s3", "cluster", ["cluster#1"], 60),
+  paper("2610.00001", "photo-z", ["photo-z#1"], 90), paper("2610.00002", "photo-z", ["photo-z#2"], 70), paper("2610.00003", "cluster", ["cluster#1"], 60),
 ]);
 
 /** A fake model: each call answers with the next response (a string, or an Error to throw). */
@@ -160,8 +160,8 @@ test("the request is built by core from the sheet's direction snapshot and the l
   const [system, user] = llm.calls[0].messages;
   assert.match(system.content, /- photo-z:\n {2}- photo-z#1: Photometric redshift methods\.\n {2}- photo-z#2: Calibration with spectroscopic samples\.\n- cluster:\n {2}- cluster#1: Cluster surveys\./);
   assert.match(user.content, /astro-ph\.CO/);
-  for (const id of ["s1", "s2", "s3", "s4", "s5", "s6", "k1", "k2", "k3"]) assert.match(user.content, new RegExp(`ID: ${id}\\nTitle: .*\\nAbstract: Abstract of ${id}\\n`));
-  assert.doesNotMatch(user.content, /ID: s7|ID: k4/, "unlabelled rows are not sent");
+  for (const id of ["2610.00001", "2610.00002", "2610.00003", "2610.00004", "2610.00005", "2610.00006", "2610.00011", "2610.00012", "2610.00013"]) assert.match(user.content, new RegExp(`ID: ${id}\\nTitle: .*\\nAbstract: Abstract of ${id}\\n`));
+  assert.doesNotMatch(user.content, /ID: 2610\.00007|ID: 2610\.00014/, "unlabelled rows are not sent");
   assert.equal(llm.calls[0].options.temperature, 0);
   assert.equal(json.current.topicSource, "sheet-snapshot");
   assert.equal(json.current.papers, 9);
@@ -179,20 +179,20 @@ test("a run is scored like the recorded decisions, weighting by the sample's ori
   close(all.precision.value, 3 / 4);
   close(all.recall.value, 3 / 5);
   close(all.f1.value, 6 / 9);
-  // k1 k2 k3 came from the skipped stratum (20 candidates, 3 labelled), whatever the new model says.
+  // 2610.00011 2610.00012 2610.00013 came from the skipped stratum (20 candidates, 3 labelled), whatever the new model says.
   close(all.weighted.skippedWeight, 20 / 3);
   close(all.weighted.recall.value, (2 + 20 / 3) / (2 + 20 / 3 + 2));
   close(all.weighted.precision.value, (2 + 20 / 3) / (2 + 20 / 3 + 1));
   assert.deepEqual([all.direction.correct, all.direction.n], [3, 3]);
-  assert.deepEqual(run.disagreements.falseNegatives.map(row => row.id), ["s3", "s6"]);
-  assert.deepEqual(run.disagreements.falsePositives.map(row => [row.id, row.modelDirections]), [["s4", [1]]]);
+  assert.deepEqual(run.disagreements.falseNegatives.map(row => row.id), ["2610.00003", "2610.00006"]);
+  assert.deepEqual(run.disagreements.falsePositives.map(row => [row.id, row.modelDirections]), [["2610.00004", [1]]]);
   const topics = Object.fromEntries(run.topics.map(topic => [topic.tag, topic]));
   close(topics["photo-z"].precision.value, 2 / 3);
   close(topics["photo-z"].recall.value, 2 / 3);
   close(topics["photo-z"].weighted.precision.value, 2 / 3, "filed rows are all from the selected stratum");
   close(topics.cluster.precision.value, 1);
   close(topics.cluster.recall.value, 1);
-  // k1 was filed under cluster by the new model; it comes from the skipped stratum, so it
+  // 2610.00011 was filed under cluster by the new model; it comes from the skipped stratum, so it
   // weighs 20/3. Here it is also the only filed cluster row and a true positive, so the
   // weighted precision stays 1; the dedicated test below covers a weighted false positive.
   close(topics.cluster.weighted.precision.value, 1);
@@ -232,16 +232,16 @@ test("the report sets the recorded decisions beside each rerun and names the cur
 });
 
 test("a skipped row filed under a topic by the new model is weighted in that topic's precision", async () => {
-  // Three skipped rows weigh 10 each. The new model files k1 (labelled n) under photo-z,
+  // Three skipped rows weigh 10 each. The new model files 2610.00011 (labelled n) under photo-z,
   // so the topic's in-sample precision (1/2) understates the weighted estimate (1/11).
   const rows = [
-    ["s1", "true", "photo-z", "1", "90", "y", "1", "", "Relevant"],
-    ["k1", "true", "skip", "", "0", "n", "", "", "Wrongly picked"],
-    ["k2", "true", "skip", "", "0", "n", "", "", "Skipped"],
-    ["k3", "true", "skip", "", "0", "n", "", "", "Skipped"],
+    ["2610.00001", "true", "photo-z", "1", "90", "y", "1", "", "Relevant"],
+    ["2610.00011", "true", "skip", "", "0", "n", "", "", "Wrongly picked"],
+    ["2610.00012", "true", "skip", "", "0", "n", "", "", "Skipped"],
+    ["2610.00013", "true", "skip", "", "0", "n", "", "", "Skipped"],
   ];
   const meta = metaOf({ counts: { rows: 4, selected: 1, skippedSampled: 3, skippedAvailable: 30, withoutAbstract: 0, hadAbstractAtFilter: 4 } });
-  const selected = answer([paper("s1", "photo-z", ["photo-z#1"], 90), paper("k1", "photo-z", ["photo-z#1"], 50)]);
+  const selected = answer([paper("2610.00001", "photo-z", ["photo-z#1"], 90), paper("2610.00011", "photo-z", ["photo-z#1"], 50)]);
   const { json, markdown } = await rerun(await writeSheet(rows, meta), fakeLlm([selected]));
   const photoZ = json.runs[0].topics.find(topic => topic.tag === "photo-z");
 
@@ -257,17 +257,17 @@ test("title-only papers keep their filter-time abstract flag and the report expl
   const run = json.runs[0];
   const decisions = Object.fromEntries(run.decisions.map(decision => [decision.id, decision]));
 
-  // s3 was judged on its title alone by the recorded filter, but export fetched an abstract
+  // 2610.00003 was judged on its title alone by the recorded filter, but export fetched an abstract
   // and the rerun sent it. The request fact is recorded apart from the filter-time fact.
-  assert.equal(decisions.s3.requestHadAbstract, true);
-  const missed = run.disagreements.falseNegatives.find(row => row.id === "s3");
+  assert.equal(decisions["2610.00003"].requestHadAbstract, true);
+  const missed = run.disagreements.falseNegatives.find(row => row.id === "2610.00003");
   assert.equal(missed.hadAbstractAtFilter, false, "the divergence list keeps the filter-time value");
   assert.match(markdown, /3 篇已标注论文在筛选时只看到标题/);
   assert.match(markdown, /输入变化/);
   const s3Line = markdown.split("\n").find(line => line.startsWith("|") && line.includes("Wrong topic"));
   assert.ok(s3Line.includes("| 否 |"), "the divergence row says there was no abstract at filter time");
 
-  // The input-comparable comparison uses the same rows on both sides (s1 s2 s4 s6 k1 k2).
+  // The input-comparable comparison uses the same rows on both sides (2610.00001 2610.00002 2610.00004 2610.00006 2610.00011 2610.00012).
   assert.equal(json.recorded.withAbstract.rows, 6);
   assert.equal(run.sets.withAbstract.rows, 6);
   assert.deepEqual(json.comparisonWithAbstract.map(entry => [entry.name, entry.rows]), [["recorded", 6], ["run 1", 6]]);
@@ -287,11 +287,11 @@ test("a failing run is reported in its own section while the others continue, an
     assert.ok(!jsonText.includes(secret) && !markdown.includes(secret), `${secret} must not be reported`);
   }
 
-  // Selected: run 1 {s1 s2 s4 k1}, run 3 {s1 s2 s3}; identical on 6 of 9 papers.
+  // Selected: run 1 {2610.00001 2610.00002 2610.00004 2610.00011}, run 3 {2610.00001 2610.00002 2610.00003}; identical on 6 of 9 papers.
   assert.equal(json.agreement.runs, 2);
   assert.deepEqual([json.agreement.identical.hits, json.agreement.identical.n], [6, 9]);
-  assert.deepEqual(json.agreement.flipFlops.map(row => [row.id, row.selected]), [["k1", [true, false]], ["s3", [false, true]], ["s4", [true, false]]]);
-  assert.deepEqual(json.agreement.flipFlops.map(row => row.label), ["y", "y", "n"]);
+  assert.deepEqual(json.agreement.flipFlops.map(row => [row.id, row.selected]), [["2610.00003", [false, true]], ["2610.00004", [true, false]], ["2610.00011", [true, false]]]);
+  assert.deepEqual(json.agreement.flipFlops.map(row => row.label), ["y", "n", "y"]);
   assert.deepEqual(json.comparison.map(entry => entry.name), ["recorded", "run 1", "run 3"]);
   assert.match(markdown, /第 2 次重跑[\s\S]*失败/);
   assert.match(markdown, /摇摆|不稳定/);
@@ -353,8 +353,8 @@ test("a sheet spanning days with different direction lists needs --topics-from-c
 });
 
 test("a paper that appears on two days cannot be sent as one request", async () => {
-  const rows = [...FIXTURE, ["s1", "true", "photo-z", "1", "90", "y", "1", "", "Same paper again"]];
-  await assert.rejects(rerun(await writeSheet(rows), fakeLlm([RUN_1])), /s1.*more than once|duplicate/i);
+  const rows = [...FIXTURE, ["2610.00001", "true", "photo-z", "1", "90", "y", "1", "", "Same paper again"]];
+  await assert.rejects(rerun(await writeSheet(rows), fakeLlm([RUN_1])), /2610\.00001.*more than once|duplicate/i);
 });
 
 test("the API key and endpoint never reach the report", async () => {
