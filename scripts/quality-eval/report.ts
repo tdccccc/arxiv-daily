@@ -1,6 +1,6 @@
 import type { RecordedReport } from "./evaluate";
 import { SCORE_THRESHOLDS, type Disagreement, type MetricSet, type Ratio, type TopicMetrics, type WeightedSummary } from "./metrics";
-import type { RerunReport, RunMetricSet } from "./rerun";
+import type { Comparison, RerunReport, RunMetricSet } from "./rerun";
 import type { MetaDirection, SourceSummary } from "./source";
 
 const NA = "n/a";
@@ -19,9 +19,16 @@ function numbers(values: readonly number[]): string {
   return values.length > 0 ? values.join(";") : "-";
 }
 
-function weightedRecall(weighted: WeightedSummary | null): string {
-  return weighted === null ? "仅未加权" : `${estimate(weighted.recall)}（F1 ${estimate(weighted.f1)}）`;
+/** Weighted precision / recall / F1 in one cell, since the weights make the counts fractional. */
+function weightedSummary(weighted: WeightedSummary | null): string {
+  return weighted === null ? "仅未加权" : `${estimate(weighted.precision)} / ${estimate(weighted.recall)} / ${estimate(weighted.f1)}`;
 }
+
+function weightedTriple(precision: Ratio | null, recall: Ratio | null, f1: Ratio | null): string {
+  return precision === null || recall === null || f1 === null ? "仅未加权" : `${estimate(precision)} / ${estimate(recall)} / ${estimate(f1)}`;
+}
+
+const WEIGHTED_HEADER = "加权估计（精确率 / 召回率 / F1）";
 
 function disagreementTable(rows: readonly Disagreement[], empty: string): string[] {
   if (rows.length === 0) return [empty, ""];
@@ -52,18 +59,20 @@ function metricSections(view: MetricView, level: number): string[] {
     `${h} 主要结果`,
     "",
     "“被选中”指模型给了某个主题（不是 skip）；每日篇数上限和忽略标记不算筛选判定。",
+    "样本内指标按表里的行直接计数；加权估计把被抽样标注的“原本被判不相关”行按抽样比例还原。",
     "",
-    "| 范围 | 已标注行数 | 精确率（选中的有多少该选） | 召回率（该选的选中了多少，样本内） | F1 | 召回率估计（按抽样加权） |",
+    `| 范围 | 已标注行数 | 精确率（样本内） | 召回率（样本内） | F1（样本内） | ${WEIGHTED_HEADER} |`,
     "| --- | --- | --- | --- | --- | --- |",
-    `| 全部已标注行 | ${all.rows} | ${withCount(all.precision)} | ${withCount(all.recall)} | ${estimate(all.f1)} | ${weightedRecall(all.weighted)} |`,
-    `| ${view.withAbstractLabel} | ${withAbstract.rows} | ${withCount(withAbstract.precision)} | ${withCount(withAbstract.recall)} | ${estimate(withAbstract.f1)} | ${weightedRecall(withAbstract.weighted)} |`,
+    `| 全部已标注行 | ${all.rows} | ${withCount(all.precision)} | ${withCount(all.recall)} | ${estimate(all.f1)} | ${weightedSummary(all.weighted)} |`,
+    `| ${view.withAbstractLabel} | ${withAbstract.rows} | ${withCount(withAbstract.precision)} | ${withCount(withAbstract.recall)} | ${estimate(withAbstract.f1)} | ${weightedSummary(withAbstract.weighted)} |`,
     "",
   ];
   if (all.weighted === null) {
     lines.push("全部行的加权估计不可用：元数据缺少被判不相关的论文总数，或没有标注任何被判不相关的行；以上为仅未加权结果。", "");
   } else {
     lines.push(
-      `加权方式：每个已标注的“原本被判不相关”行代表 ${all.weighted.skippedWeight.toFixed(2)} 篇论文；被选中的论文在导出时全部在表中，权重为 1。`,
+      `加权方式：每个已标注的“原本被判不相关”行代表 ${all.weighted.skippedWeight.toFixed(2)} 篇论文；被选中的论文在导出时全部在表中，权重为 1，所以记录的判定里加权精确率与样本内精确率相同。`,
+      "重跑时如果新模型选中了抽样的跳过层行，样本内精确率会偏高，比较改动前后应看加权列。",
       `“${view.withAbstractLabel}”没有加权，因为这类论文在被判不相关的总数里占多少没有记录。`,
       "",
     );
@@ -87,9 +96,9 @@ function metricSections(view: MetricView, level: number): string[] {
     "",
     `只有分数不低于分数线、且不是 skip 的论文才算被选中（全部已标注行，括号里是行数）。分数是模型给的 0–100 相关度，分数线取 ${SCORE_THRESHOLDS.join("、")}。`,
     "",
-    "| 分数线 | 精确率 | 召回率（样本内） | 召回率估计（加权） |",
+    "| 分数线 | 精确率（样本内） | 召回率（样本内） | " + WEIGHTED_HEADER + " |",
     "| --- | --- | --- | --- |",
-    ...all.thresholds.map((entry) => `| ≥ ${entry.threshold} | ${withCount(entry.precision)} | ${withCount(entry.recall)} | ${entry.weighted === null ? "仅未加权" : estimate(entry.weighted.recall)} |`),
+    ...all.thresholds.map((entry) => `| ≥ ${entry.threshold} | ${withCount(entry.precision)} | ${withCount(entry.recall)} | ${weightedSummary(entry.weighted)} |`),
     "",
     `${h} 分主题`,
     "",
@@ -98,11 +107,11 @@ function metricSections(view: MetricView, level: number): string[] {
     lines.push("方向列表与标注时不同，分主题结果不可用。", "");
   } else {
     lines.push(
-      "精确率：模型归入该主题的论文里，标注为 y 的比例。召回率：标注方向属于该主题的 y 论文里，模型归入该主题的比例。",
+      "精确率：模型归入该主题的论文里，标注为 y 的比例。召回率：标注方向属于该主题的 y 论文里，模型归入该主题的比例。样本内按行计数；加权估计把被抽样标注的“原本被判不相关”行按抽样比例还原。",
       "",
-      "| 主题 | 精确率 | 召回率 |",
-      "| --- | --- | --- |",
-      ...view.topics.map((topic) => `| ${cell(topic.tag)} | ${withCount(topic.precision)} | ${withCount(topic.recall)} |`),
+      "| 主题 | 精确率（样本内） | 召回率（样本内） | 加权估计（精确率 / 召回率） |",
+      "| --- | --- | --- | --- |",
+      ...view.topics.map((topic) => `| ${cell(topic.tag)} | ${withCount(topic.precision)} | ${withCount(topic.recall)} | ${topic.weighted === null ? "仅未加权" : `${estimate(topic.weighted.precision)} / ${estimate(topic.weighted.recall)}`} |`),
       "",
       `另有 ${view.topicsWithoutDirection ?? 0} 篇标注为 y 但没有填标注方向，无法归入主题召回率。`,
       "",
@@ -179,6 +188,15 @@ export function renderRecordedReport(report: RecordedReport): string {
 
 const selectedMark = (selected: boolean): string => (selected ? "选中" : "未选");
 
+function comparisonTable(entries: readonly Comparison[]): string[] {
+  return [
+    `| 来源 | 已标注行数 | 精确率（样本内） | 召回率（样本内） | F1（样本内） | ${WEIGHTED_HEADER} |`,
+    "| --- | --- | --- | --- | --- | --- |",
+    ...entries.map((entry) => `| ${entry.kind === "recorded" ? "记录的判定" : `第 ${entry.name.replace("run ", "")} 次重跑`} | ${entry.rows} | ${withCount(entry.precision)} | ${withCount(entry.recall)} | ${estimate(entry.f1)} | ${weightedTriple(entry.weightedPrecision, entry.weightedRecall, entry.weightedF1)} |`),
+    "",
+  ];
+}
+
 export function renderRerunReport(report: RerunReport): string {
   const { sheet, source, current } = report;
   const okRuns = report.runs.filter((run) => run.status === "ok");
@@ -210,12 +228,9 @@ export function renderRerunReport(report: RerunReport): string {
     "",
     "## 记录的判定与重跑对比",
     "",
-    "同一批已标注的行；加权估计按抽样时的分层计算，与新判定无关。",
+    "同一批已标注的行；加权估计按抽样时的分层计算，与新判定无关。比较提示词或模型的改动时，请看加权列。",
     "",
-    "| 来源 | 已标注行数 | 精确率 | 召回率（样本内） | F1 | 召回率估计（加权） |",
-    "| --- | --- | --- | --- | --- | --- |",
-    ...report.comparison.map((entry) => `| ${entry.kind === "recorded" ? "记录的判定" : `第 ${entry.name.replace("run ", "")} 次重跑`} | ${entry.rows} | ${withCount(entry.precision)} | ${withCount(entry.recall)} | ${estimate(entry.f1)} | ${entry.weightedRecall === null ? "仅未加权" : estimate(entry.weightedRecall)} |`),
-    "",
+    ...comparisonTable(report.comparison),
     "## 运行之间是否稳定",
     "",
   );

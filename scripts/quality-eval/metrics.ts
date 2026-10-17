@@ -51,6 +51,11 @@ export interface TopicMetrics {
   tag: string;
   precision: Ratio;
   recall: Ratio;
+  /**
+   * The same two metrics with skipped-stratum rows weighted like the overall recall;
+   * null when the skipped population or the labelled skipped rows are unknown.
+   */
+  weighted: { precision: Ratio; recall: Ratio } | null;
 }
 
 export type LabelledRow = SheetRow & { label: "y" | "n" };
@@ -155,19 +160,39 @@ export function metricSet(rows: readonly LabelledRow[], skippedAvailable: number
  * under the topic were labelled y; recall is how many papers labelled y with a direction
  * of that topic the model filed under it. Papers labelled y without a direction cannot be
  * assigned a topic and are counted in the second return value.
+ *
+ * The in-sample ratios count every row once. The weighted ones use the same rule as the
+ * overall recall: a row from the sampled skipped stratum stands for `skippedWeight`
+ * candidates, every other row for one. `skippedAvailable` is the population the exported
+ * skipped rows were sampled from; pass null where that population is not known.
  */
 export function topicMetrics(
   rows: readonly LabelledRow[],
   tags: readonly string[],
   tagOfNumber: (number: number) => string | undefined,
+  skippedAvailable: number | null = null,
 ): { topics: TopicMetrics[]; withoutDirection: number } {
+  const weight = skippedWeight(rows, skippedAvailable);
+  const weightedRatio = (hits: readonly LabelledRow[], total: readonly LabelledRow[]): Ratio => {
+    let hitWeight = 0;
+    let totalWeight = 0;
+    for (const row of total) {
+      const rowWeight = weight !== null && fromSkippedStratum(row) ? weight : 1;
+      totalWeight += rowWeight;
+      if (hits.includes(row)) hitWeight += rowWeight;
+    }
+    return { value: totalWeight > 0 ? hitWeight / totalWeight : null, n: totalWeight, hits: hitWeight };
+  };
   const topics = tags.map((tag) => {
     const filed = rows.filter((row) => row.modelCategory === tag);
     const wanted = rows.filter((row) => row.label === "y" && row.labelDirections.some((number) => tagOfNumber(number) === tag));
+    const filedYes = filed.filter((row) => row.label === "y");
+    const wantedFiled = wanted.filter((row) => row.modelCategory === tag);
     return {
       tag,
-      precision: ratio(filed.filter((row) => row.label === "y").length, filed.length),
-      recall: ratio(wanted.filter((row) => row.modelCategory === tag).length, wanted.length),
+      precision: ratio(filedYes.length, filed.length),
+      recall: ratio(wantedFiled.length, wanted.length),
+      weighted: weight === null ? null : { precision: weightedRatio(filedYes, filed), recall: weightedRatio(wantedFiled, wanted) },
     };
   });
   return { topics, withoutDirection: rows.filter((row) => row.label === "y" && row.labelDirections.length === 0).length };

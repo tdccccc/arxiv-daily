@@ -21,7 +21,7 @@ import { loadCliConfig } from "../../apps/cli/src/config";
 import type { EvaluateDeps, EvaluateOptions } from "./evaluate";
 import {
   disagreementsOf, isLabelled, metricSet, topicMetrics,
-  type Disagreement, type DirectionAccuracy, type LabelledRow, type MetricSet, type Ratio, type TopicMetrics,
+  type Disagreement, type DirectionAccuracy, type LabelledRow, type MetricSet, type Ratio, type TopicMetrics, type WeightedSummary,
 } from "./metrics";
 import type { SheetRow } from "./sheet";
 import {
@@ -66,7 +66,10 @@ export interface Comparison {
   precision: Ratio;
   recall: Ratio;
   f1: Ratio;
+  /** Weighted by the sample's original strata; null when the population is unknown. */
+  weightedPrecision: Ratio | null;
   weightedRecall: Ratio | null;
+  weightedF1: Ratio | null;
 }
 
 export interface Agreement {
@@ -297,7 +300,7 @@ async function oneRun(
     const number = context.legendKey.get(keyOf(direction.tag, direction.text));
     if (number !== undefined) legendTag.set(number, direction.tag);
   }
-  const topics = topicMetrics(rerunRows, tags, (number) => legendTag.get(number));
+  const topics = topicMetrics(rerunRows, tags, (number) => legendTag.get(number), context.available);
   const disagreements = disagreementsOf(rerunRows);
   return {
     run, status: "ok", usage,
@@ -313,8 +316,13 @@ async function oneRun(
   };
 }
 
-function comparisonOf(name: string, kind: Comparison["kind"], set: { rows: number; precision: Ratio; recall: Ratio; f1: Ratio; weighted: { recall: Ratio } | null }): Comparison {
-  return { name, kind, rows: set.rows, precision: set.precision, recall: set.recall, f1: set.f1, weightedRecall: set.weighted?.recall ?? null };
+function comparisonOf(name: string, kind: Comparison["kind"], set: { rows: number; precision: Ratio; recall: Ratio; f1: Ratio; weighted: WeightedSummary | null }): Comparison {
+  return {
+    name, kind, rows: set.rows, precision: set.precision, recall: set.recall, f1: set.f1,
+    weightedPrecision: set.weighted?.precision ?? null,
+    weightedRecall: set.weighted?.recall ?? null,
+    weightedF1: set.weighted?.f1 ?? null,
+  };
 }
 
 /** Whether each labelled paper got the same selected/not decision in every successful run. */

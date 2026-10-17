@@ -159,6 +159,30 @@ test("per-topic precision and recall follow the model's topic and the labelled d
   assert.equal(json.topicsWithoutDirection, 1, "s6 is labelled yes but names no direction");
 });
 
+test("topic metrics add weighted estimates that restore the skipped sample", async () => {
+  // a1 was selected; k1 was skipped although its label and direction say photo-z. The skipped
+  // stratum stands for 30 candidates with 3 labelled rows, so each skipped row weighs 10.
+  const rows = [
+    ["a1", "true", "photo-z", "1", "90", "y", "1", "", "Selected photo-z paper"],
+    ["k1", "true", "skip", "", "0", "y", "1", "", "Missed photo-z paper"],
+    ["k2", "true", "skip", "", "0", "n", "", "", "Correctly skipped"],
+    ["k3", "true", "skip", "", "0", "n", "", "", "Correctly skipped"],
+  ];
+  const meta = metaOf({ rows: 4, selected: 1, skippedSampled: 3, skippedAvailable: 30, withoutAbstract: 0, hadAbstractAtFilter: 4 });
+  const { json, markdown } = await evaluate(await writeSheet(rows, meta));
+  const photoZ = Object.fromEntries(json.topics.map(topic => [topic.tag, topic]))["photo-z"];
+
+  close(photoZ.precision.value, 1);
+  close(photoZ.recall.value, 1 / 2, "in-sample recall counts the skipped row once");
+  close(photoZ.weighted.precision.value, 1, "filed rows all come from the selected stratum");
+  close(photoZ.weighted.recall.value, 1 / 11, "one selected row over one selected plus ten weighted skipped");
+
+  assert.match(markdown, /精确率（样本内）/);
+  assert.match(markdown, /召回率（样本内）/);
+  assert.match(markdown, /加权估计（精确率 \/ 召回率）/);
+  assert.match(markdown, /100\.0% \/ 9\.1%/, "the topic table shows the weighted estimate beside the counts");
+});
+
 test("disagreements list missed and wrongly selected papers with their details", async () => {
   const { json, markdown } = await evaluate(await writeSheet());
   const { falseNegatives, falsePositives, directionMismatches } = json.disagreements;
