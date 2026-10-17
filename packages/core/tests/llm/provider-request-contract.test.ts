@@ -24,6 +24,21 @@ function fixture(provider: string, thinkingMode = true, overrides: Partial<LlmSe
 }
 
 describe("provider request contract", () => {
+  it("registers its API key without dropping secrets other components registered", () => {
+    const logger = new Logger("error");
+    logger.setSensitiveValues(["re_ResendSecretKey9999"]);
+    new LlmClient({
+      ...DEFAULT_SETTINGS.llm, baseUrl: "https://provider.example/v1", model: "m", apiKey: "llm-key-123456",
+    }, logger, { request: vi.fn() });
+    vi.spyOn(console, "error").mockImplementation(() => {});
+
+    logger.error("re_ResendSecretKey9999 llm-key-123456");
+
+    const joined = logger.getBuffer().join("\n");
+    expect(joined).not.toContain("re_ResendSecretKey9999");
+    expect(joined).not.toContain("llm-key-123456");
+  });
+
   it("uses native Anthropic adaptive thinking and decodes only answer text with usage", async () => {
     const { client, request, body } = fixture("anthropic", true, {
       baseUrl: "https://api.anthropic.com/v1", model: "claude-opus-4-7",

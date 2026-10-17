@@ -32,8 +32,15 @@ export class Logger {
     this.timezone = tz;
   }
 
+  /** Replace the whole secret list (a host reloading settings owns the full set). */
   setSensitiveValues(values: readonly string[]): void {
     this.secrets = [...values];
+    this.buffer = this.buffer.map((entry) => this.sanitizeText(entry));
+  }
+
+  /** Register more secrets without forgetting those other components registered. */
+  addSensitiveValues(values: readonly string[]): void {
+    this.secrets = [...new Set([...this.secrets, ...values])];
     this.buffer = this.buffer.map((entry) => this.sanitizeText(entry));
   }
 

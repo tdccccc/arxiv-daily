@@ -190,7 +190,7 @@ export class LlmClient {
     private logger: Logger,
     private http: HttpClient,
   ) {
-    this.logger.setSensitiveValues?.([settings.apiKey]);
+    this.logger.addSensitiveValues?.([settings.apiKey]);
   }
 
   async testConnection(): Promise<{ success: boolean; error?: string }> {
