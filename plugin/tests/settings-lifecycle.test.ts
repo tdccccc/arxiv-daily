@@ -1379,3 +1379,71 @@ describe("output path change through the settings transaction", () => {
     }
   });
 });
+
+describe("work after plugin unload", () => {
+  async function loadedThenUnloaded() {
+    const plugin = new ArxivDailyPlugin();
+    const storage: StorageAdapter = {
+      ...memoryStorage(),
+      writeTextAtomic: async () => {},
+      acquireLock: vi.fn(async () => null),
+      list: vi.fn(async () => []),
+    };
+    const buildHost = vi.spyOn(obsidianHost, "buildObsidianHostAdapters")
+      .mockReturnValue({ storage, http: {}, markupParser: {} } as any);
+    const settings = structuredClone(DEFAULT_SETTINGS);
+    Object.assign(plugin, {
+      settings,
+      app: {},
+      manifest: { id: "arxiv-daily" },
+      loadSettingsAndState: vi.fn(async () => []),
+      cleanupCachesIfDue: vi.fn(),
+      saveData: vi.fn(async () => {}),
+      addStatusBarItem: () => document.createElement("div"),
+      addSettingTab: () => { throw new Error("stop after the scheduler is wired"); },
+    });
+    await expect(plugin.onload()).rejects.toThrow("stop after the scheduler is wired");
+    plugin.onunload();
+    return { plugin, buildHost };
+  }
+
+  it("hands out aborted handles instead of registering operations", async () => {
+    const { plugin, buildHost } = await loadedThenUnloaded();
+    try {
+      const handle = plugin.operations.begin("daily-run", "after unload");
+      expect(handle.signal.aborted).toBe(true);
+      expect(plugin.operations.snapshot()).toHaveLength(0);
+      handle.finish();
+
+      const callback = vi.fn(async () => "ran");
+      await expect(
+        plugin.withOutputOperation("paper-index", "mark", "2606.00001", callback),
+      ).rejects.toThrow("plugin unloaded");
+      expect(callback).not.toHaveBeenCalled();
+    } finally {
+      buildHost.mockRestore();
+    }
+  });
+
+  it("does not start a pipeline run from an in-flight scheduler call", async () => {
+    const { plugin, buildHost } = await loadedThenUnloaded();
+    const buildPipeline = vi.spyOn(plugin as any, "buildPipeline");
+    try {
+      await expect(plugin.scheduler.runForDateNow("2026-10-14")).rejects.toThrow("plugin unloaded");
+      expect(buildPipeline).not.toHaveBeenCalled();
+    } finally {
+      buildHost.mockRestore();
+    }
+  });
+
+  it("does not change the schedule or start today's run after unload", async () => {
+    const { plugin, buildHost } = await loadedThenUnloaded();
+    const changeValue = vi.spyOn(plugin.settingsChanges, "changeValue");
+    try {
+      await expect(plugin.setScheduleEnabled(false)).resolves.toBe(false);
+      expect(changeValue).not.toHaveBeenCalled();
+    } finally {
+      buildHost.mockRestore();
+    }
+  });
+});

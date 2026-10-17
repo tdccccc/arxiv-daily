@@ -252,12 +252,28 @@ export interface PersonalLibraryProfileSnapshot {
 
 class SettingsOperationRegistry extends OperationRegistry {
   private outputTransitionActive = false;
+  private closedReason: string | null = null;
+
+  /**
+   * Terminal: after the plugin is unloaded nothing may start. A late caller (an
+   * in-flight scheduler tick, a dashboard continuation) gets an already-aborted
+   * handle, so it unwinds through its normal cancellation path instead of
+   * running work for an instance nothing will ever unload again.
+   */
+  close(reason: string): void {
+    this.closedReason = reason;
+  }
 
   override begin(
     kind: OperationKind,
     label: string,
     key?: string,
   ): OperationHandle {
+    if (this.closedReason !== null) {
+      const controller = new AbortController();
+      controller.abort(this.closedReason);
+      return { id: `${kind}:closed`, signal: controller.signal, finish: () => undefined };
+    }
     if (this.outputTransitionActive) {
       throw new Error(
         "Cannot start an operation while output directories are changing",
@@ -487,6 +503,7 @@ export default class ArxivDailyPlugin extends Plugin {
       lock: this.runLock,
       logger: this.logger,
       runForDate: async (date, signal) => {
+        if (this.unloading) throwIfCancelled(abortedSignal("plugin unloaded"));
         return await this.buildPipeline().runForDate(date, signal);
       },
       progress: this.progress,
@@ -561,6 +578,7 @@ export default class ArxivDailyPlugin extends Plugin {
   onunload() {
     this.unloading = true;
     this.scheduler?.stop();
+    this.operations.close("plugin unloaded");
     this.operations.cancelAll("plugin unloaded");
     this.libraryInventoryController?.abort("plugin unloaded");
     this.unsubscribeOperations?.();
@@ -2386,6 +2404,7 @@ export default class ArxivDailyPlugin extends Plugin {
   ): Promise<T> {
     const handle = this.operations.begin(kind, label, key);
     try {
+      throwIfCancelled(handle.signal);
       return await operation();
     } finally {
       handle.finish();
@@ -2421,13 +2440,13 @@ export default class ArxivDailyPlugin extends Plugin {
         return false;
       }
       const selected = await this.chooseScheduleEnableAction();
-      if (revision !== this.scheduleIntentRevision) return false;
+      if (revision !== this.scheduleIntentRevision || this.unloading) return false;
       if (selected === null || selected === "cancel") return false;
       choice = selected === "run" ? "run" : "skip";
     }
 
     return this.enqueueScheduleIntent(async () => {
-      if (revision !== this.scheduleIntentRevision) return false;
+      if (revision !== this.scheduleIntentRevision || this.unloading) return false;
       if (this.settings.schedule.enabled !== enabled) {
         await this.settingsChanges.changeValue("schedule.enabled", enabled);
       }
@@ -2444,7 +2463,7 @@ export default class ArxivDailyPlugin extends Plugin {
         // Today's run can take minutes; it reports through the status bar and
         // notices, so the toggle (and later intents) must not wait for it.
         void Promise.resolve()
-          .then(() => this.scheduler.tickToday())
+          .then(() => (this.unloading ? undefined : this.scheduler.tickToday()))
           .then((result) => {
             if (
               revision === this.scheduleIntentRevision &&
@@ -3111,6 +3130,12 @@ export default class ArxivDailyPlugin extends Plugin {
       );
     }
   }
+}
+
+function abortedSignal(reason: string): AbortSignal {
+  const controller = new AbortController();
+  controller.abort(reason);
+  return controller.signal;
 }
 
 function latestCompletedDate(store: StateStore): string | undefined {
