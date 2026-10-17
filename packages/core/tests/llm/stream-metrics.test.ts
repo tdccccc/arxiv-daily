@@ -4,7 +4,9 @@ import {
   LLM_MAX_OUTPUT_CODE_UNITS,
   LlmClient,
   LlmOutputLimitExceededError,
+  LlmOutputTruncatedError,
   LlmTransientExhaustedError,
+  isLlmOutputTruncatedError,
   isUnsupportedStreamOptionsError,
 } from "../../src/llm/client";
 import {
@@ -217,6 +219,54 @@ describe("LLM stream metrics", () => {
     expect(isCancellationError(error)).toBe(true);
     expect(seen).toBeDefined();
     expect(seen).not.toBe(controller.signal);
+  });
+
+  it.each(["length", "max_tokens"])("throws a typed error instead of returning text cut off by finish_reason %s", async (reason) => {
+    const request = vi.fn(async () => response(200, sse([
+      { choices: [{ delta: { content: "# partial note" } }] },
+      { choices: [{ delta: {}, finish_reason: reason }] },
+    ])));
+    const metrics = vi.fn();
+
+    const error = await client(request)
+      .call([{ role: "user", content: "x" }], { onMetrics: metrics })
+      .catch((e) => e);
+
+    expect(error).toBeInstanceOf(LlmOutputTruncatedError);
+    expect(isLlmOutputTruncatedError(error)).toBe(true);
+    expect(request).toHaveBeenCalledTimes(1);
+    expect(metrics).toHaveBeenCalledWith(expect.objectContaining({ logicalCalls: 1, attempts: 1 }));
+  });
+
+  it("accepts a normal stop and an Anthropic end_turn", async () => {
+    const stop = vi.fn(async () => response(200, sse([
+      { choices: [{ delta: { content: "done" }, finish_reason: "stop" }] },
+    ])));
+    await expect(client(stop).call([{ role: "user", content: "x" }])).resolves.toBe("done");
+
+    const anthropic = new LlmClient(
+      { ...DEFAULT_SETTINGS.llm, provider: "anthropic", baseUrl: "https://api.anthropic.com/v1", apiKey: "sk-full-secret", model: "claude-sonnet-4-6", thinkingMode: false },
+      new Logger("error"),
+      { request: vi.fn(async () => response(200, [
+        { type: "content_block_delta", delta: { type: "text_delta", text: "done" } },
+        { type: "message_delta", delta: { stop_reason: "end_turn" } },
+        { type: "message_stop" },
+      ].map((e) => `data: ${JSON.stringify(e)}\n\n`).join(""))) },
+    );
+    await expect(anthropic.call([{ role: "user", content: "x" }])).resolves.toBe("done");
+  });
+
+  it("types an Anthropic max_tokens stop_reason as truncation", async () => {
+    const anthropic = new LlmClient(
+      { ...DEFAULT_SETTINGS.llm, provider: "anthropic", baseUrl: "https://api.anthropic.com/v1", apiKey: "sk-full-secret", model: "claude-sonnet-4-6", thinkingMode: false },
+      new Logger("error"),
+      { request: vi.fn(async () => response(200, [
+        { type: "content_block_delta", delta: { type: "text_delta", text: "# partial" } },
+        { type: "message_delta", delta: { stop_reason: "max_tokens" } },
+        { type: "message_stop" },
+      ].map((e) => `data: ${JSON.stringify(e)}\n\n`).join(""))) },
+    );
+    await expect(anthropic.call([{ role: "user", content: "x" }])).rejects.toBeInstanceOf(LlmOutputTruncatedError);
   });
 
   it("does not treat generic client errors as unsupported options and sanitizes provider errors", async () => {

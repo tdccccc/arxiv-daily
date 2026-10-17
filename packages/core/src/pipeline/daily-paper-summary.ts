@@ -1,4 +1,5 @@
 import {
+  isLlmOutputTruncatedError,
   isLlmTransientExhaustedError,
   type LlmClient,
 } from "../llm/client";
@@ -235,6 +236,15 @@ export async function summarizeDailyPaperWithValidationRetry(
         previousValidationError = error;
         onValidationFailure?.(error, attempt);
         if (attempt < DAILY_PAPER_SUMMARY_MAX_ATTEMPTS) continue;
+        return {
+          kind: "fallback",
+          reasonCode: "validation-exhausted",
+          attempts: attempt,
+          originalAbstract: resolveTrustedOriginalAbstract(paper),
+        };
+      }
+      if (isLlmOutputTruncatedError(error)) {
+        // The same request would be cut off again, so another attempt cannot help.
         return {
           kind: "fallback",
           reasonCode: "validation-exhausted",

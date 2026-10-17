@@ -4,7 +4,7 @@ import { describe, it, expect, vi } from "vitest";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, resolve } from "node:path";
-import { LlmTransientExhaustedError } from "../../src/llm/client";
+import { LlmOutputTruncatedError, LlmTransientExhaustedError } from "../../src/llm/client";
 import type { PipelineResult } from "../../src/pipeline/pipeline";
 import { ArxivPipeline } from "../../src/pipeline/pipeline";
 import { Logger } from "../../src/services/logger";
@@ -838,6 +838,31 @@ describe("Pipeline partial failure consistency", () => {
       expect.stringContaining("pipeline: detail index repair failed for 2605.08080"),
       expect.any(Error),
     );
+  });
+
+  it("never writes a paper note whose generation was truncated", async () => {
+    const { pipeline, writer, llm } = makeOnePaperPipeline({
+      detail: true,
+      paperFetcher: {
+        fetch: vi.fn(async () => ({
+          abstractConclusion: "abstract and conclusion",
+          fullSections: "detail content",
+        })),
+      },
+    });
+    const original = llm.call;
+    llm.call = vi.fn(async (messages: any[]) => {
+      if ((messages[0]?.content ?? "").includes("详细的中文论文总结")) {
+        throw new LlmOutputTruncatedError();
+      }
+      return original(messages);
+    });
+
+    const result = await pipeline.runForDate("2026-05-11");
+
+    expect(result).toMatchObject({ kind: "completed", papersWritten: 1 });
+    expect(writer.writePaperDetail).not.toHaveBeenCalled();
+    expect(writer.writeDaily).toHaveBeenCalledTimes(1);
   });
 
   it("rejects partial category discovery before pipeline mutations", async () => {

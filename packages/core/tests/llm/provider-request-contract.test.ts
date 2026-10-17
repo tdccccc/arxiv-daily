@@ -159,6 +159,23 @@ describe("provider request contract", () => {
     expect(body().max_tokens).toBeGreaterThan(16384);
   });
 
+  it("does not cap Anthropic adaptive thinking answers at 4096 tokens by default", async () => {
+    const { client, body } = fixture("anthropic", true, {
+      baseUrl: "https://api.anthropic.com/v1", model: "claude-opus-4-7",
+    });
+    await client.call(prompt);
+    expect(body().thinking).toEqual({ type: "adaptive" });
+    expect(body().max_tokens).toBeGreaterThanOrEqual(32_000);
+  });
+
+  it("raises the Anthropic default budget without thinking", async () => {
+    const { client, body } = fixture("anthropic", false, {
+      baseUrl: "https://api.anthropic.com/v1", model: "claude-sonnet-4-6",
+    });
+    await client.call(prompt);
+    expect(body().max_tokens).toBe(8192);
+  });
+
   it("rejects an impossible Anthropic thinking budget before making a request", async () => {
     const { client, request } = fixture("anthropic");
     await expect(client.call(prompt, { maxCompletionTokens: 1024 })).rejects.toThrow("thinking");

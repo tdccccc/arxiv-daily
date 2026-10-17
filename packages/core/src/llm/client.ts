@@ -40,6 +40,29 @@ export class LlmOutputLimitExceededError extends Error {
   }
 }
 
+export const LLM_OUTPUT_TRUNCATED_ERROR_CODE = "ARXIV_LLM_OUTPUT_TRUNCATED" as const;
+
+/**
+ * The provider stopped because it hit its completion-token limit
+ * (`finish_reason: length`, Anthropic `stop_reason: max_tokens`). The text it
+ * returned is cut off, so it must never be treated as a finished answer.
+ */
+export class LlmOutputTruncatedError extends Error {
+  readonly code = LLM_OUTPUT_TRUNCATED_ERROR_CODE;
+
+  constructor() {
+    super("LLM output was truncated at the completion-token limit");
+    this.name = "LlmOutputTruncatedError";
+  }
+}
+
+export function isLlmOutputTruncatedError(error: unknown): error is LlmOutputTruncatedError {
+  if (error instanceof LlmOutputTruncatedError) return true;
+  return isErrorLike(error) &&
+    error.name === "LlmOutputTruncatedError" &&
+    error.code === LLM_OUTPUT_TRUNCATED_ERROR_CODE;
+}
+
 export class StreamIdleTimeoutError extends Error {
   constructor(message = "LLM stream idle timeout") {
     super(message);
@@ -99,6 +122,8 @@ export interface CallOptions {
 interface StreamResult {
   content: string;
   usage?: TokenUsage;
+  /** True when the provider reported that it stopped at the token limit. */
+  truncated?: boolean;
 }
 
 interface LlmStatusError extends Error {
@@ -298,9 +323,10 @@ export class LlmClient {
               );
               finalUsage = result.usage;
               throwIfCancelled(opts.signal);
+              if (result.truncated) throw new LlmOutputTruncatedError();
               return result.content;
             } catch (error) {
-              if (isCancellationError(error) || error instanceof LlmOutputLimitExceededError) throw error;
+              if (isCancellationError(error) || isDeterministicOutputFailure(error)) throw error;
               if (!isUnsupportedStreamOptionsError(error)) throw this.safeError(error);
               attempts += 1;
               const fallback = { ...params };
@@ -310,10 +336,11 @@ export class LlmClient {
                   fallback, abort.controller, opts.signal, limits.maxOutputCodeUnits,
                 );
                 finalUsage = result.usage;
+                if (result.truncated) throw new LlmOutputTruncatedError();
                 return result.content;
               } catch (fallbackError) {
                 if (isCancellationError(fallbackError)
-                  || fallbackError instanceof LlmOutputLimitExceededError) throw fallbackError;
+                  || isDeterministicOutputFailure(fallbackError)) throw fallbackError;
                 throw this.safeError(fallbackError);
               }
             } finally {
@@ -325,7 +352,7 @@ export class LlmClient {
             baseDelayMs: 5000,
             signal: opts.signal,
             shouldRetry: (err) => !isCancellationError(err)
-              && !(err instanceof LlmOutputLimitExceededError)
+              && !isDeterministicOutputFailure(err)
               && !isPermanentLlmError(err)
               // A transport failure whose physical attempt may still be running
               // (e.g. a timeout) is not re-sent: the provider could generate and
@@ -341,7 +368,7 @@ export class LlmClient {
         );
       } catch (error) {
         if (isCancellationError(error)
-          || error instanceof LlmOutputLimitExceededError
+          || isDeterministicOutputFailure(error)
           || isPermanentLlmError(error)) throw error;
         throw new LlmTransientExhaustedError(this.safeError(error));
       }
@@ -442,6 +469,21 @@ export class LlmClient {
   }
 }
 
+/** Failures a repeat of the same request would reproduce; never retried or re-typed. */
+function isDeterministicOutputFailure(error: unknown): boolean {
+  return error instanceof LlmOutputLimitExceededError || isLlmOutputTruncatedError(error);
+}
+
+/**
+ * Default completion budget when the caller sets none. Anthropic requires an
+ * explicit `max_tokens` and counts thinking tokens against it, so 4096 cut
+ * long answers off. Without thinking, 8192 is the largest value every Claude
+ * model accepts; with thinking (only newer models) 32k is within each model's
+ * output cap. Other providers keep their own default.
+ */
+const ANTHROPIC_DEFAULT_MAX_TOKENS = 8_192;
+const ANTHROPIC_THINKING_MAX_TOKENS = 32_000;
+
 function generationParameters(
   settings: LlmSettings,
   options: CallOptions,
@@ -451,7 +493,9 @@ function generationParameters(
   if (maxCompletionTokens !== undefined) {
     params[settings.provider === "openai" ? "max_completion_tokens" : "max_tokens"] = maxCompletionTokens;
   } else if (settings.provider === "anthropic") {
-    params.max_tokens = 4096;
+    params.max_tokens = settings.thinkingMode
+      ? ANTHROPIC_THINKING_MAX_TOKENS
+      : ANTHROPIC_DEFAULT_MAX_TOKENS;
   }
   const hasThinkingToggle = ["anthropic", "deepseek", "zhipu"].includes(settings.provider);
   if (!settings.thinkingMode) {
@@ -467,7 +511,8 @@ function generationParameters(
     }
     const budgets: Record<string, number> = { low: 2048, medium: 8192, high: 16384 };
     const requested = budgets[settings.reasoningEffort] ?? 8192;
-    const cap = maxCompletionTokens ?? requested + 4096;
+    const cap = maxCompletionTokens
+      ?? Math.min(requested + 16_000, ANTHROPIC_THINKING_MAX_TOKENS);
     if (cap <= 1024) {
       throw new TypeError("Anthropic thinking requires maxCompletionTokens greater than 1024");
     }
@@ -524,7 +569,7 @@ async function* parseAnthropicSseText(raw: string): AsyncIterable<unknown> {
       type?: string;
       message?: { usage?: Record<string, number> };
       usage?: Record<string, number>;
-      delta?: { type?: string; text?: string };
+      delta?: { type?: string; text?: string; stop_reason?: string };
       content_block?: { type?: string; text?: string };
       error?: { type?: string; message?: string };
     };
@@ -545,6 +590,10 @@ async function* parseAnthropicSseText(raw: string): AsyncIterable<unknown> {
         ...usage,
         input_tokens: (usage.input_tokens ?? 0) + (usage.cache_read_input_tokens ?? 0) + (usage.cache_creation_input_tokens ?? 0),
       } };
+    }
+    const stopReason = event.delta?.stop_reason;
+    if (event.type === "message_delta" && typeof stopReason === "string") {
+      yield { choices: [{ delta: {}, finish_reason: stopReason === "max_tokens" || stopReason === "model_context_window_exceeded" ? "length" : "stop" }] };
     }
     if (event.type === "message_stop") return;
   }
@@ -594,6 +643,7 @@ export async function collectStreamResultWithIdleTimeout(
   const chunks: string[] = [];
   let outputCodeUnits = 0;
   let usage: TokenUsage | undefined;
+  let truncated = false;
   const iterator = stream[Symbol.asyncIterator]();
   while (true) {
     throwIfCancelled(signal);
@@ -609,10 +659,12 @@ export async function collectStreamResultWithIdleTimeout(
       }
       chunks.push(delta);
     }
+    const finishReason = streamFinishReason(next.value);
+    if (finishReason === "length" || finishReason === "max_tokens") truncated = true;
     usage = parseTokenUsage(next.value) ?? usage;
   }
   throwIfCancelled(signal);
-  return { content: chunks.join(""), usage };
+  return { content: chunks.join(""), usage, ...(truncated ? { truncated } : {}) };
 }
 
 function nextStreamChunk(
@@ -660,6 +712,12 @@ function nextStreamChunk(
       },
     );
   });
+}
+
+function streamFinishReason(chunk: unknown): string | undefined {
+  const choices = (chunk as { choices?: Array<{ finish_reason?: unknown }> }).choices;
+  const reason = choices?.[0]?.finish_reason;
+  return typeof reason === "string" ? reason : undefined;
 }
 
 function streamDeltaContent(chunk: unknown): string | undefined {
