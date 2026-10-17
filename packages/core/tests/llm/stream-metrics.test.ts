@@ -13,7 +13,12 @@ import {
 } from "../../src/services/cancellation";
 import { Logger } from "../../src/services/logger";
 import { DEFAULT_SETTINGS } from "../../src/settings/defaults";
-import type { HttpClient, HttpRequest, HttpResponse } from "../../src/core/adapters";
+import {
+  HttpTransportError,
+  type HttpClient,
+  type HttpRequest,
+  type HttpResponse,
+} from "../../src/core/adapters";
 
 function response(status: number, bodyText: string): HttpResponse {
   return { status, bodyText, headers: {} };
@@ -169,6 +174,49 @@ describe("LLM stream metrics", () => {
     expect(metrics).toHaveBeenCalledWith(
       expect.objectContaining({ logicalCalls: 1, attempts: 3 }),
     );
+  });
+
+  it("does not re-send a request whose transport failure may still be running", async () => {
+    const request = vi.fn(async (): Promise<HttpResponse> => {
+      throw new HttpTransportError("timeout", "HTTP timeout after 300000ms", { retryableAttempt: false });
+    });
+
+    const error = await client(request).call([{ role: "user", content: "x" }]).catch((e) => e);
+
+    expect(error).toBeInstanceOf(LlmTransientExhaustedError);
+    expect(request).toHaveBeenCalledTimes(1);
+  });
+
+  it("retries a transport failure the host marked as safe to repeat", async () => {
+    vi.useFakeTimers();
+    const request = vi.fn()
+      .mockRejectedValueOnce(new HttpTransportError("network", "reset", { retryableAttempt: true }))
+      .mockResolvedValueOnce(response(200, sse([{ choices: [{ delta: { content: "ok" } }] }])));
+
+    const call = client(request).call([{ role: "user", content: "x" }]);
+    await vi.runAllTimersAsync();
+
+    await expect(call).resolves.toBe("ok");
+    expect(request).toHaveBeenCalledTimes(2);
+  });
+
+  it("gives the request the per-attempt signal that follows the caller's abort", async () => {
+    const controller = new AbortController();
+    let seen: AbortSignal | undefined;
+    const request = vi.fn(async (req: HttpRequest): Promise<HttpResponse> => {
+      seen = req.signal;
+      controller.abort("cancelled by user");
+      expect(req.signal?.aborted).toBe(true);
+      throw new RunCancelledError("cancelled by user");
+    });
+
+    const error = await client(request)
+      .call([{ role: "user", content: "x" }], { signal: controller.signal })
+      .catch((e) => e);
+
+    expect(isCancellationError(error)).toBe(true);
+    expect(seen).toBeDefined();
+    expect(seen).not.toBe(controller.signal);
   });
 
   it("does not treat generic client errors as unsupported options and sanitizes provider errors", async () => {

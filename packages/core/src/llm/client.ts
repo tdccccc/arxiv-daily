@@ -1,7 +1,7 @@
 import { retry } from "../utils/retry";
 import type { Logger } from "../services/logger";
 import type { LlmSettings } from "../settings/types";
-import type { HttpClient } from "../core/adapters";
+import { isHttpTransportError, type HttpClient } from "../core/adapters";
 import { isCancellationError, throwIfCancelled } from "../services/cancellation";
 import { redactError, redactText } from "../utils/redaction";
 import { setTimer, clearTimer } from "../utils/timers";
@@ -13,7 +13,16 @@ import {
   type TokenUsage,
 } from "../metrics/generation";
 
+/**
+ * Total wall-clock bound for one request. HttpClient returns only after the
+ * whole body arrived, so this is the only real network timeout an LLM call has.
+ */
 const LLM_TIMEOUT_MS = 300_000; // 5 minutes
+/**
+ * Gap allowed between chunks while iterating an already-received response.
+ * Hosts do not stream, so this is not a network idle timeout; it only guards
+ * consumers of {@link collectStreamWithIdleTimeout} that hand in a live stream.
+ */
 export const LLM_STREAM_IDLE_TIMEOUT_MS = 120_000;
 export const LLM_TEMPERATURE = 0.1;
 export const LLM_MAX_OUTPUT_CODE_UNITS = 10_000_000;
@@ -317,7 +326,11 @@ export class LlmClient {
             signal: opts.signal,
             shouldRetry: (err) => !isCancellationError(err)
               && !(err instanceof LlmOutputLimitExceededError)
-              && !isPermanentLlmError(err),
+              && !isPermanentLlmError(err)
+              // A transport failure whose physical attempt may still be running
+              // (e.g. a timeout) is not re-sent: the provider could generate and
+              // bill the same request twice.
+              && !(isHttpTransportError(err) && !err.retryableAttempt),
             onRetry: (err, attempt, wait) => {
               hadRetriedGenerationFailure = true;
               this.logger.warn(
@@ -352,13 +365,19 @@ export class LlmClient {
     return JSON.parse(res);
   }
 
+  /**
+   * Sends a `stream: true` request. The HTTP client buffers the whole body, so
+   * the response is parsed as a complete SSE document afterwards. `controller`
+   * merges the caller's signal with this attempt's own abort, and its signal is
+   * what the request is given.
+   */
   private async postChatStream(
     body: Record<string, unknown>,
     controller: AbortController,
     signal?: AbortSignal,
     maxOutputCodeUnits?: number,
   ): Promise<StreamResult> {
-    const raw = await this.requestChat({ ...body, stream: true }, true, signal);
+    const raw = await this.requestChat({ ...body, stream: true }, true, controller.signal);
     return collectStreamResultWithIdleTimeout(
       usesNativeAnthropic(this.settings) ? parseAnthropicSseText(raw) : parseSseText(raw),
       controller,
@@ -414,7 +433,12 @@ export class LlmClient {
   }
 
   private safeError(error: unknown): Error {
-    return redactError(error, { secrets: [this.settings.apiKey] });
+    const safe = redactError(error, { secrets: [this.settings.apiKey] });
+    if (isHttpTransportError(error)) {
+      // Keep the structural transport markers the retry policy keys off.
+      Object.assign(safe, { kind: error.kind, retryableAttempt: error.retryableAttempt });
+    }
+    return safe;
   }
 }
 
