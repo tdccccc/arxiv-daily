@@ -205,7 +205,7 @@ export async function buildCliRuntime(
     getSettings: () => config.settings,
     store: stateStore,
     lock: new RunLock(() => host.storage.acquireLock?.(DAILY_RUN_LOCK_KEY)),
-    runForDate: (date, signal) => pipeline.runForDate(date, signal),
+    runForDate: (date, signal, options) => pipeline.runForDate(date, signal, options),
     logger,
     progress: host.progress,
     cancellation: new RunCancellationService(operations),

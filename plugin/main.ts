@@ -504,9 +504,9 @@ export default class ArxivDailyPlugin extends Plugin {
       store: this.stateStore,
       lock: this.runLock,
       logger: this.logger,
-      runForDate: async (date, signal) => {
+      runForDate: async (date, signal, options) => {
         if (this.unloading) throwIfCancelled(abortedSignal("plugin unloaded"));
-        return await this.buildPipeline().runForDate(date, signal);
+        return await this.buildPipeline().runForDate(date, signal, options);
       },
       // Idle ticks must not replace the progress of a library task or detail
       // summary that currently owns the status bar.
