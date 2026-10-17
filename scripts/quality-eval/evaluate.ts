@@ -1,4 +1,5 @@
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { access, constants, mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { existsSync } from "node:fs";
 import path from "node:path";
 import type { LlmCallMetrics } from "@arxiv-daily/core";
 import {
@@ -30,6 +31,8 @@ export interface EvaluateOptions {
   configPath?: string;
   /** Use the config's topics instead of the direction snapshot stored with the sheet. */
   topicsFromConfig?: boolean;
+  /** Replace an existing report.md/report.json in `outDir`. */
+  force?: boolean;
 }
 
 export interface EvaluateDeps {
@@ -74,6 +77,7 @@ export function parseEvaluateArgs(argv: readonly string[]): Partial<EvaluateOpti
     if (flag === "--help" || flag === "-h") return { help: true };
     if (flag === "--recorded") { parsed.recorded = true; continue; }
     if (flag === "--yes") { parsed.yes = true; continue; }
+    if (flag === "--force") { parsed.force = true; continue; }
     if (flag === "--topics-from-config") { parsed.topicsFromConfig = true; continue; }
     const take = (): string => {
       const value = argv[index + 1];
@@ -113,6 +117,24 @@ export async function runEvaluate(options: EvaluateOptions, deps: EvaluateDeps =
   const rows = parseSheet(await readFile(sheetPath, "utf8"), new Set(meta.directions.map((direction) => direction.number)));
   const context = { sheetPath, metaPath, now: deps.now?.() ?? new Date() };
   const outDir = path.resolve(options.outDir);
+  const files = [path.join(outDir, "report.md"), path.join(outDir, "report.json")];
+
+  // Prepare the output before any model call: a bad directory or an existing report would
+  // otherwise surface only after the paid calls finished, losing them.
+  if (!options.force) {
+    const existing = files.find((file) => existsSync(file));
+    if (existing) {
+      throw new Error(`${existing} already exists; choose another --out or pass --force to replace it`);
+    }
+  }
+  const dryRun = !options.recorded && !options.yes;
+  if (dryRun) {
+    // A dry run must not create anything (its plan is printed and nothing is written), but it
+    // can still fail early when the nearest existing parent could not hold the report.
+    await assertWritableTarget(outDir);
+  } else {
+    await prepareOutDir(outDir);
+  }
 
   let report: RecordedReport | RerunReport;
   let allRunsFailed = false;
@@ -125,11 +147,55 @@ export async function runEvaluate(options: EvaluateOptions, deps: EvaluateDeps =
     allRunsFailed = rerun.allRunsFailed;
   }
 
-  await mkdir(outDir, { recursive: true });
-  const files = [path.join(outDir, "report.md"), path.join(outDir, "report.json")];
   await writeFile(files[0]!, report.kind === "recorded" ? renderRecordedReport(report) : renderRerunReport(report));
   await writeFile(files[1]!, `${JSON.stringify(report, null, 2)}\n`);
   return { outDir, files, report, allRunsFailed };
+}
+
+/** The nearest path that exists, so a missing `outDir` can be checked without creating it. */
+async function nearestExistingPath(target: string): Promise<string> {
+  let current = target;
+  while (true) {
+    try {
+      await stat(current);
+      return current;
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code !== "ENOENT" && code !== "ENOTDIR") throw error;
+      const parent = path.dirname(current);
+      if (parent === current) return current;
+      current = parent;
+    }
+  }
+}
+
+/** Fail with a clear message when `target` cannot become a writable directory (creating nothing). */
+async function assertWritableTarget(target: string): Promise<void> {
+  const existing = await nearestExistingPath(target);
+  const info = await stat(existing);
+  if (!info.isDirectory()) {
+    throw new Error(`cannot write reports to ${target}: ${existing} is not a directory`);
+  }
+  try {
+    await access(existing, constants.W_OK);
+  } catch {
+    throw new Error(`cannot write reports to ${target}: ${existing} is not writable`);
+  }
+}
+
+async function prepareOutDir(outDir: string): Promise<void> {
+  await assertWritableTarget(outDir);
+  await mkdir(outDir, { recursive: true });
+  // Write and remove a probe so a directory that exists but is not writable fails here,
+  // before the model calls, rather than when the report is finally written.
+  const probe = path.join(outDir, `.write-test-${process.pid}-${Date.now()}`);
+  try {
+    await writeFile(probe, "");
+  } catch (error) {
+    throw new Error(`cannot write to output directory ${outDir}: ${(error as Error).message}`);
+  } finally {
+    await rm(probe, { force: true }).catch(() => undefined);
+  }
 }
 
 export function buildRecordedReport(
