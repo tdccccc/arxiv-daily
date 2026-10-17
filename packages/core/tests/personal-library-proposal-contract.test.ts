@@ -18,6 +18,7 @@ import {
   decodePersonalLibraryInterestProfile,
   decodePersistedPersonalLibraryInterestProfile,
   evaluatePersonalLibraryInterestEligibility,
+  isNewPapersUpdate,
   type PersonalLibraryConfirmedDirection,
   type PersonalLibraryDirectionProposal,
   type PersonalLibraryInterestProfile,
@@ -372,5 +373,29 @@ describe("accounted papers (ADR 0015 section 3)", () => {
   it("counts ungrouped and covered input papers as accounted when the field is absent", () => {
     const value = { ...proposal(), coveredPaperKeys: ["arxiv:2608.00002"] };
     expect(accountedPaperKeysOf(value)).toEqual(["arxiv:2608.00001", "arxiv:2608.00002"]);
+  });
+});
+
+describe("scan scope (ADR 0015 section 4)", () => {
+  it.each(["full", "new-papers"] as const)("round-trips scope %s", (scope) => {
+    const value = { ...proposal(), scope };
+    expect(decodePersonalLibraryDirectionProposal(value)).toEqual(value);
+  });
+
+  it.each([["unknown"], [""], [null], [true], [0], [["full"]]])("rejects the scope value %j", (scope) => {
+    expect(decodePersonalLibraryDirectionProposal({ ...proposal(), scope })).toBeNull();
+  });
+
+  it("leaves an omitted scope omitted", () => {
+    const decoded = decodePersonalLibraryDirectionProposal(proposal());
+    expect(decoded).not.toBeNull();
+    expect(decoded).not.toHaveProperty("scope");
+    expect(JSON.parse(JSON.stringify(decoded))).toEqual(JSON.parse(JSON.stringify(proposal())));
+  });
+
+  it("reads a missing scope as a full scan, not an update", () => {
+    expect(isNewPapersUpdate(proposal())).toBe(false);
+    expect(isNewPapersUpdate({ ...proposal(), scope: "full" })).toBe(false);
+    expect(isNewPapersUpdate({ ...proposal(), scope: "new-papers" })).toBe(true);
   });
 });

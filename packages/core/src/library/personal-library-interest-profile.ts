@@ -123,6 +123,12 @@ export interface PersonalLibraryDirectionProposal {
    * before it existed keep decoding; read it through `accountedPaperKeysOf`.
    */
   accountedPaperKeys?: string[];
+  /**
+   * What this proposal analysed: the whole library, or only papers no earlier
+   * scan accounted for (ADR 0015 section 4). Optional so proposals saved
+   * before it existed keep decoding; a missing value means a full scan.
+   */
+  scope?: "full" | "new-papers";
 }
 
 /**
@@ -136,6 +142,18 @@ export function accountedPaperKeysOf(
   return proposal.accountedPaperKeys !== undefined
     ? [...proposal.accountedPaperKeys]
     : proposal.catalogInputPapers.map(({ paperKey }) => paperKey);
+}
+
+/**
+ * Whether this proposal is an update of papers no earlier scan accounted for.
+ * Only an explicit `"new-papers"` says so: a proposal saved before `scope`
+ * existed is read as a full scan, the safe degradation, and a full scan has no
+ * "new papers" of its own even when its accounted set outgrew its input.
+ */
+export function isNewPapersUpdate(
+  proposal: Pick<PersonalLibraryDirectionProposal, "scope">,
+): boolean {
+  return proposal.scope === "new-papers";
 }
 
 export interface PersonalLibraryCoverageEvidence {
@@ -346,12 +364,14 @@ function decodeDirectionProposal(value: unknown, maxCandidates: number): Persona
   const hasCoveredPaperKeys = isPlainObject(value) && Object.hasOwn(value, "coveredPaperKeys");
   const hasCoverageEvidence = isPlainObject(value) && Object.hasOwn(value, "coverageEvidence");
   const hasAccountedPaperKeys = isPlainObject(value) && Object.hasOwn(value, "accountedPaperKeys");
+  const hasScope = isPlainObject(value) && Object.hasOwn(value, "scope");
   if (!isExactObject(value, [
     "schemaVersion", "revision", "proposalId", "scopeFingerprint", "identificationFingerprint",
     "catalogInputFingerprint", "catalogInputPapers", "generationContractFingerprint", "generatedAt", "topics",
     ...(hasCoveredPaperKeys ? ["coveredPaperKeys"] : []),
     ...(hasCoverageEvidence ? ["coverageEvidence"] : []),
     ...(hasAccountedPaperKeys ? ["accountedPaperKeys"] : []),
+    ...(hasScope ? ["scope"] : []),
   ])
     // Only the current schema decodes. Earlier proposals were a flat candidate
     // list with name+description directions; both shapes changed in v4, so
@@ -395,6 +415,11 @@ function decodeDirectionProposal(value: unknown, maxCandidates: number): Persona
     const accounted = new Set<string>(value.accountedPaperKeys);
     if (!catalogInputPapers.every(({ paperKey }) => accounted.has(paperKey))) return null;
     accountedPaperKeys = [...value.accountedPaperKeys];
+  }
+  let scope: PersonalLibraryDirectionProposal["scope"];
+  if (hasScope) {
+    if (value.scope !== "full" && value.scope !== "new-papers") return null;
+    scope = value.scope;
   }
   const covered = new Set(coveredPaperKeys);
   let coverageEvidence: PersonalLibraryCoverageEvidence[] | undefined;
@@ -473,6 +498,7 @@ function decodeDirectionProposal(value: unknown, maxCandidates: number): Persona
     ...(coveredPaperKeys !== undefined ? { coveredPaperKeys } : {}),
     ...(coverageEvidence !== undefined ? { coverageEvidence } : {}),
     ...(accountedPaperKeys !== undefined ? { accountedPaperKeys } : {}),
+    ...(scope !== undefined ? { scope } : {}),
   };
 }
 

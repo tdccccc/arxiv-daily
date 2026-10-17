@@ -561,6 +561,7 @@ export async function proposeClusteredPersonalLibraryDirections(
   const decoded = assembleProposal({
     catalog, existingTopics, inputPapers, organization, confidenceByKey, proposalId, generatedAt,
     contract: createPersonalLibraryClusteredDirectionGenerationContract(clusteringOptions),
+    scope: "full",
     accountedPaperKeys: mergeAccountedPapers({
       previous: options.previous, manifest,
       inputKeys: inputPapers.map(({ paperKey }) => paperKey),
@@ -626,6 +627,7 @@ export async function proposeNewPapersPersonalLibraryDirections(
     catalog, existingTopics, inputPapers, organization, proposalId, generatedAt,
     confidenceByKey: new Map(inputPapers.map(({ paperKey }) => [paperKey, 1] as const)),
     contract: createPersonalLibraryNewPapersDirectionGenerationContract(),
+    scope: "new-papers",
     accountedPaperKeys: mergeAccountedPapers({
       previous, manifest, inputKeys: inputPapers.map(({ paperKey }) => paperKey), mergedKeys: [],
     }),
@@ -702,6 +704,8 @@ function assembleProposal(input: {
   proposalId: string;
   generatedAt: string;
   contract: string;
+  /** What this proposal analysed, recorded explicitly so the review pages need no heuristic. */
+  scope: "full" | "new-papers";
   accountedPaperKeys: string[];
   createId: ProposePersonalLibraryDirectionsOptions["createId"];
 }): PersonalLibraryDirectionProposal {
@@ -770,6 +774,7 @@ function assembleProposal(input: {
       generatedAt: input.generatedAt,
       topics,
       coverageEvidence,
+      scope: input.scope,
       coveredPaperKeys: [...new Set((organized.coveredGroups ?? []).flatMap(({ groupId }) =>
         groupById.get(groupId)!.paperKeys,
       ))].sort(codeUnitCompare),
