@@ -10,8 +10,9 @@ const percent = (ratio: Ratio): string => (ratio.value === null ? NA : `${(ratio
 const withCount = (ratio: Ratio): string => (ratio.value === null ? `${NA}（n=${ratio.n}）` : `${percent(ratio)}（${ratio.hits}/${ratio.n}）`);
 const estimate = (ratio: Ratio): string => (ratio.value === null ? NA : percent(ratio));
 
+/** One-line safe text for a Markdown table cell or list item: no newlines, pipes or emphasis. */
 function cell(text: string): string {
-  return text.replace(/\s+/g, " ").replace(/\\/g, "\\\\").replace(/\|/g, "\\|").trim() || " ";
+  return text.replace(/\s+/g, " ").replace(/\\/g, "\\\\").replace(/\|/g, "\\|").replace(/([*_`])/g, "\\$1").trim() || " ";
 }
 
 function numbers(values: readonly number[]): string {
@@ -147,7 +148,7 @@ function describeSource(source: SourceSummary): string[] {
 }
 
 const directionLine = (directions: readonly MetaDirection[]): string =>
-  `- 方向（编号对应标注表）：${directions.map((direction) => `${direction.number}. ${direction.tag}：${direction.text}`).join("；") || "-"}`;
+  `- 方向（编号对应标注表）：${directions.map((direction) => `${direction.number}. ${cell(direction.tag)}：${cell(direction.text)}`).join("；") || "-"}`;
 
 export function renderRecordedReport(report: RecordedReport): string {
   const { sheet, source } = report;
@@ -187,7 +188,7 @@ export function renderRerunReport(report: RerunReport): string {
     "本报告用当前的提示词和模型，对标注过的论文重新跑了筛选，并与日报当时记录的判定放在一起比较。",
     "",
   ];
-  for (const warning of report.warnings) lines.push(`> **注意**：${warning}`, "");
+  for (const warning of report.warnings) lines.push(`> **注意**：${cell(warning)}`, "");
   lines.push(
     "## 评估对象",
     "",

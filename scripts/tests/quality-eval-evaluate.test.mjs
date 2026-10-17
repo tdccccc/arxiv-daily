@@ -28,7 +28,7 @@ const DIRECTIONS = [
   { number: 3, tag: "cluster", id: "d3", text: "Cluster surveys.", dates: ["2026-10-14"] },
 ];
 
-function metaOf(counts = { rows: 11, selected: 7, skippedSampled: 4, skippedAvailable: 20, withoutAbstract: 0, hadAbstractAtFilter: 8 }) {
+function metaOf(counts = { rows: 11, selected: 7, skippedSampled: 4, skippedAvailable: 20, withoutAbstract: 0, hadAbstractAtFilter: 8 }, overrides = {}) {
   return {
     schemaVersion: 1, createdAt: "2026-10-15T12:00:00.000Z", seed: "fixture-seed", skippedSample: 4,
     sourceDates: ["2026-10-13", "2026-10-14"], columns: qe.SHEET_COLUMNS, counts, directions: DIRECTIONS,
@@ -36,6 +36,7 @@ function metaOf(counts = { rows: 11, selected: 7, skippedSampled: 4, skippedAvai
       { reportDate: "2026-10-13", promptContractVersion: 4, resultContractVersion: 3, generation: { provider: "deepseek", model: "model-a" }, candidates: 100 },
       { reportDate: "2026-10-14", promptContractVersion: 4, resultContractVersion: 3, generation: { provider: "deepseek", model: "model-a" }, candidates: 100 },
     ],
+    ...overrides,
   };
 }
 
@@ -205,6 +206,21 @@ test("F1 is 0 when one side is empty, and n/a only when there is nothing to scor
   close(second.json.sets.all.precision.value, 0);
   close(second.json.sets.all.f1.value, 0);
   assert.equal(second.json.sets.all.weighted, null, "no skipped rows to weight");
+});
+
+test("direction tags and text are escaped so they cannot break the list or add emphasis", async () => {
+  const directions = [
+    { number: 1, tag: "a|b", id: "d1", text: "Line one\nLine two *emph*", dates: ["2026-10-14"] },
+  ];
+  const rows = [["s1", "true", "a|b", "1", "90", "y", "1", "", "Title"]];
+  const { markdown } = await evaluate(await writeSheet(rows, metaOf(undefined, { directions })));
+
+  const line = markdown.split("\n").find(entry => entry.startsWith("- 方向（编号对应标注表）"));
+  assert.ok(line, "the direction line is present");
+  assert.ok(line.includes("a\\|b"), "the tag's pipe is escaped");
+  assert.ok(line.includes("Line one Line two"), "the newline is collapsed into the same list item");
+  assert.ok(line.includes("\\*emph\\*"), "asterisks are escaped instead of becoming emphasis");
+  assert.ok(!markdown.split("\n").some(entry => entry.startsWith("Line two")), "the list is not broken");
 });
 
 test("the report names its sources and says what was and was not run", async () => {
