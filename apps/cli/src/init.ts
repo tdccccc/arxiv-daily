@@ -16,7 +16,7 @@ import {
   normalizeSettingsEdits,
   startHostedEmailVerification,
 } from "@arxiv-daily/core";
-import { buildNodeHostAdapters, NodeStorageAdapter } from "@arxiv-daily/node-runtime";
+import { buildNodeHostAdapters, NodeFileLock, NodeStorageAdapter } from "@arxiv-daily/node-runtime";
 import { defaultCliVaultRoot, resolveCliConfigPath } from "./config-path";
 import type { WritableTextStream } from "./main-types";
 
@@ -199,22 +199,31 @@ export async function runInit(opts: InitOptions = {}): Promise<number> {
     if ((e as NodeJS.ErrnoException).code !== "ENOENT") throw e;
   }
 
-  let fileMode: "write" | "merge" = "write";
+  let backupExisting = false;
   if (existing !== null) {
+    // Ask before the wizard: choosing to keep the file must not cost the user a full round of answers.
     const choice = await askSelect(opts, {
       message: `Config already exists`,
       options: [
-        { value: "o", label: "Overwrite", hint: "replace entire file" },
-        { value: "m", label: "Keep existing", hint: "do not rewrite" },
+        { value: "k", label: "Keep existing", hint: "leave the file untouched and exit" },
+        { value: "o", label: "Overwrite", hint: "replace the file; the old one is saved as config.toml.bak-<timestamp>" },
         { value: "c", label: "Cancel" },
       ],
-      initialValue: "o",
+      initialValue: "k",
       allowBack: false,
     });
     if (choice.nav !== "next" || choice.value === "c") {
       return finishCancel(useClack);
     }
-    if (choice.value === "m") fileMode = "merge";
+    if (choice.value === "k") {
+      // The file holds API keys; keeping it must not leave it readable by other users.
+      const tightened = await tightenPermissions(configPath);
+      const message = `Kept existing config: ${configPath} (nothing changed${tightened ? "; file permissions tightened to 0600" : ""})`;
+      if (useClack) p.outro(message);
+      else writeLine(stdout, message);
+      return 0;
+    }
+    backupExisting = true;
   }
 
   const defaultVault = defaultCliVaultRoot();
@@ -304,13 +313,19 @@ export async function runInit(opts: InitOptions = {}): Promise<number> {
     },
   });
 
-  let finalBody = body;
-  if (fileMode === "merge" && existing) {
-    finalBody = mergeTomlPreferExisting(existing, body);
-  }
-
   await mkdir(path.dirname(configPath));
-  await write(configPath, finalBody);
+  // Serialise with workbench settings saves, which hold the same lock around their revision check.
+  const lease = opts.writeFile ? null : await acquireConfigLock(configPath);
+  try {
+    if (backupExisting && existing !== null) {
+      const backupPath = `${configPath}.bak-${new Date().toISOString().replace(/[:.]/g, "-")}`;
+      await write(backupPath, existing);
+      writeLine(stdout, `Backed up previous config to ${backupPath}`);
+    }
+    await write(configPath, body);
+  } finally {
+    await lease?.release();
+  }
 
   const nextSteps = [
     `Wrote ${configPath}`,
@@ -838,6 +853,27 @@ function expandUserPath(inputPath: string): string {
   return path.resolve(trimmed);
 }
 
+async function tightenPermissions(file: string): Promise<boolean> {
+  if (process.platform === "win32") return false;
+  try {
+    const { mode } = await fs.stat(file);
+    if ((mode & 0o077) === 0) return false;
+    await fs.chmod(file, 0o600);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function acquireConfigLock(configPath: string) {
+  const target = await fs.realpath(configPath).catch(() => path.resolve(configPath));
+  const directory = path.dirname(target);
+  const locks = new NodeFileLock(directory, { lockRoot: path.join(directory, ".arxiv-daily-config-locks") });
+  const lease = await locks.acquire(`cli-config:${path.basename(target)}`, { wait: true });
+  if (!lease) throw new Error("CLI configuration is being changed; try again in a moment");
+  return lease;
+}
+
 function finishCancel(useClack: boolean): number {
   if (useClack) p.cancel("init cancelled");
   return 0;
@@ -1259,11 +1295,4 @@ schema_version = 1
 
 function tomlString(value: string): string {
   return JSON.stringify(value);
-}
-
-function mergeTomlPreferExisting(existing: string, generated: string): string {
-  if (/^\s*vault_root\s*=/m.test(existing)) {
-    return `${existing.trimEnd()}\n\n# --- init merge: kept existing file; re-run with overwrite to replace ---\n`;
-  }
-  return generated;
 }
