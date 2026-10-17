@@ -291,6 +291,15 @@ export class StateStore {
   }
 }
 
+/**
+ * True when a transient failure of the run that is now in flight (entry as left
+ * by setRunning) would exhaust the retry budget. That run is the last chance,
+ * so it should commit what it has rather than ask to be retried.
+ */
+export function isFinalTransientAttempt(entry: RunStateEntry): boolean {
+  return priorFailureAttempts(entry) + 1 >= MAX_TRANSIENT_ATTEMPTS;
+}
+
 // Legacy running attempts already include the in-flight attempt.
 function priorFailureAttempts(entry: RunStateEntry): number {
   return entry.failureAttempts ?? Math.max(0, entry.attempts - (entry.status === "running" ? 1 : 0));

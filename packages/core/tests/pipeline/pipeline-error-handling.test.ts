@@ -426,6 +426,51 @@ describe("Pipeline partial failure consistency", () => {
     );
   });
 
+  describe("unreachable model endpoint during summarization", () => {
+    const ids = ["2605.08080", "2605.08068"];
+
+    function unreachableSecondPaper(llm: { call: any }) {
+      llm.call = vi.fn(async (messages: any[]) => {
+        const system = messages[0]?.content ?? "";
+        if (system.includes("判断它命中了哪些方向")) {
+          return JSON.stringify({
+            papers: ids.map((id) => ({ relevanceScore: 80, id, category: "test", directions: ["test#1"] })),
+          });
+        }
+        if (system.includes("strict research-paper evaluator")) return JSON.stringify({ papers: [] });
+        const id = /ID: (\d{4}\.\d{4,5})/.exec(messages[1]?.content ?? "")?.[1];
+        // Papers are summarized by descending relevance then id: 2605.08068 first, 2605.08080 second.
+        if (id === ids[0]) throw new LlmTransientExhaustedError(new Error("endpoint down"));
+        return structuredDailyResponse(messages) ?? "";
+      });
+    }
+
+    it("returns failed_transient and keeps the checkpoints when a retry is allowed", async () => {
+      const summary = { lookupReusable: vi.fn(async () => null), upsert: vi.fn(async () => undefined), removeAll: vi.fn(async () => undefined) };
+      const { pipeline, writer, paperIndex, llm } = makeOnePaperPipeline({ ids, checkpointStores: { summary } });
+      unreachableSecondPaper(llm);
+
+      const result = await pipeline.runForDate("2026-05-11", undefined, { retryTransportFallbacks: true });
+
+      expect(result).toMatchObject({ kind: "failed_transient" });
+      expect((result as { reason: string }).reason).toContain("2605.08080");
+      expect(writer.writeDaily).not.toHaveBeenCalled();
+      expect(paperIndex.addDailyReports).not.toHaveBeenCalled();
+      expect(summary.upsert).toHaveBeenCalledTimes(2);
+      expect(summary.removeAll).not.toHaveBeenCalled();
+    });
+
+    it("commits the report with fallbacks when this is the final attempt", async () => {
+      const { pipeline, writer, llm } = makeOnePaperPipeline({ ids });
+      unreachableSecondPaper(llm);
+
+      const result = await pipeline.runForDate("2026-05-11", undefined, { retryTransportFallbacks: false });
+
+      expect(result).toMatchObject({ kind: "completed", papersWritten: 2 });
+      expect(writer.writeDaily.mock.calls[0]?.[1]).toContain("<!-- arxiv-daily-fallback:2605.08080 -->");
+    });
+  });
+
   it("commits mixed emergency output and indexes all IDs but only structured summaries", async () => {
     const ids = ["2605.08080", "2605.08068"];
     const emergency = [

@@ -1,4 +1,4 @@
-import type { PipelineResult } from "../../pipeline/pipeline";
+import type { PipelineResult, PipelineRunOptions } from "../../pipeline/pipeline";
 import type { PluginSettings } from "../../settings/types";
 import {
   daysBefore,
@@ -15,7 +15,7 @@ import type { Logger } from "../logger";
 import { NoopProgressReporter, type ProgressReporter } from "../progress";
 import type { RunHistoryTrigger } from "../run-history";
 import type { RunLock } from "../run-lock";
-import type { StateStore } from "../state-store";
+import { isFinalTransientAttempt, type StateStore } from "../state-store";
 import { clearRepeatingTimer, setRepeatingTimer } from "../../utils/timers";
 import { lookbackDateStrings, todayDateString } from "./date-selector";
 import { LOOKBACK_DAYS } from "./constants";
@@ -38,7 +38,11 @@ export interface SchedulerDriverDeps {
   store: StateStore;
   getStore?: () => StateStore;
   lock: RunLock;
-  runForDate: (date: string, signal?: AbortSignal) => Promise<PipelineResult>;
+  runForDate: (
+    date: string,
+    signal?: AbortSignal,
+    options?: PipelineRunOptions,
+  ) => Promise<PipelineResult>;
   logger: Logger;
   progress?: ProgressReporter;
   cancellation?: RunCancellationService;
@@ -683,9 +687,11 @@ export class SchedulerDriver {
           await this.safeAsyncEffect(() =>
             this.deps.history.recordStarted(date, trigger, now),
           );
-          result = signal
-            ? await this.deps.runForDate(date, signal)
-            : await this.deps.runForDate(date);
+          // Only the final transient attempt may commit a report that carries
+          // unreachable-model fallbacks; every earlier one is retried instead.
+          result = await this.deps.runForDate(date, signal, {
+            retryTransportFallbacks: !isFinalTransientAttempt(store.get(date)),
+          });
         } catch (error) {
           result = isCancellationError(error)
             ? { kind: "cancelled", reason: errorMessage(error) }

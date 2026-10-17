@@ -110,6 +110,31 @@ describe("SchedulerService", () => {
     expect(newStore.get("2026-06-16").status).toBe("completed");
   });
 
+  it("asks the pipeline to retry unreachable-model fallbacks until the final transient attempt", async () => {
+    const store = makeStore();
+    await store.load();
+    // Eight failures so far: the run that starts now is attempt nine of ten.
+    for (let i = 0; i < 8; i += 1) {
+      await store.setRunning("2026-06-16");
+      await store.setFailed("2026-06-16", "transient", "down");
+    }
+    const runForDate = vi.fn().mockResolvedValue({ kind: "failed_transient", reason: "down" });
+    const svc = new SchedulerService({
+      getSettings: () => DEFAULT_SETTINGS,
+      store,
+      lock: new RunLock(),
+      runForDate,
+      logger: new Logger("error"),
+    });
+
+    await svc.runForDateNow("2026-06-16");
+    expect(runForDate).toHaveBeenLastCalledWith("2026-06-16", undefined, { retryTransportFallbacks: true });
+
+    // That run failed too (nine failures): the next one is the last allowed.
+    await svc.runForDateNow("2026-06-16");
+    expect(runForDate).toHaveBeenLastCalledWith("2026-06-16", undefined, { retryTransportFallbacks: false });
+  });
+
   it("does not run before runAtLocal time", async () => {
     const store = makeStore();
     await store.load();
@@ -329,9 +354,9 @@ describe("SchedulerService", () => {
     await svc.tick();
     // With lookbackDays=5, checks 05-11 (Mon), 05-10 (Sun, skip), 05-09 (Sat, skip), 05-08 (Fri), 05-07 (Thu)
     expect(runForDate).toHaveBeenCalledTimes(3);
-    expect(runForDate).toHaveBeenCalledWith("2026-05-11");
-    expect(runForDate).toHaveBeenCalledWith("2026-05-08");
-    expect(runForDate).toHaveBeenCalledWith("2026-05-07");
+    expect(runForDate).toHaveBeenCalledWith("2026-05-11", undefined, { retryTransportFallbacks: true });
+    expect(runForDate).toHaveBeenCalledWith("2026-05-08", undefined, { retryTransportFallbacks: true });
+    expect(runForDate).toHaveBeenCalledWith("2026-05-07", undefined, { retryTransportFallbacks: true });
     expect(store.get("2026-05-10").status).toBe("pending");
     expect(store.get("2026-05-09").status).toBe("pending");
   });
@@ -784,7 +809,7 @@ describe("SchedulerService", () => {
     });
     const result = await svc.forceRunForDate("2026-05-11");
     expect((result as any).kind).toBe("completed");
-    expect(runForDate).toHaveBeenCalledWith("2026-05-11");
+    expect(runForDate).toHaveBeenCalledWith("2026-05-11", undefined, { retryTransportFallbacks: true });
     expect(store.get("2026-05-11").attempts).toBe(1);
     expect(store.get("2026-05-11").error).toBeUndefined();
   });
@@ -863,10 +888,10 @@ describe("SchedulerService", () => {
     // With lookbackDays=5, checks 05-12 (Tue), 05-11 (Mon), 05-10 (Sun), 05-09 (Sat), 05-08 (Fri)
     // 05-12 is done, 05-11 and 05-10 are pending, 05-09 and 05-08 are pending
     expect(runForDate).toHaveBeenCalledTimes(4);
-    expect(runForDate).toHaveBeenCalledWith("2026-05-11");
-    expect(runForDate).toHaveBeenCalledWith("2026-05-10");
-    expect(runForDate).toHaveBeenCalledWith("2026-05-09");
-    expect(runForDate).toHaveBeenCalledWith("2026-05-08");
+    expect(runForDate).toHaveBeenCalledWith("2026-05-11", undefined, { retryTransportFallbacks: true });
+    expect(runForDate).toHaveBeenCalledWith("2026-05-10", undefined, { retryTransportFallbacks: true });
+    expect(runForDate).toHaveBeenCalledWith("2026-05-09", undefined, { retryTransportFallbacks: true });
+    expect(runForDate).toHaveBeenCalledWith("2026-05-08", undefined, { retryTransportFallbacks: true });
     expect(results).toHaveLength(4);
     expect(results.every((r) => r.result.kind === "completed")).toBe(true);
   });
@@ -926,8 +951,8 @@ describe("SchedulerService", () => {
     const results = await svc.retryFailedInLookback();
     expect(results.map((r) => r.date)).toEqual(["2026-05-12", "2026-05-10"]);
     expect(runForDate).toHaveBeenCalledTimes(2);
-    expect(runForDate).toHaveBeenCalledWith("2026-05-12");
-    expect(runForDate).toHaveBeenCalledWith("2026-05-10");
+    expect(runForDate).toHaveBeenCalledWith("2026-05-12", undefined, { retryTransportFallbacks: true });
+    expect(runForDate).toHaveBeenCalledWith("2026-05-10", undefined, { retryTransportFallbacks: true });
     expect(store.get("2026-05-12").status).toBe("completed");
     expect(store.get("2026-05-10").status).toBe("completed");
   });
@@ -1032,7 +1057,7 @@ describe("SchedulerService", () => {
     });
     const result = await svc.tickToday();
     expect((result as any)?.kind).toBe("completed");
-    expect(runForDate).toHaveBeenCalledWith("2026-05-11");
+    expect(runForDate).toHaveBeenCalledWith("2026-05-11", undefined, { retryTransportFallbacks: true });
   });
 
   it("tickTodayScheduled respects runAtLocal gate", async () => {
@@ -1087,7 +1112,7 @@ describe("SchedulerService", () => {
     });
     const result = await svc.tickTodayScheduled();
     expect((result as any)?.kind).toBe("completed");
-    expect(runForDate).toHaveBeenCalledWith("2026-05-11");
+    expect(runForDate).toHaveBeenCalledWith("2026-05-11", undefined, { retryTransportFallbacks: true });
   });
 
   it("tickToday respects isDone and returns skipped without running", async () => {
@@ -1363,7 +1388,7 @@ describe("SchedulerService", () => {
       recentDates,
     });
     await svc.tickTodayScheduled();
-    expect(runForDate).toHaveBeenCalledWith("2026-05-11");
+    expect(runForDate).toHaveBeenCalledWith("2026-05-11", undefined, { retryTransportFallbacks: true });
     expect(recentDates.refresh).toHaveBeenCalledTimes(1);
   });
 
@@ -1457,9 +1482,9 @@ describe("SchedulerService", () => {
       now: () => new Date("2026-05-11T05:00:00Z"),
     });
     await svc.tick();
-    expect(runForDate).toHaveBeenCalledWith("2026-05-11");
-    expect(runForDate).not.toHaveBeenCalledWith("2026-05-10");
-    expect(runForDate).not.toHaveBeenCalledWith("2026-05-09");
+    expect(runForDate).toHaveBeenCalledWith("2026-05-11", undefined, { retryTransportFallbacks: true });
+    expect(runForDate.mock.calls.map(([date]) => date)).not.toContain("2026-05-10");
+    expect(runForDate.mock.calls.map(([date]) => date)).not.toContain("2026-05-09");
 
     // tickToday() checks isWeekend NOW; FF Monday 13:00 Shanghai is a weekday so it runs.
     const store2 = makeStore();
@@ -1477,6 +1502,6 @@ describe("SchedulerService", () => {
       now: () => new Date("2026-05-11T05:00:00Z"),
     });
     await svc2.tickToday();
-    expect(runForDate2).toHaveBeenCalledWith("2026-05-11");
+    expect(runForDate2).toHaveBeenCalledWith("2026-05-11", undefined, { retryTransportFallbacks: true });
   });
 });

@@ -1,4 +1,4 @@
-import type { PipelineResult } from "../pipeline/pipeline";
+import type { PipelineResult, PipelineRunOptions } from "../pipeline/pipeline";
 import type { PluginSettings } from "../settings/types";
 import type { RunCancellationService } from "./cancellation";
 import type { Logger } from "./logger";
@@ -55,7 +55,11 @@ export interface SchedulerDeps {
   store: StateStore;
   persistence?: SchedulerPersistenceBinding;
   lock: RunLock;
-  runForDate: (date: string, signal?: AbortSignal) => Promise<PipelineResult>;
+  runForDate: (
+    date: string,
+    signal?: AbortSignal,
+    options?: PipelineRunOptions,
+  ) => Promise<PipelineResult>;
   logger: Logger;
   now?: () => Date;
   progress?: ProgressReporter;
