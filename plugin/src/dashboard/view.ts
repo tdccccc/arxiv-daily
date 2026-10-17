@@ -344,6 +344,8 @@ class ArxivDailyDashboardView extends ItemView {
         dailyDir,
         papersDir,
       );
+      const store = this.plugin.buildPaperIndex();
+      let index: Awaited<ReturnType<typeof store.load>>;
       if (
         shouldSkipDashboardHistorySync(
           this.lastSyncedHistoryPaths,
@@ -351,23 +353,25 @@ class ArxivDailyDashboardView extends ItemView {
           this.entries.length,
         )
       ) {
-        this.error = null;
+        // The markdown files are unchanged, so the vault scan is skipped. The
+        // index is not: papers.json also changes without any markdown change
+        // (PDF downloads, marks set from commands or another window), so it is
+        // always read again.
         this.plugin.logger.info(
           `dashboard: skipped history sync for ${historyPaths.size} unchanged managed history files`,
         );
-        this.render();
-        return;
+        index = await store.load();
+      } else {
+        index = await syncDashboardHistory({
+          vault: this.plugin.app.vault,
+          store,
+          output: this.plugin.settings.output,
+          topics: this.plugin.settings.arxiv.topics,
+          markdownFiles,
+          logger: this.plugin.logger,
+        });
+        this.lastSyncedHistoryPaths = historyPaths;
       }
-      const store = this.plugin.buildPaperIndex();
-      const index = await syncDashboardHistory({
-        vault: this.plugin.app.vault,
-        store,
-        output: this.plugin.settings.output,
-        topics: this.plugin.settings.arxiv.topics,
-        markdownFiles,
-        logger: this.plugin.logger,
-      });
-      this.lastSyncedHistoryPaths = historyPaths;
       this.entries = Object.values(index.papers);
       try {
         this.searchIndex = new PaperSearchIndex(this.entries);
