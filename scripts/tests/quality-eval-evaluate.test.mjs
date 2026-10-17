@@ -28,7 +28,7 @@ const DIRECTIONS = [
   { number: 3, tag: "cluster", id: "d3", text: "Cluster surveys.", dates: ["2026-10-14"] },
 ];
 
-function metaOf(counts = { rows: 11, selected: 7, skippedSampled: 4, skippedAvailable: 20, withoutAbstract: 0, hadAbstractAtFilter: 8 }) {
+function metaOf(counts = { rows: 11, selected: 7, skippedSampled: 4, skippedAvailable: 20, withoutAbstract: 0, hadAbstractAtFilter: 8 }, overrides = {}) {
   return {
     schemaVersion: 1, createdAt: "2026-10-15T12:00:00.000Z", seed: "fixture-seed", skippedSample: 4,
     sourceDates: ["2026-10-13", "2026-10-14"], columns: qe.SHEET_COLUMNS, counts, directions: DIRECTIONS,
@@ -36,6 +36,7 @@ function metaOf(counts = { rows: 11, selected: 7, skippedSampled: 4, skippedAvai
       { reportDate: "2026-10-13", promptContractVersion: 4, resultContractVersion: 3, generation: { provider: "deepseek", model: "model-a" }, candidates: 100 },
       { reportDate: "2026-10-14", promptContractVersion: 4, resultContractVersion: 3, generation: { provider: "deepseek", model: "model-a" }, candidates: 100 },
     ],
+    ...overrides,
   };
 }
 
@@ -158,6 +159,30 @@ test("per-topic precision and recall follow the model's topic and the labelled d
   assert.equal(json.topicsWithoutDirection, 1, "s6 is labelled yes but names no direction");
 });
 
+test("topic metrics add weighted estimates that restore the skipped sample", async () => {
+  // a1 was selected; k1 was skipped although its label and direction say photo-z. The skipped
+  // stratum stands for 30 candidates with 3 labelled rows, so each skipped row weighs 10.
+  const rows = [
+    ["a1", "true", "photo-z", "1", "90", "y", "1", "", "Selected photo-z paper"],
+    ["k1", "true", "skip", "", "0", "y", "1", "", "Missed photo-z paper"],
+    ["k2", "true", "skip", "", "0", "n", "", "", "Correctly skipped"],
+    ["k3", "true", "skip", "", "0", "n", "", "", "Correctly skipped"],
+  ];
+  const meta = metaOf({ rows: 4, selected: 1, skippedSampled: 3, skippedAvailable: 30, withoutAbstract: 0, hadAbstractAtFilter: 4 });
+  const { json, markdown } = await evaluate(await writeSheet(rows, meta));
+  const photoZ = Object.fromEntries(json.topics.map(topic => [topic.tag, topic]))["photo-z"];
+
+  close(photoZ.precision.value, 1);
+  close(photoZ.recall.value, 1 / 2, "in-sample recall counts the skipped row once");
+  close(photoZ.weighted.precision.value, 1, "filed rows all come from the selected stratum");
+  close(photoZ.weighted.recall.value, 1 / 11, "one selected row over one selected plus ten weighted skipped");
+
+  assert.match(markdown, /精确率（样本内）/);
+  assert.match(markdown, /召回率（样本内）/);
+  assert.match(markdown, /加权估计（精确率 \/ 召回率）/);
+  assert.match(markdown, /100\.0% \/ 9\.1%/, "the topic table shows the weighted estimate beside the counts");
+});
+
 test("disagreements list missed and wrongly selected papers with their details", async () => {
   const { json, markdown } = await evaluate(await writeSheet());
   const { falseNegatives, falsePositives, directionMismatches } = json.disagreements;
@@ -179,6 +204,47 @@ test("report table cells escape backslashes before pipes so a note cannot split 
   const { markdown } = await evaluate(await writeSheet(rows));
   assert.ok(markdown.includes(String.raw`see a\\\|b`), "backslash doubled, then the pipe escaped");
   assert.ok(!markdown.includes(String.raw`see a\\|b`), "an escaped pipe must not end up unescaped");
+});
+
+test("F1 is 0 when one side is empty, and n/a only when there is nothing to score", async () => {
+  // Nothing selected, two papers should have been: TP 0, FP 0, FN 2.
+  const skippedOnly = [
+    ["k1", "true", "skip", "", "0", "y", "", "", "Missed"],
+    ["k2", "true", "skip", "", "0", "y", "", "", "Missed"],
+    ["k3", "true", "skip", "", "0", "n", "", "", "Correctly skipped"],
+    ["k4", "true", "skip", "", "0", "n", "", "", "Correctly skipped"],
+  ];
+  const first = await evaluate(await writeSheet(skippedOnly, metaOf({ rows: 4, selected: 0, skippedSampled: 4, skippedAvailable: 4, withoutAbstract: 0, hadAbstractAtFilter: 4 })));
+  assert.equal(first.json.sets.all.precision.value, null);
+  close(first.json.sets.all.recall.value, 0);
+  close(first.json.sets.all.f1.value, 0);
+  close(first.json.sets.all.weighted.f1.value, 0, "weighted F1 follows the same counts");
+
+  // Nothing should have been selected, but two were: TP 0, FP 2, FN 0.
+  const selectedOnly = [
+    ["s1", "true", "photo-z", "1", "90", "n", "", "", "Not relevant"],
+    ["s2", "true", "photo-z", "1", "80", "n", "", "", "Not relevant"],
+  ];
+  const second = await evaluate(await writeSheet(selectedOnly, metaOf({ rows: 2, selected: 2, skippedSampled: 0, skippedAvailable: 0, withoutAbstract: 0, hadAbstractAtFilter: 2 })));
+  assert.equal(second.json.sets.all.recall.value, null);
+  close(second.json.sets.all.precision.value, 0);
+  close(second.json.sets.all.f1.value, 0);
+  assert.equal(second.json.sets.all.weighted, null, "no skipped rows to weight");
+});
+
+test("direction tags and text are escaped so they cannot break the list or add emphasis", async () => {
+  const directions = [
+    { number: 1, tag: "a|b", id: "d1", text: "Line one\nLine two *emph*", dates: ["2026-10-14"] },
+  ];
+  const rows = [["s1", "true", "a|b", "1", "90", "y", "1", "", "Title"]];
+  const { markdown } = await evaluate(await writeSheet(rows, metaOf(undefined, { directions })));
+
+  const line = markdown.split("\n").find(entry => entry.startsWith("- 方向（编号对应标注表）"));
+  assert.ok(line, "the direction line is present");
+  assert.ok(line.includes("a\\|b"), "the tag's pipe is escaped");
+  assert.ok(line.includes("Line one Line two"), "the newline is collapsed into the same list item");
+  assert.ok(line.includes("\\*emph\\*"), "asterisks are escaped instead of becoming emphasis");
+  assert.ok(!markdown.split("\n").some(entry => entry.startsWith("Line two")), "the list is not broken");
 });
 
 test("the report names its sources and says what was and was not run", async () => {

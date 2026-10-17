@@ -189,8 +189,14 @@ test("a run is scored like the recorded decisions, weighting by the sample's ori
   const topics = Object.fromEntries(run.topics.map(topic => [topic.tag, topic]));
   close(topics["photo-z"].precision.value, 2 / 3);
   close(topics["photo-z"].recall.value, 2 / 3);
+  close(topics["photo-z"].weighted.precision.value, 2 / 3, "filed rows are all from the selected stratum");
   close(topics.cluster.precision.value, 1);
   close(topics.cluster.recall.value, 1);
+  // k1 was filed under cluster by the new model; it comes from the skipped stratum, so it
+  // weighs 20/3. Here it is also the only filed cluster row and a true positive, so the
+  // weighted precision stays 1; the dedicated test below covers a weighted false positive.
+  close(topics.cluster.weighted.precision.value, 1);
+  close(topics.cluster.weighted.recall.value, 1);
   assert.equal(run.usage.inputTokens, 1000);
 });
 
@@ -207,15 +213,65 @@ test("the report sets the recorded decisions beside each rerun and names the cur
   assert.deepEqual(json.comparison.map(entry => [entry.name, entry.rows]), [["recorded", 9], ["run 1", 9]]);
   close(json.comparison[0].precision.value, 4 / 6);
   close(json.comparison[0].recall.value, 4 / 5);
+  close(json.comparison[0].weightedPrecision.value, 4 / 6, "recorded weighted precision equals the in-sample value");
   close(json.comparison[1].precision.value, 3 / 4);
+  close(json.comparison[1].weightedPrecision.value, (2 + 20 / 3) / (2 + 20 / 3 + 1));
   close(json.comparison[1].weightedRecall.value, (2 + 20 / 3) / (2 + 20 / 3 + 2));
+  close(json.comparison[1].weightedF1.value, (2 * (2 + 20 / 3)) / (2 * (2 + 20 / 3) + 1 + 2));
   assert.equal(json.agreement, null, "one successful run has nothing to agree with");
   assert.match(markdown, /^# .*重跑/m);
   assert.match(markdown, /model-b/);
   assert.match(markdown, /记录的判定/);
   assert.match(markdown, /第 1 次重跑/);
   assert.match(markdown, /仅有一次成功的运行|只有一次成功/);
+  assert.match(markdown, /精确率（样本内）/);
+  assert.match(markdown, /加权估计（精确率 \/ 召回率 \/ F1）/);
+  assert.match(markdown, /89\.7%/, "the run's weighted precision is shown beside the in-sample 75.0%");
+  assert.match(markdown, /85\.2%/, "the run's weighted F1 is shown");
   assert.ok(!markdown.includes("NaN"));
+});
+
+test("a skipped row filed under a topic by the new model is weighted in that topic's precision", async () => {
+  // Three skipped rows weigh 10 each. The new model files k1 (labelled n) under photo-z,
+  // so the topic's in-sample precision (1/2) understates the weighted estimate (1/11).
+  const rows = [
+    ["s1", "true", "photo-z", "1", "90", "y", "1", "", "Relevant"],
+    ["k1", "true", "skip", "", "0", "n", "", "", "Wrongly picked"],
+    ["k2", "true", "skip", "", "0", "n", "", "", "Skipped"],
+    ["k3", "true", "skip", "", "0", "n", "", "", "Skipped"],
+  ];
+  const meta = metaOf({ counts: { rows: 4, selected: 1, skippedSampled: 3, skippedAvailable: 30, withoutAbstract: 0, hadAbstractAtFilter: 4 } });
+  const selected = answer([paper("s1", "photo-z", ["photo-z#1"], 90), paper("k1", "photo-z", ["photo-z#1"], 50)]);
+  const { json, markdown } = await rerun(await writeSheet(rows, meta), fakeLlm([selected]));
+  const photoZ = json.runs[0].topics.find(topic => topic.tag === "photo-z");
+
+  close(photoZ.precision.value, 1 / 2);
+  close(photoZ.weighted.precision.value, 1 / 11, "one selected true positive over one plus ten weighted skipped false positives");
+  close(photoZ.weighted.recall.value, 1);
+  assert.match(markdown, /50\.0%（1\/2）/);
+  assert.match(markdown, /9\.1% \/ 100\.0%/);
+});
+
+test("title-only papers keep their filter-time abstract flag and the report explains the input change", async () => {
+  const { json, markdown } = await rerun(await writeSheet(), fakeLlm([RUN_1]));
+  const run = json.runs[0];
+  const decisions = Object.fromEntries(run.decisions.map(decision => [decision.id, decision]));
+
+  // s3 was judged on its title alone by the recorded filter, but export fetched an abstract
+  // and the rerun sent it. The request fact is recorded apart from the filter-time fact.
+  assert.equal(decisions.s3.requestHadAbstract, true);
+  const missed = run.disagreements.falseNegatives.find(row => row.id === "s3");
+  assert.equal(missed.hadAbstractAtFilter, false, "the divergence list keeps the filter-time value");
+  assert.match(markdown, /3 篇已标注论文在筛选时只看到标题/);
+  assert.match(markdown, /输入变化/);
+  const s3Line = markdown.split("\n").find(line => line.startsWith("|") && line.includes("Wrong topic"));
+  assert.ok(s3Line.includes("| 否 |"), "the divergence row says there was no abstract at filter time");
+
+  // The input-comparable comparison uses the same rows on both sides (s1 s2 s4 s6 k1 k2).
+  assert.equal(json.recorded.withAbstract.rows, 6);
+  assert.equal(run.sets.withAbstract.rows, 6);
+  assert.deepEqual(json.comparisonWithAbstract.map(entry => [entry.name, entry.rows]), [["recorded", 6], ["run 1", 6]]);
+  assert.match(markdown, /### 只看筛选时有摘要的行/);
 });
 
 test("a failing run is reported in its own section while the others continue, and flip-flopping papers are listed", async () => {
@@ -264,7 +320,7 @@ test("the CLI config's topics can replace the snapshot and a mismatch withholds 
   const same = await rerun(await writeSheet(), fakeLlm([RUN_1]), { topicsFromConfig: true, configPath: await writeConfig(configTopics()) });
   assert.equal(same.json.current.topicSource, "config");
   assert.equal(same.json.directionWithheld, null);
-  assert.deepEqual(same.json.warnings, []);
+  assert.ok(!same.json.warnings.some(warning => /方向列表与标注时不同/.test(warning)));
   assert.deepEqual([same.json.runs[0].sets.all.direction.correct, same.json.runs[0].sets.all.direction.n], [3, 3]);
 
   const edited = await rerun(await writeSheet(), fakeLlm([RUN_1]), { topicsFromConfig: true, configPath: await writeConfig(configTopics("Photometric redshifts, rewritten.")) });

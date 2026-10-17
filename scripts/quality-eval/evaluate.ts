@@ -141,7 +141,7 @@ export function buildRecordedReport(
   const available = skippedAvailable(meta);
   const tagOf = new Map(meta.directions.map((direction) => [direction.number, direction.tag]));
   const tags = [...new Set(meta.directions.map((direction) => direction.tag))];
-  const { topics, withoutDirection } = topicMetrics(labelled, tags, (number) => tagOf.get(number));
+  const { topics, withoutDirection } = topicMetrics(labelled, tags, (number) => tagOf.get(number), available);
 
   return {
     schemaVersion: 1,
