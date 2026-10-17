@@ -33,6 +33,26 @@ export class SheetError extends Error {
 }
 
 const MAX_REPORTED_PROBLEMS = 30;
+/** Four digits, a dot, then the serial; anything else is left alone (unit fixtures use "s1" style ids). */
+const ARXIV_ID_SHAPE_RE = /^\d{4}\./;
+const MODERN_ARXIV_ID_RE = /^(\d{2})(\d{2})\.(\d{4,5})(?:v\d+)?$/i;
+
+/** A real calendar day, so a spreadsheet's 2026/10/14 or 2026-02-30 is caught. */
+function isCalendarDate(value: string): boolean {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
+  const date = new Date(`${value}T00:00:00Z`);
+  return !Number.isNaN(date.getTime()) && date.toISOString().slice(0, 10) === value;
+}
+
+/** Modern arXiv ids use four-digit serials before 2015-01 and five-digit serials from then on. */
+function isModernArxivId(id: string): boolean {
+  const match = MODERN_ARXIV_ID_RE.exec(id);
+  if (!match) return false;
+  const month = Number(match[2]);
+  if (month < 1 || month > 12) return false;
+  const serialLength = match[3]!.length;
+  return Number(match[1]) * 100 + month >= 1501 ? serialLength === 5 : serialLength === 4;
+}
 
 /**
  * Read a filled label sheet. Every bad cell is reported with its spreadsheet row
@@ -56,6 +76,11 @@ export function parseSheet(text: string, legendNumbers: ReadonlySet<number>): Sh
 
     const id = cell("id");
     if (!id) problem("id is empty");
+    else if (ARXIV_ID_SHAPE_RE.test(id) && !isModernArxivId(id)) {
+      problem(`id must be a valid modern arXiv id like 2610.10230 (four or five serial digits matching the year and month), got "${id}"`);
+    }
+    const date = cell("date");
+    if (!isCalendarDate(date)) problem(`date must be a real YYYY-MM-DD date, got "${date}"`);
     const flag = cell("had_abstract_at_filter").toLowerCase();
     if (flag !== "true" && flag !== "false") problem(`had_abstract_at_filter must be true or false, got "${cell("had_abstract_at_filter")}"`);
     const score = Number(cell("model_score"));
@@ -72,7 +97,7 @@ export function parseSheet(text: string, legendNumbers: ReadonlySet<number>): Sh
     }
 
     rows.push({
-      row, date: cell("date"), id, title: cells[at.title] ?? "", abstract: cells[at.abstract] ?? "",
+      row, date, id, title: cells[at.title] ?? "", abstract: cells[at.abstract] ?? "",
       hadAbstractAtFilter: flag === "true", modelCategory: cell("model_category"), modelDirections,
       modelScore: score, modelOutcome: cell("model_outcome"),
       label: labelText === "y" || labelText === "n" ? labelText : null,

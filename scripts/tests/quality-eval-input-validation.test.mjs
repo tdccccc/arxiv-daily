@@ -150,3 +150,41 @@ test("--force is accepted by the evaluate arguments", () => {
   assert.deepEqual(qe.parseEvaluateArgs(["--sheet", "/s", "--out", "/o", "--recorded", "--force"]), { sheet: "/s", outDir: "/o", recorded: true, force: true });
 });
 
+/** One sheet row with every column, overridable per test. */
+const SHEET_ROW = {
+  date: "2026-10-14", id: "2610.10230", title: "Title", abstract: "Abstract", had_abstract_at_filter: "true",
+  model_category: "skip", model_directions: "", model_score: "0", model_outcome: "skipped_by_model",
+  label: "n", label_direction: "", note: "",
+};
+
+function oneRow(overrides = {}) {
+  const row = { ...SHEET_ROW, ...overrides };
+  return qe.encodeCsv([[...qe.SHEET_COLUMNS], qe.SHEET_COLUMNS.map(column => row[column] ?? "")]);
+}
+
+test("an arXiv id whose serial a spreadsheet shortened is rejected with its row number", () => {
+  assert.throws(
+    () => qe.parseSheet(oneRow({ id: "2610.1023" }), new Set()),
+    error => error.name === "SheetError" && /row 2: .*id/.test(error.message),
+  );
+});
+
+test("the serial width follows the year: four digits before 2015, five from then on", () => {
+  for (const id of ["2610.1023", "2610.102300", "1501.1234", "1412.12345", "2613.10230"]) {
+    assert.throws(() => qe.parseSheet(oneRow({ id }), new Set()), /row 2: .*id/, id);
+  }
+  const valid = ["0704.0001", "1412.1234", "1501.01234", "2610.10230", "2610.10230v2"];
+  const rows = valid.map((id, index) => ({ date: ["2007-04-01", "2014-12-01", "2015-01-01", "2026-10-14", "2026-10-14"][index], id }));
+  const text = qe.encodeCsv([[...qe.SHEET_COLUMNS], ...rows.map(row => {
+    const filled = { ...SHEET_ROW, ...row };
+    return qe.SHEET_COLUMNS.map(column => filled[column] ?? "");
+  })]);
+  assert.deepEqual(qe.parseSheet(text, new Set()).map(row => row.id), valid);
+});
+
+test("dates that are not real YYYY-MM-DD calendar days are rejected with their row number", () => {
+  for (const date of ["2026/10/14", "2026-13-01", "2026-02-30", "14-10-2026", ""]) {
+    assert.throws(() => qe.parseSheet(oneRow({ date }), new Set()), /row 2: .*date/, date);
+  }
+});
+
