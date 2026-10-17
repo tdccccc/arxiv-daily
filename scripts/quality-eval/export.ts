@@ -9,6 +9,8 @@ import {
   HtmlCache,
   Logger,
   extractAbsPageAbstract,
+  isArxivHttpError,
+  isArxivRetryDeferredError,
   modernArxivResources,
   type ArxivRequestCoordinator,
   type FilterDecisionCandidate,
@@ -110,12 +112,20 @@ export function parseExportArgs(argv: readonly string[]): Partial<ExportOptions>
     }
   }
   if (!parsed.outDir) throw new Error("--out <directory> is required");
+  if (parsed.from && parsed.to && parsed.from > parsed.to) {
+    throw new Error(`--from ${parsed.from} is after --to ${parsed.to}; the start date is after the end date`);
+  }
   return parsed;
 }
 
 function requireDate(flag: string, value: string): string {
-  const valid = /^\d{4}-\d{2}-\d{2}$/.test(value) && new Date(`${value}T00:00:00Z`).toISOString().startsWith(value);
-  if (!valid) throw new Error(`${flag} must be a date like 2026-10-14`);
+  const date = /^\d{4}-\d{2}-\d{2}$/.test(value) ? new Date(`${value}T00:00:00Z`) : null;
+  // `new Date("2026-13-01T00:00:00Z")` is invalid and would throw on toISOString with an unfriendly
+  // RangeError, so check the parsed instant before reading it back. The round trip also rejects
+  // dates the calendar normalizes, such as 2026-02-30.
+  if (!date || Number.isNaN(date.getTime()) || date.toISOString().slice(0, 10) !== value) {
+    throw new Error(`${flag} must be a date like 2026-10-14`);
+  }
   return value;
 }
 
@@ -221,7 +231,7 @@ export async function runExport(options: ExportOptions, deps: ExportDeps = {}): 
   const legend = buildLegend(records);
 
   await mkdir(outDir, { recursive: true });
-  deps.onProgress?.(`fetching abstracts for ${new Set(sampled.map((item) => item.candidate.id)).size} papers from arXiv (waits and retries while arXiv rate-limits)`);
+  deps.onProgress?.(`fetching abstracts for ${new Set(sampled.map((item) => item.candidate.id)).size} papers from arXiv`);
   const abstracts = await fetchAbstracts(sampled.map((item) => item.candidate.id), outDir, deps, logger, warn);
 
   const rows = sampled.map(({ date, candidate }) => [
@@ -278,13 +288,27 @@ export async function runExport(options: ExportOptions, deps: ExportDeps = {}): 
   return { outDir, rows: rows.length, selected, skippedSampled: counts.skippedSampled, withoutAbstract, warnings, files };
 }
 
+/** Whether the query API said stop: a 429 (not retried since #95) or the fail-fast cooldown it leaves behind. */
+function isThrottledQueryApi(error: unknown): boolean {
+  return isArxivRetryDeferredError(error) || (isArxivHttpError(error) && error.status === 429);
+}
+
+function roughAbsPageDuration(papers: number): string {
+  const seconds = papers * 3;
+  if (seconds < 120) return `about ${seconds} seconds`;
+  const minutes = Math.ceil(seconds / 60);
+  return `about ${minutes} minute${minutes === 1 ? "" : "s"}`;
+}
+
 /**
- * Abstracts come through core's arXiv fetcher: it batches `id_list` queries,
- * waits out HTTP 429 with backoff, and reads/writes a metadata cache, which
- * here lives beside the sheet so an interrupted export resumes without
- * refetching. A failed batch costs only that batch's abstracts; papers still
- * without one are then read from their arxiv.org/abs pages, which are not
- * subject to the API's throttling.
+ * Abstracts come through core's arXiv fetcher, which batches `id_list` queries
+ * and reads/writes a metadata cache that here lives beside the sheet. Cached
+ * abstracts are read up front, before the API is asked: a failed batch is
+ * all-or-nothing, so this keeps its cached papers out of the failure. A 429
+ * from the query API is not retried (see #95); within one process the host
+ * then fails every later request at once, so this export stops asking and
+ * reads all remaining papers from their arxiv.org/abs pages (about 3 s each)
+ * after one summary warning instead of one warning per batch.
  */
 async function fetchAbstracts(
   ids: readonly string[],
@@ -293,17 +317,18 @@ async function fetchAbstracts(
   logger: Logger,
   warn: (message: string) => void,
 ): Promise<Map<string, string>> {
+  const metadataCache = new AtomMetadataCache({
+    rootDir: ABSTRACT_CACHE_DIR,
+    expiryDays: ABSTRACT_CACHE_DAYS,
+    storage: new NodeStorageAdapter(outDir),
+  });
   const fetcher = new ArxivFetcher({
     http: deps.http ?? new NodeHttpClient(),
     markupParser: new LinkedomMarkupParser(),
     logger,
     requestDelayMs: 3000,
     requestCoordinator: deps.requestCoordinator,
-    metadataCache: new AtomMetadataCache({
-      rootDir: ABSTRACT_CACHE_DIR,
-      expiryDays: ABSTRACT_CACHE_DAYS,
-      storage: new NodeStorageAdapter(outDir),
-    }),
+    metadataCache,
   });
   const absPages = new HtmlCache({
     rootDir: ABS_PAGE_CACHE_DIR,
@@ -321,8 +346,17 @@ async function fetchAbstracts(
     if (abstract) abstracts.set(id, abstract);
   }
   const pending = unique.filter((id) => !abstracts.has(id));
-  for (let start = 0; start < pending.length; start += ABSTRACT_BATCH) {
-    const batch = pending.slice(start, start + ABSTRACT_BATCH);
+  // Read the metadata cache before batching, for the same reason as the abs cache above: a batch
+  // that fails would otherwise discard the papers of that batch that were already cached.
+  const uncached: string[] = [];
+  for (const id of pending) {
+    const canonical = modernArxivResources(id)?.id;
+    const cached = canonical ? await metadataCache.get(canonical) : null;
+    if (cached?.abstract) abstracts.set(id, cached.abstract);
+    else uncached.push(id);
+  }
+  for (let start = 0; start < uncached.length; start += ABSTRACT_BATCH) {
+    const batch = uncached.slice(start, start + ABSTRACT_BATCH);
     try {
       const found = await fetcher.fetchMetadataByIds(batch);
       for (const id of batch) {
@@ -332,7 +366,12 @@ async function fetchAbstracts(
       }
     } catch (error) {
       const reason = (error as Error).message.replace(/:?\s*https?:\/\/\S+/g, "").trim();
-      warn(`abstract fetch failed for ${batch.length} papers (${reason}); fetched ones stay cached, so a later run with --force picks up where this one stopped`);
+      if (isThrottledQueryApi(error)) {
+        const remaining = uncached.length - start;
+        warn(`arXiv rate-limited the query API (${reason}); stopping query API requests for this export. The remaining ${remaining} papers will be read from arxiv.org/abs pages (${roughAbsPageDuration(remaining)})`);
+        break;
+      }
+      warn(`abstract fetch failed for ${batch.length} papers (${reason}); the abstracts fetched so far are cached, and a later run reuses them`);
     }
   }
 
@@ -376,8 +415,13 @@ async function fillFromAbsPages(
   }
 }
 
+/** Escape one Markdown table cell: backslashes first, then pipes, and collapse whitespace (as report.ts does). */
+function markdownCell(text: string): string {
+  return text.replace(/\\/g, "\\\\").replace(/\|/g, "\\|").replace(/\s+/g, " ");
+}
+
 function renderGuide(legend: readonly LegendEntry[], dates: readonly string[]): string {
-  const rows = legend.map((entry) => `| ${entry.number} | ${entry.tag} | ${entry.text.replace(/\\/g, "\\\\").replace(/\|/g, "\\|").replace(/\s+/g, " ")} |`);
+  const rows = legend.map((entry) => `| ${entry.number} | ${markdownCell(entry.tag)} | ${markdownCell(entry.text)} |`);
   return `# 筛选标注说明
 
 这份表格用来检查日报的论文筛选准不准。每一行是一篇论文：先读标题和摘要，再告诉我们“这篇是否应该被选进日报”。覆盖的日报日期：${dates.join("、")}。
@@ -395,7 +439,7 @@ function renderGuide(legend: readonly LegendEntry[], dates: readonly string[]): 
 - 标注时先把 \`model_category\`、\`model_directions\`、\`model_score\`、\`model_outcome\` 这几列隐藏起来，不要看模型当时怎么判断的，这样标注才不会被模型带偏。
 - \`had_abstract_at_filter\` 为 \`false\` 说明筛选当时模型只看到了标题（拿不到摘要）。这类行也请照常标注，评估时会单独统计。
 - \`abstract\` 为空表示这次没能从 arXiv 取回摘要，请按标题判断，或打开论文链接 https://arxiv.org/abs/<id> 查看。
-- 用 Excel 或 WPS 保存时请保留 CSV（UTF-8）格式。
+- 用 Excel 或 WPS 打开时，请先把 \`id\`、\`date\` 两列设为文本格式，保存时保留 CSV（UTF-8）格式。否则表格软件可能把 \`2610.10230\` 存成 \`2610.1023\`，或把日期改成别的格式；评估时这两列会按原样校验，格式不对会报错。
 
 ## 方向表
 
