@@ -14,6 +14,7 @@ Scores a filled label sheet and writes report.md and report.json to <out>.
   --out <dir>           Where report.md and report.json go (required)
   --runs <n>            How many times to rerun the filter, 1 to 20 (default 1)
   --yes                 Make the model calls (they cost money)
+  --force               Replace an existing report.md/report.json in --out
   --config <file>       CLI config.toml supplying the model settings (default: the CLI's own)
   --topics-from-config  Use the config's topics instead of the direction list the sheet was labelled with
 `;

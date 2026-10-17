@@ -1,5 +1,5 @@
 import {
-  accountedPaperKeysOf, countNewPapersCoveredByExistingDirections, isThinEvidenceDirectionCandidate, matchingProposalAcceptance, resolveProposedTopicTarget,
+  accountedPaperKeysOf, countNewPapersCoveredByExistingDirections, isNewPapersUpdate, isThinEvidenceDirectionCandidate, matchingProposalAcceptance, resolveProposedTopicTarget,
   type LibraryReviewSnapshot, type LibraryPreviewPaper, type LibraryDirectionPreview,
   type PersonalLibraryDirectionCandidate, type PersonalLibraryProposedTopic, type LibraryAuthorizationDisclosure,
 } from "@arxiv-daily/core";
@@ -182,7 +182,10 @@ export function mountLibraryReview(root: HTMLElement, options: Options) {
     const proposal = snapshot!.proposal;
     if (!proposal) return h("p", { class: "review-empty" }, t("尚无文献库分析"));
     const analyzed = new Set(proposal.catalogInputPapers.map(item => item.paperKey));
-    // An update of new papers only analyses a few papers but accounts for the whole library.
+    // An update of new papers only analyses a few papers but accounts for the
+    // whole library; a full scan analysed exactly its input. The proposal
+    // records which kind it is, so no comparison of set sizes is needed.
+    const update = isNewPapersUpdate(proposal);
     const accounted = new Set(accountedPaperKeysOf(proposal));
     const represented = new Set(proposal.topics.flatMap(topic => topic.directions.flatMap(candidate => (candidate.clusterMembers?.length ? candidate.clusterMembers : candidate.representatives).map(item => item.paperKey))));
     const covered = new Set(proposal.coveredPaperKeys ?? []);
@@ -198,7 +201,7 @@ export function mountLibraryReview(root: HTMLElement, options: Options) {
       );
     });
     return h("div", { class: "review-overview" },
-      h("p", null, t("分析了 {0} 篇论文", accounted.size), analyzed.size < accounted.size ? ` · ${t("本次新增 {0} 篇", analyzed.size)}` : "", " · ", h("time", { datetime: proposal.generatedAt }, proposal.generatedAt)),
+      h("p", null, t("分析了 {0} 篇论文", update ? accounted.size : analyzed.size), update ? ` · ${t("本次新增 {0} 篇", analyzed.size)}` : "", " · ", h("time", { datetime: proposal.generatedAt }, proposal.generatedAt)),
       h("section", null,
         h("h2", null, t("已有方向覆盖")),
         coverage.length ? h("ul", null, ...coverage) : h("p", null, t("暂无已确认的覆盖记录")),

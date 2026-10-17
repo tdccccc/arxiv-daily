@@ -76,6 +76,7 @@ function snapshot(overrides: Partial<ReviewSnapshot> = {}): ReviewSnapshot {
   return {
     catalog: createEmptyPersonalLibraryCatalog(fingerprint, fingerprint, new Date(at)),
     indexedPapers: catalogInputPapers.map(({ paperKey }) => ({ paperKey, title: `Paper ${paperKey}` })),
+    newPaperKeys: [],
     proposal: {
       schemaVersion: PERSONAL_LIBRARY_PROPOSAL_SCHEMA_VERSION,
       revision: 0, proposalId: "proposal-1", scopeFingerprint: fingerprint,

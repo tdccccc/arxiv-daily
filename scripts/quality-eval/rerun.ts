@@ -21,7 +21,7 @@ import { loadCliConfig } from "../../apps/cli/src/config";
 import type { EvaluateDeps, EvaluateOptions } from "./evaluate";
 import {
   disagreementsOf, isLabelled, metricSet, topicMetrics,
-  type Disagreement, type DirectionAccuracy, type LabelledRow, type MetricSet, type Ratio, type TopicMetrics,
+  type Disagreement, type DirectionAccuracy, type LabelledRow, type MetricSet, type Ratio, type TopicMetrics, type WeightedSummary,
 } from "./metrics";
 import type { SheetRow } from "./sheet";
 import {
@@ -37,6 +37,8 @@ export interface RunDecision {
   category: string;
   directions: number[];
   score: number;
+  /** Whether this run's request carried an abstract from the sheet. */
+  requestHadAbstract: boolean;
 }
 
 export interface RerunRun {
@@ -66,7 +68,10 @@ export interface Comparison {
   precision: Ratio;
   recall: Ratio;
   f1: Ratio;
+  /** Weighted by the sample's original strata; null when the population is unknown. */
+  weightedPrecision: Ratio | null;
   weightedRecall: Ratio | null;
+  weightedF1: Ratio | null;
 }
 
 export interface Agreement {
@@ -102,7 +107,13 @@ export interface RerunReport {
   directionWithheld: string | null;
   recorded: { all: MetricSet; withAbstract: MetricSet };
   runs: RerunRun[];
+  /** Recorded decisions and reruns over the labelled rows only, weighted by stratum. */
   comparison: Comparison[];
+  /**
+   * The same comparison over the labelled rows that had an abstract at filter time,
+   * so both sides saw the same input; this subset is not weighted.
+   */
+  comparisonWithAbstract: Comparison[];
   agreement: Agreement | null;
 }
 
@@ -190,6 +201,15 @@ export async function runRerun(
   if (meta.records.some((record) => record.promptContractVersion !== DAILY_FILTER_PROMPT_CONTRACT_VERSION)) {
     warnings.push(`记录的判定用的提示词版本（${[...new Set(meta.records.map((record) => record.promptContractVersion))].join("、")}）与当前代码（${DAILY_FILTER_PROMPT_CONTRACT_VERSION}）不同，重跑与记录的差异里包含提示词本身的变化。`);
   }
+  // The rerun sends the sheet's abstract (fetching it at export time for papers the filter
+  // saw title-only), so a recorded-vs-rerun difference on those rows mixes in an input change.
+  const titleOnly = labelled.filter((row) => !row.hadAbstractAtFilter).length;
+  const titleOnlyWithAbstract = labelled.filter((row) => !row.hadAbstractAtFilter && row.abstract.trim() !== "").length;
+  if (titleOnly > 0) {
+    warnings.push(titleOnlyWithAbstract > 0
+      ? `${titleOnly} 篇已标注论文在筛选时只看到标题（没有摘要），其中 ${titleOnlyWithAbstract} 篇在重跑时发送了标注表里的摘要；与记录的判定比较时，这部分差异来自输入变化。“记录的判定与重跑对比”一节另给出只看筛选时有摘要的行的对比。`
+      : `${titleOnly} 篇已标注论文在筛选时只看到标题（没有摘要），标注表里也没有取到摘要，重跑请求与当时一样不带摘要。`);
+  }
 
   const plan = `This will make ${runs} model call${runs === 1 ? "" : "s"} (one request per run), each with ${papers.length} papers ` +
     `(about ${requestCharacters} characters of prompt), using ${config.settings.llm.model} via ${config.settings.llm.provider}. ` +
@@ -211,6 +231,7 @@ export async function runRerun(
 
   const available = skippedAvailable(meta);
   const recordedAll = metricSet(labelled, available);
+  const recordedWithAbstract = metricSet(labelled.filter((row) => row.hadAbstractAtFilter), null);
   const report: RerunReport = {
     schemaVersion: 1,
     kind: "rerun",
@@ -233,9 +254,13 @@ export async function runRerun(
     directions: meta.directions,
     warnings,
     directionWithheld,
-    recorded: { all: recordedAll, withAbstract: metricSet(labelled.filter((row) => row.hadAbstractAtFilter), null) },
+    recorded: { all: recordedAll, withAbstract: recordedWithAbstract },
     runs: results,
     comparison: [comparisonOf("recorded", "recorded", recordedAll), ...results.filter((run) => run.sets).map((run) => comparisonOf(`run ${run.run}`, "run", run.sets!.all))],
+    comparisonWithAbstract: [
+      comparisonOf("recorded", "recorded", recordedWithAbstract),
+      ...results.filter((run) => run.sets).map((run) => comparisonOf(`run ${run.run}`, "run", run.sets!.withAbstract)),
+    ],
     agreement: agreementOf(results, labelled),
   };
   return { dryRun: false, report, allRunsFailed: results.every((run) => run.status === "failed") };
@@ -277,7 +302,8 @@ async function oneRun(
 
   const decided = new Map(records.map((record) => [record.id, record] as const));
   const refNumber = new Map(request.identity.directions.map((direction) => [direction.ref, context.legendKey.get(keyOf(direction.tag, direction.text))] as const));
-  const rerunRows: LabelledRow[] = labelled.map((row) => {
+  type RerunRow = LabelledRow & { requestHadAbstract: boolean };
+  const rerunRows: RerunRow[] = labelled.map((row) => {
     const record = decided.get(row.id);
     return {
       ...row,
@@ -285,7 +311,9 @@ async function oneRun(
       modelDirections: (record?.directions ?? []).flatMap((ref) => refNumber.get(ref) ?? []),
       modelScore: record?.relevanceScore ?? 0,
       modelOutcome: "",
-      hadAbstractAtFilter: row.abstract.trim() !== "",
+      // Keep the sheet's value: it says whether the recorded filter saw an abstract.
+      // The request may still carry the abstract export fetched later, recorded apart below.
+      requestHadAbstract: row.abstract.trim() !== "",
       // The sample was drawn from the recorded decisions; a new decision does not move a row between strata.
       sampledAs: row.modelCategory === "skip" ? "skipped" : "selected",
     };
@@ -297,7 +325,7 @@ async function oneRun(
     const number = context.legendKey.get(keyOf(direction.tag, direction.text));
     if (number !== undefined) legendTag.set(number, direction.tag);
   }
-  const topics = topicMetrics(rerunRows, tags, (number) => legendTag.get(number));
+  const topics = topicMetrics(rerunRows, tags, (number) => legendTag.get(number), context.available);
   const disagreements = disagreementsOf(rerunRows);
   return {
     run, status: "ok", usage,
@@ -309,12 +337,17 @@ async function oneRun(
     topics: context.directionWithheld ? null : topics.topics,
     topicsWithoutDirection: context.directionWithheld ? null : topics.withoutDirection,
     disagreements: { ...disagreements, directionMismatches: context.directionWithheld ? null : disagreements.directionMismatches },
-    decisions: rerunRows.map((row) => ({ id: row.id, category: row.modelCategory, directions: row.modelDirections, score: row.modelScore })),
+    decisions: rerunRows.map((row) => ({ id: row.id, category: row.modelCategory, directions: row.modelDirections, score: row.modelScore, requestHadAbstract: row.requestHadAbstract })),
   };
 }
 
-function comparisonOf(name: string, kind: Comparison["kind"], set: { rows: number; precision: Ratio; recall: Ratio; f1: Ratio; weighted: { recall: Ratio } | null }): Comparison {
-  return { name, kind, rows: set.rows, precision: set.precision, recall: set.recall, f1: set.f1, weightedRecall: set.weighted?.recall ?? null };
+function comparisonOf(name: string, kind: Comparison["kind"], set: { rows: number; precision: Ratio; recall: Ratio; f1: Ratio; weighted: WeightedSummary | null }): Comparison {
+  return {
+    name, kind, rows: set.rows, precision: set.precision, recall: set.recall, f1: set.f1,
+    weightedPrecision: set.weighted?.precision ?? null,
+    weightedRecall: set.weighted?.recall ?? null,
+    weightedF1: set.weighted?.f1 ?? null,
+  };
 }
 
 /** Whether each labelled paper got the same selected/not decision in every successful run. */
