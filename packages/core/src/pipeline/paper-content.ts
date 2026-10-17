@@ -237,7 +237,7 @@ export class PaperContentFetcher {
           return {
             abstractConclusion: null,
             fullSections: null,
-            reason: `arXiv source for ${arxivId} is too large to process (${source.byteLength} bytes)`,
+            reason: `arXiv source for ${arxivId} is too large to use (${source.byteLength} bytes)`,
           };
         }
         await this.writeCachedSource(arxivId, source);
