@@ -169,6 +169,22 @@ test("an arXiv id whose serial a spreadsheet shortened is rejected with its row 
   );
 });
 
+test("an id whose shape a spreadsheet rewrote is rejected with its row number", () => {
+  for (const id of ["261010230", "2.6101023E+8", "abc"]) {
+    assert.throws(
+      () => qe.parseSheet(oneRow({ id }), new Set()),
+      error => error.name === "SheetError" && /row 2: .*id/.test(error.message),
+      id,
+    );
+  }
+});
+
+test("modern arXiv ids with four- and five-digit serials are accepted", () => {
+  for (const id of ["1412.1234", "2610.10230"]) {
+    assert.equal(qe.parseSheet(oneRow({ id }), new Set())[0].id, id);
+  }
+});
+
 test("the serial width follows the year: four digits before 2015, five from then on", () => {
   for (const id of ["2610.1023", "2610.102300", "1501.1234", "1412.12345", "2613.10230"]) {
     assert.throws(() => qe.parseSheet(oneRow({ id }), new Set()), /row 2: .*id/, id);

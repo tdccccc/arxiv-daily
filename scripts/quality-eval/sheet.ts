@@ -33,8 +33,6 @@ export class SheetError extends Error {
 }
 
 const MAX_REPORTED_PROBLEMS = 30;
-/** Four digits, a dot, then the serial; anything else is left alone (unit fixtures use "s1" style ids). */
-const ARXIV_ID_SHAPE_RE = /^\d{4}\./;
 const MODERN_ARXIV_ID_RE = /^(\d{2})(\d{2})\.(\d{4,5})(?:v\d+)?$/i;
 
 /** A real calendar day, so a spreadsheet's 2026/10/14 or 2026-02-30 is caught. */
@@ -76,7 +74,7 @@ export function parseSheet(text: string, legendNumbers: ReadonlySet<number>): Sh
 
     const id = cell("id");
     if (!id) problem("id is empty");
-    else if (ARXIV_ID_SHAPE_RE.test(id) && !isModernArxivId(id)) {
+    else if (!isModernArxivId(id)) {
       problem(`id must be a valid modern arXiv id like 2610.10230 (four or five serial digits matching the year and month), got "${id}"`);
     }
     const date = cell("date");
