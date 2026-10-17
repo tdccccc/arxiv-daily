@@ -1,6 +1,6 @@
 import { retry } from "../utils/retry";
 import type { Logger } from "../services/logger";
-import { isCancellationError, throwIfCancelled } from "../services/cancellation";
+import { isCancellationError, RunCancelledError, throwIfCancelled } from "../services/cancellation";
 import { parseAtomPapers, type AtomPaperMeta } from "./atom-parser";
 import {
   HttpTransportError,
@@ -53,6 +53,8 @@ const ARXIV_QUERY_API_HOST = "export.arxiv.org";
 const QUERY_API_HEADERLESS_429_COOLDOWN_MS = 10 * 60 * 1000;
 /** Minimum wait before retrying a header-less 429 on arxiv.org pages (then doubles). */
 const HEADERLESS_429_MIN_RETRY_MS = 30_000;
+/** Times a caller re-looks-up ids whose foreign flight owner was cancelled. */
+const MAX_FOREIGN_CANCELLATION_ROUNDS = 3;
 const MAX_DATE_TIMESTAMP_MS = 8_640_000_000_000_000;
 const ARXIV_HTTP_ERROR_NAME = "ArxivHttpError";
 const ARXIV_RETRY_DEFERRED_ERROR_NAME = "ArxivRetryDeferredError";
@@ -364,7 +366,7 @@ export class ArxivFetcher {
       return canonical ? [canonical] : [];
     })));
     const out = new Map<string, AtomPaperMeta>();
-    const misses: string[] = [];
+    let misses: string[] = [];
     for (const id of canonicalIds) {
       throwIfCancelled(signal);
       const cached = this.opts.metadataCache
@@ -374,6 +376,26 @@ export class ArxivFetcher {
       else misses.push(id);
     }
 
+    // A flight another caller owns can be cancelled by that caller. That is not
+    // this caller's cancellation, so the affected ids are looked up again (and
+    // may join or create a fresh flight) a bounded number of times.
+    for (let round = 1; misses.length > 0; round += 1) {
+      const orphaned = await this.resolveMetadataFlights(misses, out, signal);
+      if (orphaned.length === 0) break;
+      if (round >= MAX_FOREIGN_CANCELLATION_ROUNDS) {
+        throw new RunCancelledError("arXiv metadata lookup was cancelled by another caller");
+      }
+      misses = orphaned;
+    }
+    return out;
+  }
+
+  /** Fetch `misses` through the shared flight map; returns ids whose foreign owner was cancelled. */
+  private async resolveMetadataFlights(
+    misses: string[],
+    out: Map<string, AtomPaperMeta>,
+    signal?: AbortSignal,
+  ): Promise<string[]> {
     // Install every missing ID synchronously, before the first await, so overlapping
     // callers can join even when they use another fetcher or no persistent cache.
     const flights = new Map<string, MetadataFlight>();
@@ -409,13 +431,23 @@ export class ArxivFetcher {
     }
 
     const ownedSet = new Set(owned);
+    const orphaned: string[] = [];
     for (const [id, flight] of flights) {
-      const paper = await abortablePromise(flight.promise, signal);
+      let paper: AtomPaperMeta | null;
+      try {
+        paper = await abortablePromise(flight.promise, signal);
+      } catch (error) {
+        if (!ownedSet.has(id) && isCancellationError(error) && !signal?.aborted) {
+          orphaned.push(id);
+          continue;
+        }
+        throw error;
+      }
       if (!paper) continue;
       out.set(id, paper);
       if (!ownedSet.has(id)) await this.persistMetadataBestEffort(paper, signal);
     }
-    return out;
+    return orphaned;
   }
 
   private async runOwnedMetadataFlights(
