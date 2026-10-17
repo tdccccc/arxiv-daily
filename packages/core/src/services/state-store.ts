@@ -375,7 +375,16 @@ async function loadAuthoritativeRunState(
   storage: StorageAdapter,
   path: string,
 ): Promise<{ runState: RunState }> {
-  if (!(await storage.exists(path))) return { runState: {} };
+  if (!(await storage.exists(path))) {
+    // A crash between the two renames of writeAtomic leaves only the backup.
+    // It is the last committed state, so mutations must build on it; an
+    // unusable backup fails closed instead of silently starting from nothing.
+    const backupPath = `${path}.bak`;
+    if (await storage.exists(backupPath)) {
+      return parseRunState(await storage.readText(backupPath), true);
+    }
+    return { runState: {} };
+  }
   return parseRunState(await storage.readText(path), true);
 }
 
