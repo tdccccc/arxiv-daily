@@ -1,8 +1,9 @@
 import { readdir, readFile, stat } from "node:fs/promises";
 import { builtinModules } from "node:module";
-import { relative, resolve } from "node:path";
+import path, { resolve } from "node:path";
+import { pathToFileURL } from "node:url";
 
-const root = resolve(import.meta.dirname, "..");
+const defaultRoot = resolve(import.meta.dirname, "..");
 const layers = [
   { dir: "packages/core", workspace: new Set(), thirdParty: new Set(["pako"]) },
   { dir: "packages/node-runtime", workspace: new Set(["@arxiv-daily/core"]) },
@@ -23,6 +24,34 @@ const forbiddenOldPaths = [
   "plugin/src/utils", "plugin/src/cli", "plugin/src/hosts/node",
 ];
 const builtins = new Set([...builtinModules, ...builtinModules.map((name) => `node:${name}`)]);
+
+// The plugin must stay loadable on Obsidian mobile, so no production plugin file
+// may import a Node builtin except these, each with the reason it is allowed.
+// Keys are repository-relative paths with "/" separators.
+export const PLUGIN_NODE_BUILTIN_ALLOWLIST = new Map([
+  [
+    "plugin/node-fs-exclusive.ts",
+    {
+      // Desktop-only exclusive-create storage guard; the plugin loads it behind a desktop check.
+      specifiers: new Set(["node:fs", "node:fs/promises", "node:path"]),
+    },
+  ],
+]);
+
+/** Repository-relative path with "/" separators, so the same rules apply on Windows. */
+export function displayPath(root, file, pathModule = path) {
+  return pathModule.relative(root, file).split(pathModule.sep).join("/");
+}
+
+/** Production plugin TypeScript: everything under plugin/ except tests, tool configs and build output. */
+export function isPluginProductionFile(display) {
+  return display.startsWith("plugin/")
+    && !display.startsWith("plugin/tests/")
+    && !/(?:^|\/)[^/]+\.config\.[cm]?[jt]s$/.test(display)
+    && !/\.d\.ts$/.test(display);
+}
+
+export async function checkBoundaries(root = defaultRoot) {
 const errors = [];
 
 for (const oldPath of forbiddenOldPaths) {
@@ -32,8 +61,10 @@ for (const layer of layers) {
   for (const file of await filesUnder(resolve(root, layer.dir))) {
     if (!/\.(?:ts|mts|mjs)$/.test(file)) continue;
     const source = await readFile(file, "utf8");
-    const display = relative(root, file);
-    if (layer.dir === "packages/core" && file.includes("/src/") && /\b(?:process|Buffer)\b/.test(source)) {
+    const display = displayPath(root, file);
+    const coreSource = layer.dir === "packages/core" && display.startsWith("packages/core/src/");
+    const pluginProduction = layer.dir === "plugin" && isPluginProductionFile(display);
+    if (coreSource && /\b(?:process|Buffer)\b/.test(source)) {
       errors.push(`${display}: core uses forbidden Node global`);
     }
     for (const specifier of moduleSpecifiers(source)) {
@@ -53,23 +84,30 @@ for (const layer of layers) {
         }
         continue;
       }
-      if (layer.dir === "packages/core" && file.includes("/src/") && !layer.thirdParty.has(owner)) {
+      if (coreSource && !layer.thirdParty.has(owner)) {
         errors.push(`${display}: core third-party dependency is not allowlisted: ${specifier}`);
       }
-      if (layer.dir === "packages/core" && file.includes("/src/") && builtins.has(specifier)) {
+      if (coreSource && builtins.has(specifier)) {
         errors.push(`${display}: core imports Node builtin ${specifier}`);
       }
-      if (layer.dir === "plugin" && file.includes("/src/") && builtins.has(specifier)) {
-        errors.push(`${display}: plugin imports Node builtin ${specifier}`);
+      if (pluginProduction && builtins.has(specifier)) {
+        const allowed = PLUGIN_NODE_BUILTIN_ALLOWLIST.get(display);
+        if (!allowed?.specifiers.has(specifier)) errors.push(`${display}: plugin imports Node builtin ${specifier}`);
       }
     }
   }
 }
-if (errors.length) {
-  console.error(errors.join("\n"));
-  process.exit(1);
+return errors;
 }
-console.log("Workspace boundaries OK");
+
+if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
+  const errors = await checkBoundaries();
+  if (errors.length) {
+    console.error(errors.join("\n"));
+    process.exit(1);
+  }
+  console.log("Workspace boundaries OK");
+}
 
 function moduleSpecifiers(source) {
   const specs = [];

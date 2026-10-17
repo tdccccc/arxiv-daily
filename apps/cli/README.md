@@ -107,7 +107,7 @@ Or configure `[schedule]` in `config.toml` and let the CLI manage it:
 arxiv-daily schedule install
 ```
 
-`schedule install`/`uninstall` write a managed crontab entry on Linux/macOS/WSL. Native Windows Task Scheduler isn't supported — use WSL, or run the scheduler built into the Obsidian plugin or the workbench.
+`schedule install`/`uninstall` write a managed crontab entry on Linux/macOS/WSL. The entry runs `<node> <script> run --today` with the Node binary that ran `install` and appends output to `schedule.log` next to your config file; after upgrading or switching Node, run `schedule install` again. Native Windows Task Scheduler isn't supported — use WSL, or run the scheduler built into the Obsidian plugin or the workbench.
 
 ## Optional personal library
 

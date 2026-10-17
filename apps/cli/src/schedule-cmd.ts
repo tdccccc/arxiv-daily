@@ -1,5 +1,4 @@
-import * as fs from "node:fs/promises";
-import * as os from "node:os";
+import { spawn } from "node:child_process";
 import * as path from "node:path";
 import type { CliRuntimeConfig } from "./config";
 import { scheduleFireSlots } from "./config";
@@ -7,11 +6,31 @@ import type { CliIo } from "./main-types";
 
 export const CRON_MARKER = "# arxiv-daily-managed";
 
+/** What cron needs to start the CLI: cron's PATH is minimal, so node is named explicitly. */
+export interface CronRuntime {
+  nodePath: string;
+  logPath: string;
+}
+
+export function defaultCronRuntime(config: CliRuntimeConfig): CronRuntime {
+  return {
+    nodePath: process.execPath,
+    logPath: path.join(path.dirname(config.configPath), "schedule.log"),
+  };
+}
+
 export function buildCronLines(
   config: CliRuntimeConfig,
   binaryPath: string,
+  runtime: CronRuntime = defaultCronRuntime(config),
 ): string[] {
-  const executable = cronExecutable(binaryPath);
+  if (!path.isAbsolute(binaryPath)) {
+    throw new Error(`CLI script path must be absolute for cron: ${binaryPath}`);
+  }
+  // `node script`, not the script's shebang: `#!/usr/bin/env node` fails when node
+  // is not on cron's PATH (nvm, fnm, volta, Homebrew on Apple Silicon).
+  const executable = `${cronExecutable(runtime.nodePath)} ${cronExecutable(binaryPath)}`;
+  const log = cronExecutable(runtime.logPath);
   const slots = scheduleFireSlots(config.scheduleIntent);
   const dow = config.scheduleIntent.weekdaysOnly ? "1-5" : "*";
   const lines: string[] = [];
@@ -20,7 +39,7 @@ export function buildCronLines(
     const hour = Number(hh);
     const minute = Number(mm);
     lines.push(
-      `${minute} ${hour} * * ${dow}  ${executable} run --today  ${CRON_MARKER}`,
+      `${minute} ${hour} * * ${dow}  ${executable} run --today >> ${log} 2>&1  ${CRON_MARKER}`,
     );
   }
   return lines;
@@ -72,6 +91,7 @@ export async function scheduleInstall(
     readCrontab?: () => Promise<string>;
     writeCrontab?: (body: string) => Promise<void>;
     platform?: NodeJS.Platform;
+    runtime?: CronRuntime;
   } = {},
 ): Promise<number> {
   if (!config.scheduleIntent.enabled) {
@@ -83,9 +103,10 @@ export async function scheduleInstall(
   }
   const platform = opts.platform ?? process.platform;
   const binaryPath = opts.binaryPath ?? resolveBinaryPath();
+  const runtime = opts.runtime ?? defaultCronRuntime(config);
   let managed: string[];
   try {
-    managed = buildCronLines(config, binaryPath);
+    managed = buildCronLines(config, binaryPath, runtime);
   } catch (error) {
     writeLine(io.stderr, `Invalid schedule: ${(error as Error).message}`);
     return 2;
@@ -116,6 +137,11 @@ export async function scheduleInstall(
     else await writeUserCrontab(next);
     writeLine(io.stdout, `installed ${managed.length} cron line(s)`);
     for (const line of managed) writeLine(io.stdout, line);
+    writeLine(io.stdout, `Output of scheduled runs is appended to ${runtime.logPath}`);
+    writeLine(
+      io.stdout,
+      `The schedule runs ${runtime.nodePath}; after upgrading or switching Node, run: arxiv-daily schedule install`,
+    );
     return 0;
   } catch (e) {
     writeLine(io.stderr, `schedule install failed: ${(e as Error).message}`);
@@ -192,20 +218,25 @@ async function readUserCrontab(): Promise<string> {
   }
 }
 
-async function writeUserCrontab(body: string): Promise<void> {
-  const { execFile } = await import("node:child_process");
-  const { promisify } = await import("node:util");
-  const execFileAsync = promisify(execFile);
-  const tmp = path.join(
-    os.tmpdir(),
-    `arxiv-daily-cron-${process.pid}-${Date.now()}`,
-  );
-  await fs.writeFile(tmp, body.endsWith("\n") ? body : `${body}\n`, "utf8");
-  try {
-    await execFileAsync("crontab", [tmp]);
-  } finally {
-    await fs.unlink(tmp).catch(() => undefined);
-  }
+/**
+ * Install through `crontab -` on stdin: no temporary file, so there is no
+ * predictable path for another local user to pre-plant a symlink at.
+ */
+export async function writeUserCrontab(body: string, command = "crontab"): Promise<void> {
+  const text = body.endsWith("\n") ? body : `${body}\n`;
+  await new Promise<void>((resolve, reject) => {
+    const child = spawn(command, ["-"], { stdio: ["pipe", "ignore", "pipe"] });
+    let stderr = "";
+    child.stderr.setEncoding("utf8").on("data", (chunk: string) => { stderr += chunk; });
+    child.once("error", reject);
+    child.once("close", (code) => {
+      if (code === 0) resolve();
+      else reject(new Error(`crontab exited with code ${code}${stderr.trim() ? `: ${stderr.trim()}` : ""}`));
+    });
+    // A crontab that exits early closes the pipe; the exit code above reports why.
+    child.stdin.on("error", () => undefined);
+    child.stdin.end(text);
+  });
 }
 
 function writeLine(stream: { write(chunk: string): unknown }, line: string): void {

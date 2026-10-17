@@ -79,6 +79,17 @@ jobs:
             exit 1
           fi
           echo "version=$version" >> "$GITHUB_OUTPUT"
+      - name: Verify the commit comes from main or this version's release branch
+        # Reachability only: release.yml enforced "contains current main" when the tag
+        # was pushed, and a manual re-publish of an older release must keep working
+        # after main has moved on. The checker is taken from origin/main so a tagged
+        # commit cannot ship its own weakened copy.
+        env:
+          VERSION: ${{ steps.release.outputs.version }}
+        run: |
+          git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
+          git show refs/remotes/origin/main:scripts/check-release-source.mjs > "$RUNNER_TEMP/check-release-source.mjs"
+          node "$RUNNER_TEMP/check-release-source.mjs" --commit "$(git rev-parse HEAD)" --version "$VERSION" --mode republish
       - name: Install dependencies
         run: npm ci
       - name: Download same-run verified native assets

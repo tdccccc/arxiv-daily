@@ -103,16 +103,9 @@ async function verifyStart(request: Request, env: Env): Promise<Response> {
   const emailNorm = normalizeEmail(email);
   const ip = clientIp(request);
 
-  const emailRl = await checkAndIncrRateLimit(
-    env,
-    "verify-email",
-    emailNorm,
-    VERIFY_EMAIL_LIMIT,
-    VERIFY_EMAIL_WINDOW_SEC,
-  );
-  if (!emailRl.ok) {
-    return json({ ok: true, message: "verification email sent" });
-  }
+  // The IP limit is checked first: a request that is already over its IP limit must
+  // not also spend the target address's allowance, or anyone could lock a victim out
+  // of verification by hammering it from one address.
   const ipRl = await checkAndIncrRateLimit(
     env,
     "verify-ip",
@@ -121,6 +114,16 @@ async function verifyStart(request: Request, env: Env): Promise<Response> {
     VERIFY_IP_WINDOW_SEC,
   );
   if (!ipRl.ok) {
+    return json({ ok: true, message: "verification email sent" });
+  }
+  const emailRl = await checkAndIncrRateLimit(
+    env,
+    "verify-email",
+    emailNorm,
+    VERIFY_EMAIL_LIMIT,
+    VERIFY_EMAIL_WINDOW_SEC,
+  );
+  if (!emailRl.ok) {
     return json({ ok: true, message: "verification email sent" });
   }
 

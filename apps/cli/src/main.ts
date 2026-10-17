@@ -10,6 +10,7 @@ import {
   formatDate,
   todayInTz,
   redactText,
+  modernArxivResources,
 } from "@arxiv-daily/core";
 import type { HostAdapters } from "@arxiv-daily/core";
 import type { CliIo, WritableTextStream } from "./main-types";
@@ -27,6 +28,7 @@ import { inspectPapers, inspectProduct } from "./inspect-cmd";
 import { runCliLibrary } from "./library-cmd";
 import { runWorkbench } from "./workbench/launch";
 import { validateFrameOrigin } from "./workbench/embedding";
+import { isCalendarDate, parseOptions } from "./cli-args";
 
 export type { CliIo, WritableTextStream } from "./main-types";
 
@@ -339,7 +341,10 @@ function parseCli(argv: string[]): CliCommand {
 
   const [commandName, ...commandArgs] = rest;
   if (!commandName || commandName === "help") return { name: "help" };
-  if (commandName === "init") return { name: "init" };
+  if (commandName === "init") {
+    parseOptions("init", commandArgs, {});
+    return { name: "init" };
+  }
   if (commandName === "library") return { name: "library", args: commandArgs };
   if (commandName === "ui") {
     let port = 0;
@@ -379,24 +384,26 @@ function parseCli(argv: string[]): CliCommand {
   }
 
   if (commandName === "update") {
-    return {
-      name: "update",
-      checkOnly: commandArgs.includes("--check"),
-      yes: commandArgs.includes("--yes") || commandArgs.includes("-y"),
-    };
+    const { flags } = parseOptions("update", commandArgs, { flags: ["--check", "--yes", "-y"] });
+    return { name: "update", checkOnly: flags.has("--check"), yes: flags.has("--yes") || flags.has("-y") };
   }
 
   if (commandName === "run") {
-    if (commandArgs.includes("--scheduled")) {
+    const { flags, values } = parseOptions("run", commandArgs, { flags: ["--today", "--scheduled"], values: ["--date", "--id"] });
+    if (flags.has("--scheduled")) {
       if (commandArgs.length !== 1) throw new Error("run --scheduled takes no other options");
       return { name: "run", mode: "scheduled" };
     }
-    const today = commandArgs.includes("--today");
-    const date = optionValue(commandArgs, "--date");
-    const id = optionValue(commandArgs, "--id");
+    const today = flags.has("--today");
+    const date = values["--date"];
+    const id = values["--id"];
+    if (date !== undefined) requireCalendarDate("run --date", date);
     // --id may also take --date for note dating
-    if (id) {
+    if (id !== undefined) {
       if (today) throw new Error("run --id cannot be combined with --today");
+      if (!modernArxivResources(id)) {
+        throw new Error(`run --id requires an arXiv ID such as 2606.12345 (got ${JSON.stringify(id)})`);
+      }
       return { name: "run", mode: "id", id, date };
     }
     if (today && date) throw new Error("run --today cannot be combined with --date");
@@ -406,29 +413,25 @@ function parseCli(argv: string[]): CliCommand {
   }
 
   if (commandName === "email" || commandName === "email-test") {
-    if (commandName === "email-test") {
-      return {
-        name: "email",
-        sub: "test",
-        date: optionValue(commandArgs, "--date"),
-      };
-    }
-    const sub = commandArgs[0];
+    const sub = commandName === "email-test" ? "test" : commandArgs[0];
+    const rest = commandName === "email-test" ? commandArgs : commandArgs.slice(1);
     if (sub === "test") {
-      return {
-        name: "email",
-        sub: "test",
-        date: optionValue(commandArgs.slice(1), "--date"),
-      };
+      const { values } = parseOptions("email test", rest, { values: ["--date"] });
+      const date = values["--date"];
+      if (date !== undefined) requireCalendarDate("email test --date", date);
+      return { name: "email", sub: "test", date };
     }
-    if (sub === "status") return { name: "email", sub: "status" };
-    if (sub === "verify-start") return { name: "email", sub: "verify-start" };
+    if (sub === "status" || sub === "verify-start") {
+      parseOptions(`email ${sub}`, rest, {});
+      return { name: "email", sub };
+    }
     throw new Error('email requires subcommand: test | status | verify-start');
   }
 
   if (commandName === "schedule") {
     const sub = commandArgs[0];
     if (sub === "show" || sub === "install" || sub === "uninstall") {
+      parseOptions(`schedule ${sub}`, commandArgs.slice(1), {});
       return { name: "schedule", sub };
     }
     throw new Error("schedule requires subcommand: show | install | uninstall");
@@ -437,17 +440,12 @@ function parseCli(argv: string[]): CliCommand {
   if (commandName === "data") {
     const sub = commandArgs[0];
     if (sub === "export") {
-      return {
-        name: "data",
-        sub: "export",
-        out: optionValue(commandArgs.slice(1), "--out"),
-      };
+      const { values } = parseOptions("data export", commandArgs.slice(1), { values: ["--out"] });
+      return { name: "data", sub: "export", out: values["--out"] };
     }
     if (sub === "import") {
-      const args = commandArgs.slice(1);
-      const yes = args.includes("--yes");
-      const zip = args.find((a) => !a.startsWith("--"));
-      return { name: "data", sub: "import", zip, yes };
+      const { flags, positionals } = parseOptions("data import", commandArgs.slice(1), { flags: ["--yes", "-y"], positionals: 1 });
+      return { name: "data", sub: "import", zip: positionals[0], yes: flags.has("--yes") || flags.has("-y") };
     }
     throw new Error("data requires subcommand: export | import");
   }
@@ -462,6 +460,10 @@ function parseCli(argv: string[]): CliCommand {
   }
 
   throw new Error(`Unknown command: ${commandName}`);
+}
+
+function requireCalendarDate(option: string, value: string): void {
+  if (!isCalendarDate(value)) throw new Error(`${option} requires a real calendar date in YYYY-MM-DD form (got ${JSON.stringify(value)})`);
 }
 
 function optionValue(argv: string[], option: string): string | undefined {
