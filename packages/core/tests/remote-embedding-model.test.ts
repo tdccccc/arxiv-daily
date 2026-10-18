@@ -157,6 +157,25 @@ describe("createRemoteEmbeddingModel", () => {
       .rejects.toMatchObject({ name: "AbortError" });
   });
 
+  it("hands the caller's signal to the in-flight HTTP request so a query can be cancelled", async () => {
+    const controller = new AbortController();
+    let seen: AbortSignal | undefined;
+    const http = makeHttp((request) => {
+      seen = request.signal;
+      return new Promise<HttpResponse>((_resolve, reject) => {
+        request.signal?.addEventListener("abort", () => reject(new Error("request aborted")), { once: true });
+      });
+    });
+    const model = createRemoteEmbeddingModel(modelOptions(http));
+
+    const pending = model.embed(["a"], { signal: controller.signal });
+    expect(seen).toBe(controller.signal);
+    expect(seen?.aborted).toBe(false);
+    controller.abort();
+    await expect(pending).rejects.toThrow("request aborted");
+    expect(seen?.aborted).toBe(true);
+  });
+
   it("validates configuration eagerly", () => {
     const http = makeHttp(() => embeddingResponse(["a"], 0));
     expect(() => createRemoteEmbeddingModel(modelOptions(http, { baseUrl: "" })))

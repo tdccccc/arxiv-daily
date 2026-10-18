@@ -21,6 +21,7 @@ import { FullTextKnowledgeBaseStoreError } from "../src/library/fulltext/knowled
 import type { ScopedLibrarySource } from "../src/library/scoped-library-source";
 import type { PersonalLibraryCatalog } from "../src/library/personal-library-catalog";
 import { sha256Hex } from "../src/utils/digest";
+import { RunCancelledError } from "../src/services/cancellation";
 
 const SCOPE = `sha256:${"a".repeat(64)}`;
 const IDENTIFICATION = `sha256:${"b".repeat(64)}`;
@@ -947,6 +948,79 @@ describe("full-text indexing orchestration", () => {
       searchFullTextKnowledgeBase({ store, embedding: otherModel, queryText: "anything" }),
     ).rejects.toThrow(/built with model fake-e5-q8/);
     expect(embedCalls).toBe(0);
+  });
+
+  describe("search cancellation", () => {
+    async function indexedStore(): Promise<MemoryStore> {
+      const catalog = makeCatalog([
+        { paperKey: "arxiv:2403.19236", filePaths: ["lib/a.pdf"], fingerprint: fingerprint("f1") },
+      ]);
+      const store = new MemoryStore();
+      const extractor = new FakeExtractor({ "lib/a.pdf": [LONG_ALPHA] });
+      await indexPersonalLibraryFullText({
+        catalog, source: new FakeSource(), extractor, embedding: new FakeEmbedding(), store, now: () => new Date(NOW),
+      });
+      return store;
+    }
+
+    it("rejects with a cancellation before embedding when the signal is already aborted", async () => {
+      const store = await indexedStore();
+      const embedding = new FakeEmbedding();
+      const controller = new AbortController();
+      controller.abort("superseded by a newer query");
+
+      const search = searchFullTextKnowledgeBase({
+        store, embedding, queryText: "alpha", signal: controller.signal,
+      });
+      await expect(search).rejects.toBeInstanceOf(RunCancelledError);
+      await expect(search).rejects.toThrow("superseded by a newer query");
+      expect(embedding.calls).toBe(0);
+    });
+
+    it("passes the signal to the query embedding and rejects when aborted mid-flight", async () => {
+      const store = await indexedStore();
+      const controller = new AbortController();
+      let seen: AbortSignal | undefined;
+      const embedding: EmbeddingModel = {
+        modelId: "fake-e5-q8",
+        dimension: 4,
+        prefixPolicy: "e5",
+        embed(_texts, options) {
+          seen = options?.signal;
+          return new Promise((_resolve, reject) => {
+            options?.signal?.addEventListener("abort", () => reject(new Error("embed aborted")), { once: true });
+          });
+        },
+      };
+
+      const search = searchFullTextKnowledgeBase({
+        store, embedding, queryText: "alpha", signal: controller.signal,
+      });
+      const outcome = expect(search).rejects.toThrow("embed aborted");
+      await Promise.resolve();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(seen).toBe(controller.signal);
+      controller.abort();
+      await outcome;
+    });
+
+    it("still reports cancellation when the embedder ignores the signal", async () => {
+      const store = await indexedStore();
+      const controller = new AbortController();
+      const embedding: EmbeddingModel = {
+        modelId: "fake-e5-q8",
+        dimension: 4,
+        prefixPolicy: "e5",
+        async embed(texts) {
+          controller.abort("superseded");
+          return texts.map(() => new Float32Array(4));
+        },
+      };
+
+      await expect(searchFullTextKnowledgeBase({
+        store, embedding, queryText: "alpha", signal: controller.signal,
+      })).rejects.toBeInstanceOf(RunCancelledError);
+    });
   });
 
   it("indexes unresolved files with content-addressed keys and extracted titles", async () => {

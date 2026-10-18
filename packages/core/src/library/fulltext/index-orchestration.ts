@@ -908,6 +908,9 @@ export async function searchFullTextKnowledgeBase(
     [prefixFor("query", input.embedding, input.queryText)],
     { signal: input.signal },
   );
+  // An embedder that ignores the signal still must not feed a superseded query
+  // into retrieval.
+  throwIfCancelled(input.signal);
   const queryVector = queryVectors[0];
   if (!queryVector) throw new Error("embedding model returned no query vector");
   const dense = searchKnowledgeBase({
@@ -956,6 +959,9 @@ async function searchOpenedGeneration(
     [prefixFor("query", input.embedding, input.queryText)],
     { signal: input.signal },
   );
+  // An embedder that ignores the signal still must not feed a superseded query
+  // into retrieval.
+  throwIfCancelled(input.signal);
   const queryVector = queryVectors[0];
   if (!queryVector) throw new Error("embedding model returned no query vector");
   const dense = await searchGenerationDense({
