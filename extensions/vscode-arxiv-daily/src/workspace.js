@@ -12,83 +12,9 @@ async function findArxivDailyVault(vscodeApi) {
       vaultRootUri: rootUri,
       arxivDailyUri,
       paperIndexUri: vscodeApi.Uri.joinPath(rootUri, ...pathParts(PAPER_INDEX_PATH)),
-      storage: createVsCodeStorageAdapter(vscodeApi, rootUri),
     };
   }
   return null;
-}
-
-function createVsCodeStorageAdapter(vscodeApi, rootUri) {
-  const fs = vscodeApi.workspace.fs;
-  return {
-    normalizePath: normalizeStoragePath,
-    async readText(storagePath) {
-      const bytes = await fs.readFile(toUri(vscodeApi, rootUri, storagePath));
-      return new TextDecoder().decode(bytes);
-    },
-    async writeText(storagePath, content) {
-      await fs.writeFile(
-        toUri(vscodeApi, rootUri, storagePath),
-        new TextEncoder().encode(content),
-      );
-    },
-    // Temporary sibling + rename: a crash or a failed write never leaves a
-    // truncated target. There is still no cross-process lock (see dashboard.js).
-    async writeTextAtomic(storagePath, content) {
-      const normalized = normalizeStoragePath(storagePath);
-      const tmp = `${normalized}.tmp-${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
-      const tmpUri = toUri(vscodeApi, rootUri, tmp);
-      try {
-        await fs.writeFile(tmpUri, new TextEncoder().encode(content));
-        await fs.rename(tmpUri, toUri(vscodeApi, rootUri, normalized), { overwrite: true });
-      } catch (error) {
-        try {
-          await fs.delete(tmpUri, { useTrash: false });
-        } catch {
-          // The temporary file may never have been created.
-        }
-        throw error;
-      }
-    },
-    async exists(storagePath) {
-      return await existsUri(fs, toUri(vscodeApi, rootUri, storagePath));
-    },
-    async mkdir(storagePath) {
-      await fs.createDirectory(toUri(vscodeApi, rootUri, storagePath));
-    },
-    async remove(storagePath) {
-      await fs.delete(toUri(vscodeApi, rootUri, storagePath), {
-        recursive: true,
-        useTrash: false,
-      });
-    },
-    async rename(from, to) {
-      await fs.rename(toUri(vscodeApi, rootUri, from), toUri(vscodeApi, rootUri, to), {
-        overwrite: true,
-      });
-    },
-    async list(dir) {
-      const normalizedDir = normalizeStoragePath(dir);
-      const entries = await fs.readDirectory(toUri(vscodeApi, rootUri, normalizedDir));
-      return entries.map(([name, type]) => ({
-        path: normalizedDir ? `${normalizedDir}/${name}` : name,
-        type: type === vscodeApi.FileType.Directory ? "folder" : "file",
-      }));
-    },
-    async readBinary(storagePath) {
-      const bytes = await fs.readFile(toUri(vscodeApi, rootUri, storagePath));
-      return toArrayBuffer(bytes);
-    },
-    async writeBinary(storagePath, content) {
-      await fs.writeFile(toUri(vscodeApi, rootUri, storagePath), new Uint8Array(content));
-    },
-  };
-}
-
-function toUri(vscodeApi, rootUri, storagePath) {
-  const parts = pathParts(storagePath);
-  if (parts.length === 0) return rootUri;
-  return vscodeApi.Uri.joinPath(rootUri, ...parts);
 }
 
 function normalizeStoragePath(input) {
@@ -105,16 +31,6 @@ function normalizeStoragePath(input) {
 function pathParts(input) {
   const normalized = normalizeStoragePath(input);
   return normalized ? normalized.split("/") : [];
-}
-
-async function existsUri(fs, uri) {
-  try {
-    await fs.stat(uri);
-    return true;
-  } catch (error) {
-    if (isFileNotFound(error)) return false;
-    throw error;
-  }
 }
 
 async function isDirectoryUri(vscodeApi, uri) {
@@ -135,14 +51,9 @@ function isFileNotFound(error) {
   );
 }
 
-function toArrayBuffer(bytes) {
-  return bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
-}
-
 module.exports = {
   ARXIV_DAILY_DIR,
   PAPER_INDEX_PATH,
-  createVsCodeStorageAdapter,
   findArxivDailyVault,
   normalizeStoragePath,
 };

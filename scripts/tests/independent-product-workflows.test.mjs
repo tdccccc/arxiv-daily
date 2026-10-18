@@ -19,6 +19,12 @@ export const relayPaths = [
 
 export const companionPaths = [
   "extensions/vscode-arxiv-daily/**",
+  "packages/core/**",
+  "packages/node-runtime/**",
+  "package.json",
+  "package-lock.json",
+  "scripts/release-utils.mjs",
+  "THIRD_PARTY_NOTICES.md",
   "contracts/companion-cli-commands.json",
   "apps/cli/package.json",
   "apps/cli/src/main.ts",
@@ -96,8 +102,13 @@ const expectedCompanionWorkflow = {
           with: {
             "node-version": "22.17.0",
             cache: "npm",
-            "cache-dependency-path": "extensions/vscode-arxiv-daily/package-lock.json",
+            "cache-dependency-path": "package-lock.json\nextensions/vscode-arxiv-daily/package-lock.json\n",
           },
+        },
+        {
+          name: "Install workspace dependencies",
+          "working-directory": ".",
+          run: "npm ci",
         },
         { name: "Install companion dependencies", run: "npm ci" },
         { name: "Build companion", run: "npm run build" },

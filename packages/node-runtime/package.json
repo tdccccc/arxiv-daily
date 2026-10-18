@@ -19,6 +19,7 @@
     ".": "./src/index.ts",
     "./scoped-library-source": "./src/scoped-library-source.ts",
     "./file-lock": "./src/file-lock.ts",
+    "./storage-adapter": "./src/storage-adapter.ts",
     "./private-storage": "./src/native-private-storage.ts"
   },
   "scripts": {

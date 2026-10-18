@@ -14,6 +14,7 @@ id = "abc"
 [durable_objects]
 bindings = [
   { name = "DELIVER_GATE", class_name = "DeliverGate" },
+  { name = "VERIFY_RATE_LIMIT", class_name = "VerifyRateLimiter" },
 ]
 
 [vars]

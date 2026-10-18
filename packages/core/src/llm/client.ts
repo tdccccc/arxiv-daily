@@ -1,7 +1,12 @@
 import { retry } from "../utils/retry";
 import type { Logger } from "../services/logger";
 import type { LlmSettings } from "../settings/types";
-import { isHttpTransportError, type HttpClient } from "../core/adapters";
+import {
+  HttpTransportError,
+  isHttpTransportError,
+  type HttpClient,
+  type HttpRequest,
+} from "../core/adapters";
 import { isCancellationError, throwIfCancelled } from "../services/cancellation";
 import { redactError, redactText } from "../utils/redaction";
 import { setTimer, clearTimer } from "../utils/timers";
@@ -14,16 +19,23 @@ import {
 } from "../metrics/generation";
 
 /**
- * Total wall-clock bound for one request. HttpClient returns only after the
- * whole body arrived, so this is the only real network timeout an LLM call has.
+ * Total wall-clock bound for one request attempt, streaming or not. A stream
+ * that keeps trickling bytes (so never goes idle) still ends here.
  */
 const LLM_TIMEOUT_MS = 300_000; // 5 minutes
 /**
- * Gap allowed between chunks while iterating an already-received response.
- * Hosts do not stream, so this is not a network idle timeout; it only guards
- * consumers of {@link collectStreamWithIdleTimeout} that hand in a live stream.
+ * Longest silence allowed on the wire while a response streams. With a host
+ * that implements `HttpClient.requestStream` (the Node host) this acts on
+ * network bytes as they arrive, so a stalled provider is cut off after this
+ * gap instead of after {@link LLM_TIMEOUT_MS}. Hosts that can only buffer the
+ * whole body (Obsidian's `requestUrl`) have no such protection: the response
+ * is already complete when parsing starts, and only the total bound applies.
  */
 export const LLM_STREAM_IDLE_TIMEOUT_MS = 120_000;
+/** Largest single SSE event kept pending while waiting for its terminator. */
+const SSE_MAX_PENDING_EVENT_CHARS = 16_000_000;
+/** Largest non-2xx response body read to build an error message. */
+const ERROR_BODY_MAX_CHARS = 65_536;
 export const LLM_TEMPERATURE = 0.1;
 export const LLM_MAX_OUTPUT_CODE_UNITS = 10_000_000;
 export const LLM_MAX_COMPLETION_TOKENS = 1_000_000;
@@ -307,6 +319,10 @@ export class LlmClient {
     // failure (e.g. ECONNRESET): bounded duplicate-billing risk for a flaky link.
     let ambiguousResends = 0;
     const shouldResendAfterTransportFailure = (err: unknown): boolean => {
+      // A stream that went silent mid-generation was (partly) billed and may
+      // still be running at the provider: same reasoning as a request timeout.
+      if (err instanceof StreamIdleTimeoutError
+        || (err as { name?: unknown } | null)?.name === "StreamIdleTimeoutError") return false;
       if (!isHttpTransportError(err)) return true;
       // Provably never sent (connect/TLS phase): always safe to repeat.
       if (err.retryableAttempt) return true;
@@ -403,8 +419,10 @@ export class LlmClient {
   }
 
   /**
-   * Sends a `stream: true` request. The HTTP client buffers the whole body, so
-   * the response is parsed as a complete SSE document afterwards. `controller`
+   * Sends a `stream: true` request. When the host can stream, the body is parsed
+   * as SSE while it arrives: the idle timeout runs between network chunks and
+   * the output cap aborts the request the moment it is exceeded. Otherwise the
+   * host buffers the whole body and it is parsed afterwards. `controller`
    * merges the caller's signal with this attempt's own abort, and its signal is
    * what the request is given.
    */
@@ -414,22 +432,66 @@ export class LlmClient {
     signal?: AbortSignal,
     maxOutputCodeUnits?: number,
   ): Promise<StreamResult> {
-    const raw = await this.requestChat({ ...body, stream: true }, true, controller.signal);
-    return collectStreamResultWithIdleTimeout(
-      usesNativeAnthropic(this.settings) ? parseAnthropicSseText(raw) : parseSseText(raw),
-      controller,
-      LLM_STREAM_IDLE_TIMEOUT_MS,
-      signal,
-      maxOutputCodeUnits,
-    );
+    const native = usesNativeAnthropic(this.settings);
+    if (!this.http.requestStream) {
+      const raw = await this.requestChat({ ...body, stream: true }, true, controller.signal);
+      const events = parseSseStream(singleChunk(raw));
+      return collectStreamResultWithIdleTimeout(
+        native ? parseAnthropicEvents(events) : events,
+        controller,
+        LLM_STREAM_IDLE_TIMEOUT_MS,
+        signal,
+        maxOutputCodeUnits,
+      );
+    }
+
+    const request = this.chatRequest({ ...body, stream: true }, controller.signal);
+    // Wall-clock bound for the attempt; its reason is surfaced as the error.
+    const deadline = setTimer(() => {
+      controller.abort(new HttpTransportError(
+        "timeout",
+        `HTTP timeout after ${LLM_TIMEOUT_MS}ms: ${request.url}`,
+        { retryableAttempt: false },
+      ));
+    }, LLM_TIMEOUT_MS);
+    let bodyIterator: AsyncIterator<string> | undefined;
+    try {
+      const res = await this.http.requestStream(request);
+      bodyIterator = res.body[Symbol.asyncIterator]();
+      if (res.status < 200 || res.status >= 300) {
+        const errorText = await readTextWithIdleTimeout(
+          bodyIterator, controller, LLM_STREAM_IDLE_TIMEOUT_MS, signal, ERROR_BODY_MAX_CHARS,
+        );
+        throw createStatusError(res.status, errorText, [this.settings.apiKey]);
+      }
+      const watched = idleWatchedChunks(
+        bodyIterator, controller, LLM_STREAM_IDLE_TIMEOUT_MS, signal,
+      );
+      const events = parseSseStream(watched);
+      // Idle is enforced per network chunk above, so a keep-alive comment
+      // keeps the stream alive even though it yields no event.
+      return await collectParsedStream(
+        native ? parseAnthropicEvents(events) : events,
+        controller,
+        null,
+        signal,
+        maxOutputCodeUnits,
+      );
+    } catch (error) {
+      // The attempt was stopped by us (total deadline); the host may report that
+      // as a plain cancellation, so restore the real reason.
+      const reason: unknown = controller.signal.reason;
+      if (!signal?.aborted && controller.signal.aborted && reason instanceof Error) throw reason;
+      throw error;
+    } finally {
+      clearTimer(deadline);
+      // Stop reading and close the connection (a no-op once the body ended).
+      await bodyIterator?.return?.().catch(() => undefined);
+    }
   }
 
-  private async requestChat(
-    body: Record<string, unknown>,
-    stream: boolean,
-    signal?: AbortSignal,
-  ): Promise<string> {
-    let requestBody: Record<string, unknown> = { ...body, stream };
+  private chatRequest(body: Record<string, unknown>, signal?: AbortSignal): HttpRequest {
+    let requestBody: Record<string, unknown> = { ...body };
     if (usesNativeAnthropic(this.settings)) {
       const { messages, stream_options: _streamOptions, ...parameters } = requestBody;
       const chatMessages = messages as ChatMessage[];
@@ -441,14 +503,22 @@ export class LlmClient {
         ...(system ? { system } : {}),
       };
     }
-    const res = await this.http.request({
+    return {
       url: buildLlmRequestUrl(this.settings),
       method: "POST",
       headers: this.chatHeaders(),
       body: JSON.stringify(requestBody),
       timeoutMs: LLM_TIMEOUT_MS,
       signal,
-    });
+    };
+  }
+
+  private async requestChat(
+    body: Record<string, unknown>,
+    stream: boolean,
+    signal?: AbortSignal,
+  ): Promise<string> {
+    const res = await this.http.request(this.chatRequest({ ...body, stream }, signal));
     if (res.status < 200 || res.status >= 300) {
       throw createStatusError(res.status, res.bodyText, [this.settings.apiKey]);
     }
@@ -575,9 +645,9 @@ function createStatusError(
   return error;
 }
 
-async function* parseAnthropicSseText(raw: string): AsyncIterable<unknown> {
+async function* parseAnthropicEvents(events: AsyncIterable<unknown>): AsyncIterable<unknown> {
   let usage: Record<string, number> = {};
-  for await (const value of parseSseText(raw)) {
+  for await (const value of events) {
     const event = value as {
       type?: string;
       message?: { usage?: Record<string, number> };
@@ -612,12 +682,30 @@ async function* parseAnthropicSseText(raw: string): AsyncIterable<unknown> {
   }
 }
 
-async function* parseSseText(raw: string): AsyncIterable<unknown> {
-  for (const event of raw.split(/\r?\n\r?\n/)) {
-    const parsed = parseSseEvent(event);
-    if (parsed.done) return;
-    if (parsed.value !== undefined) yield parsed.value;
+async function* singleChunk(text: string): AsyncIterable<string> {
+  yield text;
+}
+
+/** Incrementally parses an SSE byte stream into JSON event payloads. */
+async function* parseSseStream(chunks: AsyncIterable<string>): AsyncIterable<unknown> {
+  let buffer = "";
+  for await (const chunk of chunks) {
+    buffer += chunk;
+    const separator = /\r?\n\r?\n/g;
+    let start = 0;
+    for (let match = separator.exec(buffer); match; match = separator.exec(buffer)) {
+      const parsed = parseSseEvent(buffer.slice(start, match.index));
+      start = match.index + match[0].length;
+      if (parsed.done) return;
+      if (parsed.value !== undefined) yield parsed.value;
+    }
+    buffer = buffer.slice(start);
+    if (buffer.length > SSE_MAX_PENDING_EVENT_CHARS) {
+      throw new Error("LLM stream event exceeded the size limit");
+    }
   }
+  const parsed = parseSseEvent(buffer);
+  if (!parsed.done && parsed.value !== undefined) yield parsed.value;
 }
 
 function parseSseEvent(event: string): { done: boolean; value?: unknown } {
@@ -643,10 +731,21 @@ export async function collectStreamWithIdleTimeout(
   )).content;
 }
 
-export async function collectStreamResultWithIdleTimeout(
+export function collectStreamResultWithIdleTimeout(
   stream: AsyncIterable<unknown>,
   controller: AbortController,
   idleTimeoutMs = LLM_STREAM_IDLE_TIMEOUT_MS,
+  signal?: AbortSignal,
+  maxOutputCodeUnits?: number,
+): Promise<StreamResult> {
+  return collectParsedStream(stream, controller, idleTimeoutMs, signal, maxOutputCodeUnits);
+}
+
+/** `idleTimeoutMs = null` leaves idleness to the caller (see {@link idleWatchedChunks}). */
+async function collectParsedStream(
+  stream: AsyncIterable<unknown>,
+  controller: AbortController,
+  idleTimeoutMs: number | null,
   signal?: AbortSignal,
   maxOutputCodeUnits?: number,
 ): Promise<StreamResult> {
@@ -680,16 +779,53 @@ export async function collectStreamResultWithIdleTimeout(
   return { content: chunks.join(""), usage, ...(truncated ? { truncated } : {}) };
 }
 
-function nextStreamChunk(
-  iterator: AsyncIterator<unknown>,
+/**
+ * Wraps a raw body iterator so each wait for the next network chunk is bounded
+ * by the idle timeout. Closing the wrapper closes the source immediately.
+ */
+function idleWatchedChunks(
+  source: AsyncIterator<string>,
   controller: AbortController,
   idleTimeoutMs: number,
   signal?: AbortSignal,
-): Promise<IteratorResult<unknown>> {
+): AsyncIterable<string> {
+  const iterator: AsyncIterator<string> = {
+    next: () => nextStreamChunk(source, controller, idleTimeoutMs, signal),
+    return: async () => {
+      await source.return?.();
+      return { done: true, value: undefined };
+    },
+  };
+  return { [Symbol.asyncIterator]: () => iterator };
+}
+
+/** Reads at most `maxChars` of a text body, each chunk bounded by the idle timeout. */
+async function readTextWithIdleTimeout(
+  source: AsyncIterator<string>,
+  controller: AbortController,
+  idleTimeoutMs: number,
+  signal: AbortSignal | undefined,
+  maxChars: number,
+): Promise<string> {
+  let text = "";
+  while (text.length < maxChars) {
+    const next = await nextStreamChunk(source, controller, idleTimeoutMs, signal);
+    if (next.done) break;
+    text += next.value;
+  }
+  return text.slice(0, maxChars);
+}
+
+function nextStreamChunk<T>(
+  iterator: AsyncIterator<T>,
+  controller: AbortController,
+  idleTimeoutMs: number | null,
+  signal?: AbortSignal,
+): Promise<IteratorResult<T>> {
   throwIfCancelled(signal);
   return new Promise((resolve, reject) => {
     let settled = false;
-    const timeout = setTimer(() => {
+    const timeout = idleTimeoutMs === null ? undefined : setTimer(() => {
       const error = new StreamIdleTimeoutError();
       finish();
       reject(error);
@@ -703,15 +839,32 @@ function nextStreamChunk(
         reject(e instanceof Error ? e : new Error(String(e), { cause: e }));
       }
     };
+    // The attempt may be stopped from outside this read (total deadline). A host
+    // is expected to fail its pending read then, but do not depend on it.
+    const onAttemptAbort = () => {
+      if (signal?.aborted) {
+        onAbort();
+        return;
+      }
+      finish();
+      const reason: unknown = controller.signal.reason;
+      reject(reason instanceof Error ? reason : new Error(String(reason), { cause: reason }));
+    };
     const finish = () => {
       if (settled) return;
       settled = true;
-      clearTimer(timeout);
+      if (timeout) clearTimer(timeout);
       signal?.removeEventListener("abort", onAbort);
+      controller.signal.removeEventListener("abort", onAttemptAbort);
     };
     signal?.addEventListener("abort", onAbort, { once: true });
+    controller.signal.addEventListener("abort", onAttemptAbort, { once: true });
     if (signal?.aborted) {
       onAbort();
+      return;
+    }
+    if (controller.signal.aborted) {
+      onAttemptAbort();
       return;
     }
     iterator.next().then(

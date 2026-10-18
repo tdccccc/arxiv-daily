@@ -12,12 +12,18 @@ preview_id = "8213e1636f1949a4be4c0d3e7774d25c"
 [durable_objects]
 bindings = [
   { name = "DELIVER_GATE", class_name = "DeliverGate" },
+  { name = "VERIFY_RATE_LIMIT", class_name = "VerifyRateLimiter" },
 ]
 
 # Free plan requires SQLite-backed Durable Objects
 [[migrations]]
 tag = "v1-deliver-gate"
 new_sqlite_classes = ["DeliverGate"]
+
+# Atomic /v1/verify/start rate limits. Append-only: never edit or reorder earlier tags.
+[[migrations]]
+tag = "v2-verify-rate-limiter"
+new_sqlite_classes = ["VerifyRateLimiter"]
 
 [vars]
 PUBLIC_BASE_URL = "https://mail.arxiv-daily.top"

@@ -2,5 +2,9 @@
 dist/**
 node_modules/**
 scripts/**
+src/**
+out/**/*.map
+package-lock.json
+.gitignore
 *.vsix
 *.log
