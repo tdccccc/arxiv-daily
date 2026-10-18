@@ -6,9 +6,10 @@ import { promisify } from "node:util";
 import { describe, expect, it, vi } from "vitest";
 import { DEFAULT_SETTINGS } from "@arxiv-daily/core";
 import { DEFAULT_CLI_SCHEDULE, type CliRuntimeConfig } from "../src/config";
-import { buildCronLines, scheduleInstall } from "../src/schedule-cmd";
+import { buildCronLines, scheduleInstall, writeUserCrontab, type CronRuntime } from "../src/schedule-cmd";
 
 const execFileAsync = promisify(execFile);
+const runtime: CronRuntime = { nodePath: "/opt/node/bin/node", logPath: "/home/u/.config/arxiv-daily/schedule.log" };
 
 function config(): CliRuntimeConfig {
   return {
@@ -62,9 +63,10 @@ describe("CLI schedule command", () => {
     try {
       const binary = path.join(dir, name);
       await fs.writeFile(binary, '#!/bin/sh\nprintf "%s\\n" "$0" "$@"\n', { mode: 0o700 });
-      const line = buildCronLines(config(), binary)[0]!;
-      const { stdout } = await execFileAsync("/bin/sh", ["-c", commandBeforeCronStdin(line)]);
-      expect(stdout.trimEnd().split("\n")).toEqual([binary, "run", "--today"]);
+      const line = buildCronLines(config(), binary, { nodePath: "/bin/echo", logPath: path.join(dir, "cron.log") })[0]!;
+      await execFileAsync("/bin/sh", ["-c", commandBeforeCronStdin(line)]);
+      // `echo` stands in for node: it records exactly which script and arguments were passed.
+      expect((await fs.readFile(path.join(dir, "cron.log"), "utf8")).trimEnd()).toBe(`${binary} run --today`);
     } finally {
       await fs.rm(dir, { recursive: true, force: true });
     }
@@ -83,10 +85,58 @@ describe("CLI schedule command", () => {
     },
   );
 
-  it("preserves the ordinary executable command", () => {
-    expect(buildCronLines(config(), "/usr/local/bin/arxiv-daily")).toEqual([
-      "30 9 * * 1-5  /usr/local/bin/arxiv-daily run --today  # arxiv-daily-managed",
+  it("names the node binary, the absolute script and a log redirect", () => {
+    expect(buildCronLines(config(), "/usr/local/bin/arxiv-daily", runtime)).toEqual([
+      "30 9 * * 1-5  /opt/node/bin/node /usr/local/bin/arxiv-daily run --today >> /home/u/.config/arxiv-daily/schedule.log 2>&1  # arxiv-daily-managed",
     ]);
+  });
+
+  it("defaults to the running node and a log beside the config file", () => {
+    const [line] = buildCronLines(config(), "/usr/local/bin/arxiv-daily");
+    expect(line).toContain(`${process.execPath.replace(/[^a-zA-Z0-9_./:-]/g, c => `\\${c}`)} /usr/local/bin/arxiv-daily run --today >> /schedule.log 2>&1`);
+  });
+
+  it("escapes spaces in the node, script and log paths", () => {
+    const [line] = buildCronLines(config(), "/opt/my apps/arxiv-daily", { nodePath: "/Users/a b/.nvm/node", logPath: "/Users/a b/log 1.txt" });
+    expect(line).toContain("/Users/a\\ b/.nvm/node /opt/my\\ apps/arxiv-daily run --today >> /Users/a\\ b/log\\ 1.txt 2>&1");
+  });
+
+  it("rejects a relative script path because cron has no working directory", () => {
+    expect(() => buildCronLines(config(), "arxiv-daily", runtime)).toThrow(/absolute/);
+  });
+
+  it("tells the user to reinstall after changing Node", async () => {
+    const { io, stdout } = captureIo();
+    expect(await scheduleInstall(config(), io, { binaryPath: "/usr/bin/arxiv-daily", runtime, readCrontab: async () => "", writeCrontab: async () => undefined })).toBe(0);
+    const text = stdout.join("");
+    expect(text).toContain("schedule.log");
+    expect(text).toContain("schedule install");
+  });
+
+  it.skipIf(process.platform === "win32")("installs through crontab stdin without a temporary file", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "arxiv-fake-crontab-"));
+    try {
+      const fake = path.join(dir, "crontab");
+      await fs.writeFile(fake, `#!/bin/sh\nprintf '%s\\n' "$@" > "${dir}/args"\ncat > "${dir}/stdin"\n`, { mode: 0o700 });
+      const before = (await fs.readdir(os.tmpdir())).filter(name => name.startsWith("arxiv-daily-cron-"));
+      await writeUserCrontab("0 0 * * * job", fake);
+      expect((await fs.readFile(path.join(dir, "args"), "utf8"))).toBe("-\n");
+      expect(await fs.readFile(path.join(dir, "stdin"), "utf8")).toBe("0 0 * * * job\n");
+      expect((await fs.readdir(os.tmpdir())).filter(name => name.startsWith("arxiv-daily-cron-"))).toEqual(before);
+    } finally {
+      await fs.rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it.skipIf(process.platform === "win32")("reports crontab failures with its stderr", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "arxiv-fake-crontab-"));
+    try {
+      const fake = path.join(dir, "crontab");
+      await fs.writeFile(fake, "#!/bin/sh\necho 'bad entry' >&2\nexit 1\n", { mode: 0o700 });
+      await expect(writeUserCrontab("x", fake)).rejects.toThrow(/exited with code 1: bad entry/);
+    } finally {
+      await fs.rm(dir, { recursive: true, force: true });
+    }
   });
 
   it("rejects an inverted repeat window without touching existing cron jobs", async () => {
@@ -95,7 +145,7 @@ describe("CLI schedule command", () => {
     const { io, stderr } = captureIo();
     const readCrontab = vi.fn().mockResolvedValue("0 9 * * * old-command # arxiv-daily-managed\n");
     const writeCrontab = vi.fn();
-    expect(await scheduleInstall(cfg, io, { binaryPath: "/usr/bin/arxiv-daily", readCrontab, writeCrontab })).toBe(2);
+    expect(await scheduleInstall(cfg, io, { binaryPath: "/usr/bin/arxiv-daily", runtime, readCrontab, writeCrontab })).toBe(2);
     expect(stderr.join("")).toContain("schedule.until");
     expect(readCrontab).not.toHaveBeenCalled();
     expect(writeCrontab).not.toHaveBeenCalled();
@@ -111,7 +161,7 @@ describe("CLI schedule command", () => {
     const { io } = captureIo();
     const writeCrontab = vi.fn();
     expect(await scheduleInstall(cfg, io, {
-      binaryPath: "/usr/bin/arxiv-daily",
+      binaryPath: "/usr/bin/arxiv-daily", runtime,
       readCrontab: async () => "0 0 * * * keep-me\n",
       writeCrontab,
     })).toBe(0);

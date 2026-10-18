@@ -1,4 +1,4 @@
-import { ungzip } from "pako";
+import { Inflate } from "pako";
 import { classifySection } from "./section-extractor";
 
 export interface SourceExtractOpts {
@@ -25,10 +25,39 @@ interface Section {
 
 const TEXT_DECODER = new TextDecoder("utf-8");
 
+/**
+ * Budgets for author-controlled source packages. A tiny archive can otherwise
+ * expand into gigabytes (gzip bomb) or, through nested \input, into a
+ * combinatorial amount of text, and a V8 heap exhaustion cannot be caught.
+ */
+export const SOURCE_EXTRACTION_LIMITS = {
+  /** Largest source download that is processed (arXiv itself caps e-prints near this). */
+  maxArchiveBytes: 50 * 1024 * 1024,
+  /** Largest amount of data a gzip stream may inflate to. */
+  maxInflatedBytes: 64 * 1024 * 1024,
+  maxTarEntries: 10_000,
+  maxTextEntryBytes: 16 * 1024 * 1024,
+  maxTotalTextBytes: 32 * 1024 * 1024,
+  /** Total raw characters visited while expanding \input / \include. */
+  maxExpandedChars: 8 * 1024 * 1024,
+  maxIncludeExpansions: 2_000,
+} as const;
+
+/** The package exceeds an extraction budget; callers treat the source as unavailable. */
+export class SourceBudgetExceededError extends Error {
+  constructor(what: string) {
+    super(`arXiv source exceeds the extraction budget: ${what}`);
+    this.name = "SourceBudgetExceededError";
+  }
+}
+
 export function extractLatexSource(
   input: ArrayBuffer,
   opts: SourceExtractOpts,
 ): SourceExtractResult {
+  if (input.byteLength > SOURCE_EXTRACTION_LIMITS.maxArchiveBytes) {
+    throw new SourceBudgetExceededError("archive size");
+  }
   const files = unpackSourceFiles(input);
   const texFiles = files.filter((file) => isTexPath(file.path));
   if (texFiles.length === 0) {
@@ -47,6 +76,9 @@ export function extractLatexSource(
     normalizeSourcePath(mainFile.path),
     mainFile.text,
     fileMap,
+    new Set<string>(),
+    0,
+    { chars: 0, expansions: 0 },
   );
   const markdown = latexToMarkdown(expanded);
   const sections = parseMarkdownSections(markdown);
@@ -89,16 +121,37 @@ function maybeGunzip(buffer: Uint8Array): Uint8Array | null {
   if (buffer.length < 2 || buffer[0] !== 0x1f || buffer[1] !== 0x8b) {
     return null;
   }
+  const chunks: Uint8Array[] = [];
+  let total = 0;
   try {
-    return ungzip(buffer);
-  } catch {
+    const inflator = new Inflate();
+    inflator.onData = (chunk: Uint8Array) => {
+      total += chunk.length;
+      if (total > SOURCE_EXTRACTION_LIMITS.maxInflatedBytes) {
+        throw new SourceBudgetExceededError("inflated size");
+      }
+      chunks.push(chunk);
+    };
+    inflator.push(buffer, true);
+    if (inflator.err) return null;
+  } catch (error) {
+    if (error instanceof SourceBudgetExceededError) throw error;
     return null;
   }
+  const out = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    out.set(chunk, offset);
+    offset += chunk.length;
+  }
+  return out;
 }
 
 function parseTar(buffer: Uint8Array): SourceFile[] {
   const out: SourceFile[] = [];
   let offset = 0;
+  let entries = 0;
+  let textBytes = 0;
   while (offset + 512 <= buffer.length) {
     const header = buffer.subarray(offset, offset + 512);
     if (isZeroBlock(header)) break;
@@ -115,7 +168,18 @@ function parseTar(buffer: Uint8Array): SourceFile[] {
     const dataEnd = dataStart + size;
     if (dataEnd > buffer.length) return [];
 
+    entries += 1;
+    if (entries > SOURCE_EXTRACTION_LIMITS.maxTarEntries) {
+      throw new SourceBudgetExceededError("tar entry count");
+    }
     if ((type === "\0" || type === "0" || type === "") && isTextPath(path)) {
+      if (size > SOURCE_EXTRACTION_LIMITS.maxTextEntryBytes) {
+        throw new SourceBudgetExceededError("text entry size");
+      }
+      textBytes += size;
+      if (textBytes > SOURCE_EXTRACTION_LIMITS.maxTotalTextBytes) {
+        throw new SourceBudgetExceededError("total text size");
+      }
       out.push({
         path,
         text: decodeText(buffer.subarray(dataStart, dataEnd)),
@@ -180,10 +244,15 @@ function expandLatexInputs(
   currentPath: string,
   text: string,
   files: Map<string, string>,
-  seen = new Set<string>(),
-  depth = 0,
+  seen: Set<string>,
+  depth: number,
+  budget: { chars: number; expansions: number },
 ): string {
   if (depth > 12 || seen.has(currentPath)) return text;
+  budget.chars += text.length;
+  if (budget.chars > SOURCE_EXTRACTION_LIMITS.maxExpandedChars) {
+    throw new SourceBudgetExceededError("\\input expansion size");
+  }
   seen.add(currentPath);
   const dir = parentDir(currentPath);
   const expanded = text.replace(
@@ -191,12 +260,17 @@ function expandLatexInputs(
     (_match, raw) => {
       const target = resolveInputPath(dir, String(raw), files);
       if (!target) return "";
+      budget.expansions += 1;
+      if (budget.expansions > SOURCE_EXTRACTION_LIMITS.maxIncludeExpansions) {
+        throw new SourceBudgetExceededError("\\input expansion count");
+      }
       return expandLatexInputs(
         target,
         files.get(target) ?? "",
         files,
         seen,
         depth + 1,
+        budget,
       );
     },
   );

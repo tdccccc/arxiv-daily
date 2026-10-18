@@ -291,6 +291,15 @@ export class StateStore {
   }
 }
 
+/**
+ * True when a transient failure of the run that is now in flight (entry as left
+ * by setRunning) would exhaust the retry budget. That run is the last chance,
+ * so it should commit what it has rather than ask to be retried.
+ */
+export function isFinalTransientAttempt(entry: RunStateEntry): boolean {
+  return priorFailureAttempts(entry) + 1 >= MAX_TRANSIENT_ATTEMPTS;
+}
+
 // Legacy running attempts already include the in-flight attempt.
 function priorFailureAttempts(entry: RunStateEntry): number {
   return entry.failureAttempts ?? Math.max(0, entry.attempts - (entry.status === "running" ? 1 : 0));
@@ -375,7 +384,16 @@ async function loadAuthoritativeRunState(
   storage: StorageAdapter,
   path: string,
 ): Promise<{ runState: RunState }> {
-  if (!(await storage.exists(path))) return { runState: {} };
+  if (!(await storage.exists(path))) {
+    // A crash between the two renames of writeAtomic leaves only the backup.
+    // It is the last committed state, so mutations must build on it; an
+    // unusable backup fails closed instead of silently starting from nothing.
+    const backupPath = `${path}.bak`;
+    if (await storage.exists(backupPath)) {
+      return parseRunState(await storage.readText(backupPath), true);
+    }
+    return { runState: {} };
+  }
   return parseRunState(await storage.readText(path), true);
 }
 

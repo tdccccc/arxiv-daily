@@ -4,7 +4,10 @@ import {
   LLM_MAX_OUTPUT_CODE_UNITS,
   LlmClient,
   LlmOutputLimitExceededError,
+  LlmOutputTruncatedError,
   LlmTransientExhaustedError,
+  isLlmOutputTruncatedError,
+  isPermanentLlmError,
   isUnsupportedStreamOptionsError,
 } from "../../src/llm/client";
 import {
@@ -13,7 +16,12 @@ import {
 } from "../../src/services/cancellation";
 import { Logger } from "../../src/services/logger";
 import { DEFAULT_SETTINGS } from "../../src/settings/defaults";
-import type { HttpClient, HttpRequest, HttpResponse } from "../../src/core/adapters";
+import {
+  HttpTransportError,
+  type HttpClient,
+  type HttpRequest,
+  type HttpResponse,
+} from "../../src/core/adapters";
 
 function response(status: number, bodyText: string): HttpResponse {
   return { status, bodyText, headers: {} };
@@ -169,6 +177,152 @@ describe("LLM stream metrics", () => {
     expect(metrics).toHaveBeenCalledWith(
       expect.objectContaining({ logicalCalls: 1, attempts: 3 }),
     );
+  });
+
+  it("does not re-send a request whose transport failure may still be running", async () => {
+    const request = vi.fn(async (): Promise<HttpResponse> => {
+      throw new HttpTransportError("timeout", "HTTP timeout after 300000ms", { retryableAttempt: false });
+    });
+
+    const error = await client(request).call([{ role: "user", content: "x" }]).catch((e) => e);
+
+    expect(error).toBeInstanceOf(LlmTransientExhaustedError);
+    expect(request).toHaveBeenCalledTimes(1);
+  });
+
+  it("re-sends an ambiguous mid-request network failure exactly once", async () => {
+    vi.useFakeTimers();
+    const request = vi.fn(async (): Promise<HttpResponse> => {
+      throw new HttpTransportError("network", "socket hang up", { retryableAttempt: false });
+    });
+
+    const call = client(request).call([{ role: "user", content: "x" }]).catch((e) => e);
+    await vi.runAllTimersAsync();
+
+    expect(await call).toBeInstanceOf(LlmTransientExhaustedError);
+    expect(request).toHaveBeenCalledTimes(2);
+  });
+
+  it("recovers when the single re-send after a connection reset succeeds", async () => {
+    vi.useFakeTimers();
+    const request = vi.fn()
+      .mockRejectedValueOnce(new HttpTransportError("network", "ECONNRESET", { retryableAttempt: false }))
+      .mockResolvedValueOnce(response(200, sse([{ choices: [{ delta: { content: "ok" } }] }])));
+
+    const call = client(request).call([{ role: "user", content: "x" }]);
+    await vi.runAllTimersAsync();
+
+    await expect(call).resolves.toBe("ok");
+    expect(request).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps retrying failures that provably happened before the request was sent", async () => {
+    vi.useFakeTimers();
+    const request = vi.fn(async (): Promise<HttpResponse> => {
+      throw new HttpTransportError("network", "ECONNREFUSED", { retryableAttempt: true });
+    });
+
+    const call = client(request).call([{ role: "user", content: "x" }]).catch((e) => e);
+    await vi.runAllTimersAsync();
+
+    expect(await call).toBeInstanceOf(LlmTransientExhaustedError);
+    expect(request).toHaveBeenCalledTimes(3);
+  });
+
+  it("retries a transport failure the host marked as safe to repeat", async () => {
+    vi.useFakeTimers();
+    const request = vi.fn()
+      .mockRejectedValueOnce(new HttpTransportError("network", "reset", { retryableAttempt: true }))
+      .mockResolvedValueOnce(response(200, sse([{ choices: [{ delta: { content: "ok" } }] }])));
+
+    const call = client(request).call([{ role: "user", content: "x" }]);
+    await vi.runAllTimersAsync();
+
+    await expect(call).resolves.toBe("ok");
+    expect(request).toHaveBeenCalledTimes(2);
+  });
+
+  it("gives the request the per-attempt signal that follows the caller's abort", async () => {
+    const controller = new AbortController();
+    let seen: AbortSignal | undefined;
+    const request = vi.fn(async (req: HttpRequest): Promise<HttpResponse> => {
+      seen = req.signal;
+      controller.abort("cancelled by user");
+      expect(req.signal?.aborted).toBe(true);
+      throw new RunCancelledError("cancelled by user");
+    });
+
+    const error = await client(request)
+      .call([{ role: "user", content: "x" }], { signal: controller.signal })
+      .catch((e) => e);
+
+    expect(isCancellationError(error)).toBe(true);
+    expect(seen).toBeDefined();
+    expect(seen).not.toBe(controller.signal);
+  });
+
+  it.each(["length", "max_tokens"])("throws a typed error instead of returning text cut off by finish_reason %s", async (reason) => {
+    const request = vi.fn(async () => response(200, sse([
+      { choices: [{ delta: { content: "# partial note" } }] },
+      { choices: [{ delta: {}, finish_reason: reason }] },
+    ])));
+    const metrics = vi.fn();
+
+    const error = await client(request)
+      .call([{ role: "user", content: "x" }], { onMetrics: metrics })
+      .catch((e) => e);
+
+    expect(error).toBeInstanceOf(LlmOutputTruncatedError);
+    expect(isLlmOutputTruncatedError(error)).toBe(true);
+    expect(request).toHaveBeenCalledTimes(1);
+    expect(metrics).toHaveBeenCalledWith(expect.objectContaining({ logicalCalls: 1, attempts: 1 }));
+  });
+
+  it("accepts a normal stop and an Anthropic end_turn", async () => {
+    const stop = vi.fn(async () => response(200, sse([
+      { choices: [{ delta: { content: "done" }, finish_reason: "stop" }] },
+    ])));
+    await expect(client(stop).call([{ role: "user", content: "x" }])).resolves.toBe("done");
+
+    const anthropic = new LlmClient(
+      { ...DEFAULT_SETTINGS.llm, provider: "anthropic", baseUrl: "https://api.anthropic.com/v1", apiKey: "sk-full-secret", model: "claude-sonnet-4-6", thinkingMode: false },
+      new Logger("error"),
+      { request: vi.fn(async () => response(200, [
+        { type: "content_block_delta", delta: { type: "text_delta", text: "done" } },
+        { type: "message_delta", delta: { stop_reason: "end_turn" } },
+        { type: "message_stop" },
+      ].map((e) => `data: ${JSON.stringify(e)}\n\n`).join(""))) },
+    );
+    await expect(anthropic.call([{ role: "user", content: "x" }])).resolves.toBe("done");
+  });
+
+  it("types an Anthropic max_tokens stop_reason as truncation", async () => {
+    const anthropic = new LlmClient(
+      { ...DEFAULT_SETTINGS.llm, provider: "anthropic", baseUrl: "https://api.anthropic.com/v1", apiKey: "sk-full-secret", model: "claude-sonnet-4-6", thinkingMode: false },
+      new Logger("error"),
+      { request: vi.fn(async () => response(200, [
+        { type: "content_block_delta", delta: { type: "text_delta", text: "# partial" } },
+        { type: "message_delta", delta: { stop_reason: "max_tokens" } },
+        { type: "message_stop" },
+      ].map((e) => `data: ${JSON.stringify(e)}\n\n`).join(""))) },
+    );
+    await expect(anthropic.call([{ role: "user", content: "x" }])).rejects.toBeInstanceOf(LlmOutputTruncatedError);
+  });
+
+  it.each([408, 409, 425, 429])("treats HTTP %i as transient and retries it", async (status) => {
+    vi.useFakeTimers();
+    const request = vi.fn(async () => response(status, "try again"));
+
+    const call = client(request).call([{ role: "user", content: "x" }]).catch((e) => e);
+    await vi.runAllTimersAsync();
+
+    expect(await call).toBeInstanceOf(LlmTransientExhaustedError);
+    expect(request).toHaveBeenCalledTimes(3);
+    expect(isPermanentLlmError(Object.assign(new Error("x"), { status }))).toBe(false);
+  });
+
+  it.each([400, 401, 403, 404, 413, 422])("keeps HTTP %i permanent", (status) => {
+    expect(isPermanentLlmError(Object.assign(new Error("x"), { status }))).toBe(true);
   });
 
   it("does not treat generic client errors as unsupported options and sanitizes provider errors", async () => {

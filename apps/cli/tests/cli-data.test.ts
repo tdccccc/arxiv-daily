@@ -819,4 +819,109 @@ describe("CLI data portability", () => {
     ).rejects.toThrow(/unsafe archive path/);
     await expect(fs.readdir(vaultRoot)).resolves.toEqual([]);
   });
+
+  describe("export enforces the import limits", () => {
+    async function seed(vaultRoot: string, files: Record<string, string>) {
+      for (const [relative, body] of Object.entries(files)) {
+        const target = path.join(vaultRoot, "arxiv-daily", relative);
+        await fs.mkdir(path.dirname(target), { recursive: true });
+        await fs.writeFile(target, body);
+      }
+    }
+
+    it("fails before writing when the file count exceeds the import entry limit", async () => {
+      const vaultRoot = await tempDir("export-count-vault");
+      const out = path.join(await tempDir("export-count-out"), "data.zip");
+      await seed(vaultRoot, { "papers/a.md": "a", "papers/b.md": "b", "papers/c.md": "c" });
+      await expect(dataExport(config(vaultRoot), captureIo().io, out, { limits: { entryCount: 3 } }))
+        .rejects.toThrow(/more than 3 files/);
+      await expect(fs.stat(out)).rejects.toMatchObject({ code: "ENOENT" });
+      await expect(fs.readdir(path.dirname(out))).resolves.toEqual([]);
+    });
+
+    it("fails before writing when one file exceeds the per-entry byte limit", async () => {
+      const vaultRoot = await tempDir("export-size-vault");
+      const out = path.join(await tempDir("export-size-out"), "data.zip");
+      await seed(vaultRoot, { "papers/big.md": "x".repeat(100) });
+      await expect(dataExport(config(vaultRoot), captureIo().io, out, { limits: { entryUncompressedBytes: 50 } }))
+        .rejects.toThrow(/papers\/big\.md is 100 bytes/);
+      await expect(fs.stat(out)).rejects.toMatchObject({ code: "ENOENT" });
+    });
+
+    it("fails when the total content exceeds the import limit", async () => {
+      const vaultRoot = await tempDir("export-total-vault");
+      const out = path.join(await tempDir("export-total-out"), "data.zip");
+      await seed(vaultRoot, { "papers/a.md": "x".repeat(40), "papers/b.md": "x".repeat(40) });
+      await expect(dataExport(config(vaultRoot), captureIo().io, out, { limits: { totalUncompressedBytes: 60 } }))
+        .rejects.toThrow(/exceeds the 60-byte import limit/);
+    });
+
+    it("stores highly compressible files uncompressed so the archive still imports", async () => {
+      const vaultRoot = await tempDir("export-ratio-vault");
+      const out = path.join(await tempDir("export-ratio-out"), "data.zip");
+      await seed(vaultRoot, { "papers/padded.md": `# t\n${" ".repeat(400_000)}`, "papers/plain.md": "plain" });
+      await dataExport(config(vaultRoot), captureIo().io, out);
+
+      const restored = await tempDir("export-ratio-restored");
+      await expect(dataImport(config(restored), captureIo().io, out, { yes: true })).resolves.toBe(0);
+      await expect(fs.readFile(path.join(restored, "arxiv-daily/papers/padded.md"), "utf8"))
+        .resolves.toBe(`# t\n${" ".repeat(400_000)}`);
+    });
+
+    it("round-trips an archive just under the entry limit", async () => {
+      const vaultRoot = await tempDir("export-roundtrip-vault");
+      const out = path.join(await tempDir("export-roundtrip-out"), "data.zip");
+      await seed(vaultRoot, Object.fromEntries(Array.from({ length: 20 }, (_, index) => [`papers/p${index}.md`, `# ${index}`])));
+      await dataExport(config(vaultRoot), captureIo().io, out, { limits: { entryCount: 21 } });
+      const restored = await tempDir("export-roundtrip-restored");
+      await expect(dataImport(config(restored), captureIo().io, out, { yes: true, limits: { entryCount: 21 } })).resolves.toBe(0);
+    });
+  });
+
+  describe("export writes the archive atomically", () => {
+    it("keeps the previous archive when the write fails midway and leaves no temp file", async () => {
+      const vaultRoot = await tempDir("export-atomic-vault");
+      await fs.mkdir(path.join(vaultRoot, "arxiv-daily/papers"), { recursive: true });
+      await fs.writeFile(path.join(vaultRoot, "arxiv-daily/papers/a.md"), "a");
+      const outDir = await tempDir("export-atomic-out");
+      const out = path.join(outDir, "data.zip");
+      await fs.writeFile(out, "previous good backup");
+
+      await expect(dataExport(config(vaultRoot), captureIo().io, out, {
+        testHooks: { afterTempWritten: () => { throw new Error("disk exploded"); } },
+      })).rejects.toThrow(/disk exploded/);
+      await expect(fs.readFile(out, "utf8")).resolves.toBe("previous good backup");
+      await expect(fs.readdir(outDir)).resolves.toEqual(["data.zip"]);
+    });
+
+    it("replaces the previous archive on success", async () => {
+      const vaultRoot = await tempDir("export-replace-vault");
+      await fs.mkdir(path.join(vaultRoot, "arxiv-daily/papers"), { recursive: true });
+      await fs.writeFile(path.join(vaultRoot, "arxiv-daily/papers/a.md"), "a");
+      const outDir = await tempDir("export-replace-out");
+      const out = path.join(outDir, "data.zip");
+      await fs.writeFile(out, "old");
+      await dataExport(config(vaultRoot), captureIo().io, out);
+      const zip = await JSZip.loadAsync(await fs.readFile(out));
+      expect(Object.keys(zip.files)).toContain("papers/a.md");
+      await expect(fs.readdir(outDir)).resolves.toEqual(["data.zip"]);
+    });
+
+    it.each(["arxiv-daily/daily", "arxiv-daily/papers", "arxiv-daily/.index"])("refuses --out inside %s", async (inside) => {
+      const vaultRoot = await tempDir("export-inside-vault");
+      await fs.mkdir(path.join(vaultRoot, inside), { recursive: true });
+      const out = path.join(vaultRoot, inside, "nested", "backup.zip");
+      await expect(dataExport(config(vaultRoot), captureIo().io, out)).rejects.toThrow(/is inside the exported/);
+      await expect(fs.stat(path.join(vaultRoot, inside, "nested"))).rejects.toMatchObject({ code: "ENOENT" });
+    });
+
+    it("refuses --out reached through a symlink into an exported directory", async () => {
+      const vaultRoot = await tempDir("export-inside-link-vault");
+      await fs.mkdir(path.join(vaultRoot, "arxiv-daily/papers"), { recursive: true });
+      const linkParent = await tempDir("export-inside-link");
+      await fs.symlink(path.join(vaultRoot, "arxiv-daily/papers"), path.join(linkParent, "link"), "dir");
+      await expect(dataExport(config(vaultRoot), captureIo().io, path.join(linkParent, "link", "backup.zip")))
+        .rejects.toThrow(/is inside the exported/);
+    });
+  });
 });

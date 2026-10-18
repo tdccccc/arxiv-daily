@@ -87,10 +87,27 @@ export interface SummarizerDeps {
   signal?: AbortSignal;
   onMetrics?: MetricsObserver;
   onDailyPaperProgress?: (completed: number, total: number) => void;
+  /**
+   * Throw {@link DailySummaryIncompleteError} on the first paper whose model
+   * call ended as transport-exhausted instead of carrying a fallback into the
+   * report. Papers finished so far stay in the checkpoint store.
+   */
+  failOnTransportExhausted?: boolean;
   /** Lower-level renderer injected behind the production assembler preflight boundary. */
   dailyRenderer?: (input: DailySummaryAssemblyInput) => string;
   rescueDaily?: typeof rescueDailySummary;
   assembleEmergencyDaily?: (input: DailySummaryAssemblyInput) => string;
+}
+
+/** The model endpoint was unreachable for a paper; the run should be retried, not committed. */
+export class DailySummaryIncompleteError extends Error {
+  readonly paperId: string;
+
+  constructor(paperId: string) {
+    super(`daily summary incomplete: the model endpoint was unreachable for ${paperId}; finished papers are kept and the run will be retried`);
+    this.name = "DailySummaryIncompleteError";
+    this.paperId = paperId;
+  }
 }
 
 export interface SummarizeDailyResult {
@@ -179,6 +196,16 @@ export async function summarizeDaily(
           `summarizeDaily: checkpoint persisted date=${dateStr} paper=${paper.id}`,
         );
       }
+    }
+    if (
+      result.kind === "fallback" &&
+      result.reasonCode === "transport-exhausted" &&
+      deps.failOnTransportExhausted
+    ) {
+      deps.logger.warn(
+        `summarizeDaily: model endpoint unreachable for ${paper.id}; keeping ${slots.length} finished papers for a retry`,
+      );
+      throw new DailySummaryIncompleteError(paper.id);
     }
     if (result.kind === "fallback") {
       fallbackCount += 1;

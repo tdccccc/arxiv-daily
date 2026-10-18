@@ -1,7 +1,7 @@
 import { retry } from "../utils/retry";
 import type { Logger } from "../services/logger";
 import type { LlmSettings } from "../settings/types";
-import type { HttpClient } from "../core/adapters";
+import { isHttpTransportError, type HttpClient } from "../core/adapters";
 import { isCancellationError, throwIfCancelled } from "../services/cancellation";
 import { redactError, redactText } from "../utils/redaction";
 import { setTimer, clearTimer } from "../utils/timers";
@@ -13,7 +13,16 @@ import {
   type TokenUsage,
 } from "../metrics/generation";
 
+/**
+ * Total wall-clock bound for one request. HttpClient returns only after the
+ * whole body arrived, so this is the only real network timeout an LLM call has.
+ */
 const LLM_TIMEOUT_MS = 300_000; // 5 minutes
+/**
+ * Gap allowed between chunks while iterating an already-received response.
+ * Hosts do not stream, so this is not a network idle timeout; it only guards
+ * consumers of {@link collectStreamWithIdleTimeout} that hand in a live stream.
+ */
 export const LLM_STREAM_IDLE_TIMEOUT_MS = 120_000;
 export const LLM_TEMPERATURE = 0.1;
 export const LLM_MAX_OUTPUT_CODE_UNITS = 10_000_000;
@@ -29,6 +38,29 @@ export class LlmOutputLimitExceededError extends Error {
     super("LLM output exceeded configured limit");
     this.name = "LlmOutputLimitExceededError";
   }
+}
+
+export const LLM_OUTPUT_TRUNCATED_ERROR_CODE = "ARXIV_LLM_OUTPUT_TRUNCATED" as const;
+
+/**
+ * The provider stopped because it hit its completion-token limit
+ * (`finish_reason: length`, Anthropic `stop_reason: max_tokens`). The text it
+ * returned is cut off, so it must never be treated as a finished answer.
+ */
+export class LlmOutputTruncatedError extends Error {
+  readonly code = LLM_OUTPUT_TRUNCATED_ERROR_CODE;
+
+  constructor() {
+    super("LLM output was truncated at the completion-token limit");
+    this.name = "LlmOutputTruncatedError";
+  }
+}
+
+export function isLlmOutputTruncatedError(error: unknown): error is LlmOutputTruncatedError {
+  if (error instanceof LlmOutputTruncatedError) return true;
+  return isErrorLike(error) &&
+    error.name === "LlmOutputTruncatedError" &&
+    error.code === LLM_OUTPUT_TRUNCATED_ERROR_CODE;
 }
 
 export class StreamIdleTimeoutError extends Error {
@@ -90,6 +122,8 @@ export interface CallOptions {
 interface StreamResult {
   content: string;
   usage?: TokenUsage;
+  /** True when the provider reported that it stopped at the token limit. */
+  truncated?: boolean;
 }
 
 interface LlmStatusError extends Error {
@@ -190,7 +224,7 @@ export class LlmClient {
     private logger: Logger,
     private http: HttpClient,
   ) {
-    this.logger.setSensitiveValues?.([settings.apiKey]);
+    this.logger.addSensitiveValues?.([settings.apiKey]);
   }
 
   async testConnection(): Promise<{ success: boolean; error?: string }> {
@@ -269,6 +303,19 @@ export class LlmClient {
     let attempts = 0;
     let finalUsage: TokenUsage | undefined;
     let hadRetriedGenerationFailure = false;
+    // One blind re-send is allowed after an ambiguous mid-request network
+    // failure (e.g. ECONNRESET): bounded duplicate-billing risk for a flaky link.
+    let ambiguousResends = 0;
+    const shouldResendAfterTransportFailure = (err: unknown): boolean => {
+      if (!isHttpTransportError(err)) return true;
+      // Provably never sent (connect/TLS phase): always safe to repeat.
+      if (err.retryableAttempt) return true;
+      // A timeout means the request may still be generating at the provider.
+      if (err.kind === "timeout") return false;
+      if (ambiguousResends >= 1) return false;
+      ambiguousResends += 1;
+      return true;
+    };
     try {
       try {
         return await retry(
@@ -289,9 +336,10 @@ export class LlmClient {
               );
               finalUsage = result.usage;
               throwIfCancelled(opts.signal);
+              if (result.truncated) throw new LlmOutputTruncatedError();
               return result.content;
             } catch (error) {
-              if (isCancellationError(error) || error instanceof LlmOutputLimitExceededError) throw error;
+              if (isCancellationError(error) || isDeterministicOutputFailure(error)) throw error;
               if (!isUnsupportedStreamOptionsError(error)) throw this.safeError(error);
               attempts += 1;
               const fallback = { ...params };
@@ -301,10 +349,11 @@ export class LlmClient {
                   fallback, abort.controller, opts.signal, limits.maxOutputCodeUnits,
                 );
                 finalUsage = result.usage;
+                if (result.truncated) throw new LlmOutputTruncatedError();
                 return result.content;
               } catch (fallbackError) {
                 if (isCancellationError(fallbackError)
-                  || fallbackError instanceof LlmOutputLimitExceededError) throw fallbackError;
+                  || isDeterministicOutputFailure(fallbackError)) throw fallbackError;
                 throw this.safeError(fallbackError);
               }
             } finally {
@@ -316,8 +365,9 @@ export class LlmClient {
             baseDelayMs: 5000,
             signal: opts.signal,
             shouldRetry: (err) => !isCancellationError(err)
-              && !(err instanceof LlmOutputLimitExceededError)
-              && !isPermanentLlmError(err),
+              && !isDeterministicOutputFailure(err)
+              && !isPermanentLlmError(err)
+              && shouldResendAfterTransportFailure(err),
             onRetry: (err, attempt, wait) => {
               hadRetriedGenerationFailure = true;
               this.logger.warn(
@@ -328,7 +378,7 @@ export class LlmClient {
         );
       } catch (error) {
         if (isCancellationError(error)
-          || error instanceof LlmOutputLimitExceededError
+          || isDeterministicOutputFailure(error)
           || isPermanentLlmError(error)) throw error;
         throw new LlmTransientExhaustedError(this.safeError(error));
       }
@@ -352,13 +402,19 @@ export class LlmClient {
     return JSON.parse(res);
   }
 
+  /**
+   * Sends a `stream: true` request. The HTTP client buffers the whole body, so
+   * the response is parsed as a complete SSE document afterwards. `controller`
+   * merges the caller's signal with this attempt's own abort, and its signal is
+   * what the request is given.
+   */
   private async postChatStream(
     body: Record<string, unknown>,
     controller: AbortController,
     signal?: AbortSignal,
     maxOutputCodeUnits?: number,
   ): Promise<StreamResult> {
-    const raw = await this.requestChat({ ...body, stream: true }, true, signal);
+    const raw = await this.requestChat({ ...body, stream: true }, true, controller.signal);
     return collectStreamResultWithIdleTimeout(
       usesNativeAnthropic(this.settings) ? parseAnthropicSseText(raw) : parseSseText(raw),
       controller,
@@ -414,9 +470,29 @@ export class LlmClient {
   }
 
   private safeError(error: unknown): Error {
-    return redactError(error, { secrets: [this.settings.apiKey] });
+    const safe = redactError(error, { secrets: [this.settings.apiKey] });
+    if (isHttpTransportError(error)) {
+      // Keep the structural transport markers the retry policy keys off.
+      Object.assign(safe, { kind: error.kind, retryableAttempt: error.retryableAttempt });
+    }
+    return safe;
   }
 }
+
+/** Failures a repeat of the same request would reproduce; never retried or re-typed. */
+function isDeterministicOutputFailure(error: unknown): boolean {
+  return error instanceof LlmOutputLimitExceededError || isLlmOutputTruncatedError(error);
+}
+
+/**
+ * Default completion budget when the caller sets none. Anthropic requires an
+ * explicit `max_tokens` and counts thinking tokens against it, so 4096 cut
+ * long answers off. Without thinking, 8192 is the largest value every Claude
+ * model accepts; with thinking (only newer models) 32k is within each model's
+ * output cap. Other providers keep their own default.
+ */
+const ANTHROPIC_DEFAULT_MAX_TOKENS = 8_192;
+const ANTHROPIC_THINKING_MAX_TOKENS = 32_000;
 
 function generationParameters(
   settings: LlmSettings,
@@ -427,7 +503,9 @@ function generationParameters(
   if (maxCompletionTokens !== undefined) {
     params[settings.provider === "openai" ? "max_completion_tokens" : "max_tokens"] = maxCompletionTokens;
   } else if (settings.provider === "anthropic") {
-    params.max_tokens = 4096;
+    params.max_tokens = settings.thinkingMode
+      ? ANTHROPIC_THINKING_MAX_TOKENS
+      : ANTHROPIC_DEFAULT_MAX_TOKENS;
   }
   const hasThinkingToggle = ["anthropic", "deepseek", "zhipu"].includes(settings.provider);
   if (!settings.thinkingMode) {
@@ -443,7 +521,8 @@ function generationParameters(
     }
     const budgets: Record<string, number> = { low: 2048, medium: 8192, high: 16384 };
     const requested = budgets[settings.reasoningEffort] ?? 8192;
-    const cap = maxCompletionTokens ?? requested + 4096;
+    const cap = maxCompletionTokens
+      ?? Math.min(requested + 16_000, ANTHROPIC_THINKING_MAX_TOKENS);
     if (cap <= 1024) {
       throw new TypeError("Anthropic thinking requires maxCompletionTokens greater than 1024");
     }
@@ -464,13 +543,16 @@ export function isUnsupportedStreamOptionsError(err: unknown): boolean {
     /unsupported|unknown|unrecognized|not (?:allowed|supported)|extra fields?|invalid/i.test(message);
 }
 
+/** Client-error statuses a later attempt can legitimately succeed on. */
+const TRANSIENT_CLIENT_STATUSES: ReadonlySet<number> = new Set([408, 409, 425, 429]);
+
 export function isPermanentLlmError(err: unknown): boolean {
   const status = (err as LlmStatusError | undefined)?.status;
   return (
     typeof status === "number" &&
     status >= 400 &&
     status < 500 &&
-    status !== 429
+    !TRANSIENT_CLIENT_STATUSES.has(status)
   );
 }
 
@@ -500,7 +582,7 @@ async function* parseAnthropicSseText(raw: string): AsyncIterable<unknown> {
       type?: string;
       message?: { usage?: Record<string, number> };
       usage?: Record<string, number>;
-      delta?: { type?: string; text?: string };
+      delta?: { type?: string; text?: string; stop_reason?: string };
       content_block?: { type?: string; text?: string };
       error?: { type?: string; message?: string };
     };
@@ -521,6 +603,10 @@ async function* parseAnthropicSseText(raw: string): AsyncIterable<unknown> {
         ...usage,
         input_tokens: (usage.input_tokens ?? 0) + (usage.cache_read_input_tokens ?? 0) + (usage.cache_creation_input_tokens ?? 0),
       } };
+    }
+    const stopReason = event.delta?.stop_reason;
+    if (event.type === "message_delta" && typeof stopReason === "string") {
+      yield { choices: [{ delta: {}, finish_reason: stopReason === "max_tokens" || stopReason === "model_context_window_exceeded" ? "length" : "stop" }] };
     }
     if (event.type === "message_stop") return;
   }
@@ -570,6 +656,7 @@ export async function collectStreamResultWithIdleTimeout(
   const chunks: string[] = [];
   let outputCodeUnits = 0;
   let usage: TokenUsage | undefined;
+  let truncated = false;
   const iterator = stream[Symbol.asyncIterator]();
   while (true) {
     throwIfCancelled(signal);
@@ -585,10 +672,12 @@ export async function collectStreamResultWithIdleTimeout(
       }
       chunks.push(delta);
     }
+    const finishReason = streamFinishReason(next.value);
+    if (finishReason === "length" || finishReason === "max_tokens") truncated = true;
     usage = parseTokenUsage(next.value) ?? usage;
   }
   throwIfCancelled(signal);
-  return { content: chunks.join(""), usage };
+  return { content: chunks.join(""), usage, ...(truncated ? { truncated } : {}) };
 }
 
 function nextStreamChunk(
@@ -636,6 +725,12 @@ function nextStreamChunk(
       },
     );
   });
+}
+
+function streamFinishReason(chunk: unknown): string | undefined {
+  const choices = (chunk as { choices?: Array<{ finish_reason?: unknown }> }).choices;
+  const reason = choices?.[0]?.finish_reason;
+  return typeof reason === "string" ? reason : undefined;
 }
 
 function streamDeltaContent(chunk: unknown): string | undefined {

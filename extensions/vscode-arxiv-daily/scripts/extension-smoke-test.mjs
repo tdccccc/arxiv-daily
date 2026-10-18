@@ -14,27 +14,54 @@ assert(panel.webview.html.includes("arXiv Daily"));
 assert(panel.webview.html.includes("Search"));
 assert(panel.webview.html.includes("Photometric Redshift Calibration"));
 
+const htmlAtOpen = panel.webview.html;
+const indexPath = "/workspace/vault/arxiv-daily/.index/papers.json";
+const readIndex = async () =>
+  JSON.parse(new TextDecoder().decode(await vscodeApi.fs.readFile(uri(indexPath))));
+
+// The page posts the map key of the row ("arxiv:<id>" in schema 5).
 await panel.webview.receive({
   type: "setStatus",
+  key: "arxiv:2606.12345",
   arxivId: "2606.12345",
   status: "reading",
 });
-const savedIndex = JSON.parse(
-  new TextDecoder().decode(
-    await vscodeApi.fs.readFile(uri("/workspace/vault/arxiv-daily/.index/papers.json")),
-  ),
+let savedIndex = await readIndex();
+assert.equal(savedIndex.schemaVersion, 5);
+assert.equal(savedIndex.papers["arxiv:2606.12345"].status, "reading");
+assert.equal(savedIndex.papers["arxiv:2606.12345"].updated, "2026-06-13");
+assert(savedIndex.updatedAt !== "2026-06-13T00:00:00.000Z", "status update should refresh index updatedAt");
+// The running page is updated by message, so its tab/search/filter state survives.
+assert.equal(panel.webview.html, htmlAtOpen, "html must not be reassigned after the first render");
+assert.equal(panel.webview.posted.length, 1);
+assert.equal(panel.webview.posted[0].type, "state");
+assert.equal(panel.webview.posted[0].state.allRows[0].entry.status, "reading");
+// No temporary file is left behind by the atomic replace.
+assert.deepEqual(
+  (await vscodeApi.fs.readDirectory(uri("/workspace/vault/arxiv-daily/.index"))).map(([name]) => name),
+  ["papers.json"],
 );
-assert.equal(savedIndex.papers["2606.12345"].status, "reading");
-assert.equal(savedIndex.papers["2606.12345"].updated, "2026-06-13");
-assert(savedIndex.updatedAt, "status update should refresh index updatedAt");
+
+// Older pages (or other callers) may only send the bare arXiv id.
+await panel.webview.receive({ type: "setStatus", arxivId: "2606.12345", status: "saved" });
+assert.equal((await readIndex()).papers["arxiv:2606.12345"].status, "saved");
 
 await panel.webview.receive({
   type: "openResource",
+  key: "arxiv:2606.12345",
   arxivId: "2606.12345",
   resource: "note",
 });
 assert.deepEqual(vscodeApi.commands.opened.map((item) => item.path), [
   "/workspace/vault/arxiv-daily/papers/2606.12345.md",
+]);
+await panel.webview.receive({
+  type: "openResource",
+  key: "arxiv:2606.12345",
+  resource: "arxiv",
+});
+assert.deepEqual(vscodeApi.env.openedExternal.map((item) => item.path), [
+  "https://arxiv.org/abs/2606.12345",
 ]);
 
 const runPromise = runForToday(vscodeApi);
@@ -58,14 +85,18 @@ function seedVault(fs) {
   fs.addDirectory("/workspace/vault/arxiv-daily/.index");
   fs.addDirectory("/workspace/vault/arxiv-daily/daily");
   fs.addDirectory("/workspace/vault/arxiv-daily/papers");
+  // Shape written by core's PaperIndexStore (schema 5): keyed "arxiv:<id>".
   fs.addFile(
     "/workspace/vault/arxiv-daily/.index/papers.json",
     JSON.stringify(
       {
-        schemaVersion: 2,
+        schemaVersion: 5,
         updatedAt: "2026-06-13T00:00:00.000Z",
         papers: {
-          "2606.12345": {
+          "arxiv:2606.12345": {
+            paperKey: "arxiv:2606.12345",
+            source: "arxiv",
+            externalId: "2606.12345",
             arxivId: "2606.12345",
             title: "Photometric Redshift Calibration",
             authors: ["Jane Doe"],
@@ -83,6 +114,7 @@ function seedVault(fs) {
             priority: "normal",
             seenDates: ["2026-06-13"],
             dailyReports: ["arxiv-daily/daily/2026-06-13.md"],
+            discoveryProvenanceByReport: {},
             paperPath: "arxiv-daily/papers/2606.12345.md",
             arxivUrl: "https://arxiv.org/abs/2606.12345",
             pdfUrl: "https://arxiv.org/pdf/2606.12345",
@@ -258,6 +290,11 @@ function createMockPanel() {
   return {
     webview: {
       html: "",
+      posted: [],
+      async postMessage(message) {
+        this.posted.push(message);
+        return true;
+      },
       onDidReceiveMessage(callback) {
         handler = callback;
       },

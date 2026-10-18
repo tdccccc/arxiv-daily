@@ -69,15 +69,47 @@ export interface FilterClassification {
 }
 
 export interface DailyFilterCheckpointPort {
+  /** `batch` is 0 for an ordinary one-request day; later batches only exist on very large days. */
   lookupReusable(
     reportDate: string,
     prepared: PreparedDailyFilterCheckpoint,
+    batch?: number,
   ): Promise<FilterRecord[] | null>;
   save(
     reportDate: string,
     prepared: PreparedDailyFilterCheckpoint,
     result: FilterRecord[],
+    batch?: number,
   ): Promise<unknown>;
+}
+
+/**
+ * Candidate text (ids, titles, abstracts) one filter request may carry. Sized
+ * so an ordinary day, even a busy single category, stays one request while a
+ * day that would not fit a ~128k-token context is split.
+ */
+export const FILTER_BATCH_CHAR_BUDGET = 400_000;
+
+/** Split candidates, in order, into batches whose text stays within `budget` (never empty, never reordered). */
+export function splitPapersForFilter(
+  papers: readonly PaperMeta[],
+  budget = FILTER_BATCH_CHAR_BUDGET,
+): PaperMeta[][] {
+  const batches: PaperMeta[][] = [];
+  let current: PaperMeta[] = [];
+  let size = 0;
+  for (const paper of papers) {
+    const cost = paper.id.length + paper.title.length + paper.abstract.length + 32;
+    if (current.length > 0 && size + cost > budget) {
+      batches.push(current);
+      current = [];
+      size = 0;
+    }
+    current.push(paper);
+    size += cost;
+  }
+  if (current.length > 0) batches.push(current);
+  return batches;
 }
 
 export interface PaperFilterDeps {
@@ -148,7 +180,7 @@ export async function filterPapers(
   papers: PaperMeta[],
   deps: PaperFilterDeps,
 ): Promise<FilteredPaper[]> {
-  const { llm, logger, arxivSettings } = deps;
+  const { logger, arxivSettings } = deps;
   throwIfCancelled(deps.signal);
   if (papers.length === 0) return [];
 
@@ -171,89 +203,20 @@ export async function filterPapers(
     return [];
   }
 
-  let prepared: PreparedDailyFilterCheckpoint | undefined;
-  try {
-    prepared = deps.checkpointStore
-      ? prepareDailyFilterCheckpoint({
-          papers,
-          arxivSettings,
-          llm: deps.llmSettings,
-        })
-      : undefined;
-  } catch (error) {
-    throw new PaperFilterCheckpointError(
-      `prepare failed for ${deps.reportDate}: ${(error as Error).message}`,
-      error,
-    );
-  }
-  const request = prepared?.request ?? buildPaperFilterRequest(papers, arxivSettings);
-  let validatedRecords: FilterRecord[];
-  let reusable: FilterRecord[] | null | undefined;
-  try {
-    reusable = await deps.checkpointStore?.lookupReusable(
-      deps.reportDate,
-      prepared!,
-    );
-  } catch (error) {
-    if (isCancellationError(error)) throw error;
-    throwIfCancelled(deps.signal);
-    throw new PaperFilterCheckpointError(
-      `lookup failed for ${deps.reportDate}: ${(error as Error).message}`,
-      error,
-    );
-  }
-  throwIfCancelled(deps.signal);
-  if (reusable) {
-    validatedRecords = reusable;
+  const batches = splitPapersForFilter(papers);
+  if (batches.length > 1) {
     logger.info(
-      `paper-filter: checkpoint hit date=${deps.reportDate} count=${validatedRecords.length}`,
+      `paper-filter: ${papers.length} papers exceed one request, classifying in ${batches.length} batches`,
     );
-  } else {
-    if (deps.checkpointStore) {
-      logger.info(
-        `paper-filter: checkpoint miss date=${deps.reportDate} count=${papers.length}`,
-      );
-    }
-    logger.info(
-      `paper-filter: sending ${papers.length} papers to LLM for classification`,
-    );
-
-    let raw: string;
-    try {
-      raw = await llm.call(request.messages, {
-        ...request.options,
-        signal: deps.signal,
-        onMetrics: deps.onMetrics,
-      });
-    } catch (e) {
-      if (isCancellationError(e)) throw e;
-      logger.error("paper-filter: LLM call failed", e);
-      throw e;
-    }
-    throwIfCancelled(deps.signal);
-
-    validatedRecords = decodePaperFilterResponse(raw, request);
-    try {
-      await deps.checkpointStore?.save(
-        deps.reportDate,
-        prepared!,
-        validatedRecords,
-      );
-    } catch (error) {
-      if (isCancellationError(error)) throw error;
-      throwIfCancelled(deps.signal);
-      throw new PaperFilterCheckpointError(
-        `save failed for ${deps.reportDate}: ${(error as Error).message}`,
-        error,
-      );
-    }
-    throwIfCancelled(deps.signal);
-    if (deps.checkpointStore) {
-      logger.info(
-        `paper-filter: checkpoint persisted date=${deps.reportDate} count=${validatedRecords.length}`,
-      );
-    }
   }
+  const classified: BatchClassification[] = [];
+  for (const [index, batch] of batches.entries()) {
+    classified.push(await classifyBatch(batch, index, batches.length, deps));
+  }
+  const first = classified[0]!;
+  const request = first.request;
+  const prepared = first.prepared;
+  const validatedRecords = classified.flatMap((entry) => entry.records);
 
   reportClassification(deps, request.options.temperature, prepared, request.identity.directions, validatedRecords);
 
@@ -289,6 +252,107 @@ export async function filterPapers(
   const skipped = papers.length - out.length;
   logger.info(`paper-filter: ${breakdown}${skipped > 0 ? `, skipped=${skipped}` : ""}`);
   return out;
+}
+
+interface BatchClassification {
+  request: PaperFilterRequest;
+  prepared: PreparedDailyFilterCheckpoint | undefined;
+  records: FilterRecord[];
+}
+
+/** One validated classification for `batch`: reused from its checkpoint or generated and persisted. */
+async function classifyBatch(
+  batch: PaperMeta[],
+  index: number,
+  batchCount: number,
+  deps: PaperFilterDeps,
+): Promise<BatchClassification> {
+  const { llm, logger, arxivSettings } = deps;
+  const label = batchCount > 1 ? ` batch=${index + 1}/${batchCount}` : "";
+  let prepared: PreparedDailyFilterCheckpoint | undefined;
+  try {
+    prepared = deps.checkpointStore
+      ? prepareDailyFilterCheckpoint({
+          papers: batch,
+          arxivSettings,
+          llm: deps.llmSettings,
+        })
+      : undefined;
+  } catch (error) {
+    throw new PaperFilterCheckpointError(
+      `prepare failed for ${deps.reportDate}: ${(error as Error).message}`,
+      error,
+    );
+  }
+  const request = prepared?.request ?? buildPaperFilterRequest(batch, arxivSettings);
+  let reusable: FilterRecord[] | null | undefined;
+  try {
+    reusable = await deps.checkpointStore?.lookupReusable(
+      deps.reportDate,
+      prepared!,
+      ...(index > 0 ? [index] : []),
+    );
+  } catch (error) {
+    if (isCancellationError(error)) throw error;
+    throwIfCancelled(deps.signal);
+    throw new PaperFilterCheckpointError(
+      `lookup failed for ${deps.reportDate}: ${(error as Error).message}`,
+      error,
+    );
+  }
+  throwIfCancelled(deps.signal);
+  if (reusable) {
+    logger.info(
+      `paper-filter: checkpoint hit date=${deps.reportDate} count=${reusable.length}${label}`,
+    );
+    return { request, prepared, records: reusable };
+  }
+  if (deps.checkpointStore) {
+    logger.info(
+      `paper-filter: checkpoint miss date=${deps.reportDate} count=${batch.length}${label}`,
+    );
+  }
+  logger.info(
+    `paper-filter: sending ${batch.length} papers to LLM for classification${label}`,
+  );
+
+  let raw: string;
+  try {
+    raw = await llm.call(request.messages, {
+      ...request.options,
+      signal: deps.signal,
+      onMetrics: deps.onMetrics,
+    });
+  } catch (e) {
+    if (isCancellationError(e)) throw e;
+    logger.error("paper-filter: LLM call failed", e);
+    throw e;
+  }
+  throwIfCancelled(deps.signal);
+
+  const records = decodePaperFilterResponse(raw, request);
+  try {
+    await deps.checkpointStore?.save(
+      deps.reportDate,
+      prepared!,
+      records,
+      ...(index > 0 ? [index] : []),
+    );
+  } catch (error) {
+    if (isCancellationError(error)) throw error;
+    throwIfCancelled(deps.signal);
+    throw new PaperFilterCheckpointError(
+      `save failed for ${deps.reportDate}: ${(error as Error).message}`,
+      error,
+    );
+  }
+  throwIfCancelled(deps.signal);
+  if (deps.checkpointStore) {
+    logger.info(
+      `paper-filter: checkpoint persisted date=${deps.reportDate} count=${records.length}${label}`,
+    );
+  }
+  return { request, prepared, records };
 }
 
 function reportClassification(

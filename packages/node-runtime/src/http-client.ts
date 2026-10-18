@@ -62,10 +62,40 @@ export class NodeHttpClient implements HttpClient {
       throw new HttpTransportError(
         "network",
         `HTTP network failure: ${req.url}`,
-        { cause: error, retryableAttempt: false },
+        // Only a failure that provably happened before any request bytes were
+        // sent may be repeated blindly; anything else (reset, hang up) might
+        // have reached the server.
+        { cause: error, retryableAttempt: failedBeforeRequestSent(error) },
       );
     }
   }
+}
+
+const PRE_SEND_ERROR_CODES: ReadonlySet<string> = new Set([
+  // Name resolution and connection establishment.
+  "ENOTFOUND", "EAI_AGAIN", "ECONNREFUSED", "EHOSTUNREACH", "ENETUNREACH", "ENETDOWN",
+  "UND_ERR_CONNECT_TIMEOUT",
+  // TLS handshake / certificate failures (the request is sent after the handshake).
+  "EPROTO", "CERT_HAS_EXPIRED", "DEPTH_ZERO_SELF_SIGNED_CERT", "SELF_SIGNED_CERT_IN_CHAIN",
+  "UNABLE_TO_VERIFY_LEAF_SIGNATURE", "UNABLE_TO_GET_ISSUER_CERT_LOCALLY",
+]);
+
+/** True when `error` (or a cause in its chain) is a connect-phase failure: nothing was sent. */
+export function failedBeforeRequestSent(error: unknown): boolean {
+  const seen = new Set<unknown>();
+  const pending: unknown[] = [error];
+  while (pending.length > 0 && seen.size < 16) {
+    const current = pending.pop();
+    if (!current || typeof current !== "object" || seen.has(current)) continue;
+    seen.add(current);
+    const { code, cause, errors } = current as { code?: unknown; cause?: unknown; errors?: unknown };
+    if (typeof code === "string" && (PRE_SEND_ERROR_CODES.has(code) || /^ERR_(?:TLS|SSL)_/.test(code))) {
+      return true;
+    }
+    pending.push(cause);
+    if (Array.isArray(errors)) pending.push(...errors);
+  }
+  return false;
 }
 
 function settleRequest(

@@ -24,6 +24,7 @@ export type LibrarySearchState =
   | { kind: "loading" }
   | { kind: "matches"; matches: readonly LibrarySearchMatch[] }
   | { kind: "empty" }
+  | { kind: "hint"; message: string }
   | { kind: "error"; message: string };
 
 export function renderLibrarySearchBlock(
@@ -37,6 +38,13 @@ export function renderLibrarySearchBlock(
     container.createDiv({
       cls: "arxiv-daily-dashboard__library-status",
       text: "Searching your library…",
+    });
+    return;
+  }
+  if (state.kind === "hint") {
+    container.createDiv({
+      cls: "arxiv-daily-dashboard__library-status",
+      text: state.message,
     });
     return;
   }

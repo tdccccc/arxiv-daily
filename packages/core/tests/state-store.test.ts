@@ -867,6 +867,75 @@ describe("StateStore", () => {
     expect(store.get("2026-06-13").papersWritten).toBe(2);
   });
 
+  it("keeps backup entries when a mutation follows a crash that left only the backup", async () => {
+    const { files, storage } = makeStorage({
+      "arxiv-daily/.index/run-state.json.bak": JSON.stringify({
+        schemaVersion: 1,
+        runState: {
+          "2026-06-12": { status: "failed_permanent", lastAttempt: 1, attempts: 3, failureAttempts: 3, error: "x" },
+          "2026-06-13": { status: "completed", lastAttempt: 1, attempts: 1, papersWritten: 2 },
+        },
+      }),
+    });
+    const store = createStorageStateStore(storage, DEFAULT_SETTINGS.output);
+    await store.load();
+
+    await store.setRunning("2026-06-14");
+
+    const saved = JSON.parse(files["arxiv-daily/.index/run-state.json"]);
+    expect(Object.keys(saved.runState).sort()).toEqual(["2026-06-12", "2026-06-13", "2026-06-14"]);
+    expect(saved.runState["2026-06-12"].status).toBe("failed_permanent");
+    expect(store.get("2026-06-13").papersWritten).toBe(2);
+  });
+
+  it("rejects a mutation when the primary is missing and the backup is not strictly valid", async () => {
+    const { files, storage } = makeStorage({
+      "arxiv-daily/.index/run-state.json.bak": "{not-json",
+    });
+    const store = createStorageStateStore(storage, DEFAULT_SETTINGS.output, { warn: vi.fn() });
+
+    await expect(store.setRunning("2026-06-14")).rejects.toThrow();
+
+    expect(files["arxiv-daily/.index/run-state.json"]).toBeUndefined();
+    expect(files["arxiv-daily/.index/run-state.json.bak"]).toBe("{not-json");
+  });
+
+  it("survives a crash after the first rename of the atomic write", async () => {
+    const { files, storage } = makeStorage({
+      "arxiv-daily/.index/run-state.json": JSON.stringify({
+        schemaVersion: 1,
+        runState: { old: { status: "completed", lastAttempt: 1, attempts: 1 } },
+      }),
+    });
+    let crash = true;
+    const crashing = {
+      ...storage,
+      async rename(from: string, to: string) {
+        if (crash && to === "arxiv-daily/.index/run-state.json") {
+          // Simulate a process death: the primary was already moved to .bak.
+          throw new Error("process died");
+        }
+        return storage.rename(from, to);
+      },
+    } satisfies StorageAdapter;
+    const first = createStorageStateStore(crashing, DEFAULT_SETTINGS.output, { warn: vi.fn() });
+    await expect(first.setRunning("new")).rejects.toThrow();
+    // The in-process rollback is skipped by a real crash: remove the primary again.
+    delete files["arxiv-daily/.index/run-state.json"];
+    files["arxiv-daily/.index/run-state.json.bak"] = JSON.stringify({
+      schemaVersion: 1,
+      runState: { old: { status: "completed", lastAttempt: 1, attempts: 1 } },
+    });
+    crash = false;
+
+    const restarted = createStorageStateStore(storage, DEFAULT_SETTINGS.output, { warn: vi.fn() });
+    await restarted.load();
+    await restarted.setRunning("new");
+
+    expect(restarted.get("old").status).toBe("completed");
+    expect(restarted.get("new").status).toBe("running");
+  });
+
   it("ignores schema-invalid run-state entries with wrong field types", async () => {
     const { storage } = makeStorage({
       "arxiv-daily/.index/run-state.json": JSON.stringify({

@@ -82,6 +82,18 @@ describe("CLI runtime", () => {
     expect(run).toHaveBeenCalledOnce();
   });
 
+  it("forwards the scheduler's retry-fallback option to the pipeline", async () => {
+    const root = await makeTempDir();
+    const config = await loadCliConfig({
+      configPath: join(root, "config.toml"),
+      readText: async () => tomlForVault(root, join(root, ".cache")),
+    });
+    const runtime = await buildCliRuntime(config, { host: buildNodeHostAdapters({ rootDir: root }) });
+    const run = vi.spyOn(runtime.pipeline, "runForDate").mockResolvedValue({ kind: "completed", papersWritten: 1 });
+    await runtime.scheduler.runForDateNow("2026-09-28");
+    expect(run).toHaveBeenCalledWith("2026-09-28", expect.anything(), { retryTransportFallbacks: true });
+  });
+
   it("preserves another host's temporary Markdown during startup and cleans it after release", async () => {
     const root = await makeTempDir();
     const config = await loadCliConfig({

@@ -36,16 +36,37 @@ type OutputLayout = {
   exporterVersion?: string;
 };
 
+export interface DataExportTestHooks {
+  /** Runs after the archive is fully written to its temp file, before it replaces the target. */
+  afterTempWritten?: () => void | Promise<void>;
+}
+
 export async function dataExport(
   config: CliRuntimeConfig,
   io: CliIo,
   outPath: string,
+  opts: { limits?: Partial<DataImportLimits>; testHooks?: DataExportTestHooks } = {},
 ): Promise<number> {
-  const zip = new JSZip();
-  const files: Array<{ logical: string; abs: string; mtimeMs: number }> = [];
+  // An archive this command writes must satisfy the limits `data import` enforces,
+  // otherwise the backup is only discovered to be unusable when it is needed.
+  const limits = { ...DATA_IMPORT_LIMITS, ...opts.limits };
+  const files: Array<{ logical: string; abs: string; mtimeMs: number; size: number }> = [];
   const rootMap = dataRoots(config);
   const vaultReal = await validateVaultRoot(config.vaultRoot);
+  const resolvedOut = path.resolve(outPath);
+  const realOut = await realpathAllowingMissing(resolvedOut);
+  for (const logical of LOGICAL) {
+    const absRoot = rootMap[logical];
+    const realRoot = await realpathAllowingMissing(absRoot);
+    if (isInside(absRoot, resolvedOut) || isInside(realRoot, realOut)) {
+      throw new Error(
+        `--out ${outPath} is inside the exported ${logical} directory (${absRoot}); choose a location outside daily, papers and .index`,
+      );
+    }
+  }
 
+  // Pass 1: decide from file metadata alone, before reading any content.
+  let plannedBytes = 0;
   for (const logical of LOGICAL) {
     const absRoot = rootMap[logical];
     if (!(await pathExists(absRoot))) continue;
@@ -54,36 +75,140 @@ export async function dataExport(
       await assertSafePath(config.vaultRoot, vaultReal, abs, true);
       const stat = await fs.stat(abs);
       const logicalPath = `${logical}/${rel.split(path.sep).join("/")}`;
-      files.push({ logical: logicalPath, abs, mtimeMs: stat.mtimeMs });
-      zip.file(logicalPath, await fs.readFile(abs), {
-        date: new Date(stat.mtimeMs),
-      });
+      if (stat.size > limits.entryUncompressedBytes) {
+        throw new Error(
+          `export would not be importable: ${logicalPath} is ${stat.size} bytes, over the ${limits.entryUncompressedBytes}-byte per-file import limit; move it out of the vault output folders`,
+        );
+      }
+      plannedBytes += stat.size;
+      files.push({ logical: logicalPath, abs, mtimeMs: stat.mtimeMs, size: stat.size });
+      // The manifest is one more entry.
+      if (files.length + 1 > limits.entryCount) {
+        throw new Error(
+          `export would not be importable: more than ${limits.entryCount} files (import entry count limit); archive or remove old notes first`,
+        );
+      }
     });
+  }
+  if (plannedBytes > limits.totalUncompressedBytes) {
+    throw new Error(
+      `export would not be importable: ${plannedBytes} bytes of content exceeds the ${limits.totalUncompressedBytes}-byte import limit`,
+    );
+  }
+
+  // Pass 2: read content once; sizes below are what the archive really holds.
+  const contents = new Map<string, Buffer>();
+  let actualBytes = 0;
+  for (const file of files) {
+    const body = await fs.readFile(file.abs);
+    actualBytes += body.length;
+    if (body.length > limits.entryUncompressedBytes || actualBytes > limits.totalUncompressedBytes) {
+      throw new Error(`export would not be importable: ${file.logical} grew past the import size limits while reading`);
+    }
+    contents.set(file.logical, body);
   }
 
   const layout = outputLayout(config);
-  zip.file(
-    MANIFEST_NAME,
-    JSON.stringify(
-      {
-        formatVersion: 1,
-        exportedAt: new Date().toISOString(),
-        contents: ["daily", "papers", "index"],
-        fileCount: files.length,
-        outputLayout: { ...layout, exporterVersion: EXPORTER_VERSION },
-      },
-      null,
-      2,
-    ),
+  const manifest = JSON.stringify(
+    {
+      formatVersion: 1,
+      exportedAt: new Date().toISOString(),
+      contents: ["daily", "papers", "index"],
+      fileCount: files.length,
+      outputLayout: { ...layout, exporterVersion: EXPORTER_VERSION },
+    },
+    null,
+    2,
   );
-  const buf = await zip.generateAsync({
-    type: "nodebuffer",
-    compression: "DEFLATE",
-  });
-  await fs.mkdir(path.dirname(path.resolve(outPath)), { recursive: true });
-  await fs.writeFile(outPath, buf);
+  const build = async (stored: ReadonlySet<string>): Promise<Buffer> => {
+    const zip = new JSZip();
+    for (const file of files) {
+      zip.file(file.logical, contents.get(file.logical)!, {
+        date: new Date(file.mtimeMs),
+        // Directory entries would count against the importer's entry limit.
+        createFolders: false,
+        ...(stored.has(file.logical) ? { compression: "STORE" as const } : {}),
+      });
+    }
+    zip.file(MANIFEST_NAME, manifest);
+    return zip.generateAsync({ type: "nodebuffer", compression: "DEFLATE" });
+  };
+  let buf = await build(new Set());
+  // Highly repetitive files can deflate past the importer's zip-bomb ratio; store
+  // those uncompressed (ratio 1) so the backup stays importable.
+  const stored = overRatioEntries(buf, contents, limits);
+  if (stored.size > 0) buf = await build(stored);
+  const verified = validateRawZip(buf, limits);
+  const stillOver = overRatioEntries(buf, contents, limits, verified);
+  if (stillOver.size > 0) {
+    throw new Error(`export would not be importable: ${[...stillOver][0]} exceeds the import compression ratio limit`);
+  }
+  if (buf.length > limits.archiveBytes) {
+    throw new Error(
+      `export would not be importable: archive is ${buf.length} bytes, over the ${limits.archiveBytes}-byte compressed import limit`,
+    );
+  }
+
+  await writeFileAtomically(resolvedOut, buf, opts.testHooks);
   writeLine(io.stdout, `exported ${files.length} files to ${outPath}`);
   return 0;
+}
+
+/** Logical paths whose compression ratio the importer would reject. */
+function overRatioEntries(
+  archive: Buffer,
+  contents: Map<string, Buffer>,
+  limits: DataImportLimits,
+  verified: VerifiedRawZip = validateRawZip(archive, limits),
+): Set<string> {
+  const over = new Set<string>();
+  for (const [logical, body] of contents) {
+    const entry = verified.byJsZipName.get(logical);
+    if (!entry || body.length === 0) continue;
+    if (entry.compressedSize === 0 || body.length / entry.compressedSize > limits.compressionRatio) over.add(logical);
+  }
+  return over;
+}
+
+async function writeFileAtomically(target: string, body: Buffer, hooks?: DataExportTestHooks): Promise<void> {
+  const directory = path.dirname(target);
+  await fs.mkdir(directory, { recursive: true });
+  const tmp = path.join(directory, `.${path.basename(target)}.${randomUUID()}.tmp`);
+  const handle = await fs.open(tmp, "wx");
+  try {
+    try {
+      await handle.writeFile(body);
+      await handle.sync();
+    } finally {
+      await handle.close();
+    }
+    await hooks?.afterTempWritten?.();
+    await fs.rename(tmp, target);
+  } catch (error) {
+    await fs.rm(tmp, { force: true });
+    throw error;
+  }
+}
+
+function isInside(root: string, target: string): boolean {
+  const relative = path.relative(root, target);
+  return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
+}
+
+/** realpath of the deepest existing ancestor, with the not-yet-existing tail re-appended. */
+async function realpathAllowingMissing(target: string): Promise<string> {
+  const tail: string[] = [];
+  let current = path.resolve(target);
+  for (;;) {
+    try {
+      return path.join(await fs.realpath(current), ...tail);
+    } catch (error) {
+      const parent = path.dirname(current);
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT" || parent === current) throw error;
+      tail.unshift(path.basename(current));
+      current = parent;
+    }
+  }
 }
 
 export async function dataImport(

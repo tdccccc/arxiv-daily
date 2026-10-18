@@ -15,12 +15,14 @@ import {
   RunLock,
   SchedulerService,
   StateStore,
+  type PluginSettings,
   type StorageAdapter,
 } from "@arxiv-daily/core";
 import * as obsidianHost from "../src/hosts/obsidian";
 import ArxivDailyPlugin, { resolvePluginDir } from "../main.ts";
 import { settingsAndStateFromPersistedData } from "../src/settings/load";
 import { SettingsChangeService } from "../src/settings/change-service";
+import { LibraryIndexStatusStore } from "../src/library/index-status";
 import { ObsidianHttpClient } from "../src/hosts/obsidian/http-client";
 import { ObsidianMarkupParser } from "../src/hosts/obsidian/markup-parser";
 
@@ -81,6 +83,46 @@ function makeStateStore() {
       );
     },
   );
+}
+
+/** The real settings path ends here: prepare stores for settings.output, then install them. */
+async function installStoresForCurrentOutput(plugin: ArxivDailyPlugin): Promise<void> {
+  const internals = plugin as unknown as {
+    prepareOutputStores(settings: unknown): Promise<unknown>;
+    installOutputStores(prepared: unknown): void;
+  };
+  internals.installOutputStores(await internals.prepareOutputStores(plugin.settings));
+}
+
+/** A plugin whose onload wired the real SettingsChangeService (it stops at addSettingTab). */
+async function pluginWithSettingsChanges(saveData: (data: any) => Promise<void>) {
+  const plugin = new ArxivDailyPlugin();
+  const storage: StorageAdapter = {
+    ...memoryStorage(),
+    writeTextAtomic: async () => {},
+    acquireLock: vi.fn(async () => null),
+    list: vi.fn(async () => []),
+  };
+  const buildHost = vi.spyOn(obsidianHost, "buildObsidianHostAdapters")
+    .mockReturnValue({ storage, http: {}, markupParser: {} } as any);
+  Object.assign(plugin, {
+    settings: structuredClone(DEFAULT_SETTINGS),
+    app: {},
+    manifest: { id: "arxiv-daily" },
+    loadSettingsAndState: vi.fn(async () => []),
+    cleanupCachesIfDue: vi.fn(),
+    saveData,
+    addStatusBarItem: () => document.createElement("div"),
+    addSettingTab: () => { throw new Error("stop after settingsChanges is wired"); },
+  });
+  await expect(plugin.onload()).rejects.toThrow("stop after settingsChanges is wired");
+  return {
+    plugin,
+    dispose: () => {
+      plugin.onunload();
+      buildHost.mockRestore();
+    },
+  };
 }
 
 describe("plugin directory resolution", () => {
@@ -193,71 +235,65 @@ describe("plugin settings reload lifecycle", () => {
   });
 
   it("routes base URL persistence through effective-endpoint cancellation", async () => {
-    const plugin = Object.create(ArxivDailyPlugin.prototype) as ArxivDailyPlugin;
-    const settings = structuredClone(DEFAULT_SETTINGS);
-    const cancel = vi.fn();
-    Object.assign(plugin, {
-      settings,
-      operations: {
-        snapshot: () => [{ id: "generation:1", kind: "personal-library-direction-generation" }],
-        cancel,
-      },
-      logger: { setSensitiveValues: vi.fn() },
-      saveData: vi.fn().mockResolvedValue(undefined),
-    });
-
-    await plugin.setLlmBaseUrl(`${settings.llm.baseUrl}/`);
-    expect(cancel).not.toHaveBeenCalled();
-    await plugin.setLlmBaseUrl("https://other.example/v1");
-    expect(cancel).toHaveBeenCalledWith("generation:1", "model endpoint changed");
+    const { plugin, dispose } = await pluginWithSettingsChanges(vi.fn().mockResolvedValue(undefined));
+    try {
+      const generation = plugin.operations.begin(
+        "personal-library-direction-generation",
+        "Personal library direction generation",
+        "scope",
+      );
+      // A trailing slash is the same effective endpoint: nothing is cancelled.
+      await plugin.settingsChanges.changeValue("llm.baseUrl", `${plugin.settings.llm.baseUrl}/`);
+      expect(generation.signal.aborted).toBe(false);
+      await plugin.settingsChanges.changeValue("llm.baseUrl", "https://other.example/v1");
+      expect(generation.signal.aborted).toBe(true);
+      expect(generation.signal.reason).toBe("model endpoint changed");
+      expect(plugin.settings.llm.baseUrl).toBe("https://other.example/v1");
+    } finally {
+      dispose();
+    }
   });
 
-  it("rolls back base URL when persistence fails", async () => {
-    const plugin = Object.create(ArxivDailyPlugin.prototype) as ArxivDailyPlugin;
-    const settings = structuredClone(DEFAULT_SETTINGS);
-    const previous = settings.llm.baseUrl;
-    Object.assign(plugin, {
-      settings,
-      operations: { snapshot: () => [], cancel: vi.fn() },
-      logger: { setSensitiveValues: vi.fn() },
-      saveData: vi.fn().mockRejectedValue(new Error("disk full")),
-    });
-
-    await expect(plugin.setLlmBaseUrl("https://other.example/v1")).rejects.toThrow("disk full");
-    expect(settings.llm.baseUrl).toBe(previous);
+  it("leaves the base URL unchanged when persistence fails", async () => {
+    const { plugin, dispose } = await pluginWithSettingsChanges(
+      vi.fn().mockRejectedValue(new Error("disk full")),
+    );
+    try {
+      const previous = plugin.settings.llm.baseUrl;
+      await expect(plugin.settingsChanges.changeValue("llm.baseUrl", "https://other.example/v1"))
+        .rejects.toThrow("disk full");
+      expect(plugin.settings.llm.baseUrl).toBe(previous);
+    } finally {
+      dispose();
+    }
   });
 
-  it("serializes overlapping base URL setters without stale rollback", async () => {
-    const plugin = Object.create(ArxivDailyPlugin.prototype) as ArxivDailyPlugin;
-    const settings = structuredClone(DEFAULT_SETTINGS);
+  it("serializes overlapping base URL changes without stale rollback", async () => {
     const persisted: string[] = [];
     let releaseFirst!: () => void;
-    const saveData = vi.fn(async (data: { settings: typeof settings }) => {
-      const value = data.settings.llm.baseUrl;
+    const saveData = vi.fn(async (data: { settings: PluginSettings }) => {
       if (saveData.mock.calls.length === 1) {
         await new Promise<void>((resolve) => { releaseFirst = resolve; });
         throw new Error("first failed");
       }
-      persisted.push(value);
+      persisted.push(data.settings.llm.baseUrl);
     });
-    Object.assign(plugin, {
-      settings,
-      operations: { snapshot: () => [], cancel: vi.fn() },
-      logger: { setSensitiveValues: vi.fn() },
-      saveData,
-    });
+    const { plugin, dispose } = await pluginWithSettingsChanges(saveData);
+    try {
+      const first = plugin.settingsChanges.changeValue("llm.baseUrl", "https://first.example/v1");
+      const firstRejected = expect(first).rejects.toThrow("first failed");
+      await vi.waitFor(() => expect(saveData).toHaveBeenCalledTimes(1));
+      const second = plugin.settingsChanges.changeValue("llm.baseUrl", "https://second.example/v1");
+      expect(plugin.settings.llm.baseUrl).not.toBe("https://first.example/v1");
+      releaseFirst();
+      await firstRejected;
+      await second;
 
-    const first = plugin.setLlmBaseUrl("https://first.example/v1");
-    const firstRejected = expect(first).rejects.toThrow("first failed");
-    await vi.waitFor(() => expect(saveData).toHaveBeenCalledTimes(1));
-    const second = plugin.setLlmBaseUrl("https://second.example/v1");
-    expect(settings.llm.baseUrl).toBe("https://first.example/v1");
-    releaseFirst();
-    await firstRejected;
-    await second;
-
-    expect(settings.llm.baseUrl).toBe("https://second.example/v1");
-    expect(persisted).toEqual(["https://second.example/v1"]);
+      expect(plugin.settings.llm.baseUrl).toBe("https://second.example/v1");
+      expect(persisted).toEqual(["https://second.example/v1"]);
+    } finally {
+      dispose();
+    }
   });
 
   it("passes the exact candidate to saveData instead of capturing live settings", async () => {
@@ -558,6 +594,7 @@ describe("plugin settings reload lifecycle", () => {
       logger: { warn: vi.fn() },
       scheduler,
       progress,
+      libraryIndexStatus: new LibraryIndexStatusStore(),
     });
 
     const prepared = await (plugin as any).prepareOutputStores(candidate);
@@ -1200,7 +1237,7 @@ describe("plugin settings reload lifecycle", () => {
 
     const run = scheduler.runForDateNow("2026-08-10");
     await started;
-    await expect(plugin.reloadStateStoreForOutputPaths()).rejects.toThrow(
+    await expect(installStoresForCurrentOutput(plugin)).rejects.toThrow(
       "cannot replace scheduler store while work is active",
     );
 
@@ -1287,7 +1324,7 @@ describe("plugin settings reload lifecycle", () => {
       kind: "failed_transient",
       reason: "scheduler completion commit failed",
     });
-    await expect(plugin.reloadStateStoreForOutputPaths()).rejects.toThrow(
+    await expect(installStoresForCurrentOutput(plugin)).rejects.toThrow(
       "cannot replace scheduler store while work is active",
     );
 
@@ -1304,5 +1341,159 @@ describe("plugin settings reload lifecycle", () => {
       papersWritten: 3,
     });
     expect(oldHistory.records.at(-1)?.event).toBe("completed");
+  });
+});
+
+describe("output path change through the settings transaction", () => {
+  it("supersedes and reloads personal library state for the new output location", async () => {
+    const plugin = new ArxivDailyPlugin();
+    const storage: StorageAdapter = {
+      ...memoryStorage(),
+      writeTextAtomic: async () => {},
+      acquireLock: vi.fn(async () => null),
+      list: vi.fn(async () => []),
+    };
+    const buildHost = vi.spyOn(obsidianHost, "buildObsidianHostAdapters")
+      .mockReturnValue({ storage, http: {}, markupParser: {} } as any);
+    Object.assign(plugin, {
+      settings: structuredClone(DEFAULT_SETTINGS),
+      app: {},
+      manifest: { id: "arxiv-daily" },
+      loadSettingsAndState: vi.fn(async () => []),
+      cleanupCachesIfDue: vi.fn(),
+      saveData: vi.fn(async () => {}),
+      addStatusBarItem: () => document.createElement("div"),
+      addSettingTab: () => { throw new Error("stop after settingsChanges is wired"); },
+    });
+    try {
+      await expect(plugin.onload()).rejects.toThrow("stop after settingsChanges is wired");
+      const internals = plugin as unknown as Record<string, any>;
+      internals.libraryCatalog = { stale: "catalog of the old location" };
+      internals.libraryProposal = { stale: "proposal of the old location" };
+      internals.libraryNewPaperKeys = ["arxiv:2606.00001"];
+      internals.libraryIndexedPapers = [{ paperKey: "arxiv:2606.00001", title: "stale" }];
+      plugin.libraryIndexStatus.setLastRun({ updatedAt: "2026-10-01T00:00:00.000Z", papers: 4 });
+      const reloadCatalog = vi.spyOn(plugin, "reloadPersonalLibraryCatalog");
+      const revisionBefore = internals.libraryOutputRevision;
+
+      await plugin.settingsChanges.changeValue("output.papersDir", "elsewhere/papers");
+      await plugin.settingsChanges.changeValue("output.dailyDir", "elsewhere/daily");
+
+      expect(plugin.settings.output).toMatchObject({ dailyDir: "elsewhere/daily", papersDir: "elsewhere/papers" });
+      expect(internals.libraryOutputRevision).toBe(revisionBefore + 2);
+      expect(internals.libraryCatalog).toBeNull();
+      expect(internals.libraryProposal).toBeNull();
+      expect(internals.libraryNewPaperKeys).toEqual([]);
+      expect(internals.libraryIndexedPapers).toEqual([]);
+      expect(plugin.libraryIndexStatus.snapshot().lastRun).toBeUndefined();
+      // No library is connected in this fixture, so there is nothing to reload.
+      expect(reloadCatalog).not.toHaveBeenCalled();
+
+      internals.libraryConnection = { selectedRoot: "/lib", rootIdentity: "1:2" };
+      const reloadProfile = vi.spyOn(plugin, "reloadPersonalLibraryProfileDocuments")
+        .mockResolvedValue({} as never);
+      const refreshTrace = vi.spyOn(plugin, "refreshLibraryIndexTrace").mockResolvedValue();
+      reloadCatalog.mockResolvedValue(null);
+      await plugin.settingsChanges.changeValue("output.papersDir", "another/papers");
+      await internals.libraryMutationQueue;
+      expect(reloadCatalog).toHaveBeenCalledTimes(1);
+      expect(reloadProfile).toHaveBeenCalledTimes(1);
+      expect(refreshTrace).toHaveBeenCalledTimes(1);
+    } finally {
+      plugin.onunload();
+      buildHost.mockRestore();
+    }
+  });
+});
+
+describe("work after plugin unload", () => {
+  async function loadedThenUnloaded() {
+    const plugin = new ArxivDailyPlugin();
+    const storage: StorageAdapter = {
+      ...memoryStorage(),
+      writeTextAtomic: async () => {},
+      acquireLock: vi.fn(async () => null),
+      list: vi.fn(async () => []),
+    };
+    const buildHost = vi.spyOn(obsidianHost, "buildObsidianHostAdapters")
+      .mockReturnValue({ storage, http: {}, markupParser: {} } as any);
+    const settings = structuredClone(DEFAULT_SETTINGS);
+    Object.assign(plugin, {
+      settings,
+      app: {},
+      manifest: { id: "arxiv-daily" },
+      loadSettingsAndState: vi.fn(async () => []),
+      cleanupCachesIfDue: vi.fn(),
+      saveData: vi.fn(async () => {}),
+      addStatusBarItem: () => document.createElement("div"),
+      addSettingTab: () => { throw new Error("stop after the scheduler is wired"); },
+    });
+    await expect(plugin.onload()).rejects.toThrow("stop after the scheduler is wired");
+    plugin.onunload();
+    return { plugin, buildHost };
+  }
+
+  it("hands out aborted handles instead of registering operations", async () => {
+    const { plugin, buildHost } = await loadedThenUnloaded();
+    try {
+      const handle = plugin.operations.begin("daily-run", "after unload");
+      expect(handle.signal.aborted).toBe(true);
+      expect(plugin.operations.snapshot()).toHaveLength(0);
+      handle.finish();
+
+      const callback = vi.fn(async () => "ran");
+      await expect(
+        plugin.withOutputOperation("paper-index", "mark", "2606.00001", callback),
+      ).rejects.toThrow("plugin unloaded");
+      expect(callback).not.toHaveBeenCalled();
+    } finally {
+      buildHost.mockRestore();
+    }
+  });
+
+  it("does not start a pipeline run from an in-flight scheduler call", async () => {
+    const { plugin, buildHost } = await loadedThenUnloaded();
+    const buildPipeline = vi.spyOn(plugin as any, "buildPipeline");
+    try {
+      await expect(plugin.scheduler.runForDateNow("2026-10-14")).rejects.toThrow("plugin unloaded");
+      expect(buildPipeline).not.toHaveBeenCalled();
+    } finally {
+      buildHost.mockRestore();
+    }
+  });
+
+  it("does not change the schedule or start today's run after unload", async () => {
+    const { plugin, buildHost } = await loadedThenUnloaded();
+    const changeValue = vi.spyOn(plugin.settingsChanges, "changeValue");
+    try {
+      await expect(plugin.setScheduleEnabled(false)).resolves.toBe(false);
+      expect(changeValue).not.toHaveBeenCalled();
+    } finally {
+      buildHost.mockRestore();
+    }
+  });
+});
+
+describe("legacy run state in data.json", () => {
+  it("is written back while its migration is pending and dropped once migrated", async () => {
+    const plugin = new ArxivDailyPlugin();
+    const saved: any[] = [];
+    const legacy = { "2026-10-01": { status: "completed", lastAttempt: 1, attempts: 1, papersWritten: 5 } };
+    Object.assign(plugin, {
+      settings: structuredClone(DEFAULT_SETTINGS),
+      saveData: vi.fn(async (data: unknown) => { saved.push(structuredClone(data)); }),
+    });
+    const internals = plugin as unknown as {
+      pendingLegacyRunState: unknown;
+      persistSettings(): Promise<void>;
+    };
+
+    internals.pendingLegacyRunState = legacy;
+    await internals.persistSettings();
+    expect(saved.at(-1)).toMatchObject({ runState: legacy });
+
+    internals.pendingLegacyRunState = {};
+    await internals.persistSettings();
+    expect(saved.at(-1)).not.toHaveProperty("runState");
   });
 });

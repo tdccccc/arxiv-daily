@@ -260,7 +260,7 @@ describe("ArxivFetcher", () => {
     expect(http.request).toHaveBeenCalledTimes(2);
   });
 
-  it("defines owner cancellation to fail joined waiters and permits a clean retry", async () => {
+  it("does not propagate the owner's cancellation to a joined waiter that was not cancelled", async () => {
     vi.useFakeTimers();
     const controller = new AbortController();
     const http: HttpClient = { request: vi.fn((req) => {
@@ -274,11 +274,26 @@ describe("ArxivFetcher", () => {
     controller.abort("metadata owner cancelled");
 
     await expect(owner).rejects.toThrow("metadata owner cancelled");
-    await expect(joined).rejects.toThrow("metadata owner cancelled");
-    const retry = makeFetcher(http).fetchMetadataByIds(["2606.10007"]);
     await vi.advanceTimersByTimeAsync(3_000);
-    await expect(retry).resolves.toHaveProperty("size", 1);
+    await expect(joined).resolves.toHaveProperty("size", 1);
     expect(http.request).toHaveBeenCalledTimes(2);
+  });
+
+  it("still fails a joined waiter that is itself cancelled", async () => {
+    vi.useFakeTimers();
+    const ownerAbort = new AbortController();
+    const joinerAbort = new AbortController();
+    const http: HttpClient = { request: vi.fn(() => new Promise(() => {})) as any };
+    const owner = makeFetcher(http, undefined, { textTimeoutMs: 60_000 })
+      .fetchMetadataByIds(["2606.10009"], ownerAbort.signal);
+    await vi.waitFor(() => expect(http.request).toHaveBeenCalledOnce());
+    const joined = makeFetcher(http).fetchMetadataByIds(["2606.10009"], joinerAbort.signal);
+    joinerAbort.abort("joiner cancelled");
+
+    await expect(joined).rejects.toThrow("joiner cancelled");
+    ownerAbort.abort("owner cancelled");
+    await expect(owner).rejects.toThrow("owner cancelled");
+    expect(http.request).toHaveBeenCalledOnce();
   });
 
   it("rejects and removes owned flights immediately when cancellation occurs in cache wait", async () => {
@@ -300,9 +315,8 @@ describe("ArxivFetcher", () => {
     controller.abort("cancel cache owner");
 
     await expect(owner).rejects.toThrow("cancel cache owner");
-    await expect(joined).rejects.toThrow("cancel cache owner");
-    await expect(makeFetcher(http).fetchMetadataByIds(["2606.10008"]))
-      .resolves.toHaveProperty("size", 1);
+    // The cancelled owner's flight was removed, so the joiner took over and fetched.
+    await expect(joined).resolves.toHaveProperty("size", 1);
     expect(http.request).toHaveBeenCalledOnce();
   });
 

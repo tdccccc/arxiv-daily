@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it, vi } from "vitest";
-import { LlmTransientExhaustedError } from "../src/llm/client";
+import { LlmOutputTruncatedError, LlmTransientExhaustedError } from "../src/llm/client";
 import {
   classifyJsonParseFailure,
   DAILY_PAPER_SUMMARY_VALIDATION_ERROR_CODE,
@@ -524,6 +524,15 @@ describe("summarizeDailyPaperWithValidationRetry", () => {
       "Never split a single formula into multiple adjacent $...$ spans",
       "For ensemble-average or expectation angle brackets",
     ]);
+  });
+
+  it("falls back without repeating a request whose output was truncated", async () => {
+    const llm = { call: vi.fn().mockRejectedValue(new LlmOutputTruncatedError()) };
+
+    await expect(
+      summarizeDailyPaperWithValidationRetry(paper, { llm: llm as any }),
+    ).resolves.toMatchObject({ kind: "fallback", reasonCode: "validation-exhausted", attempts: 1 });
+    expect(llm.call).toHaveBeenCalledTimes(1);
   });
 
   it("falls back immediately for typed exhausted transient transport", async () => {

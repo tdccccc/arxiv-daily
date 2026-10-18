@@ -365,7 +365,17 @@ describe("personal library scan lifecycle", () => {
     await vi.waitFor(() => expect(
       plugin.operations.snapshot().some((item) => item.kind === "personal-library-scan"),
     ).toBe(true));
-    const reload = plugin.reloadStateStoreForOutputPaths();
+    // The settings path: prepare stores for the new output, install them, and
+    // let the library transition reload from the new location.
+    const reload = (async () => {
+      const stores = internals as unknown as {
+        prepareOutputStores(settings: unknown): Promise<unknown>;
+        installOutputStores(prepared: unknown): void;
+        libraryMutationQueue: Promise<void>;
+      };
+      stores.installOutputStores(await stores.prepareOutputStores(plugin.settings));
+      await stores.libraryMutationQueue;
+    })();
     await vi.waitFor(() => expect(
       plugin.operations.snapshot().find((item) => item.kind === "personal-library-scan")
         ?.cancellationRequested,

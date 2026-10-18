@@ -3,6 +3,7 @@ import {
   CLI_PACKAGE_NAME,
   compareSemver,
   getCliVersion,
+  isSemVer,
 } from "./version";
 import type { CliIo } from "./main-types";
 
@@ -39,6 +40,13 @@ export async function runUpdate(
       io.stderr,
       `Try manually: npm install -g ${CLI_PACKAGE_NAME}@latest`,
     );
+    return 1;
+  }
+
+  // The version becomes part of an npm spec, so anything but strict SemVer is refused.
+  if (!isSemVer(latest)) {
+    writeLine(io.stderr, "Could not check npm for updates: the registry returned an invalid version.");
+    writeLine(io.stderr, `Try manually: npm install -g ${CLI_PACKAGE_NAME}@latest`);
     return 1;
   }
 
@@ -124,13 +132,27 @@ async function fetchLatestFromNpm(): Promise<string> {
   return data.version;
 }
 
+/**
+ * npm is `npm.cmd` on Windows, which Node can only start through a shell. `spec`
+ * is built from a SemVer-validated version, so it contains no shell metacharacters.
+ */
+export function npmInstallCommand(
+  spec: string,
+  platform: NodeJS.Platform = process.platform,
+): { command: string; args: string[]; shell: boolean } {
+  return platform === "win32"
+    ? { command: "npm.cmd", args: ["install", "-g", spec], shell: true }
+    : { command: "npm", args: ["install", "-g", spec], shell: false };
+}
+
 async function npmInstallGlobal(
   spec: string,
 ): Promise<{ code: number; output: string }> {
   return new Promise((resolve) => {
-    const child = spawn("npm", ["install", "-g", spec], {
+    const { command, args, shell } = npmInstallCommand(spec);
+    const child = spawn(command, args, {
       env: process.env,
-      shell: false,
+      shell,
     });
     let output = "";
     child.stdout?.on("data", (chunk: Buffer) => {
