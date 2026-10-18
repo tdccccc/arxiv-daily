@@ -17,8 +17,29 @@ export interface HttpResponse {
   bodyBuffer?: ArrayBuffer;
 }
 
+/**
+ * A response whose body is still arriving. `body` yields decoded text chunks as
+ * the bytes come in; a consumer that stops early must call `return()` on the
+ * iterator (a `for await` break does this), which cancels the underlying read
+ * and closes the connection.
+ */
+export interface HttpStreamResponse {
+  status: number;
+  headers: Record<string, string>;
+  body: AsyncIterable<string>;
+}
+
 export interface HttpClient {
   request(req: HttpRequest): Promise<HttpResponse>;
+  /**
+   * Optional streaming variant of {@link request}. Resolves once the status
+   * line and headers arrive. `timeoutMs` bounds only that wait; the body is
+   * bounded by the caller (idle timeout, abort `signal`). Aborting `signal`
+   * after resolution fails the pending body read and cancels the body.
+   * Hosts that cannot stream (e.g. Obsidian's `requestUrl`) omit it, and
+   * callers fall back to the buffered `request`.
+   */
+  requestStream?(req: HttpRequest): Promise<HttpStreamResponse>;
 }
 
 export type HttpTransportErrorKind = "network" | "timeout";

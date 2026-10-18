@@ -14,6 +14,7 @@ import {
 import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
 import { createRequire } from "node:module";
+import type { IncomingMessage, ServerResponse } from "node:http";
 import type { NativeStorageBinding } from "../src/native-private-storage";
 import {
   DailyFilterCheckpointStore,
@@ -23,6 +24,9 @@ import {
   deliverDailyEmailIfEnabled,
   emptyDeliveryState,
   HttpTransportError,
+  LlmClient,
+  LlmOutputLimitExceededError,
+  Logger,
   markDelivered,
   normalizeTopic,
   readDeliveryState,
@@ -234,6 +238,180 @@ describe("NodeHttpClient failure phase", () => {
     } finally {
       await new Promise((resolve) => server.close(resolve));
     }
+  });
+});
+
+describe("NodeHttpClient streaming", () => {
+  async function readAll(body: AsyncIterable<string>): Promise<string[]> {
+    const chunks: string[] = [];
+    for await (const chunk of body) chunks.push(chunk);
+    return chunks;
+  }
+
+  async function listen(handler: (req: IncomingMessage, res: ServerResponse) => void) {
+    const { createServer } = await import("node:http");
+    const server = createServer(handler).listen(0, "127.0.0.1");
+    await new Promise((resolve) => server.once("listening", resolve));
+    const port = (server.address() as { port: number }).port;
+    return { server, url: `http://127.0.0.1:${port}/` };
+  }
+
+  it("returns headers before the body ends and yields chunks as they arrive", async () => {
+    let releaseSecond!: () => void;
+    const secondMayStart = new Promise<void>((resolve) => { releaseSecond = resolve; });
+    const { server, url } = await listen((_req, res) => {
+      res.writeHead(200, { "content-type": "text/event-stream", "x-test": "yes" });
+      res.write("data: one\n\n");
+      void secondMayStart.then(() => res.end("data: two\n\n"));
+    });
+    try {
+      const res = await new NodeHttpClient().requestStream({ url });
+      expect(res.status).toBe(200);
+      expect(res.headers["x-test"]).toBe("yes");
+      const iterator = res.body[Symbol.asyncIterator]();
+      // The first chunk is readable while the server has not finished the body.
+      expect(await iterator.next()).toEqual({ done: false, value: "data: one\n\n" });
+      releaseSecond();
+      expect(await iterator.next()).toEqual({ done: false, value: "data: two\n\n" });
+      expect((await iterator.next()).done).toBe(true);
+    } finally {
+      server.closeAllConnections();
+      await new Promise((resolve) => server.close(resolve));
+    }
+  });
+
+  it("decodes multi-byte characters split across chunks", async () => {
+    const bytes = new TextEncoder().encode("a你b");
+    const fetchImpl: FetchLike = async () => new Response(new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(bytes.slice(0, 2));
+        controller.enqueue(bytes.slice(2));
+        controller.close();
+      },
+    }), { status: 200 });
+    const res = await new NodeHttpClient(fetchImpl).requestStream({ url: "https://example.test" });
+    expect((await readAll(res.body)).join("")).toBe("a你b");
+  });
+
+  it("surfaces non-2xx status with a readable body", async () => {
+    const fetchImpl: FetchLike = async () => new Response("denied", { status: 401 });
+    const res = await new NodeHttpClient(fetchImpl).requestStream({ url: "https://example.test" });
+    expect(res.status).toBe(401);
+    expect((await readAll(res.body)).join("")).toBe("denied");
+  });
+
+  it("cancels the body reader when the consumer returns early", async () => {
+    const cancelled = vi.fn();
+    const fetchImpl: FetchLike = async () => new Response(new ReadableStream<Uint8Array>({
+      start(controller) { controller.enqueue(new TextEncoder().encode("first")); },
+      cancel: cancelled,
+    }), { status: 200 });
+    const res = await new NodeHttpClient(fetchImpl).requestStream({ url: "https://example.test" });
+    for await (const chunk of res.body) {
+      expect(chunk).toBe("first");
+      break;
+    }
+    expect(cancelled).toHaveBeenCalledTimes(1);
+  });
+
+  it("cancels a pending read when return() is called mid-wait", async () => {
+    const cancelled = vi.fn();
+    const fetchImpl: FetchLike = async () => new Response(new ReadableStream<Uint8Array>({
+      cancel: cancelled,
+    }), { status: 200 });
+    const res = await new NodeHttpClient(fetchImpl).requestStream({ url: "https://example.test" });
+    const iterator = res.body[Symbol.asyncIterator]();
+    const pending = iterator.next();
+    await iterator.return?.();
+    expect(cancelled).toHaveBeenCalledTimes(1);
+    expect((await pending).done).toBe(true);
+  });
+
+  it("fails a pending body read as cancellation when the caller aborts", async () => {
+    const controller = new AbortController();
+    const { server, url } = await listen((_req, res) => {
+      res.writeHead(200);
+      res.write("start");
+    });
+    try {
+      const res = await new NodeHttpClient().requestStream({ url, signal: controller.signal });
+      const iterator = res.body[Symbol.asyncIterator]();
+      expect((await iterator.next()).value).toBe("start");
+      const pending = iterator.next();
+      controller.abort("stop now");
+      await expect(pending).rejects.toSatisfy(isCancellationError);
+    } finally {
+      server.closeAllConnections();
+      await new Promise((resolve) => server.close(resolve));
+    }
+  });
+
+  it("applies timeoutMs to the wait for headers only", async () => {
+    vi.useFakeTimers();
+    try {
+      const stalled = new NodeHttpClient(() => new Promise<Response>(() => {}));
+      const result = stalled.requestStream({ url: "https://example.test", timeoutMs: 25 });
+      const assertion = expect(result).rejects.toMatchObject({
+        name: "HttpTransportError", kind: "timeout", retryableAttempt: false,
+      });
+      await vi.advanceTimersByTimeAsync(25);
+      await assertion;
+
+      const fetchImpl: FetchLike = async () => new Response(new ReadableStream<Uint8Array>({
+        start(controller) { controller.enqueue(new TextEncoder().encode("x")); },
+      }), { status: 200 });
+      const res = await new NodeHttpClient(fetchImpl)
+        .requestStream({ url: "https://example.test", timeoutMs: 25 });
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect((await res.body[Symbol.asyncIterator]().next()).value).toBe("x");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("normalizes a mid-body failure as an ambiguous network error", async () => {
+    const fetchImpl: FetchLike = async () => new Response(new ReadableStream<Uint8Array>({
+      pull() { throw new Error("socket closed"); },
+    }), { status: 200 });
+    const res = await new NodeHttpClient(fetchImpl).requestStream({ url: "https://example.test" });
+    await expect(readAll(res.body)).rejects.toMatchObject({
+      name: "HttpTransportError", kind: "network", retryableAttempt: false,
+    });
+  });
+
+  it("lets the LLM output cap close a live provider connection early", async () => {
+    let connectionClosed!: () => void;
+    const closed = new Promise<void>((resolve) => { connectionClosed = resolve; });
+    const { server, url } = await listen((req, res) => {
+      res.writeHead(200, { "content-type": "text/event-stream" });
+      const event = `data: ${JSON.stringify({ choices: [{ delta: { content: "0123456789" } }] })}\n\n`;
+      const timer = setInterval(() => res.write(event), 5);
+      res.on("close", () => { clearInterval(timer); connectionClosed(); });
+    });
+    try {
+      const llm = new LlmClient(
+        { ...DEFAULT_SETTINGS.llm, baseUrl: url, apiKey: "sk-test", model: "test" },
+        new Logger("error"),
+        new NodeHttpClient(),
+      );
+      // The server never ends the stream; only the cap can stop this call.
+      await expect(llm.call([{ role: "user", content: "x" }], { maxOutputCodeUnits: 25 }))
+        .rejects.toBeInstanceOf(LlmOutputLimitExceededError);
+      await closed;
+    } finally {
+      server.closeAllConnections();
+      await new Promise((resolve) => server.close(resolve));
+    }
+  });
+
+  it("rejects before fetching when already cancelled", async () => {
+    const controller = new AbortController();
+    controller.abort();
+    const fetchImpl = vi.fn<FetchLike>();
+    await expect(new NodeHttpClient(fetchImpl).requestStream({
+      url: "https://example.test", signal: controller.signal,
+    })).rejects.toSatisfy(isCancellationError);
+    expect(fetchImpl).not.toHaveBeenCalled();
   });
 });
 

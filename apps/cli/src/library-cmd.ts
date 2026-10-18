@@ -9,7 +9,7 @@ import {
   createPersonalLibraryIdentificationFingerprint, createRemoteEmbeddingModel,
   searchFullTextKnowledgeBase, redactText,
   validateLlmConfig, validateEmbeddingConfig,
-  type HttpClient, type DocumentParser, type DocumentParserSelector, type EmbeddingModel,
+  type HttpClient, type HttpRequest, type DocumentParser, type DocumentParserSelector, type EmbeddingModel,
   type LibraryReviewSnapshot, type PersonalLibraryDirectionTextPatch, type PersonalLibraryDirectionProposal,
 } from "@arxiv-daily/core";
 import {
@@ -180,7 +180,11 @@ export async function createCliLibraryContext(config: CliRuntimeConfig, options:
     if (_purpose === "directions" && !validateLlmConfig(config.settings).ok) throw new Error("Complete the model configuration before generating research directions");
   };
   const transport = options.http ?? new NodeHttpClient();
-  const http: HttpClient = { async request(request) { await assertCurrent(); return transport.request(request); } };
+  const http: HttpClient = {
+    async request(request) { await assertCurrent(); return transport.request(request); },
+    // Keep real streaming for LLM calls when the transport has it.
+    ...(transport.requestStream ? { async requestStream(request: HttpRequest) { await assertCurrent(); return transport.requestStream!(request); } } : {}),
+  };
   const fetcher = new ArxivFetcher({ category: config.settings.arxiv.category, categories: config.settings.arxiv.categories, http, markupParser: new LinkedomMarkupParser(), logger, requestDelayMs: config.settings.advanced.requestDelayMs });
   let embedding: EmbeddingModel | undefined;
   const createEmbedding = async (signal?: AbortSignal) => {
