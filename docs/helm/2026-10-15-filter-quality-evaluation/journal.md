@@ -26,3 +26,17 @@
 - change: P3 started; the two out-of-scope findings (arXiv API throttling leading to titles-only filtering; every structured summary falling back with `gpt-6-luna`) go to read-only investigations at the user's request, outside this initiative's phases.
 - disposition: none yet.
 - next: backfill 2026-10-08/09/12/13, export the sheet.
+
+## 2026-10-18 — handoff and close
+
+- Handoff: the owner session from 2026-10-15 is gone. Its branch `feat/quality-evaluation` merged as PR #94, and the branch and worktree were deleted, so the Constraints line about them is historical. This session took over as owner.
+- Evidence:
+  - The researcher labelled all 48 rows.
+  - Recorded decisions scored precision 37.5% and recall 100%.
+  - A gpt-6.1-sol rerun with abstracts (3 runs, all identical) scored precision 60% and recall 100%.
+  - Details are in P3 Chunks 2–3.
+- Change: P3 done; success criterion 5 ticked; goal closed as done.
+- Follow-ups worth their own initiatives:
+  - (a) Two high-scoring false positives remain at score 95, so a score threshold cannot remove them; a prompt change would be needed. Rerun with this sheet before and after.
+  - (b) gpt-6.1-sol sometimes omits skipped papers from its answer. Check how the daily filter treats omissions.
+  - (c) There are no photo-z positives in the sheet yet, so a future sheet should include more photo-z candidates.
