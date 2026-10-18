@@ -12,6 +12,8 @@ type View = {
   query: { tab: string; search?: string };
   libraryResultsEl: unknown;
   refreshLibrarySearch(): void;
+  onClose(): Promise<void>;
+  contentEl: unknown;
 };
 
 function setup(overrides: {
@@ -91,5 +93,106 @@ describe("dashboard library search block", () => {
     view.refreshLibrarySearch();
     await flush();
     expect(search).toHaveBeenCalledTimes(2);
+  });
+
+  describe("cancellation", () => {
+    /** A search that stays in flight until its signal aborts, then rejects like an aborted request. */
+    function hangingSearch() {
+      const signals: AbortSignal[] = [];
+      const search = vi.fn((_query: string, options?: { signal?: AbortSignal }) => {
+        const signal = options?.signal;
+        if (signal) signals.push(signal);
+        return new Promise<never>((_resolve, reject) => {
+          signal?.addEventListener("abort", () => {
+            const error = new Error("cancelled by user");
+            error.name = "AbortError";
+            reject(error);
+          }, { once: true });
+        });
+      });
+      return { search, signals };
+    }
+
+    it("aborts the in-flight search when a newer query supersedes it", async () => {
+      const { search, signals } = hangingSearch();
+      const { view } = setup({ search });
+      view.refreshLibrarySearch();
+      expect(signals).toHaveLength(1);
+      expect(signals[0]!.aborted).toBe(false);
+
+      view.query = { tab: "all", search: "weak lensing" };
+      view.refreshLibrarySearch();
+      await flush();
+
+      expect(signals).toHaveLength(2);
+      expect(signals[0]!.aborted).toBe(true);
+      expect(signals[1]!.aborted).toBe(false);
+      expect(rendered.some((state) => state.kind === "error")).toBe(false);
+    });
+
+    it("does not abort a shared search when the same query renders again", async () => {
+      const { search, signals } = hangingSearch();
+      const { view } = setup({ search });
+      view.refreshLibrarySearch();
+      view.refreshLibrarySearch();
+      view.refreshLibrarySearch();
+      await flush();
+      expect(search).toHaveBeenCalledTimes(1);
+      expect(signals[0]!.aborted).toBe(false);
+    });
+
+    it("neither caches nor shows an aborted search, and searches again for the same query", async () => {
+      const { search, signals } = hangingSearch();
+      const { view } = setup({ search });
+      view.refreshLibrarySearch(); // "galaxy clusters"
+      view.query = { tab: "all", search: "weak lensing" };
+      view.refreshLibrarySearch(); // supersedes it
+      await flush();
+      expect(signals[0]!.aborted).toBe(true);
+
+      view.query = { tab: "all", search: "galaxy clusters" };
+      view.refreshLibrarySearch(); // back to the first query: nothing was cached
+      await flush();
+      expect(search).toHaveBeenCalledTimes(3);
+      expect(signals[1]!.aborted).toBe(true);
+      expect(signals[2]!.aborted).toBe(false);
+      expect(rendered.map((state) => state.kind)).toEqual(["loading", "loading", "loading"]);
+    });
+
+    it("aborts the in-flight search when the query becomes too short to search", async () => {
+      const { search, signals } = hangingSearch();
+      const { view, empty } = setup({ search });
+      view.refreshLibrarySearch();
+      view.query = { tab: "all", search: "g" };
+      view.refreshLibrarySearch();
+      await flush();
+      expect(signals[0]!.aborted).toBe(true);
+      expect(empty).toHaveBeenCalled();
+      expect(rendered.map((state) => state.kind)).toEqual(["loading"]);
+    });
+
+    it("aborts the in-flight search when the view closes", async () => {
+      const { search, signals } = hangingSearch();
+      const { view } = setup({ search });
+      view.contentEl = { empty: vi.fn() };
+      view.refreshLibrarySearch();
+      await view.onClose();
+      await flush();
+      expect(signals[0]!.aborted).toBe(true);
+      expect(rendered.map((state) => state.kind)).toEqual(["loading"]);
+    });
+
+    it("still caches a search that finished before it could be superseded", async () => {
+      const { view, search } = setup();
+      view.refreshLibrarySearch();
+      await flush();
+      view.query = { tab: "all", search: "weak lensing" };
+      view.refreshLibrarySearch();
+      await flush();
+      view.query = { tab: "all", search: "weak lensing" };
+      view.refreshLibrarySearch();
+      await flush();
+      expect(search).toHaveBeenCalledTimes(2);
+    });
   });
 });

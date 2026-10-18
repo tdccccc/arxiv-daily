@@ -280,7 +280,12 @@ class ArxivDailyDashboardView extends ItemView {
   private libraryResultsEl: HTMLElement | null = null;
   private librarySearchToken = 0;
   private librarySearchCache: { key: string; state: LibrarySearchState } | null = null;
-  private librarySearchPending: { key: string; promise: Promise<LibrarySearchState> } | null = null;
+  private librarySearchPending: {
+    key: string;
+    controller: AbortController;
+    /** Resolves to null when the search was cancelled: nothing to cache or render. */
+    promise: Promise<LibrarySearchState | null>;
+  } | null = null;
   private recentDatesNotice: string | null = null;
   private recentDatesRefresh: Promise<unknown> | null = null;
   private searchDebounceTimer: number | null = null;
@@ -315,6 +320,8 @@ class ArxivDailyDashboardView extends ItemView {
   async onClose(): Promise<void> {
     this.isOpen = false;
     this.clearSearchDebounce();
+    this.librarySearchToken += 1;
+    this.cancelLibrarySearch();
     this.contentEl.empty();
   }
 
@@ -2360,6 +2367,11 @@ class ArxivDailyDashboardView extends ItemView {
    * starring, batch actions or a reload repaint it without embedding the query
    * again; a staleness token drops responses from superseded queries. Failures
    * (model errors) degrade to an inline message and never affect row filtering.
+   *
+   * A search is shared by every render of the same key and is cancelled only
+   * when it is superseded (a different query, index or mode, or a query that no
+   * longer searches) or the view closes; its embedding request is then aborted.
+   * A cancelled search is neither cached nor shown.
    */
   private refreshLibrarySearch(): void {
     const container = this.libraryResultsEl;
@@ -2367,11 +2379,13 @@ class ArxivDailyDashboardView extends ItemView {
     const query = this.query.search?.trim() ?? "";
     const token = ++this.librarySearchToken;
     if (query.length < 2 || this.plugin.getLibraryConnectionStatus().kind === "disconnected") {
+      this.cancelLibrarySearch();
       container.empty();
       return;
     }
     const index = this.plugin.libraryIndexStatus.snapshot();
     if (!index.lastRun?.papers || index.preparationError) {
+      this.cancelLibrarySearch();
       renderLibrarySearchBlock(container, {
         kind: "hint",
         message: "Library search is available once the library index is prepared.",
@@ -2384,13 +2398,18 @@ class ArxivDailyDashboardView extends ItemView {
       onActionError: (error: unknown, action: string) => this.reportLibraryEvidenceActionError(error, action),
     };
     if (this.librarySearchCache?.key === key) {
+      this.cancelLibrarySearch(); // any in-flight search belongs to a query we left
       renderLibrarySearchBlock(container, this.librarySearchCache.state, options);
       return;
     }
     renderLibrarySearchBlock(container, { kind: "loading" });
     let pending = this.librarySearchPending;
     if (pending?.key !== key) {
-      const promise: Promise<LibrarySearchState> = this.plugin.searchPersonalLibraryFullText(query).then(
+      this.cancelLibrarySearch();
+      const controller = new AbortController();
+      const promise: Promise<LibrarySearchState | null> = this.plugin.searchPersonalLibraryFullText(query, {
+        signal: controller.signal,
+      }).then(
         (matches): LibrarySearchState => matches.length === 0
           ? { kind: "empty" }
           : {
@@ -2408,19 +2427,28 @@ class ArxivDailyDashboardView extends ItemView {
           },
         (error: unknown): LibrarySearchState => ({ kind: "error", message: errorMessage(error) }),
       ).then((state) => {
-        if (this.librarySearchPending?.key === key) {
+        if (controller.signal.aborted) return null;
+        if (this.librarySearchPending?.controller === controller) {
           this.librarySearchPending = null;
           this.librarySearchCache = { key, state };
         }
         return state;
       });
-      pending = { key, promise };
+      pending = { key, controller, promise };
       this.librarySearchPending = pending;
     }
     void pending.promise.then((state) => {
-      if (token !== this.librarySearchToken || !this.libraryResultsEl) return;
+      if (!state || token !== this.librarySearchToken || !this.libraryResultsEl) return;
       renderLibrarySearchBlock(this.libraryResultsEl, state, options);
     });
+  }
+
+  /** Abort the in-flight library search, if any, because its query is superseded or the view closed. */
+  private cancelLibrarySearch(): void {
+    const pending = this.librarySearchPending;
+    if (!pending) return;
+    this.librarySearchPending = null;
+    pending.controller.abort("superseded by a newer library search");
   }
 
   private async openLibraryPdf(
