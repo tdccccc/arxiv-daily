@@ -1,9 +1,7 @@
-import { createRequire } from "node:module";
 import assert from "node:assert/strict";
 
-const require = createRequire(import.meta.url);
-const { openDashboard } = require("../src/dashboard.js");
-const { runForToday } = require("../src/pipeline-commands.js");
+const { loadExtensionBundle } = await import("./load-bundle.mjs");
+const { openDashboard, runForToday } = loadExtensionBundle().internals;
 
 const vscodeApi = createMockVscodeApi();
 seedVault(vscodeApi.fs);

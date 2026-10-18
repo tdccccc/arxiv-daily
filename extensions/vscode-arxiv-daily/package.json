@@ -11,7 +11,7 @@
   "categories": [
     "Other"
   ],
-  "main": "./src/extension.js",
+  "main": "./out/extension.js",
   "activationEvents": [
     "onCommand:arxivDaily.openDashboard",
     "onCommand:arxivDaily.run",
@@ -44,9 +44,10 @@
     ]
   },
   "scripts": {
-    "build": "node scripts/check-package.mjs",
-    "test": "node scripts/check-package.mjs && node scripts/workspace-adapter-test.mjs && node scripts/dashboard-test.mjs && node scripts/pipeline-commands-test.mjs && npm run smoke",
+    "build": "node scripts/build.mjs && node scripts/check-package.mjs",
+    "test": "npm run build && node scripts/workspace-adapter-test.mjs && node scripts/dashboard-test.mjs && node scripts/pipeline-commands-test.mjs && npm run smoke",
     "smoke": "node scripts/extension-smoke-test.mjs",
+    "vscode:prepublish": "npm run build",
     "vsix:package": "vsce package"
   },
   "devDependencies": {

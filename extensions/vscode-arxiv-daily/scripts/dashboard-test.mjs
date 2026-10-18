@@ -3,11 +3,12 @@ import assert from "node:assert/strict";
 
 const require = createRequire(import.meta.url);
 const { buildDashboardState, matchesTab } = require("../src/dashboard-model.js");
+const { loadExtensionBundle } = await import("./load-bundle.mjs");
 const {
   renderDashboardHtml,
   resourceTargetForEntry,
   updatePaperStatus,
-} = require("../src/dashboard.js");
+} = loadExtensionBundle().internals;
 
 // Schema-5 shape written by core's PaperIndexStore: entries are keyed
 // "arxiv:<id>" and carry paperKey/source/externalId.

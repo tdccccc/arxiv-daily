@@ -1,5 +1,6 @@
 const vscode = require("vscode");
-const { openDashboard } = require("./dashboard");
+const dashboard = require("./dashboard");
+const { openDashboard } = dashboard;
 const { runForToday, summarizeById } = require("./pipeline-commands");
 
 function activate(context) {
@@ -23,4 +24,11 @@ function deactivate() {}
 module.exports = {
   activate,
   deactivate,
+  // Not used by VS Code. The tests load the built bundle (the shipped
+  // artifact) and drive these directly with a mock `vscode` API.
+  internals: {
+    ...dashboard,
+    runForToday,
+    summarizeById,
+  },
 };
