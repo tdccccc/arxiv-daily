@@ -4,7 +4,6 @@ import assert from "node:assert/strict";
 const require = createRequire(import.meta.url);
 const {
   PAPER_INDEX_PATH,
-  createVsCodeStorageAdapter,
   findArxivDailyVault,
   normalizeStoragePath,
 } = require("../src/workspace.js");
@@ -30,50 +29,9 @@ const vault = await findArxivDailyVault(vscodeApi);
 assert.equal(vault.workspaceFolder.name, "vault");
 assert.equal(vault.paperIndexUri.path, `/workspace/vault/${PAPER_INDEX_PATH}`);
 
-const storage = createVsCodeStorageAdapter(vscodeApi, vault.vaultRootUri);
-assert.equal(storage.normalizePath("\\arxiv-daily//daily/./today.md"), "arxiv-daily/daily/today.md");
+assert.equal(vault.vaultRootUri.path, "/workspace/vault");
+assert.equal(normalizeStoragePath("\\arxiv-daily//daily/./today.md"), "arxiv-daily/daily/today.md");
 assert.throws(() => normalizeStoragePath("../outside"), /escapes root/);
-
-await storage.mkdir("arxiv-daily/.index");
-await storage.writeText(PAPER_INDEX_PATH, '{"schemaVersion":2}');
-assert.equal(await storage.exists(PAPER_INDEX_PATH), true);
-assert.equal(await storage.readText(PAPER_INDEX_PATH), '{"schemaVersion":2}');
-
-// Atomic replace: the target is swapped from a temporary sibling that never
-// survives, even when the rename fails.
-await storage.writeTextAtomic(PAPER_INDEX_PATH, '{"schemaVersion":5}');
-assert.equal(await storage.readText(PAPER_INDEX_PATH), '{"schemaVersion":5}');
-assert.deepEqual(
-  (await storage.list("arxiv-daily/.index")).map((entry) => entry.path),
-  [PAPER_INDEX_PATH],
-);
-const realRename = vscodeApi.fs.rename;
-vscodeApi.fs.rename = async () => {
-  throw new Error("rename failed");
-};
-await assert.rejects(storage.writeTextAtomic(PAPER_INDEX_PATH, "partial"), /rename failed/);
-vscodeApi.fs.rename = realRename;
-assert.equal(await storage.readText(PAPER_INDEX_PATH), '{"schemaVersion":5}');
-assert.deepEqual(
-  (await storage.list("arxiv-daily/.index")).map((entry) => entry.path),
-  [PAPER_INDEX_PATH],
-);
-await storage.writeText(PAPER_INDEX_PATH, '{"schemaVersion":2}');
-
-await storage.writeBinary("arxiv-daily/pdfs/example.pdf", new Uint8Array([1, 2]).buffer);
-assert.deepEqual(
-  Array.from(new Uint8Array(await storage.readBinary("arxiv-daily/pdfs/example.pdf"))),
-  [1, 2],
-);
-
-assert.deepEqual(await storage.list("arxiv-daily"), [
-  { path: "arxiv-daily/.index", type: "folder" },
-  { path: "arxiv-daily/pdfs", type: "folder" },
-]);
-
-await storage.rename(PAPER_INDEX_PATH, "arxiv-daily/.index/papers-old.json");
-assert.equal(await storage.exists(PAPER_INDEX_PATH), false);
-assert.equal(await storage.readText("arxiv-daily/.index/papers-old.json"), '{"schemaVersion":2}');
 
 console.log("arXiv Daily VS Code workspace adapter OK");
 

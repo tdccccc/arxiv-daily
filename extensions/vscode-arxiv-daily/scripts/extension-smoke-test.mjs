@@ -1,23 +1,23 @@
-import { createRequire } from "node:module";
 import assert from "node:assert/strict";
+import { readdirSync, statSync, writeFileSync } from "node:fs";
+import path from "node:path";
+import { createTestVault } from "./test-vault.mjs";
 
-const require = createRequire(import.meta.url);
-const { openDashboard } = require("../src/dashboard.js");
-const { runForToday } = require("../src/pipeline-commands.js");
+const { loadExtensionBundle } = await import("./load-bundle.mjs");
+const { openDashboard, runForToday } = loadExtensionBundle().internals;
 
-const vscodeApi = createMockVscodeApi();
-seedVault(vscodeApi.fs);
+const testVault = createTestVault({ index: seedIndex() });
+writeFileSync(path.join(testVault.root, "arxiv-daily", "papers", "2606.12345.md"), "# Paper");
+const vscodeApi = createMockVscodeApi(testVault.root);
 
-const panel = await openDashboard(vscodeApi, vscodeApi.context);
+const panel = await openDashboard(vscodeApi, vscodeApi.context, { storeOptions: testVault.storeOptions });
 assert(panel, "Dashboard panel should open for a workspace containing arxiv-daily/");
 assert(panel.webview.html.includes("arXiv Daily"));
 assert(panel.webview.html.includes("Search"));
 assert(panel.webview.html.includes("Photometric Redshift Calibration"));
 
 const htmlAtOpen = panel.webview.html;
-const indexPath = "/workspace/vault/arxiv-daily/.index/papers.json";
-const readIndex = async () =>
-  JSON.parse(new TextDecoder().decode(await vscodeApi.fs.readFile(uri(indexPath))));
+const readIndex = async () => testVault.readIndex();
 
 // The page posts the map key of the row ("arxiv:<id>" in schema 5).
 await panel.webview.receive({
@@ -36,10 +36,10 @@ assert.equal(panel.webview.html, htmlAtOpen, "html must not be reassigned after 
 assert.equal(panel.webview.posted.length, 1);
 assert.equal(panel.webview.posted[0].type, "state");
 assert.equal(panel.webview.posted[0].state.allRows[0].entry.status, "reading");
-// No temporary file is left behind by the atomic replace.
+// Core's atomic replace leaves only the index and its backup behind.
 assert.deepEqual(
-  (await vscodeApi.fs.readDirectory(uri("/workspace/vault/arxiv-daily/.index"))).map(([name]) => name),
-  ["papers.json"],
+  readdirSync(path.dirname(testVault.indexFile)).sort(),
+  ["papers.json", "papers.json.bak"],
 );
 
 // Older pages (or other callers) may only send the bare arXiv id.
@@ -53,7 +53,7 @@ await panel.webview.receive({
   resource: "note",
 });
 assert.deepEqual(vscodeApi.commands.opened.map((item) => item.path), [
-  "/workspace/vault/arxiv-daily/papers/2606.12345.md",
+  `${testVault.root}/arxiv-daily/papers/2606.12345.md`,
 ]);
 await panel.webview.receive({
   type: "openResource",
@@ -78,63 +78,53 @@ assert.equal(vscodeApi.executedTasks[0].scope, vscodeApi.TaskScope.Workspace);
 assert.equal(vscodeApi.executedTasks[0].execution.process, "arxiv-daily");
 assert.deepEqual(vscodeApi.executedTasks[0].execution.args, ["run", "--today"]);
 
+testVault.cleanup();
+
 console.log("arXiv Daily VS Code extension smoke OK");
 
-function seedVault(fs) {
-  fs.addDirectory("/workspace/vault/arxiv-daily");
-  fs.addDirectory("/workspace/vault/arxiv-daily/.index");
-  fs.addDirectory("/workspace/vault/arxiv-daily/daily");
-  fs.addDirectory("/workspace/vault/arxiv-daily/papers");
-  // Shape written by core's PaperIndexStore (schema 5): keyed "arxiv:<id>".
-  fs.addFile(
-    "/workspace/vault/arxiv-daily/.index/papers.json",
-    JSON.stringify(
-      {
-        schemaVersion: 5,
-        updatedAt: "2026-06-13T00:00:00.000Z",
-        papers: {
-          "arxiv:2606.12345": {
-            paperKey: "arxiv:2606.12345",
-            source: "arxiv",
-            externalId: "2606.12345",
-            arxivId: "2606.12345",
-            title: "Photometric Redshift Calibration",
-            authors: ["Jane Doe"],
-            published: "2026-06-13",
-            updated: "2026-06-13",
-            category: "astro-ph.CO",
-            categories: ["astro-ph.CO"],
-            summary: {
-              coreProblem: "calibrating photo-z catalogs",
-            },
-            topics: ["photo-z"],
-            primaryTopic: "photo-z",
-            detail: false,
-            status: "to_read",
-            priority: "normal",
-            seenDates: ["2026-06-13"],
-            dailyReports: ["arxiv-daily/daily/2026-06-13.md"],
-            discoveryProvenanceByReport: {},
-            paperPath: "arxiv-daily/papers/2606.12345.md",
-            arxivUrl: "https://arxiv.org/abs/2606.12345",
-            pdfUrl: "https://arxiv.org/pdf/2606.12345",
-            pdfPath: "",
-            zoteroKey: "",
-            zoteroUri: "",
-            citationKey: "",
-            projects: [],
-          },
+// Shape written by core's PaperIndexStore (schema 5): keyed "arxiv:<id>".
+function seedIndex() {
+  return {
+    schemaVersion: 5,
+    updatedAt: "2026-06-13T00:00:00.000Z",
+    papers: {
+      "arxiv:2606.12345": {
+        paperKey: "arxiv:2606.12345",
+        source: "arxiv",
+        externalId: "2606.12345",
+        arxivId: "2606.12345",
+        title: "Photometric Redshift Calibration",
+        authors: ["Jane Doe"],
+        published: "2026-06-13",
+        updated: "2026-06-13",
+        category: "astro-ph.CO",
+        categories: ["astro-ph.CO"],
+        summary: {
+          coreProblem: "calibrating photo-z catalogs",
         },
+        topics: ["photo-z"],
+        primaryTopic: "photo-z",
+        detail: false,
+        status: "to_read",
+        priority: "normal",
+        seenDates: ["2026-06-13"],
+        dailyReports: ["arxiv-daily/daily/2026-06-13.md"],
+        discoveryProvenanceByReport: {},
+        paperPath: "arxiv-daily/papers/2606.12345.md",
+        arxivUrl: "https://arxiv.org/abs/2606.12345",
+        pdfUrl: "https://arxiv.org/pdf/2606.12345",
+        pdfPath: "",
+        zoteroKey: "",
+        zoteroUri: "",
+        citationKey: "",
+        projects: [],
       },
-      null,
-      2,
-    ),
-  );
-  fs.addFile("/workspace/vault/arxiv-daily/papers/2606.12345.md", "# Paper");
+    },
+  };
 }
 
-function createMockVscodeApi() {
-  const fs = createMemoryFs();
+function createMockVscodeApi(vaultRoot) {
+  const fs = createRealFs();
   const terminals = [];
   const executedTasks = [];
   const taskExecutions = [];
@@ -191,7 +181,7 @@ function createMockVscodeApi() {
     },
     workspace: {
       fs,
-      workspaceFolders: [{ name: "vault", uri: uri("/workspace/vault") }],
+      workspaceFolders: [{ name: "vault", uri: uri(vaultRoot) }],
       getConfiguration() {
         return {
           get(_key, fallback) {
@@ -306,102 +296,23 @@ function createMockPanel() {
   };
 }
 
-function createMemoryFs() {
-  const files = new Map();
-  const directories = new Set(["/"]);
+// The dashboard only stats the vault folder through VS Code's file system; the
+// paper index itself is read and written by core on the real disk.
+function createRealFs() {
   return {
-    addDirectory(path) {
-      ensureParentDirectories(directories, path);
-      directories.add(normalizeUriPath(path));
-    },
-    addFile(path, content = "") {
-      const normalized = normalizeUriPath(path);
-      ensureParentDirectories(directories, parentDir(normalized));
-      files.set(normalized, new TextEncoder().encode(content));
-    },
     async stat(target) {
-      const path = normalizeUriPath(target.path);
-      if (files.has(path)) return { type: 1 };
-      if (directories.has(path)) return { type: 2 };
-      throw fileNotFound(path);
-    },
-    async readFile(target) {
-      const path = normalizeUriPath(target.path);
-      if (!files.has(path)) throw fileNotFound(path);
-      return files.get(path);
-    },
-    async writeFile(target, content) {
-      const path = normalizeUriPath(target.path);
-      ensureParentDirectories(directories, parentDir(path));
-      files.set(path, new Uint8Array(content));
-    },
-    async createDirectory(target) {
-      const path = normalizeUriPath(target.path);
-      ensureParentDirectories(directories, path);
-      directories.add(path);
-    },
-    async delete(target) {
-      files.delete(normalizeUriPath(target.path));
-    },
-    async rename(from, to) {
-      const fromPath = normalizeUriPath(from.path);
-      const toPath = normalizeUriPath(to.path);
-      if (!files.has(fromPath)) throw fileNotFound(fromPath);
-      ensureParentDirectories(directories, parentDir(toPath));
-      files.set(toPath, files.get(fromPath));
-      files.delete(fromPath);
-    },
-    async readDirectory(target) {
-      const path = normalizeUriPath(target.path);
-      if (!directories.has(path)) throw fileNotFound(path);
-      const children = new Map();
-      for (const dirPath of directories) {
-        const child = directChildName(path, dirPath);
-        if (child) children.set(child, 2);
+      try {
+        return { type: statSync(target.fsPath).isDirectory() ? 2 : 1 };
+      } catch (error) {
+        throw error.code === "ENOENT" ? fileNotFound(target.fsPath) : error;
       }
-      for (const filePath of files.keys()) {
-        const child = directChildName(path, filePath);
-        if (child) children.set(child, 1);
-      }
-      return [...children.entries()].sort((a, b) => a[0].localeCompare(b[0]));
     },
   };
 }
 
-function directChildName(parent, child) {
-  if (parent === child) return "";
-  const prefix = parent === "/" ? "/" : `${parent}/`;
-  if (!child.startsWith(prefix)) return "";
-  const rest = child.slice(prefix.length);
-  if (!rest || rest.includes("/")) return "";
-  return rest;
-}
-
-function ensureParentDirectories(directories, path) {
-  const parts = normalizeUriPath(path).split("/").filter(Boolean);
-  let cur = "";
-  for (const part of parts) {
-    cur += `/${part}`;
-    directories.add(cur);
-  }
-}
-
-function parentDir(path) {
-  const normalized = normalizeUriPath(path);
-  const idx = normalized.lastIndexOf("/");
-  return idx <= 0 ? "/" : normalized.slice(0, idx);
-}
-
-function uri(path) {
-  const normalized = normalizeUriPath(path);
-  return {
-    path: normalized,
-    fsPath: normalized,
-  };
-}
-
-function normalizeUriPath(path) {
-  return `/${String(path).split("/").filter(Boolean).join("/")}`;
+function uri(target) {
+  const normalized = String(target).replace(/\\/g, "/");
+  return { path: normalized, fsPath: target, scheme: "file" };
 }
 
 function fileNotFound(path) {

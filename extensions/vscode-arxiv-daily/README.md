@@ -32,24 +32,47 @@ code 0.
 ## Current Scope
 
 - Workspace detection for a folder containing `arxiv-daily/`.
-- A `workspace.fs`-backed adapter for the shared Paper Index.
+- The shared Paper Index, read and written through the same core
+  `PaperIndexStore` and cross-process file lock that the Obsidian plugin and the
+  CLI use, so a status change made here cannot overwrite a concurrent change from
+  those hosts. The extension reads the vault as a local folder; virtual
+  workspaces are not supported.
 - A Webview Dashboard with tabs, search, status/priority filters, resource
-  opening, and single-paper status updates.
+  opening, and single-paper status updates. A `papers.json` that is damaged or
+  written by a newer version is never overwritten; the Dashboard shows the error
+  and the file stays as it is.
 - `arXiv Daily: Run for Today`, which runs exactly `arxiv-daily run --today` as
   a VS Code process task.
 - `arXiv Daily: Summarize by arXiv ID`, which canonicalizes the entered ID and
   runs `arxiv-daily run --id <canonical id>` as a VS Code process task.
-- Local scaffold checks through `npm run build`, `npm test`, and `npm run smoke`.
+- Local checks through `npm run build`, `npm test`, and `npm run smoke`.
 
 ## Planned Scope
 
-- Reuse the host-neutral core storage and Dashboard model from the Obsidian
-  plugin.
+- Reuse the host-neutral Dashboard model from the Obsidian plugin (the Paper
+  Index storage already comes from core).
 - Replace the local Dashboard model mirror with a directly shared package once
   the Obsidian plugin core is published in an importable form.
-- Replace the CLI process bridge with direct core calls once the extension has
-  the same bundled runtime as the Obsidian plugin.
+- Replace the CLI process bridge for the pipeline commands with direct core
+  calls (the bundled core runtime is already in place for the Paper Index).
 - Launch generated markdown files through VS Code's native editor and preview.
+
+## Building
+
+The extension ships as one bundle, `out/extension.js`, which inlines
+`@arxiv-daily/core` and `@arxiv-daily/node-runtime` (only `vscode` stays
+external). Those packages are TypeScript workspace sources, so install the
+repository's root dependencies first; the build also uses the root `esbuild`:
+
+```bash
+npm ci                              # repository root
+cd extensions/vscode-arxiv-daily
+npm ci
+npm run build                       # esbuild bundle + package checks
+```
+
+The tests run against the built bundle (`npm test` builds first). The bundle is
+about 0.9 MB because it carries core.
 
 ## Release Strategy
 
@@ -57,13 +80,14 @@ The VS Code extension uses an independent version sequence and VSIX artifact.
 It is intentionally decoupled from the Obsidian plugin tag series.
 
 ```bash
+npm ci                              # repository root, once
 cd extensions/vscode-arxiv-daily
+npm ci
 npm run build
 npm test
-npm run smoke
 npm run vsix:package
 ```
 
-`npm run vsix:package` uses `npx @vscode/vsce package` and writes the VSIX to
-`dist/`. Install dependencies or allow `npx` to fetch `@vscode/vsce` before
-running that packaging command.
+`npm run vsix:package` runs `vsce package`, which rebuilds the bundle through
+the `vscode:prepublish` script and writes the VSIX to the current directory.
+The VSIX contains `package.json`, this README and `out/extension.js`.

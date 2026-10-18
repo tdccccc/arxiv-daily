@@ -143,6 +143,12 @@
           "pathPolicy": "listed-paths",
           "requiredPaths": [
             "extensions/vscode-arxiv-daily/**",
+            "packages/core/**",
+            "packages/node-runtime/**",
+            "package.json",
+            "package-lock.json",
+            "scripts/release-utils.mjs",
+            "THIRD_PARTY_NOTICES.md",
             "contracts/companion-cli-commands.json",
             "apps/cli/package.json",
             "apps/cli/src/main.ts",

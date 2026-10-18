@@ -1,20 +1,27 @@
 const { buildDashboardState } = require("./dashboard-model");
-const { PAPER_INDEX_PATH, findArxivDailyVault, normalizeStoragePath } = require("./workspace");
+const { findArxivDailyVault, normalizeStoragePath } = require("./workspace");
+const { createPaperIndexStore, loadPaperIndex, updatePaperStatus } = require("./paper-index");
 const { normalizeArxivId } = require("./pipeline-commands");
 
 const DASHBOARD_VIEW_TYPE = "arxivDaily.dashboard";
-const VALID_STATUSES = new Set(["inbox", "to_read", "reading", "read", "saved", "ignored"]);
-// papers.json schema versions this companion has been checked against. It
-// edits a single field in place and preserves everything else, so it refuses to
-// write a document written by a format it does not know.
-const SUPPORTED_SCHEMA_VERSIONS = new Set([1, 2, 3, 4, 5]);
 
-async function openDashboard(vscodeApi, context) {
+/**
+ * @param {{ storeOptions?: Parameters<typeof createPaperIndexStore>[1] }} [options]
+ *   `storeOptions` is a test seam (private lock directory).
+ */
+async function openDashboard(vscodeApi, context, options = {}) {
   const vault = await findArxivDailyVault(vscodeApi);
   if (!vault) {
     void vscodeApi.window.showWarningMessage(
       "arXiv Daily: no workspace folder contains arxiv-daily/.",
     );
+    return null;
+  }
+  let store;
+  try {
+    store = createPaperIndexStore(vault, options.storeOptions);
+  } catch (error) {
+    void vscodeApi.window.showErrorMessage(`arXiv Daily: ${error.message}`);
     return null;
   }
 
@@ -30,8 +37,15 @@ async function openDashboard(vscodeApi, context) {
 
   let htmlLoaded = false;
   const render = async () => {
-    const index = await loadPaperIndex(vault.storage);
-    const state = buildDashboardState(index);
+    let state;
+    try {
+      state = buildDashboardState(await loadPaperIndex(store));
+    } catch (error) {
+      if (htmlLoaded) throw error;
+      // Nothing is on screen yet: say why instead of leaving "Loading...".
+      panel.webview.html = renderLoadingHtml(`Cannot read papers.json: ${error.message}`);
+      throw error;
+    }
     if (!htmlLoaded) {
       htmlLoaded = true;
       panel.webview.html = renderDashboardHtml({
@@ -57,75 +71,30 @@ async function openDashboard(vscodeApi, context) {
         return;
       }
       if (message?.type === "setStatus") {
-        await updatePaperStatus(vault.storage, message.key ?? message.arxivId, message.status);
+        await updatePaperStatus(store, message.key ?? message.arxivId, message.status);
         await render();
         return;
       }
       if (message?.type === "openResource") {
-        const index = await loadPaperIndex(vault.storage);
-        await openResource(vscodeApi, vault, index, message.key ?? message.arxivId, message.resource);
+        await openResource(vscodeApi, vault, store, message.key ?? message.arxivId, message.resource);
       }
     } catch (error) {
       void vscodeApi.window.showErrorMessage(`arXiv Daily: ${error.message}`);
     }
   }, undefined, context.subscriptions);
 
-  await render();
+  try {
+    await render();
+  } catch (error) {
+    void vscodeApi.window.showErrorMessage(`arXiv Daily: ${error.message}`);
+  }
   return panel;
 }
 
-async function loadPaperIndex(storage) {
-  if (!(await storage.exists(PAPER_INDEX_PATH))) {
-    return { schemaVersion: 2, updatedAt: "", papers: {} };
-  }
-  return JSON.parse(await storage.readText(PAPER_INDEX_PATH));
-}
-
-/**
- * Find a paper by its papers.json map key or by its arXiv id. Core keys entries
- * "arxiv:<id>" (schema 4+); older files used the bare id.
- */
-function findPaper(index, id) {
-  const papers = index?.papers;
-  if (typeof id !== "string" || !id || !papers || typeof papers !== "object") return null;
-  for (const key of [id, `arxiv:${id}`]) {
-    if (Object.hasOwn(papers, key)) return { key, entry: papers[key] };
-  }
-  for (const [key, entry] of Object.entries(papers)) {
-    if (entry && (entry.arxivId === id || entry.paperKey === id)) return { key, entry };
-  }
-  return null;
-}
-
-/**
- * Edits one field of papers.json in place. There is no cross-process lock here
- * (core's PaperIndexStore uses a file lock the extension host cannot take), so a
- * write racing an Obsidian/CLI write can lose one side's change; the write
- * itself is atomic, so the file is never left truncated.
- */
-async function updatePaperStatus(storage, id, status, now = () => new Date()) {
-  if (!VALID_STATUSES.has(status)) throw new Error(`invalid status: ${status}`);
-  if (typeof storage.writeTextAtomic !== "function") {
-    throw new Error("storage does not support atomic writes");
-  }
-  const index = await loadPaperIndex(storage);
-  if (!index || typeof index !== "object" || !SUPPORTED_SCHEMA_VERSIONS.has(index.schemaVersion)) {
-    throw new Error(
-      `papers.json schemaVersion ${String(index?.schemaVersion)} is not supported by this extension; update the extension or use Obsidian/the CLI`,
-    );
-  }
-  const found = findPaper(index, id);
-  if (!found) throw new Error(`${id} is not in papers.json`);
-  found.entry.status = status;
-  index.updatedAt = now().toISOString();
-  await storage.writeTextAtomic(PAPER_INDEX_PATH, JSON.stringify(index, null, 2));
-  return found.entry;
-}
-
-async function openResource(vscodeApi, vault, index, id, resource) {
-  const found = findPaper(index, id);
-  if (!found) throw new Error(`${id} is not in papers.json`);
-  const target = resourceTargetForEntry(found.entry, resource);
+async function openResource(vscodeApi, vault, store, id, resource) {
+  const entry = await store.get(id);
+  if (!entry) throw new Error(`${id} is not in papers.json`);
+  const target = resourceTargetForEntry(entry, resource);
   if (!target) {
     void vscodeApi.window.showWarningMessage(`arXiv Daily: no ${resource} for ${id}.`);
     return;
@@ -456,6 +425,7 @@ function createNonce() {
 
 module.exports = {
   DASHBOARD_VIEW_TYPE,
+  createPaperIndexStore,
   loadPaperIndex,
   openDashboard,
   renderDashboardHtml,

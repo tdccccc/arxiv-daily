@@ -1,7 +1,7 @@
 # VS Code 扩展面板按裸 arXiv 编号查找论文，而 papers.json（schema 5）的键是 `arxiv:<id>`：状态修改和所有打开按钮都失效
 
 > 发现日期：2026-10-18 · 来源：main `21fe2ce` 深度代码审查 · 编号 P3
-> 范围：`extensions/vscode-arxiv-daily` · 严重程度：高 · 状态：部分修复（分支 `fix/2026-10-18-review`，提交 89c2cc2；余项见文末） · 置信度：已复现
+> 范围：`extensions/vscode-arxiv-daily` · 严重程度：高 · 状态：已修复（第一部分：分支 `fix/2026-10-18-review`，提交 89c2cc2；文件锁：分支 `fix/followup-vscode-lock`） · 置信度：已复现
 
 ## 问题
 
@@ -44,4 +44,10 @@
 
 按映射键或 arXiv 编号查找条目；未知 `schemaVersion` 拒绝写入；`papers.json` 经临时文件 + rename 原子替换；打开链接由 arXiv 编号重建，存储的 URL 仅在为 https arxiv.org 时使用；页面更新改用 `postMessage`，标签页、搜索和筛选不再被重置；测试改用 core `PaperIndexStore` 生成的 schema 5 夹具。
 
-**仍未解决**：扩展无法获取 core 的索引文件锁，与 Obsidian / CLI 并发写时可能丢失一方的修改（文件不会被截断）。本文件保留为后续项。
+**文件锁（后续项，已解决）**：扩展现在把 core 和 node-runtime 一起打包进 `out/extension.js`（只有 `vscode` 留在外面），状态修改直接用 core 的 `PaperIndexStore`，和 Obsidian、CLI 走同一套读写：同一把跨进程文件锁（锁目录名由库的真实路径加 `paper-index:arxiv-daily/.index/papers.json` 算出，三端一致）、同一个变更队列、`.bak` 备份和临时文件替换。因此别的程序正在改 `papers.json` 时，扩展的修改会等它放锁之后再读再写，双方的修改都会保留，不会再互相覆盖。扩展里自己写的原子写入代码和 schema 版本白名单已删除，面板列表的读取也改用 core。
+
+保留的行为：按映射键或 arXiv 编号查找；打开链接仍由编号重建、只用 https；页面更新仍用 `postMessage`，标签页、搜索和筛选不会被重置。损坏的或版本比扩展新的 `papers.json` 不会被改写：core 遇到这种文件会退回 `.bak` 再保存，扩展在写之前先检查，一旦 core 实际读到的是备份就拒绝并提示用 Obsidian 或 CLI 处理。
+
+构建与测试：扩展新增 `npm run build`（esbuild 打包，需要先在仓库根目录 `npm ci`），`vsce package` 会自动重新打包，VSIX 只含 `package.json`、README 和 `out/extension.js`（约 0.9 MB，因为带着 core）。新增锁互斥测试：测试里扮演另一端持有 core 的锁，扩展的写入会等待，放锁后双方的修改都在，并核对两端用的是同一个锁目录。扩展的 CI 工作流现在也先安装根目录依赖，并在 core、node-runtime 变化时触发。
+
+已知限制：只支持本地文件夹工作区（虚拟工作区会提示不支持）；Obsidian 在 Windows 而扩展在 WSL 等不同主机/命名空间时，锁各自独立，这是 NodeFileLock 本身的范围。

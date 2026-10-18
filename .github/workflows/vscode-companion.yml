@@ -5,6 +5,12 @@ on:
     branches: ["main"]
     paths:
       - extensions/vscode-arxiv-daily/**
+      - packages/core/**
+      - packages/node-runtime/**
+      - package.json
+      - package-lock.json
+      - scripts/release-utils.mjs
+      - THIRD_PARTY_NOTICES.md
       - contracts/companion-cli-commands.json
       - apps/cli/package.json
       - apps/cli/src/main.ts
@@ -17,6 +23,12 @@ on:
   pull_request:
     paths:
       - extensions/vscode-arxiv-daily/**
+      - packages/core/**
+      - packages/node-runtime/**
+      - package.json
+      - package-lock.json
+      - scripts/release-utils.mjs
+      - THIRD_PARTY_NOTICES.md
       - contracts/companion-cli-commands.json
       - apps/cli/package.json
       - apps/cli/src/main.ts
@@ -46,7 +58,14 @@ jobs:
         with:
           node-version: 22.17.0
           cache: npm
-          cache-dependency-path: extensions/vscode-arxiv-daily/package-lock.json
+          cache-dependency-path: |
+            package-lock.json
+            extensions/vscode-arxiv-daily/package-lock.json
+      - name: Install workspace dependencies
+        # The companion bundles @arxiv-daily/core and node-runtime from their
+        # workspace sources, and builds with the root esbuild.
+        working-directory: .
+        run: npm ci
       - name: Install companion dependencies
         run: npm ci
       - name: Build companion
