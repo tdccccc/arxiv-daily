@@ -24,6 +24,9 @@ import {
   deliverDailyEmailIfEnabled,
   emptyDeliveryState,
   HttpTransportError,
+  LlmClient,
+  LlmOutputLimitExceededError,
+  Logger,
   markDelivered,
   normalizeTopic,
   readDeliveryState,
@@ -374,6 +377,31 @@ describe("NodeHttpClient streaming", () => {
     await expect(readAll(res.body)).rejects.toMatchObject({
       name: "HttpTransportError", kind: "network", retryableAttempt: false,
     });
+  });
+
+  it("lets the LLM output cap close a live provider connection early", async () => {
+    let connectionClosed!: () => void;
+    const closed = new Promise<void>((resolve) => { connectionClosed = resolve; });
+    const { server, url } = await listen((req, res) => {
+      res.writeHead(200, { "content-type": "text/event-stream" });
+      const event = `data: ${JSON.stringify({ choices: [{ delta: { content: "0123456789" } }] })}\n\n`;
+      const timer = setInterval(() => res.write(event), 5);
+      res.on("close", () => { clearInterval(timer); connectionClosed(); });
+    });
+    try {
+      const llm = new LlmClient(
+        { ...DEFAULT_SETTINGS.llm, baseUrl: url, apiKey: "sk-test", model: "test" },
+        new Logger("error"),
+        new NodeHttpClient(),
+      );
+      // The server never ends the stream; only the cap can stop this call.
+      await expect(llm.call([{ role: "user", content: "x" }], { maxOutputCodeUnits: 25 }))
+        .rejects.toBeInstanceOf(LlmOutputLimitExceededError);
+      await closed;
+    } finally {
+      server.closeAllConnections();
+      await new Promise((resolve) => server.close(resolve));
+    }
   });
 
   it("rejects before fetching when already cancelled", async () => {
