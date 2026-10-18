@@ -1,10 +1,10 @@
 # Filter quality evaluation
 
-status: active
+status: done
 created: 2026-10-15T10:35:00+08:00
-updated: 2026-10-15T12:35:00+08:00
-revision: 5
-owner: claude-code-session-2026-10-15
+updated: 2026-10-18T11:35:00+08:00
+revision: 6
+owner: current-session
 
 ## Intent
 
@@ -16,7 +16,7 @@ owner: claude-code-session-2026-10-15
 - [x] 保留的筛选决定有上限，旧记录按日期自动清理，不会无限增长；固定测试覆盖。
 - [x] 一条开发者命令能从保留的筛选决定中按日期抽样导出一份标注表（含标题、摘要、当时的模型判定），研究者可以直接在表里填写判断。
 - [x] 一条开发者命令能读取填好的标注表，用真实模型重跑筛选，输出"该选的选中了多少（召回）""选中的有多少该选（精确）""方向判对了多少"，结果连同提示词版本、模型写成一份可留存的报告；同一命令也能只对保留的历史判定打分，不调用模型。
-- [ ] 至少一次真实模型基线运行：研究者标注不少于 30 篇论文，得到第一份基线报告（运行前征得用户同意费用）。
+- [x] 至少一次真实模型基线运行：研究者标注不少于 30 篇论文，得到第一份基线报告（运行前征得用户同意费用）。
 
 ## Non-goals
 
@@ -44,7 +44,7 @@ owner: claude-code-session-2026-10-15
 <!-- Single source of truth for phase status. PN ↔ filename NN. Integer IDs are permanent and never reused; replacement phases take the next unused number. Outcomes only — no steps. The active line is the current focus. -->
 1. P1 — 日报完成后保留当天全部筛选决定，有日期上限，CLI 与插件一致 — status: done
 2. P2 — 开发者评估工具：导出标注表、按标注用真实模型重跑或给历史判定打分、输出可对比的报告 — status: done
-3. P3 — 研究者标注不少于 30 篇并完成第一次真实模型基线运行 — status: active
+3. P3 — 研究者标注不少于 30 篇并完成第一次真实模型基线运行 — status: done
 
 ## Open questions
 
