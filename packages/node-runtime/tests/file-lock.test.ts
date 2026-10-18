@@ -187,12 +187,19 @@ describe("machine-local file lock", () => {
     await next!.release();
   });
   describe("owner process identity", () => {
+    // Mirrors NodeFileLock's directory naming, including the case-folded root on win32.
+    async function lockDir(vault: string, lockRoot: string, key: string) {
+      const canonical = await fs.realpath(vault);
+      const rootIdentity = process.platform === "win32" ? canonical.toLowerCase() : canonical;
+      return path.join(lockRoot, createHash("sha256").update(`${rootIdentity}\0${key}`).digest("hex"));
+    }
+
     async function heldByForgedOwner(mutate: (owner: Record<string, any>) => void) {
       const { vault, lockRoot } = await fixture();
       const holderLocks = new NodeFileLock(vault, { lockRoot });
       const first = await holderLocks.acquire("daily-run");
       expect(first).not.toBeNull();
-      const dir = path.join(lockRoot, createHash("sha256").update(`${await fs.realpath(vault)}\0daily-run`).digest("hex"));
+      const dir = await lockDir(vault, lockRoot, "daily-run");
       const ownerFile = path.join(dir, "g0.owner.json");
       const owner = JSON.parse(await fs.readFile(ownerFile, "utf8"));
       // The owner "crashed"; its PID now belongs to an unrelated live process (this test runner's parent).
@@ -205,7 +212,7 @@ describe("machine-local file lock", () => {
     it("records a process identity in the owner record", async () => {
       const { vault, lockRoot } = await fixture();
       const lock = await new NodeFileLock(vault, { lockRoot }).acquire("daily-run");
-      const dir = path.join(lockRoot, createHash("sha256").update(`${await fs.realpath(vault)}\0daily-run`).digest("hex"));
+      const dir = await lockDir(vault, lockRoot, "daily-run");
       const owner = JSON.parse(await fs.readFile(path.join(dir, "g0.owner.json"), "utf8"));
       expect(owner.identity).toBeDefined();
       await lock!.release();
