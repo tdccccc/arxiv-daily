@@ -45,7 +45,7 @@
   },
   "scripts": {
     "build": "node scripts/build.mjs && node scripts/check-package.mjs",
-    "test": "npm run build && node scripts/workspace-adapter-test.mjs && node scripts/dashboard-test.mjs && node scripts/pipeline-commands-test.mjs && npm run smoke",
+    "test": "npm run build && node scripts/workspace-adapter-test.mjs && node scripts/dashboard-test.mjs && node scripts/lock-interop-test.mjs && node scripts/pipeline-commands-test.mjs && npm run smoke",
     "smoke": "node scripts/extension-smoke-test.mjs",
     "vscode:prepublish": "npm run build",
     "vsix:package": "vsce package"
