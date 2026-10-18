@@ -2,11 +2,11 @@ import { isPlausibleEmail, normalizeEmail, randomToken, sha256Hex } from "./cryp
 import {
   authenticateDevice,
   automaticRuntimeConfigured,
-  checkAndIncrRateLimit,
   hashPendingToken,
   putPending,
   type Env,
 } from "./kv";
+import { consumeVerifyRateLimit } from "./verify-rate-limiter";
 import { sendResendEmail } from "./resend";
 import { parseJsonObject } from "./json-body";
 import { deliveryKeyKind } from "./deliver-logic";
@@ -20,8 +20,9 @@ import {
 
 export type { Env };
 export { DeliverGate } from "./deliver-gate";
+export { VerifyRateLimiter } from "./verify-rate-limiter";
 
-/** Verify-start limits (per rolling TTL window on the KV key). */
+/** Verify-start limits (fixed window per subject, enforced in a Durable Object). */
 const VERIFY_EMAIL_LIMIT = 3;
 const VERIFY_EMAIL_WINDOW_SEC = 3600;
 const VERIFY_IP_LIMIT = 10;
@@ -106,7 +107,7 @@ async function verifyStart(request: Request, env: Env): Promise<Response> {
   // The IP limit is checked first: a request that is already over its IP limit must
   // not also spend the target address's allowance, or anyone could lock a victim out
   // of verification by hammering it from one address.
-  const ipRl = await checkAndIncrRateLimit(
+  const ipRl = await consumeVerifyRateLimit(
     env,
     "verify-ip",
     ip,
@@ -116,7 +117,7 @@ async function verifyStart(request: Request, env: Env): Promise<Response> {
   if (!ipRl.ok) {
     return json({ ok: true, message: "verification email sent" });
   }
-  const emailRl = await checkAndIncrRateLimit(
+  const emailRl = await consumeVerifyRateLimit(
     env,
     "verify-email",
     emailNorm,

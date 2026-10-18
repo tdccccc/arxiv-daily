@@ -15,6 +15,7 @@ export const RELAY_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..")
 
 export const REQUIRED_TOML_NAMES = [
   "DELIVER_GATE",
+  "VERIFY_RATE_LIMIT",
   "STORE",
   "PUBLIC_BASE_URL",
   "FROM_EMAIL",

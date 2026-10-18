@@ -9,6 +9,8 @@ export interface Env {
   STORE: KVNamespace;
   /** Recipient-scoped automatic gates, device-scoped test gates, and cutover control. */
   DELIVER_GATE?: DurableObjectNamespace;
+  /** Atomic /v1/verify/start counters, one object per hashed IP or address. */
+  VERIFY_RATE_LIMIT?: DurableObjectNamespace;
   /** Operator-only bearer secret for the single-version cutover control API. */
   DELIVERY_V2_CUTOVER_TOKEN?: string;
   RESEND_API_KEY: string;
@@ -63,7 +65,6 @@ export interface PendingVerify {
 const PENDING_PREFIX = "pending:";
 const DEVICE_PREFIX = "device:";
 const DEVICE_V2_PREFIX = "device-v2:";
-const RL_PREFIX = "rl:";
 export const DELIVERY_V3_CUTOVER_AUDIT_KEY = "cutover:delivery-v3-audit";
 export const DELIVERY_V2_KV_VISIBILITY_MS = 60 * 1000;
 export const DELIVERY_V2_LEGACY_PENDING_TTL_MS = 120 * 1000;
@@ -109,10 +110,6 @@ export function deviceKey(tokenHash: string): string {
 
 export function deviceV2Key(tokenHash: string): string {
   return `${DEVICE_V2_PREFIX}${tokenHash}`;
-}
-
-export function rateLimitKey(kind: string, id: string): string {
-  return `${RL_PREFIX}${kind}:${id}`;
 }
 
 export async function hashDeviceToken(
@@ -235,26 +232,6 @@ export async function getDevice(
   return authenticated
     ? { email: authenticated.email, createdAt: "authenticated" }
     : null;
-}
-
-/**
- * Verification rate limits remain best-effort KV counters. They are not used
- * for delivery authorization, idempotency, or quota correctness.
- */
-export async function checkAndIncrRateLimit(
-  env: Env,
-  kind: string,
-  id: string,
-  limit: number,
-  windowSeconds: number,
-): Promise<{ ok: true; count: number } | { ok: false; count: number }> {
-  const key = rateLimitKey(kind, id);
-  const raw = await env.STORE.get(key);
-  const count = raw && Number.isFinite(Number(raw)) ? Number(raw) : 0;
-  if (count >= limit) return { ok: false, count };
-  const next = count + 1;
-  await env.STORE.put(key, String(next), { expirationTtl: windowSeconds });
-  return { ok: true, count: next };
 }
 
 export function dailyQuotaLimit(env: Env): number {
