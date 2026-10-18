@@ -2027,10 +2027,15 @@ export default class ArxivDailyPlugin extends Plugin {
    * Embed the query locally and return the most similar indexed papers with
    * their best matching passages. Joins catalog titles for display; the
    * similarity evidence (hit chunk text) is explainable end to end.
+   *
+   * `signal` cancels a search the caller no longer wants (a newer query, a
+   * closed view): it is checked between the load steps and handed down to the
+   * embedding call, so a remote request is aborted in flight. A cancelled
+   * search rejects with a cancellation error.
    */
   async searchPersonalLibraryFullText(
     queryText: string,
-    options?: { lexicalQueryText?: string },
+    options?: { lexicalQueryText?: string; signal?: AbortSignal },
   ): Promise<Array<{
     paperKey: string;
     title: string;
@@ -2042,6 +2047,8 @@ export default class ArxivDailyPlugin extends Plugin {
     rankingScoreKind: "cosine" | "bm25" | "rrf";
     hits: readonly KnowledgeBaseChunkHit[];
   }>> {
+    const signal = options?.signal;
+    throwIfCancelled(signal);
     const connection = this.libraryConnection;
     if (!connection) throw new Error("Choose a personal library first");
     const { scopeFingerprint, identificationFingerprint } = this.libraryFingerprints(connection);
@@ -2049,6 +2056,7 @@ export default class ArxivDailyPlugin extends Plugin {
       scopeFingerprint,
       identificationFingerprint,
     );
+    throwIfCancelled(signal);
     this.assertRemoteEmbeddingReady();
     // Ranking uses catalog titles only. Fallback titles from this exact source
     // snapshot are display metadata; generation search uses its persisted title.
@@ -2058,6 +2066,7 @@ export default class ArxivDailyPlugin extends Plugin {
     }
     const store = this.buildFullTextKnowledgeBaseStore(connection);
     const manifest = await store.loadManifest();
+    throwIfCancelled(signal);
     const matches = await searchFullTextKnowledgeBaseCore({
       store,
       sourceManifest: manifest,
@@ -2067,6 +2076,7 @@ export default class ArxivDailyPlugin extends Plugin {
       lexicalQueryText: options?.lexicalQueryText,
       titles: rankingTitles,
       logger: this.logger,
+      signal,
     });
     return projectLibraryFullTextMatches({ catalogTitles: rankingTitles, manifest, matches });
   }

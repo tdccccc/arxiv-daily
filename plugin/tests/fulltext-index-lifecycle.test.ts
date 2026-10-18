@@ -413,6 +413,18 @@ describe("personal library full-text index lifecycle", () => {
     expect(runtime.legacy.loadManifest).toHaveBeenCalledTimes(1);
   });
 
+  it("rejects a full-text search whose signal is already aborted without reading the index", async () => {
+    const memory = memoryStorage();
+    const runtime = fixture(memory.storage);
+    const controller = new AbortController();
+    controller.abort("superseded by a newer library search");
+
+    await expect(runtime.plugin.searchPersonalLibraryFullText("alpha", { signal: controller.signal }))
+      .rejects.toMatchObject({ name: "RunCancelledError", message: "superseded by a newer library search" });
+
+    expect(runtime.legacy.loadManifest).not.toHaveBeenCalled();
+  });
+
   it("rejects an incompatible generation before a capable host touches the legacy manifest", async () => {
     const memory = memoryStorage();
     const runtime = fixture(memory.storage);
