@@ -1,10 +1,13 @@
 import { createRequire } from "node:module";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { createTestVault } from "./test-vault.mjs";
 
 const require = createRequire(import.meta.url);
 const { buildDashboardState, matchesTab } = require("../src/dashboard-model.js");
 const { loadExtensionBundle } = await import("./load-bundle.mjs");
 const {
+  createPaperIndexStore,
   renderDashboardHtml,
   resourceTargetForEntry,
   updatePaperStatus,
@@ -66,41 +69,61 @@ assert.deepEqual(watch.allRows.map((row) => row.key), [
   "arxiv:2606.00003",
 ]);
 
-// Status updates resolve by map key, by bare arXiv id, and by prefixed id.
-const storage = memoryStorage(index);
-await updatePaperStatus(storage, "arxiv:2606.00001", "reading", () => new Date("2026-06-13T12:00:00.000Z"));
-let saved = JSON.parse(await storage.readText("arxiv-daily/.index/papers.json"));
+// Status updates go through core's PaperIndexStore and resolve by map key, by
+// bare arXiv id, and by prefixed id.
+const vaults = [];
+const newVault = (options) => {
+  const created = createTestVault(options);
+  vaults.push(created);
+  return created;
+};
+const keyed = newVault({ index });
+const keyedStore = createPaperIndexStore(keyed.vault, keyed.storeOptions);
+await updatePaperStatus(keyedStore, "arxiv:2606.00001", "reading");
+let saved = keyed.readIndex();
 assert.equal(saved.papers["arxiv:2606.00001"].status, "reading");
 assert.equal(saved.papers["arxiv:2606.00001"].paperKey, "arxiv:2606.00001");
 assert.equal(saved.schemaVersion, 5);
-assert.equal(saved.updatedAt, "2026-06-13T12:00:00.000Z");
+assert.notEqual(saved.updatedAt, "2026-06-13T00:00:00.000Z");
 assert.equal(saved.papers["arxiv:2606.00002"].status, "to_read");
-await updatePaperStatus(storage, "2606.00002", "saved");
-saved = JSON.parse(await storage.readText("arxiv-daily/.index/papers.json"));
+await updatePaperStatus(keyedStore, "2606.00002", "saved");
+saved = keyed.readIndex();
 assert.equal(saved.papers["arxiv:2606.00002"].status, "saved");
-assert.equal(storage.atomicWrites, 2, "papers.json must be replaced atomically");
-await assert.rejects(updatePaperStatus(storage, "2606.99999", "read"), /not in papers\.json/);
-await assert.rejects(updatePaperStatus(storage, "__proto__", "read"), /not in papers\.json/);
-await assert.rejects(updatePaperStatus(storage, "2606.00001", "bogus"), /invalid status/);
+// Core keeps the previous document as papers.json.bak when it replaces it.
+assert.equal(JSON.parse(readFileSync(`${keyed.indexFile}.bak`, "utf8")).papers["arxiv:2606.00002"].status, "to_read");
+await assert.rejects(updatePaperStatus(keyedStore, "2606.99999", "read"), /not in papers\.json/);
+await assert.rejects(updatePaperStatus(keyedStore, "__proto__", "read"), /not in papers\.json/);
+await assert.rejects(updatePaperStatus(keyedStore, "2606.00001", "bogus"), /invalid status/);
+assert.equal(keyed.readIndex().papers["arxiv:2606.00001"].status, "reading");
 
-// Pre-schema-4 files keyed by the bare id still work.
-const legacyStorage = memoryStorage({
-  schemaVersion: 3,
-  updatedAt: "2026-06-13T00:00:00.000Z",
-  papers: { "2606.00001": { ...entry({ arxivId: "2606.00001" }), paperKey: undefined } },
+// Pre-schema-4 files keyed by the bare id still work (core upgrades them).
+const legacy = newVault({
+  index: {
+    schemaVersion: 3,
+    updatedAt: "2026-06-13T00:00:00.000Z",
+    papers: { "2606.00001": { ...entry({ arxivId: "2606.00001" }), paperKey: undefined } },
+  },
 });
-await updatePaperStatus(legacyStorage, "2606.00001", "read");
-assert.equal(
-  JSON.parse(await legacyStorage.readText("arxiv-daily/.index/papers.json")).papers["2606.00001"].status,
-  "read",
-);
+await updatePaperStatus(createPaperIndexStore(legacy.vault, legacy.storeOptions), "2606.00001", "read");
+assert.equal(legacy.readIndex().papers["arxiv:2606.00001"].status, "read");
 
-// A format the extension does not know is never rewritten.
-const futureStorage = memoryStorage({ ...index, schemaVersion: 99 });
-const futureBefore = await futureStorage.readText("arxiv-daily/.index/papers.json");
-await assert.rejects(updatePaperStatus(futureStorage, "2606.00001", "read"), /schemaVersion 99 is not supported/);
-assert.equal(await futureStorage.readText("arxiv-daily/.index/papers.json"), futureBefore);
-assert.equal(futureStorage.atomicWrites, 0);
+// A format the extension does not know is never rewritten, with or without an
+// older backup that core would otherwise fall back to.
+for (const backup of [undefined, index]) {
+  const future = newVault({ index: { ...index, schemaVersion: 99 }, backup });
+  const futureBefore = future.readIndexText();
+  await assert.rejects(
+    updatePaperStatus(createPaperIndexStore(future.vault, future.storeOptions), "2606.00001", "read"),
+    /unsupported schemaVersion|cannot be read by this extension/,
+  );
+  assert.equal(future.readIndexText(), futureBefore);
+}
+
+// Only local folders can be locked and written.
+assert.throws(
+  () => createPaperIndexStore({ vaultRootUri: { fsPath: "/v", scheme: "vscode-vfs" } }),
+  /local folder/,
+);
 
 assert.equal(
   resourceTargetForEntry(index.papers["arxiv:2606.00001"], "note").value,
@@ -154,6 +177,8 @@ assert(script, "dashboard page script should be present");
 assert.doesNotThrow(() => new Function("acquireVsCodeApi", "document", "window", script));
 assert(script.includes('addEventListener("message"'));
 
+for (const created of vaults) created.cleanup();
+
 console.log("arXiv Daily VS Code Dashboard OK");
 
 function entry(overrides = {}) {
@@ -186,28 +211,5 @@ function entry(overrides = {}) {
     zoteroUri: overrides.zoteroUri ?? "",
     citationKey: overrides.citationKey ?? "Doe2026",
     projects: overrides.projects ?? [],
-  };
-}
-
-function memoryStorage(initialIndex) {
-  let content = JSON.stringify(initialIndex, null, 2);
-  return {
-    atomicWrites: 0,
-    normalizePath(path) {
-      return path.replace(/\\/g, "/");
-    },
-    async exists(path) {
-      return path === "arxiv-daily/.index/papers.json";
-    },
-    async readText() {
-      return content;
-    },
-    async writeText() {
-      throw new Error("papers.json must be written through writeTextAtomic");
-    },
-    async writeTextAtomic(_path, next) {
-      this.atomicWrites += 1;
-      content = next;
-    },
   };
 }

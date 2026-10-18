@@ -2,6 +2,7 @@ import esbuild from "esbuild";
 import { mkdir, rm, stat } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { noticeBanner, readPakoNotice } from "../../../scripts/release-utils.mjs";
 
 // Bundles the extension, together with @arxiv-daily/core and
 // @arxiv-daily/node-runtime, into one CommonJS file. The workspace packages are
@@ -23,6 +24,8 @@ await esbuild.build({
   external: ["vscode"],
   minify: true,
   sourcemap: false,
+  loader: { ".md": "text" },
+  banner: { js: noticeBanner(await readPakoNotice()) },
   legalComments: "inline",
   logLevel: "warning",
   // The VS Code companion never loads the native private-storage binding; the
