@@ -1408,6 +1408,74 @@ describe("full-text indexing orchestration", () => {
     expect((await store.loadPaper(paperKey))?.filePaths).toEqual([newPath]);
   });
 
+  describe("identical unresolved PDFs in several folders", () => {
+    // The first differing character sorts one way by code unit and the other by
+    // locale (uppercase before lowercase, accents). Stored path arrays must follow
+    // code-unit order whatever the host locale does.
+    it.each([
+      [["Zotero/x.pdf", "arXiv/x.pdf"], ["Zotero/x.pdf", "arXiv/x.pdf"]],
+      [["a/x.pdf", "B/x.pdf"], ["B/x.pdf", "a/x.pdf"]],
+      [["cosmology/a.pdf", "Reviews/a.pdf"], ["Reviews/a.pdf", "cosmology/a.pdf"]],
+      [["é.pdf", "z.pdf"], ["z.pdf", "é.pdf"]],
+    ])("merges %j into one paper listing its files as %j", async (paths, expected) => {
+      const bytes = "same-pdf-bytes";
+      const source = new FakeSource({ [paths[0]!]: bytes, [paths[1]!]: bytes });
+      const store = new MemoryStore();
+      const fingerprints: Record<string, string> = {
+        [paths[0]!]: fingerprint("a1"),
+        [paths[1]!]: fingerprint("b2"),
+      };
+      const run = () => indexPersonalLibraryFullText({
+        catalog: makeCatalog([], paths.map((path) => ({ path, fingerprint: fingerprints[path]! }))),
+        source,
+        extractor: new FakeExtractor({ [bytes]: ["Stable Local Paper Title\nAbstract body."] }),
+        embedding: new FakeEmbedding(),
+        store,
+        now: () => new Date(NOW),
+      });
+
+      const first = await run();
+      expect(first).toMatchObject({ indexed: 1, reused: 0, failed: 0 });
+      const record = (await store.loadManifest()).papers[fallbackPaperKey(bytes)];
+      expect(record).toMatchObject({ status: "ready", filePaths: expected });
+      expect(record?.observationFingerprints).toEqual(expected.map((path) => fingerprints[path]));
+
+      const second = await run();
+      expect(second).toMatchObject({ indexed: 0, reused: 1, failed: 0 });
+    });
+  });
+
+  it("records an unsavable paper's files in stored order so the manifest still commits", async () => {
+    // A catalog entry that lists its files out of order cannot be stored as a
+    // paper document. That paper must fail alone: its failed record is written
+    // in the order the manifest decoder demands, files and fingerprints paired.
+    const catalog = makeCatalog([
+      { paperKey: "arxiv:2403.19236", filePaths: ["lib/b.pdf", "lib/a.pdf"], fingerprint: fingerprint("f1") },
+      { paperKey: "arxiv:2501.00001", filePaths: ["lib/c.pdf"], fingerprint: fingerprint("f2") },
+    ]);
+    catalog.files["lib/a.pdf"]!.observationFingerprint = fingerprint("aa");
+    catalog.files["lib/b.pdf"]!.observationFingerprint = fingerprint("bb");
+    const store = new MemoryStore();
+
+    const summary = await indexPersonalLibraryFullText({
+      catalog,
+      source: new FakeSource(),
+      extractor: new FakeExtractor({ "lib/a.pdf": [LONG_ALPHA], "lib/b.pdf": [LONG_ALPHA], "lib/c.pdf": [LONG_BETA] }),
+      embedding: new FakeEmbedding(),
+      store,
+      now: () => new Date(NOW),
+    });
+
+    expect(summary).toMatchObject({ indexed: 1, failed: 1 });
+    const manifest = await store.loadManifest();
+    expect(manifest.papers["arxiv:2501.00001"]?.status).toBe("ready");
+    expect(manifest.papers["arxiv:2403.19236"]).toMatchObject({
+      status: "failed",
+      filePaths: ["lib/a.pdf", "lib/b.pdf"],
+      observationFingerprints: [fingerprint("aa"), fingerprint("bb")],
+    });
+  });
+
   it("fails only the affected fallback paper when its stored document is corrupt", async () => {
     const oldPath = "lib/old-name.pdf";
     const newPath = "lib/renamed.pdf";
