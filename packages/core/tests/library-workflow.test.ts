@@ -11,6 +11,8 @@ import { accountedPaperKeysOf, decodePersonalLibraryDirectionProposal } from "..
 import { PersonalLibraryDirectionProposalStore } from "../src/library/personal-library-proposal-store";
 import { DEFAULT_SETTINGS } from "../src/settings/defaults";
 import { PDF_IDENTIFICATION_HEAD_BYTES, PDF_IDENTIFICATION_TAIL_BYTES } from "../src/library/pdf-library-file-identifier";
+import { resetArxivRequestCoordinatorForTests } from "../src/pipeline/arxiv-fetcher";
+import { Logger } from "../src/services/logger";
 
 function memoryStorage() {
   const text = new Map<string, string>();
@@ -296,6 +298,101 @@ describe("shared LibraryWorkflow", () => {
     expect(f.options.source.readBinary).toHaveBeenCalledWith("renamed.pdf", expect.objectContaining({ start: 0, end: PDF_IDENTIFICATION_HEAD_BYTES }));
     expect(f.options.source.readBinary).toHaveBeenCalledWith("renamed.pdf", expect.objectContaining({ start: pdf.length - PDF_IDENTIFICATION_TAIL_BYTES, end: pdf.length }));
     expect(f.parser.parse).not.toHaveBeenCalled();
+  });
+
+  describe("entries whose names the catalog cannot hold", () => {
+    const unsafe = ["old\\2610.00009.pdf", "A:b 2610.00010.pdf"];
+    const withUnsafeEntries = () => {
+      const logger = new Logger("warn");
+      const warn = vi.spyOn(logger, "warn").mockImplementation(() => undefined);
+      const f = fixture({ logger });
+      const listed = vi.mocked(f.options.source.inventory).getMockImplementation()!;
+      vi.mocked(f.options.source.inventory).mockImplementation(async (options) => {
+        const inventory = await listed(options);
+        return {
+          ...inventory,
+          entries: [
+            ...inventory.entries,
+            ...unsafe.map((path) => ({ path, type: "file" as const, size: 1, mtimeMs: 1 })),
+            { path: "bad\\folder", type: "ignored" as const, ignoredReason: "unsafe-name" as const },
+          ],
+        };
+      });
+      return { ...f, warn };
+    };
+
+    it("scans the rest of the library and names the first skipped entries in the log", async () => {
+      const f = withUnsafeEntries();
+      const catalog = await f.workflow.scan();
+
+      expect(Object.keys(catalog.papers)).toHaveLength(6);
+      expect(Object.keys(catalog.files)).not.toContain(unsafe[0]);
+      expect(catalog.lastScan).toMatchObject({ ready: 6, skipped: 3 });
+      expect(f.warn).toHaveBeenCalledTimes(1);
+      expect(f.warn.mock.calls[0]![0]).toMatch(/3 entries/);
+      expect(f.warn.mock.calls[0]![0]).toContain(unsafe[0]);
+    });
+
+    it("does not take them for changes when indexing right after the scan", async () => {
+      const f = withUnsafeEntries();
+      await f.workflow.scan();
+      const onFolderChange = vi.fn();
+      await f.workflow.index({ onFolderChange });
+      expect(onFolderChange).not.toHaveBeenCalled();
+    });
+
+    it("stays quiet when nothing was skipped", async () => {
+      const logger = new Logger("warn");
+      const warn = vi.spyOn(logger, "warn").mockImplementation(() => undefined);
+      await fixture({ logger }).workflow.scan();
+      expect(warn).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("a PDF whose name carries no id and whose title is searched on arXiv", () => {
+    const title = "Reliable Scientific Agents With Evidence";
+    const withTitle = () => {
+      const f = fixture();
+      f.documents.clear();
+      f.documents.set("renamed.pdf", new TextEncoder().encode(`%PDF-1.4\n1 0 obj\n<< /Title (${title}) >>\nendobj\n`));
+      return f;
+    };
+    const feed = (...entries: string[]) => ({ status: 200, headers: {}, bodyText: `<feed>${entries.join("")}</feed>` });
+    const found = feed(`<entry><id>https://arxiv.org/abs/2610.00002</id><title>${title}</title></entry>`);
+
+    it("is identified by the next scan after a failed lookup, and then left alone", async () => {
+      await resetArxivRequestCoordinatorForTests();
+      const f = withTitle();
+      const request = vi.mocked(f.options.http.request);
+      request.mockResolvedValueOnce({ status: 503, headers: {}, bodyText: "" }).mockResolvedValue(found);
+
+      const first = await f.workflow.scan();
+      expect(first.files["renamed.pdf"]).toMatchObject({ status: "unresolved" });
+      expect(first.files["renamed.pdf"]).not.toHaveProperty("contentIdentificationVersion");
+      expect(first.lastScan).toMatchObject({ ready: 0, unresolved: 1, failed: 0 });
+
+      await resetArxivRequestCoordinatorForTests();
+      const second = await f.workflow.scan();
+      expect(second.files["renamed.pdf"]).toMatchObject({ status: "ready", arxivId: "2610.00002" });
+      expect(request).toHaveBeenCalledTimes(2);
+
+      const third = await f.workflow.scan();
+      expect(third.files["renamed.pdf"]).toEqual(second.files["renamed.pdf"]);
+      expect(request).toHaveBeenCalledTimes(2);
+    });
+
+    it("is not looked up again once arXiv has said nothing matches", async () => {
+      await resetArxivRequestCoordinatorForTests();
+      const f = withTitle();
+      const request = vi.mocked(f.options.http.request);
+      request.mockResolvedValue(feed());
+
+      const first = await f.workflow.scan();
+      expect(first.files["renamed.pdf"]).toMatchObject({ status: "unresolved", contentIdentificationVersion: expect.any(Number) });
+      const second = await f.workflow.scan();
+      expect(second.files["renamed.pdf"]).toEqual(first.files["renamed.pdf"]);
+      expect(request).toHaveBeenCalledTimes(1);
+    });
   });
 
   it("preserves the committed title-and-abstract index when generation synchronization fails", async () => {

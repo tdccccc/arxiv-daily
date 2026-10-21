@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { deflateSync } from "node:zlib";
 import {
   DEFAULT_SETTINGS,
@@ -7,6 +7,7 @@ import {
   createPersonalLibraryIdentificationFingerprint,
   createPersonalLibraryScopeFingerprint,
   derivePersonalLibraryCatalogPaths,
+  resetArxivRequestCoordinatorForTests,
   type StorageAdapter,
 } from "@arxiv-daily/core";
 import ArxivDailyPlugin from "../main.ts";
@@ -126,6 +127,9 @@ function makePlugin(storage = makeStorage().storage) {
     storage,
   };
 }
+
+// Title searches wait for the spacing every arXiv request shares; start each test with none owed.
+beforeEach(async () => { await resetArxivRequestCoordinatorForTests(); });
 
 describe("personal library scan lifecycle", () => {
   it("scans without model authorization, resolves only canonical IDs, and atomically reloads", async () => {
@@ -458,6 +462,7 @@ describe("personal library scan lifecycle", () => {
 
     // A failed title search (garbage document title) must not demote the
     // real paper: the direct ID stands.
+    await resetArxivRequestCoordinatorForTests();
     const { plugin: plugin2, internals: internals2, source: source2, fetchMetadataByIds: fetch2 } = makePlugin();
     const pdf2 = identificationPdf(
       "(arXiv:1601.00621v1 [astro-ph.CO] 5 Jan 2016) Tj",

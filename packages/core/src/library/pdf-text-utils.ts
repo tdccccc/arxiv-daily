@@ -19,17 +19,20 @@ const ARXIV_URL_IN_TEXT_RE = /(?:^|[^0-9A-Za-z])(?:https?:\/\/)?(?:www\.)?arxiv\
  * asserts identity — the caller scopes the text region and the count.
  */
 export function extractArxivIdsFromText(text: string): ArxivIdCandidate[] {
+  // Each form is matched on its own; merge the matches back into text order.
+  const found: Array<{ index: number; raw: string }> = [];
+  for (const pattern of [MODERN_ARXIV_ID_IN_TEXT_RE, LEGACY_ARXIV_ID_IN_TEXT_RE, ARXIV_URL_IN_TEXT_RE]) {
+    for (const match of text.matchAll(pattern)) found.push({ index: match.index, raw: match[1]! });
+  }
+  found.sort((left, right) => left.index - right.index);
   const seen = new Set<string>();
   const candidates: ArxivIdCandidate[] = [];
-  const push = (raw: string): void => {
+  for (const { raw } of found) {
     const canonicalId = canonicalArxivId(raw);
-    if (!canonicalId || seen.has(canonicalId)) return;
+    if (!canonicalId || seen.has(canonicalId)) continue;
     seen.add(canonicalId);
     candidates.push({ canonicalId, raw });
-  };
-  for (const match of text.matchAll(MODERN_ARXIV_ID_IN_TEXT_RE)) push(match[1]!);
-  for (const match of text.matchAll(LEGACY_ARXIV_ID_IN_TEXT_RE)) push(match[1]!);
-  for (const match of text.matchAll(ARXIV_URL_IN_TEXT_RE)) push(match[1]!);
+  }
   return candidates;
 }
 

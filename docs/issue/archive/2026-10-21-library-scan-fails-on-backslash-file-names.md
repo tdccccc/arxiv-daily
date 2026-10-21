@@ -1,7 +1,7 @@
 # 文献库文件夹里只要有一个文件名带反斜杠，整个库的扫描和索引都会失败，错误信息还不指出是哪个文件
 
 > 发现日期：2026-10-21 · 来源：main `d999037` 深度代码审查 · 编号 LIB-03
-> 范围：个人文献库目录扫描（macOS、Linux 上的插件、CLI、Workbench） · 严重程度：中 · 状态：未修复 · 置信度：已复现
+> 范围：个人文献库目录扫描（macOS、Linux 上的插件、CLI、Workbench） · 严重程度：中 · 状态：已修复（分支 `fix/2026-10-21-batch1`，提交 74a02f2、19603de） · 置信度：已复现
 
 ## 问题
 
@@ -38,3 +38,9 @@
 - core：清单里带一个 `a\b.pdf` 和一个 `notes\x.md`，扫描成功，其它论文正常入库，被跳过的条目不写入目录。
 - node-runtime：临时文件夹里创建 `old\x.pdf`，`inventory()` 把它标成 ignored，`readBinary("old\\x.pdf")` 仍被拒绝。
 - 回归：同一份清单连续扫描两次，第二次 `detectPersonalLibraryFolderChange` 不因被跳过的条目报告变化。
+
+## 修复情况
+
+文件夹里出现名字带反斜杠（或以 `X:` 开头）的文件或文件夹时，扫描和建立索引不再整体失败：Node 目录清单把这类条目标成 `ignored`（新增原因 `unsafe-name`）且不进入这样的文件夹，对账和"文件夹有无变化"检查也会跳过它们，所以它们既不进目录，也不会被当成新增而让每次索引都重扫。跳过的数量记入扫描摘要的可选字段 `lastScan.skipped`（为 0 时不出现，目录 schema 不变），CLI 的日志警告会列出前三个路径，库目录预览列出全部并说明原因。可选的后续：插件的"目录摘要"对话框还没有 `skipped` 一行，插件自己的扫描路径也不输出这条日志。
+
+测试：core 的 `personal-library-reconciliation`、`personal-library-folder-change`、`personal-library-catalog`（路径判定与摘要解码）、`library-connection`（预览）、`library-workflow`（日志，索引不把它们当作变化）；node-runtime 的 `scoped-library-source.test.ts` 在真实临时文件夹里验证清单、拒读，以及"扫描得到有效目录且之后视为未变化"（Windows 上跳过）。

@@ -522,16 +522,35 @@ async function collectIndexUnits(input: {
   }
 
   for (const unit of byPaperKey.values()) {
-    const paired = unit.filePaths.map((path, index) => ({
-      path,
-      fingerprint: unit.observationFingerprints[index],
-    })).sort((left, right) => left.path.localeCompare(right.path));
-    unit.filePaths = paired.map(({ path }) => path);
-    unit.observationFingerprints = paired.map(({ fingerprint }) => fingerprint);
+    const files = sortFilesByPath(unit.filePaths, unit.observationFingerprints);
+    unit.filePaths = files.filePaths;
+    unit.observationFingerprints = files.observationFingerprints;
     unit.migrationSourceKeys = [...new Set(unit.migrationSourceKeys)].sort();
     units.push(unit);
   }
   return units.sort((left, right) => left.paperKey.localeCompare(right.paperKey));
+}
+
+/**
+ * Order a paper's files the way the manifest and paper decoders demand: by
+ * UTF-16 code unit, which is what the default `sort()` does. `localeCompare`
+ * disagrees on case and accents (and varies with the host locale), which made
+ * two identical PDFs in `Zotero/` and `arXiv/` an undecodable record. Each
+ * fingerprint stays with its file.
+ */
+function sortFilesByPath<T extends string | undefined>(
+  filePaths: readonly string[],
+  fingerprints: readonly T[],
+): { filePaths: string[]; observationFingerprints: T[] } {
+  const order = filePaths.map((_, index) => index).sort((left, right) => {
+    const leftPath = filePaths[left]!;
+    const rightPath = filePaths[right]!;
+    return leftPath < rightPath ? -1 : leftPath > rightPath ? 1 : 0;
+  });
+  return {
+    filePaths: order.map((index) => filePaths[index]!),
+    observationFingerprints: order.map((index) => fingerprints[index]!),
+  };
 }
 
 async function buildPaperDocument(input: {
@@ -734,13 +753,21 @@ function recordFailed(
     (value): value is string => value !== undefined,
   );
   const completeUnit = unit && fingerprints?.length === unit.filePaths.length;
+  // Sorted here as well, so one paper whose files arrive out of order fails
+  // alone instead of making the whole manifest undecodable at commit.
+  const files = completeUnit
+    ? sortFilesByPath(unit.filePaths, fingerprints)
+    : {
+      filePaths: previous?.filePaths ?? [],
+      observationFingerprints: previous?.observationFingerprints ?? [],
+    };
   papers[paperKey] = {
     paperKey,
     status: "failed",
     modelId,
     dimension,
-    filePaths: completeUnit ? unit.filePaths : previous?.filePaths ?? [],
-    observationFingerprints: completeUnit ? fingerprints : previous?.observationFingerprints ?? [],
+    filePaths: files.filePaths,
+    observationFingerprints: files.observationFingerprints,
     chunkCount: 0,
     error: error.slice(0, 500),
     updatedAt: nowIso,
