@@ -316,9 +316,9 @@ const sharedRequestCoordinator = new ArxivRequestCoordinator();
 
 /**
  * Run one arXiv request under the spacing and per-host cooldowns that every
- * ArxivFetcher request shares (the process-wide coordinator unless one is
- * given). A failed answer must be thrown as an `ArxivHttpError` for a 429 to
- * start the host's cooldown.
+ * ArxivFetcher request shares (the shared coordinator unless one is given). A
+ * failed answer must be thrown as an `ArxivHttpError` for a 429 to start the
+ * host's cooldown.
  */
 export function coordinateArxivRequest<T>(
   attempt: () => Promise<T>,
