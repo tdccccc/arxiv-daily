@@ -11,6 +11,7 @@ import { accountedPaperKeysOf, decodePersonalLibraryDirectionProposal } from "..
 import { PersonalLibraryDirectionProposalStore } from "../src/library/personal-library-proposal-store";
 import { DEFAULT_SETTINGS } from "../src/settings/defaults";
 import { PDF_IDENTIFICATION_HEAD_BYTES, PDF_IDENTIFICATION_TAIL_BYTES } from "../src/library/pdf-library-file-identifier";
+import { resetArxivRequestCoordinatorForTests } from "../src/pipeline/arxiv-fetcher";
 
 function memoryStorage() {
   const text = new Map<string, string>();
@@ -296,6 +297,52 @@ describe("shared LibraryWorkflow", () => {
     expect(f.options.source.readBinary).toHaveBeenCalledWith("renamed.pdf", expect.objectContaining({ start: 0, end: PDF_IDENTIFICATION_HEAD_BYTES }));
     expect(f.options.source.readBinary).toHaveBeenCalledWith("renamed.pdf", expect.objectContaining({ start: pdf.length - PDF_IDENTIFICATION_TAIL_BYTES, end: pdf.length }));
     expect(f.parser.parse).not.toHaveBeenCalled();
+  });
+
+  describe("a PDF whose name carries no id and whose title is searched on arXiv", () => {
+    const title = "Reliable Scientific Agents With Evidence";
+    const withTitle = () => {
+      const f = fixture();
+      f.documents.clear();
+      f.documents.set("renamed.pdf", new TextEncoder().encode(`%PDF-1.4\n1 0 obj\n<< /Title (${title}) >>\nendobj\n`));
+      return f;
+    };
+    const feed = (...entries: string[]) => ({ status: 200, headers: {}, bodyText: `<feed>${entries.join("")}</feed>` });
+    const found = feed(`<entry><id>https://arxiv.org/abs/2610.00002</id><title>${title}</title></entry>`);
+
+    it("is identified by the next scan after a failed lookup, and then left alone", async () => {
+      await resetArxivRequestCoordinatorForTests();
+      const f = withTitle();
+      const request = vi.mocked(f.options.http.request);
+      request.mockResolvedValueOnce({ status: 503, headers: {}, bodyText: "" }).mockResolvedValue(found);
+
+      const first = await f.workflow.scan();
+      expect(first.files["renamed.pdf"]).toMatchObject({ status: "unresolved" });
+      expect(first.files["renamed.pdf"]).not.toHaveProperty("contentIdentificationVersion");
+      expect(first.lastScan).toMatchObject({ ready: 0, unresolved: 1, failed: 0 });
+
+      await resetArxivRequestCoordinatorForTests();
+      const second = await f.workflow.scan();
+      expect(second.files["renamed.pdf"]).toMatchObject({ status: "ready", arxivId: "2610.00002" });
+      expect(request).toHaveBeenCalledTimes(2);
+
+      const third = await f.workflow.scan();
+      expect(third.files["renamed.pdf"]).toEqual(second.files["renamed.pdf"]);
+      expect(request).toHaveBeenCalledTimes(2);
+    });
+
+    it("is not looked up again once arXiv has said nothing matches", async () => {
+      await resetArxivRequestCoordinatorForTests();
+      const f = withTitle();
+      const request = vi.mocked(f.options.http.request);
+      request.mockResolvedValue(feed());
+
+      const first = await f.workflow.scan();
+      expect(first.files["renamed.pdf"]).toMatchObject({ status: "unresolved", contentIdentificationVersion: expect.any(Number) });
+      const second = await f.workflow.scan();
+      expect(second.files["renamed.pdf"]).toEqual(first.files["renamed.pdf"]);
+      expect(request).toHaveBeenCalledTimes(1);
+    });
   });
 
   it("preserves the committed title-and-abstract index when generation synchronization fails", async () => {

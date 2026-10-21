@@ -3,6 +3,8 @@ import { deflate } from "pako";
 import type { HttpClient, HttpResponse } from "../src/core/adapters";
 import { createPdfLibraryFileIdentifier } from "../src/library/pdf-library-file-identifier";
 import type { ScopedLibrarySource } from "../src/library/scoped-library-source";
+import { ArxivRequestCoordinator, isArxivHttpError, isArxivRetryDeferredError } from "../src/pipeline/arxiv-fetcher";
+import { isCancellationError } from "../src/services/cancellation";
 
 const TITLE = "Measuring the baryon fraction using galaxy clustering";
 const PATH = "papers/renamed.pdf";
@@ -49,9 +51,21 @@ function httpAnswering(bodyText: string, status = 200) {
   return { http: { request } satisfies HttpClient, request };
 }
 
+/** A coordinator on a fake clock: waiting advances the clock instead of taking time. */
+function fakeClock() {
+  const state = { monotonic: 0 };
+  const coordinator = new ArxivRequestCoordinator({
+    monotonicNow: () => state.monotonic,
+    wallNow: () => Date.parse("2026-10-21T10:00:00.000Z") + state.monotonic,
+    sleep: async (ms) => { state.monotonic += ms; },
+  });
+  return { state, coordinator };
+}
+
 async function identify(bytes: Uint8Array, http: HttpClient): Promise<string | null> {
-  return await createPdfLibraryFileIdentifier({ source: sourceOf(bytes), http })
-    .identify(PATH, undefined, bytes.length);
+  return await createPdfLibraryFileIdentifier({
+    source: sourceOf(bytes), http, requestCoordinator: fakeClock().coordinator,
+  }).identify(PATH, undefined, bytes.length);
 }
 
 describe("createPdfLibraryFileIdentifier", () => {
@@ -120,6 +134,125 @@ describe("createPdfLibraryFileIdentifier", () => {
       });
       expect(await identify(bytes, http)).toBe("2302.05010");
       expect(request).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("when the PDF names no paper itself and the title search cannot answer", () => {
+    const untitled = pdfBytes({ header: "(Just some text) Tj" });
+
+    it("answers null, a judgement, when arXiv was asked and nothing matched", async () => {
+      const { http, request } = httpAnswering(feed());
+      expect(await identify(pdfBytes({ info: titled() }), http)).toBeNull();
+      expect(request).toHaveBeenCalledTimes(1);
+    });
+
+    it("answers null without a lookup when the PDF has no usable title", async () => {
+      const { http, request } = httpAnswering(feed(entry("2403.19236v2", TITLE)));
+      expect(await identify(untitled, http)).toBeNull();
+      expect(request).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      ["an HTTP error", httpAnswering("", 503).http],
+      ["a rate limit", httpAnswering("", 429).http],
+      ["a page that is not a feed", httpAnswering("<html>maintenance</html>").http],
+      ["no connection", { request: vi.fn(async () => { throw new Error("offline"); }) } satisfies HttpClient],
+    ])("throws rather than answering null on %s, so the file is not judged", async (_case, http) => {
+      await expect(identify(pdfBytes({ info: titled() }), http)).rejects.toThrow();
+    });
+
+    it("throws the HTTP error itself, naming the status", async () => {
+      const error = await identify(pdfBytes({ info: titled() }), httpAnswering("", 503).http).catch((caught) => caught);
+      expect(isArxivHttpError(error)).toBe(true);
+      expect(error).toMatchObject({ status: 503 });
+    });
+
+    it("lets cancellation through instead of treating it as a failed lookup", async () => {
+      const controller = new AbortController();
+      const request = vi.fn(async (): Promise<HttpResponse> => {
+        controller.abort();
+        throw new Error("aborted");
+      });
+      const identifier = createPdfLibraryFileIdentifier({
+        source: sourceOf(pdfBytes({ info: titled() })), http: { request }, requestCoordinator: fakeClock().coordinator,
+      });
+      await expect(identifier.identify(PATH, controller.signal)).rejects.toSatisfy(isCancellationError);
+    });
+
+    it("does not read the file once cancelled", async () => {
+      const controller = new AbortController();
+      controller.abort();
+      const source = sourceOf(pdfBytes({ info: titled() }));
+      const identifier = createPdfLibraryFileIdentifier({ source, http: httpAnswering(feed()).http });
+      await expect(identifier.identify(PATH, controller.signal)).rejects.toSatisfy(isCancellationError);
+      expect(source.readBinary).not.toHaveBeenCalled();
+    });
+
+    it("stops asking after a 429 until the cooldown has passed", async () => {
+      const { state, coordinator } = fakeClock();
+      const request = vi.fn(async (): Promise<HttpResponse> => ({ status: 429, headers: {}, bodyText: "" }));
+      const bytes = pdfBytes({ info: titled() });
+      const identifier = createPdfLibraryFileIdentifier({ source: sourceOf(bytes), http: { request }, requestCoordinator: coordinator });
+
+      await expect(identifier.identify("a.pdf")).rejects.toMatchObject({ status: 429 });
+      const deferred = await identifier.identify("b.pdf").catch((caught) => caught);
+      expect(isArxivRetryDeferredError(deferred)).toBe(true);
+      expect(request).toHaveBeenCalledTimes(1);
+
+      state.monotonic += 10 * 60 * 1000;
+      await expect(identifier.identify("c.pdf")).rejects.toMatchObject({ status: 429 });
+      expect(request).toHaveBeenCalledTimes(2);
+    });
+
+    it("spaces the lookups of consecutive files", async () => {
+      const { state, coordinator } = fakeClock();
+      const { http, request } = httpAnswering(feed());
+      const identifier = createPdfLibraryFileIdentifier({ source: sourceOf(pdfBytes({ info: titled() })), http, requestCoordinator: coordinator });
+      await identifier.identify("a.pdf");
+      const afterFirst = state.monotonic;
+      await identifier.identify("b.pdf");
+      expect(request).toHaveBeenCalledTimes(2);
+      expect(state.monotonic - afterFirst).toBeGreaterThanOrEqual(3_000);
+    });
+
+    it("pauses its lookups for the rest of the scan after repeated failures", async () => {
+      const request = vi.fn(async () => { throw new Error("offline"); });
+      const identifier = createPdfLibraryFileIdentifier({
+        source: sourceOf(pdfBytes({ info: titled() })), http: { request }, requestCoordinator: fakeClock().coordinator,
+      });
+      for (const name of ["a", "b", "c", "d", "e"]) {
+        await expect(identifier.identify(`${name}.pdf`)).rejects.toThrow();
+      }
+      expect(request).toHaveBeenCalledTimes(3);
+    });
+
+    it("keeps looking up after a failure that is followed by an answer", async () => {
+      const request = vi.fn()
+        .mockRejectedValueOnce(new Error("offline"))
+        .mockRejectedValueOnce(new Error("offline"))
+        .mockResolvedValueOnce({ status: 200, headers: {}, bodyText: feed() })
+        .mockRejectedValueOnce(new Error("offline"))
+        .mockRejectedValueOnce(new Error("offline"))
+        .mockResolvedValue({ status: 200, headers: {}, bodyText: feed(entry("2403.19236v2", TITLE)) });
+      const identifier = createPdfLibraryFileIdentifier({
+        source: sourceOf(pdfBytes({ info: titled() })), http: { request }, requestCoordinator: fakeClock().coordinator,
+      });
+      const outcomes: Array<string | null> = [];
+      for (const name of ["a", "b", "c", "d", "e", "f"]) {
+        outcomes.push(await identifier.identify(`${name}.pdf`).catch(() => "failed"));
+      }
+      expect(outcomes).toEqual(["failed", "failed", null, "failed", "failed", "2403.19236"]);
+    });
+
+    it("still answers from the PDF's own id while lookups are failing", async () => {
+      const request = vi.fn(async () => { throw new Error("offline"); });
+      const identifier = createPdfLibraryFileIdentifier({
+        source: sourceOf(pdfBytes({ header: streamHeader("2302.05010"), info: titled() })),
+        http: { request }, requestCoordinator: fakeClock().coordinator,
+      });
+      for (const name of ["a", "b", "c", "d", "e"]) {
+        expect(await identifier.identify(`${name}.pdf`)).toBe("2302.05010");
+      }
     });
   });
 });

@@ -39,6 +39,13 @@ export interface PersonalLibraryMetadataResolver {
 export interface PersonalLibraryFileIdentifier {
   /** Bump when content-evidence rules change so unchanged files are re-evaluated. */
   readonly version: number;
+  /**
+   * `null` is a judgement: the content names no arXiv paper. It is remembered
+   * under `version` and not asked again while the file is unchanged. A throw
+   * means the file could not be judged this time (arXiv unreachable, rate
+   * limited): the file stays unresolved but nothing is remembered, so the next
+   * scan asks again.
+   */
   identify(
     logicalPath: string,
     signal?: AbortSignal,
@@ -208,6 +215,7 @@ export async function reconcilePersonalLibraryCatalog(
     }
 
     let arxivId = filenameArxivId;
+    let judged = true;
     if (!arxivId && input.identifyFile) {
       try {
         const identified = await input.identifyFile.identify(
@@ -218,8 +226,12 @@ export async function reconcilePersonalLibraryCatalog(
         arxivId = identified ? modernArxivResources(identified)?.id ?? null : null;
       } catch {
         // Content identification is best-effort: any failure or unsupported ID
-        // keeps the file unresolved instead of failing or blocking the scan.
+        // keeps the file unresolved instead of failing or blocking the scan. A
+        // failure is not a judgement, though: it is left without the rule
+        // version so that the next scan identifies the file again.
+        throwIfCancelled(input.signal);
         arxivId = null;
+        judged = false;
       }
     }
     if (!arxivId) {
@@ -228,7 +240,7 @@ export async function reconcilePersonalLibraryCatalog(
         status: "unresolved",
         observationFingerprint,
         reason: "unrecognized-filename",
-        ...(contentIdentificationVersion === undefined ? {} : { contentIdentificationVersion }),
+        ...(contentIdentificationVersion === undefined || !judged ? {} : { contentIdentificationVersion }),
         updatedAt: nowIso,
       });
       continue;

@@ -290,6 +290,100 @@ describe("content-based file identification (strategy v2)", () => {
     expect(record.status).toBe("unresolved");
   });
 
+  it("does not remember an identification that failed, so the next scan identifies the file again", async () => {
+    const path = "paper-without-an-id.pdf";
+    const failing = { version: 4, identify: vi.fn(async () => { throw new Error("arXiv unreachable"); }) };
+    const first = await reconcilePersonalLibraryCatalog({
+      current: emptyCatalog(),
+      inventory: { entries: [file(path)], truncated: false },
+      eligibleExtensions: [".pdf"],
+      resolver: resolver([]),
+      identifyFile: failing,
+      now,
+    });
+    expect(first.catalog.files[path]).toMatchObject({ status: "unresolved" });
+    expect(first.catalog.files[path]).not.toHaveProperty("contentIdentificationVersion");
+    expect(decodePersonalLibraryCatalog(first.catalog)).toEqual(first.catalog);
+
+    const recovered = { version: 4, identify: vi.fn(async () => "2001.04385") };
+    const second = await reconcilePersonalLibraryCatalog({
+      current: first.catalog,
+      inventory: { entries: [file(path)], truncated: false },
+      eligibleExtensions: [".pdf"],
+      resolver: resolver([metadata("2001.04385")]),
+      identifyFile: recovered,
+      now,
+    });
+    expect(recovered.identify).toHaveBeenCalledTimes(1);
+    expect(second.reusedFileCount).toBe(0);
+    expect(second.catalog.files[path]).toMatchObject({
+      status: "ready",
+      arxivId: "2001.04385",
+      contentIdentificationVersion: 4,
+    });
+  });
+
+  it("remembers a judgement that the content names no paper, and does not ask again", async () => {
+    const path = "not-on-arxiv.pdf";
+    const judging = { version: 4, identify: vi.fn(async () => null) };
+    const first = await reconcilePersonalLibraryCatalog({
+      current: emptyCatalog(),
+      inventory: { entries: [file(path)], truncated: false },
+      eligibleExtensions: [".pdf"],
+      resolver: resolver([]),
+      identifyFile: judging,
+      now,
+    });
+    expect(first.catalog.files[path]).toMatchObject({ status: "unresolved", contentIdentificationVersion: 4 });
+
+    const second = await reconcilePersonalLibraryCatalog({
+      current: first.catalog,
+      inventory: { entries: [file(path)], truncated: false },
+      eligibleExtensions: [".pdf"],
+      resolver: resolver([]),
+      identifyFile: judging,
+      now,
+    });
+    expect(judging.identify).toHaveBeenCalledTimes(1);
+    expect(second.reusedFileCount).toBe(1);
+    expect(second.catalog.files[path]).toEqual(first.catalog.files[path]);
+  });
+
+  it("settles each file on its own: one failed identification does not unsettle the others", async () => {
+    const identifyFile = { version: 4, identify: vi.fn(async (path: string) => {
+      if (path === "flaky.pdf") throw new Error("arXiv unreachable");
+      return null;
+    }) };
+    const result = await reconcilePersonalLibraryCatalog({
+      current: emptyCatalog(),
+      inventory: { entries: [file("flaky.pdf"), file("steady.pdf")], truncated: false },
+      eligibleExtensions: [".pdf"],
+      resolver: resolver([]),
+      identifyFile,
+      now,
+    });
+    expect(result.catalog.files["flaky.pdf"]).not.toHaveProperty("contentIdentificationVersion");
+    expect(result.catalog.files["steady.pdf"]).toMatchObject({ contentIdentificationVersion: 4 });
+    expect(result.catalog.lastScan).toMatchObject({ unresolved: 2, failed: 0 });
+  });
+
+  it("lets cancellation during an identification cancel the scan instead of recording it", async () => {
+    const controller = new AbortController();
+    const identifyFile = { version: 4, identify: vi.fn(async () => {
+      controller.abort("stop");
+      throw new Error("aborted");
+    }) };
+    await expect(reconcilePersonalLibraryCatalog({
+      current: emptyCatalog(),
+      inventory: { entries: [file("only.pdf")], truncated: false },
+      eligibleExtensions: [".pdf"],
+      resolver: resolver([]),
+      identifyFile,
+      now,
+      signal: controller.signal,
+    })).rejects.toSatisfy(isCancellationError);
+  });
+
   it("treats identifier values unsupported by the catalog as unresolved", async () => {
     const identifyFile = {
       version: 1,

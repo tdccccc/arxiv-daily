@@ -1,4 +1,5 @@
 import type { HttpClient } from "../core/adapters";
+import { ArxivHttpError, coordinateArxivRequest, type ArxivRequestCoordinator } from "../pipeline/arxiv-fetcher";
 import { modernArxivResources } from "../utils/arxiv";
 
 /**
@@ -11,6 +12,10 @@ import { modernArxivResources } from "../utils/arxiv";
  * the entry's own `<id>`; text elsewhere in the entry (summary, comment,
  * journal reference) cites other papers and is never read for IDs. The query
  * sends only the title text (public paper metadata) to arxiv.org.
+ *
+ * The request shares the spacing and the 429 cooldown of every other arXiv API
+ * request. A search that could not be made or read throws; `arxivId: null` always
+ * means arXiv was asked and nothing matched.
  */
 export interface ArxivTitleSearchResult {
   arxivId: string | null;
@@ -28,18 +33,28 @@ export async function searchArxivTitle(
   http: HttpClient,
   title: string,
   signal?: AbortSignal,
+  /** The request coordinator to pace and cool down with; tests pass one with a fake clock. */
+  coordinator?: ArxivRequestCoordinator,
 ): Promise<ArxivTitleSearchResult> {
   const query = title.trim().replace(/\s+/g, " ").replace(/["\\]/g, "");
   if (query.length < 4) return { arxivId: null };
-  const response = await http.request({
-    url: `${SEARCH_URL}?search_query=ti:"${encodeURIComponent(query)}"&max_results=${MAX_RESULTS}`,
-    method: "GET",
-    headers: { Accept: "application/atom+xml" },
-    timeoutMs: SEARCH_TIMEOUT_MS,
-    signal,
-  });
-  if (response.status < 200 || response.status >= 300) {
-    throw new Error(`arxiv title search failed with HTTP ${response.status}`);
+  const url = `${SEARCH_URL}?search_query=ti:"${encodeURIComponent(query)}"&max_results=${MAX_RESULTS}`;
+  const response = await coordinateArxivRequest(async () => {
+    const answer = await http.request({
+      url,
+      method: "GET",
+      headers: { Accept: "application/atom+xml" },
+      timeoutMs: SEARCH_TIMEOUT_MS,
+      signal,
+    });
+    if (answer.status < 200 || answer.status >= 300) {
+      throw new ArxivHttpError(answer.status, url, answer.headers);
+    }
+    return answer;
+  }, url, signal, coordinator);
+  // A 200 that is not an Atom feed (a proxy or maintenance page) is no answer, not "no match".
+  if (!/<feed[\s>]/.test(response.bodyText)) {
+    throw new Error("arxiv title search returned something other than an Atom feed");
   }
   return matchBestTitle(query, response.bodyText);
 }
