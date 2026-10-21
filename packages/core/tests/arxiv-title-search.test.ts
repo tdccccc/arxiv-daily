@@ -61,6 +61,85 @@ describe("arxiv title search matching", () => {
   });
 });
 
+/**
+ * An entry shaped like arXiv's own: the id is the first element, and the fields
+ * that authors write (summary, comment, journal reference) come after the title.
+ */
+function arxivEntry(input: {
+  id: string;
+  title: string;
+  summary?: string;
+  comment?: string;
+  journalRef?: string;
+}): string {
+  return `<entry>
+    <id>${input.id}</id>
+    <updated>2024-04-01T00:00:00Z</updated>
+    <published>2024-03-28T00:00:00Z</published>
+    <title>${input.title}</title>
+    <summary>${input.summary ?? "A summary."}</summary>
+    <author><name>A. Author</name></author>
+    ${input.comment === undefined ? "" : `<arxiv:comment xmlns:arxiv="http://arxiv.org/schemas/atom">${input.comment}</arxiv:comment>`}
+    ${input.journalRef === undefined ? "" : `<arxiv:journal_ref xmlns:arxiv="http://arxiv.org/schemas/atom">${input.journalRef}</arxiv:journal_ref>`}
+    <link href="${input.id}" rel="alternate" type="text/html"/>
+    <category term="astro-ph.CO" scheme="http://arxiv.org/schemas/atom"/>
+  </entry>`;
+}
+
+function feedOf(...entries: string[]): string {
+  return `<?xml version="1.0" encoding="UTF-8"?><feed xmlns="http://www.w3.org/2005/Atom">${entries.join("\n")}</feed>`;
+}
+
+describe("arxiv title search entry identity", () => {
+  const title = "Measuring the baryon fraction using galaxy clustering";
+  const own = "http://arxiv.org/abs/2403.19236v2";
+
+  it.each([
+    ["summary", { summary: "We extend the analysis of arXiv:2101.01234 to larger scales." }],
+    ["comment", { comment: "12 pages; companion to arXiv:2101.01234" }],
+    ["journal reference", { journalRef: "Phys. Rev. D 109 (2024), also arXiv:2101.01234" }],
+    ["legacy-form citation", { summary: "Follows arXiv:astro-ph/0210215 closely." }],
+    ["cited URL", { summary: "Data from https://arxiv.org/abs/2101.01234 are reused." }],
+  ])("returns the entry's own id when its %s cites another paper", (_field, extra) => {
+    const result = matchBestTitle(title, feedOf(arxivEntry({ id: own, title, ...extra })));
+    expect(result).toEqual({ arxivId: "2403.19236", matchedTitle: title });
+  });
+
+  it("returns the entry's own id when the title itself cites another paper", () => {
+    const cited = "A reply to arXiv:2101.01234 on galaxy clustering";
+    expect(matchBestTitle(cited, feedOf(arxivEntry({ id: own, title: cited }))).arxivId)
+      .toBe("2403.19236");
+  });
+
+  it("does not take a cited paper for an entry whose own id is not a modern id", () => {
+    const legacy = arxivEntry({
+      id: "http://arxiv.org/abs/astro-ph/0210215v1",
+      title,
+      summary: "Revisits arXiv:2101.01234.",
+    });
+    expect(matchBestTitle(title, feedOf(legacy)).arxivId).toBeNull();
+  });
+
+  it("skips an entry that has no id of its own", () => {
+    const noId = arxivEntry({ id: own, title, summary: "Cites arXiv:2101.01234." }).replace(/<id>[^<]*<\/id>/, "");
+    expect(matchBestTitle(title, feedOf(noId)).arxivId).toBeNull();
+  });
+
+  it("reads an id element that has attributes or surrounding whitespace", () => {
+    const spaced = arxivEntry({ id: own, title }).replace(`<id>${own}</id>`, `<id xml:lang="en">\n  ${own}\n</id>`);
+    expect(matchBestTitle(title, feedOf(spaced)).arxivId).toBe("2403.19236");
+  });
+
+  it("keeps two entries with different own ids ambiguous even when both cite one paper", () => {
+    const summary = "Builds on arXiv:2101.01234.";
+    const result = matchBestTitle(title, feedOf(
+      arxivEntry({ id: "http://arxiv.org/abs/2403.19236v1", title, summary }),
+      arxivEntry({ id: "http://arxiv.org/abs/2403.19237v1", title, summary }),
+    ));
+    expect(result.arxivId).toBeNull();
+  });
+});
+
 describe("arxiv title search over HTTP", () => {
   it("issues a title query and returns the matched canonical ID", async () => {
     const http: HttpClient = {

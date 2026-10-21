@@ -28,8 +28,15 @@ export interface PdfIdentificationEvidence {
   title?: string;
 }
 
-/** Cache version for content-based identification evidence rules. */
-export const PDF_IDENTIFICATION_EVIDENCE_VERSION = 3 as const;
+/**
+ * Cache version for content-based identification evidence rules. Bumped when a
+ * rule can change what an unchanged file is identified as, so the next scan
+ * identifies it again.
+ *
+ * 4 — a title search answers with the Atom entry's own id (earlier versions could
+ * take an id cited in its summary or comment) and IDs are taken in text order.
+ */
+export const PDF_IDENTIFICATION_EVIDENCE_VERSION = 4 as const;
 
 const META_REGION_BYTES = 256 * 1024;
 const STREAM_REGEX = /(?:\r?\n)stream\r?\n/g;

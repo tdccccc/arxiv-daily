@@ -9,7 +9,16 @@ import type { ScopedLibrarySource } from "./scoped-library-source";
 export const PDF_IDENTIFICATION_HEAD_BYTES = 4 * 1024 * 1024;
 export const PDF_IDENTIFICATION_TAIL_BYTES = 1024 * 1024;
 
-/** Shared scan glue: bounded PDF head/tail evidence, then the existing title search. */
+/**
+ * Shared scan glue: bounded PDF head/tail evidence, then the existing title search.
+ *
+ * When the PDF carries an arXiv id and the title search answers too, a title
+ * match that is strict and unambiguous wins: it is an arXiv record for the
+ * document's own title, while an embedded id is only the file's claim (stream
+ * text can cite other papers). A search that finds nothing, is ambiguous or
+ * fails never demotes an embedded id, and a title that merely restates an
+ * arXiv stamp is not searched.
+ */
 export function createPdfLibraryFileIdentifier(input: {
   source: ScopedLibrarySource;
   http: HttpClient;

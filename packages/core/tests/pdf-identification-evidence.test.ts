@@ -51,6 +51,16 @@ describe("pdf identification evidence", () => {
     expect(extractPdfIdentificationEvidence(pdf).arxivId).toBe("2302.05010");
   });
 
+  it("takes the first header ID in stream order, not the first of a particular form", () => {
+    // The page's own URL-form stamp comes first; a later stream cites another
+    // paper in the "arXiv:" form, which a form-by-form search would prefer.
+    const pdf = pdfWith([
+      { text: "(Read online at https://arxiv.org/abs/2403.19236v2) Tj\n(Some title) Tj" },
+      { text: "(References) Tj\n(see arXiv:2101.01234 for details) Tj" },
+    ]);
+    expect(extractPdfIdentificationEvidence(pdf).arxivId).toBe("2403.19236");
+  });
+
   it("prefers the Info dict /arXivID over reference-list IDs in stream text", () => {
     // A reference-list DOI ("arXiv.0912.0201" in a content stream) must not
     // override the submission system's own identity claim (/arXivID): the
@@ -135,6 +145,19 @@ describe("pdf text arXiv ID extraction", () => {
   it("extracts arXiv URLs", () => {
     expect(extractArxivIdsFromText("see https://arxiv.org/abs/2410.02857v2 for details")[0]?.canonicalId)
       .toBe("2410.02857");
+  });
+
+  it("returns candidates in document order whatever their form", () => {
+    const ids = (text: string) => extractArxivIdsFromText(text).map((item) => item.canonicalId);
+    expect(ids("见 https://arxiv.org/abs/2403.19236 以及 arXiv:2101.01234"))
+      .toEqual(["2403.19236", "2101.01234"]);
+    expect(ids("arXiv:2101.01234 and then https://arxiv.org/abs/2403.19236"))
+      .toEqual(["2101.01234", "2403.19236"]);
+    expect(ids("arXiv:astro-ph/0210215 before arXiv:2302.05010 before https://arxiv.org/abs/2403.19236"))
+      .toEqual(["astro-ph/0210215", "2302.05010", "2403.19236"]);
+    expect(extractArxivIdsFromText("https://arxiv.org/pdf/2403.19236v2 arXiv:2403.19236v1")).toEqual([
+      { canonicalId: "2403.19236", raw: "2403.19236" },
+    ]);
   });
 
   it("does not invent IDs from plain numbers", () => {
