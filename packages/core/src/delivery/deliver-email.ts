@@ -8,6 +8,7 @@ import type { EmailSettings, OutputSettings } from "../settings/types";
 import {
   AUTOMATIC_EMAIL_UNSUPPORTED_MESSAGE,
   claimAutomaticDelivery,
+  deliveryStatePath,
   finalizeAutomaticDelivery,
   markAutomaticDeliveryAttemptStarted,
   releaseAutomaticDeliveryBeforeAttempt,
@@ -187,6 +188,8 @@ export async function deliverDailyEmailIfEnabled(
       recipient,
       channel,
       now: now(),
+      onDamagedFile: (name) =>
+        deps.logger?.warn(`email: ignoring unreadable delivery file ${name}`),
     });
     if (claimed.kind === "blocked") {
       deps.logger?.info(`email: skip ${digest.date} (${claimed.reason})`);
@@ -196,7 +199,9 @@ export async function deliverDailyEmailIfEnabled(
       deps.logger?.error(
         claimed.reason === "delivery_storage_unsupported"
           ? `email: ${digest.date}: ${AUTOMATIC_EMAIL_UNSUPPORTED_MESSAGE}`
-          : `email: cannot claim ${digest.date}: ${claimed.reason}`,
+          : claimed.reason === "delivery_claim_unreadable"
+            ? `email: ${digest.date}: nothing was sent because ${deliveryClaimsDirectory(deps)}/${claimed.file ?? "(unknown file)"} is unreadable. Other days are not affected; delete that file only if you are sure this day's email was not delivered.`
+            : `email: cannot claim ${digest.date}: ${claimed.reason}`,
       );
       return { kind: "failed", reason: claimed.reason, attempts: 0 };
     }
@@ -364,6 +369,12 @@ export async function deliverDailyEmailIfEnabled(
   } finally {
     await claim?.namespaceGuard?.release().catch(() => undefined);
   }
+}
+
+function deliveryClaimsDirectory(
+  deps: Pick<DeliverDailyEmailDeps, "storage" | "output">,
+): string {
+  return `${deliveryStatePath(deps.output, (p) => deps.storage.normalizePath(p))}.claims`;
 }
 
 export async function automaticDeliveryIdempotencyKey(

@@ -58,7 +58,8 @@ export interface DeliveryClaimHandle {
 export type DeliveryClaimResult =
   | ({ kind: "claimed" } & DeliveryClaimHandle)
   | { kind: "blocked"; reason: EmailDeliveryReason }
-  | { kind: "failed"; reason: EmailDeliveryReason };
+  /** `file` names the unreadable sidecar (base name only) when that is why it failed. */
+  | { kind: "failed"; reason: EmailDeliveryReason; file?: string };
 
 type ClaimDecisionPhase =
   | "provider_attempt_started"
@@ -97,13 +98,38 @@ interface DeliveryResultDocument {
   errorCode?: DeliveryResultErrorCode;
 }
 
+type SidecarKind = "claim" | "decision" | "result";
+/**
+ * Why a sidecar that exists cannot be used. `incomplete`: empty or not JSON,
+ * the leftover of a write that never finished (or of damage). `invalid`: it
+ * parses but is not a valid v1 document, which may be a newer client's data.
+ */
+type SidecarDamage = "incomplete" | "invalid";
+
+interface GenerationPaths {
+  claimPath: string;
+  decisionPath: string;
+  resultPath: string;
+}
+
 interface ClaimGeneration {
   stem: string;
-  handle: DeliveryClaimHandle;
-  claim: DeliveryClaimDocument;
+  generation: number;
+  paths: GenerationPaths;
+  /** Present only when the claim file is a valid claim. */
+  claim?: DeliveryClaimDocument;
   decision?: DeliveryDecisionDocument;
   result?: DeliveryResultDocument;
+  /**
+   * Sidecars that exist but could not be read as valid documents. Recording
+   * them instead of throwing keeps one bad file from stopping every other
+   * date's email.
+   */
+  damaged: Partial<Record<SidecarKind, SidecarDamage>>;
 }
+
+/** A generation whose claim is valid and whose damage, if any, does not hide its outcome. */
+type RecordableGeneration = ClaimGeneration & { claim: DeliveryClaimDocument };
 
 export function deliveryRecordKey(
   date: string,
@@ -333,6 +359,8 @@ export async function claimAutomaticDelivery(
     now?: Date;
     recoveryGraceMs?: number;
     owner?: string;
+    /** Told the base name of every unreadable sidecar that was set aside rather than stopping delivery. */
+    onDamagedFile?: (fileName: string) => void;
   },
 ): Promise<DeliveryClaimResult> {
   // Keep in step with supportsAutomaticEmailDelivery; inline for narrowing.
@@ -368,8 +396,7 @@ export async function claimAutomaticDelivery(
   try {
     await ensureDirDeep(storage, dir);
     for (let pass = 0; pass < STATE_REBUILD_ATTEMPTS; pass += 1) {
-      const generations = await readLogicalGenerations(storage, dir, stem);
-      const latest = generations.at(-1);
+      const latest = await readLatestLogicalGeneration(storage, dir, stem);
       let nextGeneration = 0;
 
       if (!latest) {
@@ -378,27 +405,44 @@ export async function claimAutomaticDelivery(
         }
       } else {
         const status = classifyGeneration(latest);
+        if (status === "unreadable") {
+          // Which attempt this file records cannot be told, so nothing is sent
+          // for this date until someone decides; other dates are not touched.
+          return {
+            kind: "failed",
+            reason: "delivery_claim_unreadable",
+            file: damagedFileNames(latest)[0],
+          };
+        }
         if (status === "blocking") {
           return { kind: "blocked", reason: blockingReason(latest) };
         }
         if (status === "waiting") {
-          const ageMs = now.getTime() - Date.parse(latest.claim.createdAt);
-          if (!Number.isFinite(ageMs) || ageMs < graceMs) {
-            return {
-              kind: "blocked",
-              reason: "delivery_claim_active",
-            };
+          // An incomplete claim carries no timestamp to age: a claim whose write
+          // never finished cannot have led to a provider call (the owner re-reads
+          // and validates it first), so the decision file below arbitrates at
+          // once, exactly as for a stale claim.
+          if (latest.claim) {
+            const ageMs = now.getTime() - Date.parse(latest.claim.createdAt);
+            if (!Number.isFinite(ageMs) || ageMs < graceMs) {
+              return {
+                kind: "blocked",
+                reason: "delivery_claim_active",
+              };
+            }
+          } else {
+            for (const name of damagedFileNames(latest)) input.onDamagedFile?.(name);
           }
-          const recovered = await createDecision(storage, latest.handle, {
+          const recovered = await createDecision(storage, latest.paths, {
             schemaVersion: CLAIM_SCHEMA_VERSION,
             phase: "recovered_before_provider_attempt",
             owner,
-            previousOwner: latest.claim.owner,
+            previousOwner: latest.claim?.owner,
             createdAt: now.toISOString(),
           });
           if (!recovered) continue;
         }
-        nextGeneration = latest.claim.generation + 1;
+        nextGeneration = latest.generation + 1;
       }
 
       const handle = claimHandle(storage, dir, stem, {
@@ -430,13 +474,14 @@ export async function claimAutomaticDelivery(
         namespaceGuard = await storage.guardClaimNamespace(handle.claimPath);
         namespaceGuard.assertCurrent();
         await assertCurrentClaim(storage, handle);
-        await rebuildDeliveryStateFromClaims(
+        const unreadable = await rebuildDeliveryStateFromClaims(
           storage,
           output,
           now,
           input.recipient,
           handle,
         );
+        for (const name of unreadable) input.onDamagedFile?.(name);
       } catch {
         const recovered = await (async () => {
           try {
@@ -654,13 +699,19 @@ function normalizeRecord(raw: unknown): DeliveryRecord | null {
   };
 }
 
+/**
+ * Projects every stem's latest generation into the v1 main state. A stem whose
+ * files cannot be read is left out, keeping whatever record it already has, so
+ * one damaged sidecar cannot stop the other dates; the base names of such files
+ * are returned for the caller to report.
+ */
 async function rebuildDeliveryStateFromClaims(
   storage: StorageAdapter,
   output: OutputSettings,
   now: Date,
   recipientHint?: string,
   expectedClaim?: DeliveryClaimHandle,
-): Promise<void> {
+): Promise<string[]> {
   if (!storage.list) throw new Error("storage cannot enumerate delivery claims");
   const statePath = deliveryStatePath(output, (p) => storage.normalizePath(p));
   const dir = claimDirectory(storage, output);
@@ -670,7 +721,7 @@ async function rebuildDeliveryStateFromClaims(
     if (read.kind === "corrupt" || read.kind === "unreadable") {
       throw new Error(`delivery state ${read.kind}: ${read.reason}`);
     }
-    const latest = await readLatestGenerations(storage, dir);
+    const latest = (await readLatestGenerations(storage, dir)).filter(isRecordable);
     if (expectedClaim) assertClaimGenerationVisible(latest, expectedClaim);
     const next = await stateWithClaimRecords(
       read.state,
@@ -684,16 +735,19 @@ async function rebuildDeliveryStateFromClaims(
 
     const afterRead = await readDeliveryState(storage, output);
     if (afterRead.kind !== "valid") continue;
-    const afterLatest = await readLatestGenerations(storage, dir);
+    const afterObserved = await readLatestGenerations(storage, dir);
+    const afterLatest = afterObserved.filter(isRecordable);
     if (expectedClaim) assertClaimGenerationVisible(afterLatest, expectedClaim);
-    if (await claimRecordsMatch(afterRead.state, afterLatest)) return;
+    if (await claimRecordsMatch(afterRead.state, afterLatest)) {
+      return afterObserved.flatMap(damagedFileNames);
+    }
   }
   throw new Error("delivery state did not converge with durable claims");
 }
 
 async function stateWithClaimRecords(
   state: DeliveryStateFile,
-  latest: ClaimGeneration[],
+  latest: RecordableGeneration[],
   now: Date,
   recipientHint?: string,
 ): Promise<DeliveryStateFile> {
@@ -723,7 +777,7 @@ async function stateWithClaimRecords(
 
 function putClaimRecord(
   state: DeliveryStateFile,
-  generation: ClaimGeneration,
+  generation: RecordableGeneration,
   recipient: string,
 ): DeliveryStateFile {
   const common = {
@@ -782,7 +836,7 @@ function putClaimRecord(
 
 async function claimRecordsMatch(
   state: DeliveryStateFile,
-  latest: ClaimGeneration[],
+  latest: RecordableGeneration[],
 ): Promise<boolean> {
   const recipients = await recipientsByIdentity(state);
   for (const generation of latest) {
@@ -840,7 +894,7 @@ async function assertCurrentClaim(
 }
 
 function assertClaimGenerationVisible(
-  latest: ClaimGeneration[],
+  latest: RecordableGeneration[],
   handle: DeliveryClaimHandle,
 ): void {
   const visible = latest.some(
@@ -882,66 +936,119 @@ async function readLatestGenerations(
   return latest;
 }
 
-async function readLogicalGenerations(
+/** Only the newest generation decides: an older one is always released. */
+async function readLatestLogicalGeneration(
   storage: StorageAdapter,
   dir: string,
   stem: string,
-): Promise<ClaimGeneration[]> {
+): Promise<ClaimGeneration | undefined> {
   if (!storage.list) throw new Error("storage cannot enumerate delivery claims");
   const entries = await storage.list(dir);
-  const generations: number[] = [];
+  let newest = -1;
   const pattern = new RegExp(`^${stem}\\.g(\\d+)\\.claim\\.json$`);
   for (const entry of entries) {
     if (entry.type !== "file") continue;
     const match = pattern.exec(baseName(entry.path));
     if (!match?.[1]) continue;
     const generation = Number(match[1]);
-    if (Number.isSafeInteger(generation) && generation >= 0) generations.push(generation);
+    if (Number.isSafeInteger(generation) && generation > newest) newest = generation;
   }
-  generations.sort((a, b) => a - b);
-  return Promise.all(
-    generations.map((generation) => readGeneration(storage, dir, stem, generation)),
-  );
+  return newest < 0 ? undefined : readGeneration(storage, dir, stem, newest);
 }
 
+/**
+ * Reads one generation. A file that exists but is not a valid document is
+ * recorded in `damaged` rather than thrown; only a failure to read the file at
+ * all (permissions, I/O) is thrown, since that proves nothing about its content.
+ */
 async function readGeneration(
   storage: StorageAdapter,
   dir: string,
   stem: string,
   generation: number,
 ): Promise<ClaimGeneration> {
-  const claimPath = storage.normalizePath(`${dir}/${stem}.g${generation}.claim.json`);
-  const claim = normalizeClaimDocument(await readJsonDocument(storage, claimPath));
-  if (claim.generation !== generation) {
-    throw new Error(`delivery claim generation mismatch: ${claimPath}`);
-  }
-  const handle = claimHandle(storage, dir, stem, claim);
-  return {
-    stem,
-    handle,
-    claim,
-    decision: await readOptionalDecision(storage, handle.decisionPath),
-    result: await readOptionalResult(storage, handle.resultPath),
+  const paths = generationPaths(storage, dir, stem, generation);
+  const damaged: ClaimGeneration["damaged"] = {};
+  const read = async <T>(
+    kind: SidecarKind,
+    path: string,
+    normalize: (raw: unknown) => T,
+  ): Promise<T | undefined> => {
+    if (kind !== "claim" && !(await storage.exists(path))) return undefined;
+    const outcome = parseSidecar(await storage.readText(path), normalize);
+    if (outcome.kind === "ok") return outcome.value;
+    damaged[kind] = outcome.kind;
+    return undefined;
   };
+  let claim = await read("claim", paths.claimPath, normalizeClaimDocument);
+  if (claim && claim.generation !== generation) {
+    claim = undefined;
+    damaged.claim = "invalid";
+  }
+  const decision = await read("decision", paths.decisionPath, normalizeDecisionDocument);
+  const result = await read("result", paths.resultPath, normalizeResultDocument);
+  return { stem, generation, paths, claim, decision, result, damaged };
 }
 
+function parseSidecar<T>(
+  raw: string,
+  normalize: (raw: unknown) => T,
+): { kind: "ok"; value: T } | { kind: SidecarDamage } {
+  if (!raw.trim()) return { kind: "incomplete" };
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return { kind: "incomplete" };
+  }
+  try {
+    return { kind: "ok", value: normalize(parsed) };
+  } catch {
+    return { kind: "invalid" };
+  }
+}
+
+function isRecordable(generation: ClaimGeneration): generation is RecordableGeneration {
+  // Without a decision an unreadable result hides what happened, so the stem's
+  // existing record stays; with one, the decision still says whether it blocks.
+  return (
+    generation.claim !== undefined &&
+    !generation.damaged.decision &&
+    !(generation.damaged.result && !generation.decision)
+  );
+}
+
+function damagedFileNames(generation: ClaimGeneration): string[] {
+  const names: string[] = [];
+  if (generation.damaged.claim) names.push(baseName(generation.paths.claimPath));
+  if (generation.damaged.decision) names.push(baseName(generation.paths.decisionPath));
+  if (generation.damaged.result) names.push(baseName(generation.paths.resultPath));
+  return names;
+}
+
+/**
+ * `unreadable` fails closed: the generation might record a provider attempt, so
+ * it neither blocks as such nor is released. The one exception is an incomplete
+ * claim with no decision or result: nothing can have been attempted under it,
+ * so it is `waiting` like any claim whose owner is gone.
+ */
 function classifyGeneration(
   generation: ClaimGeneration,
-): "released" | "blocking" | "waiting" {
+): "released" | "blocking" | "waiting" | "unreadable" {
+  const { decision, result, damaged } = generation;
+  if (result?.phase === "cancelled_before_provider_attempt") return "released";
   if (
-    generation.result?.phase === "cancelled_before_provider_attempt" ||
-    generation.decision?.phase === "recovered_before_provider_attempt"
-  ) {
-    return "released";
-  }
-  if (
-    generation.result?.phase === "delivered" ||
-    generation.result?.phase === "ambiguous" ||
-    generation.result?.phase === "definitive_rejection" ||
-    generation.decision?.phase === "provider_attempt_started"
+    result?.phase === "delivered" ||
+    result?.phase === "ambiguous" ||
+    result?.phase === "definitive_rejection"
   ) {
     return "blocking";
   }
+  if (damaged.decision) return "unreadable";
+  if (decision?.phase === "recovered_before_provider_attempt") return "released";
+  if (decision?.phase === "provider_attempt_started") return "blocking";
+  if (damaged.result) return "unreadable";
+  if (damaged.claim === "invalid") return "unreadable";
   return "waiting";
 }
 
@@ -961,6 +1068,20 @@ function claimDirectory(storage: StorageAdapter, output: OutputSettings): string
   return storage.normalizePath(`${statePath}.claims`);
 }
 
+function generationPaths(
+  storage: StorageAdapter,
+  dir: string,
+  stem: string,
+  generation: number,
+): GenerationPaths {
+  const prefix = storage.normalizePath(`${dir}/${stem}.g${generation}`);
+  return {
+    claimPath: `${prefix}.claim.json`,
+    decisionPath: `${prefix}.decision.json`,
+    resultPath: `${prefix}.result.json`,
+  };
+}
+
 function claimHandle(
   storage: StorageAdapter,
   dir: string,
@@ -974,11 +1095,8 @@ function claimHandle(
     channel: EmailDeliveryChannel;
   },
 ): DeliveryClaimHandle {
-  const prefix = storage.normalizePath(`${dir}/${stem}.g${input.generation}`);
   return {
-    claimPath: `${prefix}.claim.json`,
-    decisionPath: `${prefix}.decision.json`,
-    resultPath: `${prefix}.result.json`,
+    ...generationPaths(storage, dir, stem, input.generation),
     owner: input.owner,
     generation: input.generation,
     date: input.date,
@@ -990,7 +1108,7 @@ function claimHandle(
 
 async function createDecision(
   storage: StorageAdapter,
-  handle: DeliveryClaimHandle,
+  handle: Pick<GenerationPaths, "decisionPath">,
   document: DeliveryDecisionDocument,
 ): Promise<boolean> {
   if (!storage.createTextExclusive) {
