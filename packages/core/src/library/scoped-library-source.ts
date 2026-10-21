@@ -5,7 +5,8 @@ export interface LibrarySourceEntry {
   type: LibraryEntryType;
   size?: number;
   mtimeMs?: number;
-  ignoredReason?: "symbolic-link" | "unsupported-entry";
+  /** `unsafe-name`: the name cannot be a catalog path (a backslash, or a drive-like prefix such as "A:"). */
+  ignoredReason?: "symbolic-link" | "unsupported-entry" | "unsafe-name";
 }
 
 export interface LibraryInventory {

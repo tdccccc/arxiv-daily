@@ -397,7 +397,9 @@ export function buildLibraryInventoryPreview(
         path: entry.path,
         reason: entry.ignoredReason === "symbolic-link"
           ? "Symbolic link"
-          : "Unsupported filesystem entry",
+          : entry.ignoredReason === "unsafe-name"
+            ? "Unsupported name (backslash or drive-letter prefix); rename it to include it"
+            : "Unsupported filesystem entry",
       });
       continue;
     }

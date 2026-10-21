@@ -2,7 +2,15 @@ import { afterEach, describe, expect, it } from "vitest";
 import { mkdtemp, mkdir, rename, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { isCancellationError } from "@arxiv-daily/core";
+import {
+  createEmptyPersonalLibraryCatalog,
+  createPersonalLibraryIdentificationFingerprint,
+  createPersonalLibraryScopeFingerprint,
+  decodePersonalLibraryCatalog,
+  detectPersonalLibraryFolderChange,
+  isCancellationError,
+  reconcilePersonalLibraryCatalog,
+} from "@arxiv-daily/core";
 import { openScopedLibrarySource } from "../src/scoped-library-source";
 
 const tempDirs: string[] = [];
@@ -65,6 +73,74 @@ describe("openScopedLibrarySource", () => {
       name: "LibrarySourceError",
       kind: "unsafe-path",
     });
+  });
+
+  // Backslashes and colons are legal in macOS and Linux names (a Windows zip
+  // unpacked by a tool that ignores path separators leaves "old\\x.pdf") but
+  // cannot be written to the catalog, which would turn one such name into a
+  // failed scan of the whole library.
+  async function makeLibraryWithUnsafeNames(): Promise<string> {
+    const root = await makeTempDir();
+    await mkdir(join(root, "papers"));
+    await writeFile(join(root, "papers", "2610.00001.pdf"), new Uint8Array([1]));
+    await writeFile(join(root, "old\\2301.00002.pdf"), new Uint8Array([2]));
+    await writeFile(join(root, "A:b 2301.00003.pdf"), new Uint8Array([3]));
+    await writeFile(join(root, "notes\\todo.docx"), new Uint8Array([4]));
+    await mkdir(join(root, "dir\\sub"));
+    await writeFile(join(root, "dir\\sub", "inside.pdf"), new Uint8Array([5]));
+    return root;
+  }
+
+  it.skipIf(process.platform === "win32")("scans such a folder into a valid catalog and then sees it as unchanged", async () => {
+    const source = await openScopedLibrarySource(await makeLibraryWithUnsafeNames());
+    const inventory = await source.inventory();
+    const eligibleExtensions = [".pdf"];
+    const now = new Date("2026-10-21T00:00:00.000Z");
+
+    const { catalog } = await reconcilePersonalLibraryCatalog({
+      current: createEmptyPersonalLibraryCatalog(
+        createPersonalLibraryScopeFingerprint({ rootIdentity: source.rootIdentity, eligibleExtensions }),
+        createPersonalLibraryIdentificationFingerprint(eligibleExtensions),
+        now,
+      ),
+      inventory,
+      eligibleExtensions,
+      resolver: { resolve: async (ids) => new Map(ids.map((arxivId) => [arxivId, {
+        arxivId, title: `Paper ${arxivId}`, authors: ["A. Author"], abstract: "Abstract.",
+        published: "2026-10-01T00:00:00.000Z", updated: "2026-10-01T00:00:00.000Z",
+        primaryCategory: "cs.AI", categories: ["cs.AI"],
+      }])) },
+      now,
+    });
+
+    expect(decodePersonalLibraryCatalog(catalog)).toEqual(catalog);
+    expect(Object.keys(catalog.files)).toEqual(["papers/2610.00001.pdf"]);
+    expect(catalog.lastScan).toMatchObject({ ready: 1, papers: 1, skipped: 4 });
+    expect(detectPersonalLibraryFolderChange({
+      catalog, inventory: await source.inventory(), eligibleExtensions,
+    }).changed).toBe(false);
+  });
+
+  it.skipIf(process.platform === "win32")("lists names the catalog cannot hold as ignored and neither descends into nor reads them", async () => {
+    const source = await openScopedLibrarySource(await makeLibraryWithUnsafeNames());
+
+    const { entries, truncated } = await source.inventory();
+
+    expect(truncated).toBe(false);
+    const summary = entries
+      .map((entry) => `${entry.path}|${entry.type}|${entry.ignoredReason ?? ""}`)
+      .sort();
+    expect(summary).toEqual([
+      "A:b 2301.00003.pdf|ignored|unsafe-name",
+      "dir\\sub|ignored|unsafe-name",
+      "notes\\todo.docx|ignored|unsafe-name",
+      "old\\2301.00002.pdf|ignored|unsafe-name",
+      "papers|folder|",
+      "papers/2610.00001.pdf|file|",
+    ].sort());
+    for (const unsafe of ["old\\2301.00002.pdf", "A:b 2301.00003.pdf", "dir\\sub/inside.pdf"]) {
+      await expect(source.readBinary(unsafe)).rejects.toMatchObject({ kind: "unsafe-path" });
+    }
   });
 
   it("reads bounded byte ranges with start/end offsets", async () => {

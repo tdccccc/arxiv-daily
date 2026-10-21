@@ -253,6 +253,62 @@ describe("reconcilePersonalLibraryCatalog", () => {
   });
 });
 
+describe("entries whose names the catalog cannot hold", () => {
+  // Legal on macOS and Linux, never stored: a path with a backslash, or one that
+  // starts like a drive ("A:b"), fails the catalog's strict path decoding.
+  const unsafeFiles = ["old\\2301.00002.pdf", "notes\\todo.docx", "A:b 2301.00003.pdf", "dir\\sub/2301.00004.pdf"];
+
+  it("skips them, counts them, and still scans the rest of the library", async () => {
+    const metadataResolver = resolver([metadata("2610.00001")]);
+    const result = await reconcile({
+      entries: [
+        file("papers/2610.00001.pdf"),
+        ...unsafeFiles.map((path) => file(path)),
+        { path: "bad\\folder", type: "ignored", ignoredReason: "unsafe-name" },
+        file("notes/draft.md"),
+      ],
+      truncated: false,
+    }, [], emptyCatalog(), metadataResolver);
+
+    expect(Object.keys(result.catalog.files).sort()).toEqual(["notes/draft.md", "papers/2610.00001.pdf"]);
+    expect(result.catalog.files["papers/2610.00001.pdf"]).toMatchObject({ status: "ready" });
+    expect(result.catalog.lastScan).toEqual({
+      ready: 1, unresolved: 0, unrelated: 1, failed: 0, papers: 1, truncated: false, skipped: 5,
+    });
+    // The id in a skipped file's name is never looked up.
+    expect(metadataResolver.resolve).toHaveBeenCalledWith(["2610.00001"], undefined);
+    expect(decodePersonalLibraryCatalog(result.catalog)).toEqual(result.catalog);
+  });
+
+  it("reports no skipped count when nothing was skipped", async () => {
+    const result = await reconcile({ entries: [file("papers/2610.00001.pdf")], truncated: false }, [metadata("2610.00001")]);
+    expect(result.catalog.lastScan).not.toHaveProperty("skipped");
+  });
+
+  it("does not identify a skipped file from its content either", async () => {
+    const identifyFile = { version: 1, identify: vi.fn(async () => null) };
+    await reconcilePersonalLibraryCatalog({
+      current: emptyCatalog(),
+      inventory: { entries: [file("old\\paper.pdf"), file("kept.pdf")], truncated: false },
+      eligibleExtensions: [".pdf"],
+      resolver: resolver([]),
+      identifyFile,
+      now,
+    });
+    expect(identifyFile.identify.mock.calls.map(([path]) => path)).toEqual(["kept.pdf"]);
+  });
+
+  it("keeps scanning the same way on later scans", async () => {
+    const inventory = { entries: [file("papers/2610.00001.pdf"), file("old\\2301.00002.pdf")], truncated: false };
+    const first = await reconcile(inventory, [metadata("2610.00001")]);
+    const second = await reconcile(inventory, [], first.catalog);
+    expect(second.reusedFileCount).toBe(1);
+    expect(second.catalog.lastScan).toEqual(first.catalog.lastScan);
+    expect(second.catalog.files).toEqual(first.catalog.files);
+    expect(decodePersonalLibraryCatalog(second.catalog)).toEqual(second.catalog);
+  });
+});
+
 describe("content-based file identification (strategy v2)", () => {
   it("identifies unresolved files through the injected identifier", async () => {
     const identifyFile = {

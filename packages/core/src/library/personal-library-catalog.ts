@@ -66,6 +66,11 @@ export interface PersonalLibraryScanSummary {
   failed: number;
   papers: number;
   truncated: boolean;
+  /**
+   * Entries the scan left out because their names cannot be catalog paths
+   * (see `isLogicalRelativePath`). Present only when there were any.
+   */
+  skipped?: number;
 }
 
 export interface PersonalLibraryCatalog {
@@ -529,11 +534,13 @@ function decodePaperRecord(value: unknown, paperKey: string): PersonalLibraryPap
 }
 
 function decodeScanSummary(value: unknown): PersonalLibraryScanSummary | null {
-  if (!isExactObject(value, ["ready", "unresolved", "unrelated", "failed", "papers", "truncated"])) {
+  const keys = ["ready", "unresolved", "unrelated", "failed", "papers", "truncated"];
+  if (!isExactObject(value, isPlainObject(value) && value.skipped !== undefined ? [...keys, "skipped"] : keys)) {
     return null;
   }
   if (![value.ready, value.unresolved, value.unrelated, value.failed, value.papers]
     .every(isNonNegativeSafeInteger) || typeof value.truncated !== "boolean") return null;
+  if (value.skipped !== undefined && !isNonNegativeSafeInteger(value.skipped)) return null;
   return value as unknown as PersonalLibraryScanSummary;
 }
 
@@ -623,7 +630,13 @@ function isFingerprint(value: unknown): value is string {
   return typeof value === "string" && /^sha256:[a-f0-9]{64}$/.test(value);
 }
 
-function isLogicalRelativePath(value: unknown): value is string {
+/**
+ * Whether `value` can be a path in the catalog: relative, "/"-separated, and free
+ * of anything a path check on another platform would read differently (a
+ * backslash, a drive prefix such as "A:", NUL). macOS and Linux allow all of
+ * these in a file name; the catalog does not.
+ */
+export function isLogicalRelativePath(value: unknown): value is string {
   return typeof value === "string"
     && value.length > 0
     && !value.includes("\\")

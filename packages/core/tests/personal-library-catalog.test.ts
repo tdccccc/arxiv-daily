@@ -7,6 +7,7 @@ import {
   createPersonalLibraryIdentificationFingerprint,
   createPersonalLibraryScopeFingerprint,
   decodePersonalLibraryCatalog,
+  isLogicalRelativePath,
   derivePersonalLibraryCatalogPaths,
   type PersonalLibraryCatalog,
 } from "../src/library/personal-library-catalog";
@@ -149,6 +150,35 @@ describe("personal library catalog schema", () => {
     expect(decodePersonalLibraryCatalog(catalog)).toEqual(catalog);
     expect(decodePersonalLibraryCatalog({ ...catalog, schemaVersion: 2 })).toBeNull();
     expect(decodePersonalLibraryCatalog({ ...catalog, unexpected: true })).toBeNull();
+  });
+
+  it("accepts a count of skipped entries in the scan summary, and nothing else extra", () => {
+    const catalog = populatedCatalog();
+    const withSkipped = { ...catalog, lastScan: { ...catalog.lastScan!, skipped: 2 } };
+    expect(decodePersonalLibraryCatalog(withSkipped)).toEqual(withSkipped);
+    expect(decodePersonalLibraryCatalog({ ...catalog, lastScan: { ...catalog.lastScan!, skipped: -1 } })).toBeNull();
+    expect(decodePersonalLibraryCatalog({ ...catalog, lastScan: { ...catalog.lastScan!, skipped: 1.5 } })).toBeNull();
+    expect(decodePersonalLibraryCatalog({ ...catalog, lastScan: { ...catalog.lastScan!, skipped: "2" } })).toBeNull();
+    expect(decodePersonalLibraryCatalog({ ...catalog, lastScan: { ...catalog.lastScan!, extra: 1 } })).toBeNull();
+  });
+
+  it.each([
+    ["papers/2608.00001.pdf", true],
+    ["a", true],
+    ["notes/x y.md", true],
+    ["old\\2301.00002.pdf", false],
+    ["dir\\sub/x.pdf", false],
+    ["A:b 2301.00003.pdf", false],
+    ["z:", false],
+    ["/abs.pdf", false],
+    ["a//b.pdf", false],
+    ["a/./b.pdf", false],
+    ["../b.pdf", false],
+    ["a\0b.pdf", false],
+    ["", false],
+    ["sub/A:b.pdf", true],
+  ])("judges %j as a storable logical path: %s", (path, expected) => {
+    expect(isLogicalRelativePath(path)).toBe(expected);
   });
 
   it("rejects unsafe paths, noncanonical IDs, and broken file-paper membership", () => {
