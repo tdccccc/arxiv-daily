@@ -1,0 +1,835 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>arXiv Daily 架构图</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,600;12..96,700&family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&family=Noto+Sans+SC:wght@400;500;700&display=swap">
+<style>
+/* Layout: a single column of wide "plates" — each figure is a white technical sheet on a cool ground, read top to bottom from whole system to individual flows. */
+:root {
+  --bg: #F1F4F8;
+  --surface: #FFFFFF;
+  --ink: #142030;
+  --muted: #586578;
+  --faint: #8D98A8;
+  --line: #CFD7E1;
+
+  --entry: #3F51C6;  --entry-t: #ECEFFC;
+  --host: #5C697D;   --host-t: #EEF1F5;
+  --core: #0B7D71;   --core-t: #E2F3EF;
+  --ext: #B0650A;    --ext-t: #FBF0E0;
+  --data: #983F6A;   --data-t: #F8E9F0;
+  --ok: #2C8140;     --ok-t: #E5F4E8;
+  --bad: #B3261E;    --bad-t: #FBE9E7;
+
+  --f-display: "Bricolage Grotesque", "Noto Sans SC", "PingFang SC", system-ui, sans-serif;
+  --f-body: "IBM Plex Sans", "Noto Sans SC", "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
+  --f-mono: "IBM Plex Mono", ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0D131A; --surface: #151D27; --ink: #E3E9F0; --muted: #9AA7B7; --faint: #6C7889; --line: #2A3644;
+    --entry: #95A3FF; --entry-t: #1C2242;
+    --host: #A5B0C0;  --host-t: #1B232E;
+    --core: #45C7B3;  --core-t: #0D2A27;
+    --ext: #EFA846;   --ext-t: #2E220F;
+    --data: #E68BB6;  --data-t: #33192A;
+    --ok: #63C97C;    --ok-t: #13301C;
+    --bad: #F2796C;   --bad-t: #3A1814;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #0D131A; --surface: #151D27; --ink: #E3E9F0; --muted: #9AA7B7; --faint: #6C7889; --line: #2A3644;
+  --entry: #95A3FF; --entry-t: #1C2242;
+  --host: #A5B0C0;  --host-t: #1B232E;
+  --core: #45C7B3;  --core-t: #0D2A27;
+  --ext: #EFA846;   --ext-t: #2E220F;
+  --data: #E68BB6;  --data-t: #33192A;
+  --ok: #63C97C;    --ok-t: #13301C;
+  --bad: #F2796C;   --bad-t: #3A1814;
+  color-scheme: dark;
+}
+
+body {
+  background: var(--bg);
+  color: var(--ink);
+  font-family: var(--f-body);
+  font-size: 15px;
+  line-height: 1.65;
+  -webkit-font-smoothing: antialiased;
+}
+.page {
+  max-width: 1260px;
+  margin: 0 auto;
+  padding-block: 48px 72px;
+  padding-left: max(16px, env(safe-area-inset-left, 0px));
+  padding-right: max(16px, env(safe-area-inset-right, 0px));
+  display: grid;
+  gap: 56px;
+}
+code, .mono { font-family: var(--f-mono); font-size: 0.9em; }
+
+/* Header */
+header.intro { display: grid; gap: 18px; }
+.eyebrow {
+  font-family: var(--f-mono);
+  font-size: 12px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+h1 {
+  font-family: var(--f-display);
+  font-weight: 700;
+  font-size: clamp(30px, 4.6vw, 52px);
+  line-height: 1.12;
+  letter-spacing: -0.015em;
+  margin: 0;
+  text-wrap: balance;
+}
+h1 em { font-style: normal; color: var(--core); }
+.lede { margin: 0; max-width: 64ch; color: var(--muted); font-size: 16px; }
+.legend { display: flex; flex-wrap: wrap; gap: 8px 20px; margin: 4px 0 0; padding: 0; list-style: none; font-size: 13px; color: var(--muted); }
+.legend li { display: flex; align-items: center; gap: 8px; }
+.sw { width: 14px; height: 14px; border-radius: 4px; border: 1.5px solid; flex: none; }
+.sw.entry { background: var(--entry-t); border-color: var(--entry); }
+.sw.host  { background: var(--host-t);  border-color: var(--host); }
+.sw.core  { background: var(--core-t);  border-color: var(--core); }
+.sw.ext   { background: var(--ext-t);   border-color: var(--ext); }
+.sw.data  { background: var(--data-t);  border-color: var(--data); }
+nav.toc { display: flex; flex-wrap: wrap; gap: 8px; }
+nav.toc a {
+  font-size: 13px;
+  color: var(--ink);
+  text-decoration: none;
+  padding: 5px 12px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--surface);
+}
+nav.toc a:hover { border-color: var(--core); color: var(--core); }
+nav.toc a:focus-visible, button:focus-visible { outline: 2px solid var(--core); outline-offset: 2px; }
+nav.toc a span { font-family: var(--f-mono); color: var(--faint); margin-right: 6px; }
+
+/* Sections */
+section { display: grid; gap: 16px; scroll-margin-top: 24px; }
+.sec-head { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 8px 24px; }
+.sec-head > div { min-width: 0; display: grid; gap: 6px; }
+.fig-no { font-family: var(--f-mono); font-size: 12px; color: var(--core); letter-spacing: 0.06em; }
+h2 {
+  font-family: var(--f-display);
+  font-weight: 700;
+  font-size: clamp(22px, 2.6vw, 28px);
+  line-height: 1.2;
+  margin: 0;
+  text-wrap: balance;
+}
+.sec-text { margin: 0; max-width: 68ch; color: var(--muted); }
+button.fs {
+  font: 500 12px var(--f-body);
+  color: var(--muted);
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 5px 10px;
+  cursor: pointer;
+}
+button.fs:hover { color: var(--ink); border-color: var(--faint); }
+
+figure { margin: 0; display: grid; gap: 12px; min-width: 0; }
+.plate {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  overflow-x: auto;
+  padding: 12px;
+}
+.plate svg { display: block; width: 100%; height: auto; min-width: 980px; }
+.plate.half svg { min-width: 520px; }
+figcaption { font-size: 13.5px; color: var(--muted); max-width: 80ch; }
+figcaption b { color: var(--ink); font-weight: 600; }
+.pair { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 480px), 1fr)); gap: 24px; }
+.pair > figure > h3 { margin: 0; font-size: 16px; font-weight: 600; }
+
+figure:fullscreen { background: var(--bg); padding: 24px; display: flex; align-items: center; justify-content: center; }
+figure:fullscreen .plate { width: 100%; max-height: 100%; overflow: auto; }
+figure:fullscreen .plate svg { min-width: 0; max-height: calc(100vh - 80px); }
+figure:fullscreen figcaption, figure:fullscreen h3 { display: none; }
+
+footer { display: grid; gap: 12px; border-top: 1px solid var(--line); padding-top: 24px; font-size: 13px; color: var(--muted); }
+.stack { display: flex; flex-wrap: wrap; gap: 6px 8px; margin: 0; padding: 0; list-style: none; }
+.stack li { font-family: var(--f-mono); font-size: 12px; padding: 3px 9px; border-radius: 4px; background: var(--host-t); color: var(--ink); }
+
+/* SVG diagram vocabulary */
+.d text { font-family: var(--f-body); fill: var(--ink); }
+.d .t  { font-size: 15px; font-weight: 600; }
+.d .ts { font-size: 14px; font-weight: 600; }
+.d .tc { font-size: 13px; font-weight: 600; }
+.d .s  { font-size: 12px; fill: var(--muted); }
+.d .xs { font-size: 11.5px; fill: var(--muted); }
+.d .m  { font-family: var(--f-mono); font-size: 11px; fill: var(--muted); }
+.d .mt { font-family: var(--f-mono); font-size: 12px; font-weight: 600; fill: var(--ink); }
+.d .rl { font-size: 13px; font-weight: 600; }
+.d .lbl { paint-order: stroke; stroke: var(--surface); stroke-width: 5px; stroke-linejoin: round; }
+.d .c-entry { fill: var(--entry); } .d .c-host { fill: var(--host); } .d .c-core { fill: var(--core); }
+.d .c-ext { fill: var(--ext); } .d .c-data { fill: var(--data); }
+
+.d .bx { fill: var(--surface); stroke: var(--line); stroke-width: 1; }
+.d .bx-entry { fill: var(--entry-t); stroke: var(--entry); stroke-width: 1.2; }
+.d .bx-host  { fill: var(--host-t);  stroke: var(--host);  stroke-width: 1.2; }
+.d .bx-core  { fill: var(--core-t);  stroke: var(--core);  stroke-width: 1.2; }
+.d .bx-key   { fill: var(--core-t);  stroke: var(--core);  stroke-width: 2.2; }
+.d .bx-ext   { fill: var(--ext-t);   stroke: var(--ext);   stroke-width: 1.2; }
+.d .bx-data  { fill: var(--data-t);  stroke: var(--data);  stroke-width: 1.2; }
+.d .bx-human { fill: var(--entry-t); stroke: var(--entry); stroke-width: 2.2; }
+.d .grp-core { fill: none; stroke: var(--core); stroke-width: 1.5; }
+.d .grp-ext  { fill: var(--ext-t);  stroke: var(--ext);  stroke-width: 1.2; }
+.d .grp-data { fill: var(--data-t); stroke: var(--data); stroke-width: 1.2; }
+.d .note { fill: var(--surface); stroke: var(--faint); stroke-width: 1.2; stroke-dasharray: 5 4; }
+.d .opt  { stroke-dasharray: 5 4; }
+
+.d .ar  { fill: none; stroke: var(--faint); stroke-width: 1.5; }
+.d .fl  { fill: none; stroke: var(--core); stroke-width: 2.2; }
+.d .dash { stroke-dasharray: 4 4; }
+.d .ah  { fill: var(--faint); }
+.d .ahf { fill: var(--core); }
+
+.d .bdg rect { stroke-width: 1; }
+.d .bdg text { font-family: var(--f-mono); font-size: 10.5px; font-weight: 600; text-anchor: middle; }
+.d .bdg.ext rect  { fill: var(--ext-t);   stroke: var(--ext); }   .d .bdg.ext text  { fill: var(--ext); }
+.d .bdg.data rect { fill: var(--data-t);  stroke: var(--data); }  .d .bdg.data text { fill: var(--data); }
+.d .bdg.core rect { fill: var(--core-t);  stroke: var(--core); }  .d .bdg.core text { fill: var(--core); }
+.d .bdg.entry rect{ fill: var(--entry-t); stroke: var(--entry); } .d .bdg.entry text{ fill: var(--entry); }
+.d .bdg.host rect { fill: var(--host-t);  stroke: var(--host); }  .d .bdg.host text { fill: var(--host); }
+
+.d .pill rect { stroke-width: 1; }
+.d .pill text { font-family: var(--f-mono); font-size: 11px; font-weight: 500; text-anchor: middle; }
+.d .pill.ok rect   { fill: var(--ok-t);   stroke: var(--ok); }   .d .pill.ok text   { fill: var(--ok); }
+.d .pill.wait rect { fill: var(--host-t); stroke: var(--host); } .d .pill.wait text { fill: var(--host); }
+.d .pill.warn rect { fill: var(--ext-t);  stroke: var(--ext); }  .d .pill.warn text { fill: var(--ext); }
+.d .pill.bad rect  { fill: var(--bad-t);  stroke: var(--bad); }  .d .pill.bad text  { fill: var(--bad); }
+
+@media (prefers-reduced-motion: no-preference) {
+  nav.toc a, button.fs { transition: border-color .15s, color .15s; }
+}
+</style>
+</head>
+<body style="margin:0">
+
+<main class="page">
+
+<header class="intro">
+  <div class="eyebrow">arxiv-daily · v0.6.2 · main @ d999037</div>
+  <h1>一个业务核，五个入口，<br><em>一条每日流水线</em></h1>
+  <p class="lede">arXiv Daily 每天拉取 arXiv 新论文，按研究者自己写的研究主题和方向筛选，生成本地 Markdown 日报和论文总结。可以选择接入个人 PDF 文献库，由模型提议新的研究方向，研究者确认后才影响每日筛选。</p>
+  <ul class="legend" aria-label="颜色图例">
+    <li><span class="sw entry"></span>产品入口</li>
+    <li><span class="sw host"></span>宿主适配层</li>
+    <li><span class="sw core"></span>业务核 / 主流程</li>
+    <li><span class="sw ext"></span>外部服务</li>
+    <li><span class="sw data"></span>本地数据（Vault）</li>
+  </ul>
+  <nav class="toc" aria-label="目录">
+    <a href="#overview"><span>1</span>系统全景</a>
+    <a href="#pipeline"><span>2</span>每日流水线</a>
+    <a href="#library"><span>3</span>文献库与研究方向</a>
+    <a href="#delivery"><span>4</span>邮件投递与依赖边界</a>
+  </nav>
+</header>
+
+<!-- ============ FIG 1 ============ -->
+<section id="overview">
+  <div class="sec-head">
+    <div>
+      <div class="fig-no">图 1</div>
+      <h2>系统全景</h2>
+      <p class="sec-text">所有业务逻辑都在 <code>@arxiv-daily/core</code> 里。Obsidian 插件和 Node 是两个“宿主”，各自把网络、磁盘、密钥等能力注入业务核。工作台、DSH 插件和 VS Code 扩展不重写生成逻辑，而是启动 CLI 进程来跑。</p>
+    </div>
+    <button class="fs" type="button" data-fs="fig1">全屏查看</button>
+  </div>
+  <figure id="fig1">
+    <div class="plate">
+      <svg class="d" viewBox="0 0 1200 810" role="img" aria-label="系统全景：五个产品入口经两个宿主适配层调用同一个业务核，业务核通过宿主访问 arXiv、LLM、嵌入模型和邮件服务，并读写本地 Vault。">
+        <defs>
+          <marker id="a1" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="ah" d="M0,0 L10,5 L0,10 z"/></marker>
+        </defs>
+
+        <!-- row labels -->
+        <rect class="bx-entry" x="20" y="108" width="10" height="10" rx="2"/>
+        <text class="rl c-entry" x="38" y="118">产品入口</text>
+        <text class="m" x="38" y="136">surfaces</text>
+        <rect class="bx-host" x="20" y="253" width="10" height="10" rx="2"/>
+        <text class="rl c-host" x="38" y="263">宿主适配</text>
+        <text class="m" x="38" y="281">hosts</text>
+        <rect class="bx-core" x="20" y="465" width="10" height="10" rx="2"/>
+        <text class="rl c-core" x="38" y="475">业务核</text>
+        <text class="m" x="38" y="493">core</text>
+        <rect class="bx-ext" x="20" y="705" width="10" height="10" rx="2"/>
+        <text class="rl c-ext" x="38" y="715">外部与数据</text>
+        <text class="m" x="38" y="733">I/O</text>
+
+        <!-- process hand-off arcs between entries -->
+        <path class="ar" d="M470,70 Q545,18 620,70" marker-end="url(#a1)"/>
+        <text class="m lbl" x="545" y="41" text-anchor="middle">run --today / --id</text>
+        <path class="ar" d="M840,70 Q765,18 690,70" marker-end="url(#a1)"/>
+        <text class="m lbl" x="765" y="41" text-anchor="middle">spawn run · IPC</text>
+        <path class="ar" d="M1060,70 Q982,18 905,70" marker-end="url(#a1)"/>
+        <text class="m lbl" x="982" y="41" text-anchor="middle">spawn ui · iframe</text>
+
+        <!-- row A: entries -->
+        <rect class="bx-entry" x="130" y="70" width="180" height="100" rx="8"/>
+        <text class="t" x="146" y="98">Obsidian 插件</text>
+        <text class="s" x="146" y="119">Dashboard · 设置页 · 命令</text>
+        <text class="s" x="146" y="136">Obsidian 开着时定时运行</text>
+        <text class="m" x="146" y="157">plugin/</text>
+
+        <rect class="bx-entry" x="347.5" y="70" width="180" height="100" rx="8"/>
+        <text class="t" x="363.5" y="98">VS Code 扩展</text>
+        <text class="s" x="363.5" y="119">阅读 Dashboard</text>
+        <text class="s" x="363.5" y="136">今日运行 · 按 ID 总结</text>
+        <text class="m" x="363.5" y="157">vscode-arxiv-daily</text>
+
+        <rect class="bx-entry" x="565" y="70" width="180" height="100" rx="8"/>
+        <text class="t" x="581" y="98">CLI</text>
+        <text class="s" x="581" y="119">run · library · schedule</text>
+        <text class="s" x="581" y="136">data · email · status</text>
+        <text class="m" x="581" y="157">npm i -g arxiv-daily</text>
+
+        <rect class="bx-entry" x="782.5" y="70" width="180" height="100" rx="8"/>
+        <text class="t" x="798.5" y="98">浏览器工作台</text>
+        <text class="s" x="798.5" y="119">日历 · 阅读 · 收藏 · 设置</text>
+        <text class="s" x="798.5" y="136">文献库复审 · 发起生成</text>
+        <text class="m" x="798.5" y="157">arxiv-daily ui</text>
+
+        <rect class="bx-entry" x="1000" y="70" width="180" height="100" rx="8"/>
+        <text class="t" x="1016" y="98">DSH 插件</text>
+        <text class="s" x="1016" y="119">DeepSeek Harness 侧边栏</text>
+        <text class="s" x="1016" y="136">嵌入同一个工作台</text>
+        <text class="m" x="1016" y="157">dsh-arxiv-daily</text>
+
+        <!-- A -> B -->
+        <path class="ar" d="M220,170 V223" marker-end="url(#a1)"/>
+        <path class="ar" d="M655,170 V223" marker-end="url(#a1)"/>
+        <path class="ar" d="M872.5,170 V223" marker-end="url(#a1)"/>
+
+        <!-- row B: hosts -->
+        <rect class="bx-host" x="130" y="225" width="180" height="80" rx="8"/>
+        <text class="t" x="146" y="251">Obsidian 宿主</text>
+        <text class="s" x="146" y="271">Vault · requestUrl</text>
+        <text class="s" x="146" y="289">pdf.js · 本地嵌入模型</text>
+
+        <text class="s" x="437.5" y="251" text-anchor="middle" style="font-weight:600;fill:var(--host)">注入 HostAdapters 端口</text>
+        <text class="xs" x="437.5" y="271" text-anchor="middle">HTTP · 存储 · 密钥</text>
+        <text class="xs" x="437.5" y="289" text-anchor="middle">进度 · 打开资源 · 解析</text>
+
+        <rect class="bx-host" x="565" y="225" width="397.5" height="80" rx="8"/>
+        <text class="t" x="581" y="251">Node 宿主</text>
+        <text class="m" x="660" y="251">@arxiv-daily/node-runtime</text>
+        <text class="s" x="581" y="271">fetch · 文件系统 · 原子私有存储 · 跨进程文件锁 · linkedom</text>
+        <text class="s" x="581" y="289">按需安装 PDF.js / Transformers（library prepare）</text>
+
+        <text class="xs" x="1090" y="251" text-anchor="middle">VS Code 与 DSH</text>
+        <text class="xs" x="1090" y="269" text-anchor="middle">不加载业务核，</text>
+        <text class="xs" x="1090" y="287" text-anchor="middle">生成都交给 CLI 进程</text>
+
+        <!-- B -> C -->
+        <path class="ar" d="M220,305 V353" marker-end="url(#a1)"/>
+        <path class="ar" d="M763.75,305 V353" marker-end="url(#a1)"/>
+
+        <!-- row C: core -->
+        <rect class="grp-core" x="130" y="355" width="1050" height="245" rx="12"/>
+        <text class="mt c-core" x="150" y="385" style="font-size:15px">@arxiv-daily/core</text>
+        <text class="t" x="310" y="385">业务核</text>
+        <text class="s" x="1160" y="385" text-anchor="end">宿主无关：不碰 Node 内置模块 / process / Buffer，第三方依赖只有 pako</text>
+
+        <rect class="bx" x="150" y="400" width="320" height="56" rx="6"/>
+        <text class="ts" x="166" y="423">调度器</text>
+        <text class="m" x="454" y="423" text-anchor="end">SchedulerService</text>
+        <text class="s" x="166" y="443">时间窗 · 回看 5 天 · 跳过周末 · 运行锁</text>
+
+        <rect class="bx-key" x="495" y="400" width="320" height="56" rx="6"/>
+        <text class="ts c-core" x="511" y="423">每日流水线</text>
+        <text class="m" x="799" y="423" text-anchor="end">ArxivPipeline</text>
+        <text class="s" x="511" y="443">发现 → 过滤 → 入索引 → 正文 → 总结 → 写入</text>
+
+        <rect class="bx" x="840" y="400" width="320" height="56" rx="6"/>
+        <text class="ts" x="856" y="423">邮件投递</text>
+        <text class="m" x="1144" y="423" text-anchor="end">delivery</text>
+        <text class="s" x="856" y="443">digest 渲染 · 落盘 claim 防重发 · 两种通道</text>
+
+        <rect class="bx" x="150" y="465" width="320" height="56" rx="6"/>
+        <text class="ts" x="166" y="488">数据面</text>
+        <text class="m" x="454" y="488" text-anchor="end">stores</text>
+        <text class="s" x="166" y="508">Paper Index · run-state · 运行历史 · checkpoint</text>
+
+        <rect class="bx" x="495" y="465" width="320" height="56" rx="6"/>
+        <text class="ts" x="511" y="488">个人文献库</text>
+        <text class="m" x="799" y="488" text-anchor="end">library</text>
+        <text class="s" x="511" y="508">catalog · 全文知识库 · 混合检索 · 方向提议</text>
+
+        <rect class="bx" x="840" y="465" width="320" height="56" rx="6"/>
+        <text class="ts" x="856" y="488">阅读数据</text>
+        <text class="m" x="1144" y="488" text-anchor="end">dashboard</text>
+        <text class="s" x="856" y="508">Dashboard 查询 · 日历 · 词法检索</text>
+
+        <rect class="bx" x="150" y="530" width="320" height="56" rx="6"/>
+        <text class="ts" x="166" y="553">LLM 客户端</text>
+        <text class="m" x="454" y="553" text-anchor="end">LlmClient</text>
+        <text class="s" x="166" y="573">流式 · 瞬态重试 · thinking · 密钥脱敏</text>
+
+        <rect class="bx" x="495" y="530" width="320" height="56" rx="6"/>
+        <text class="ts" x="511" y="553">来源与文档</text>
+        <text class="m" x="799" y="553" text-anchor="end">sources · documents</text>
+        <text class="s" x="511" y="573">ArxivSourceAdapter · DocumentParser</text>
+
+        <rect class="bx" x="840" y="530" width="320" height="56" rx="6"/>
+        <text class="ts" x="856" y="553">设置与提示词</text>
+        <text class="m" x="1144" y="553" text-anchor="end">settings · prompts</text>
+        <text class="s" x="856" y="573">共享设置 schema · 中英提示词 · 界面文案</text>
+
+        <!-- C -> D -->
+        <path class="ar" d="M416,600 V643" marker-end="url(#a1)"/>
+        <text class="xs lbl" x="426" y="626">HTTP（经宿主端口）</text>
+        <path class="ar" d="M955,602 V643" marker-start="url(#a1)" marker-end="url(#a1)"/>
+        <text class="xs lbl" x="966" y="626">读 / 写（原子写 + 备份）</text>
+
+        <!-- row D: external -->
+        <rect class="grp-ext" x="130" y="645" width="572" height="145" rx="10"/>
+        <text class="ts c-ext" x="146" y="670">外部服务</text>
+
+        <rect class="bx" x="146" y="684" width="126" height="92" rx="6"/>
+        <text class="tc" x="158" y="707">arXiv</text>
+        <text class="xs" x="158" y="727">/recent 每日列表</text>
+        <text class="xs" x="158" y="744">Atom 元数据</text>
+        <text class="xs" x="158" y="761">HTML 正文</text>
+
+        <rect class="bx" x="285" y="684" width="126" height="92" rx="6"/>
+        <text class="tc" x="297" y="707">LLM API</text>
+        <text class="xs" x="297" y="727">DeepSeek（默认）</text>
+        <text class="xs" x="297" y="744">OpenAI · GLM</text>
+        <text class="xs" x="297" y="761">Anthropic · 自定义</text>
+
+        <rect class="bx" x="424" y="684" width="126" height="92" rx="6"/>
+        <text class="tc" x="436" y="707">嵌入模型</text>
+        <text class="xs" x="436" y="727">本地 e5-small</text>
+        <text class="xs" x="436" y="744">离线，默认</text>
+        <text class="xs" x="436" y="761">或远程兼容端点</text>
+
+        <rect class="bx" x="563" y="684" width="126" height="92" rx="6"/>
+        <text class="tc" x="575" y="707">邮件</text>
+        <text class="xs" x="575" y="727">Resend 自发</text>
+        <text class="xs" x="575" y="744">官方中继 Worker</text>
+        <text class="xs" x="575" y="761">（Cloudflare）</text>
+
+        <!-- row D: vault -->
+        <rect class="grp-data" x="730" y="645" width="450" height="145" rx="10"/>
+        <text class="ts c-data" x="746" y="670">Vault 本地数据</text>
+        <text class="xs" x="860" y="670">研究者所有，可直接阅读和编辑</text>
+
+        <rect class="bx" x="746" y="684" width="201" height="42" rx="6"/>
+        <text class="mt" x="758" y="702">daily/YYYY-MM-DD.md</text>
+        <text class="xs" x="758" y="718">日报</text>
+        <rect class="bx" x="963" y="684" width="201" height="42" rx="6"/>
+        <text class="mt" x="975" y="702">papers/&lt;arxiv_id&gt;.md</text>
+        <text class="xs" x="975" y="718">论文总结</text>
+        <rect class="bx" x="746" y="734" width="201" height="42" rx="6"/>
+        <text class="mt" x="758" y="752">.index/</text>
+        <text class="xs" x="758" y="768">论文索引 · 运行状态 · 投递状态</text>
+        <rect class="bx" x="963" y="734" width="201" height="42" rx="6"/>
+        <text class="tc" x="975" y="752">个人文献库目录</text>
+        <text class="xs" x="975" y="768">你的 PDF，只读访问</text>
+      </svg>
+    </div>
+    <figcaption>业务核只通过宿主端口接触网络和磁盘，所以同一条流水线既能在 Obsidian 里跑，也能在终端里跑。两个产品的配置互不同步；浏览器工作台和 DSH 插件共用 CLI 的 <code>config.toml</code>。VS Code 扩展的阅读面板直接读 Vault 里的 <code>papers.json</code>。</figcaption>
+  </figure>
+</section>
+
+<!-- ============ FIG 2 ============ -->
+<section id="pipeline">
+  <div class="sec-head">
+    <div>
+      <div class="fig-no">图 2</div>
+      <h2>每日流水线</h2>
+      <p class="sec-text">按日期运行，每天一次。阶段之间有 checkpoint，中断后重跑不会重复已经完成的模型调用。只有完整日报写入并确认运行状态后，这一天才算完成。</p>
+    </div>
+    <button class="fs" type="button" data-fs="fig2">全屏查看</button>
+  </div>
+  <figure id="fig2">
+    <div class="plate">
+      <svg class="d" viewBox="0 0 1200 500" role="img" aria-label="每日流水线：三种触发方式经调度器进入八个阶段——发现、LLM 过滤、入索引、抓正文、选论文总结、写论文总结、日报摘要、写日报，然后确认运行状态并可选发送邮件。">
+        <defs>
+          <marker id="a2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="ah" d="M0,0 L10,5 L0,10 z"/></marker>
+          <marker id="f2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path class="ahf" d="M0,0 L10,5 L0,10 z"/></marker>
+        </defs>
+
+        <!-- triggers -->
+        <text class="s" x="20" y="48" style="font-weight:600">触发</text>
+        <rect class="bx-entry" x="20" y="62" width="185" height="30" rx="6"/>
+        <text class="s" x="32" y="82" style="fill:var(--ink)">插件：每 20 分钟 tick</text>
+        <rect class="bx-entry" x="20" y="96" width="185" height="30" rx="6"/>
+        <text class="s" x="32" y="116" style="fill:var(--ink)">cron → <tspan class="m" style="fill:var(--ink)">run --today</tspan></text>
+        <rect class="bx-entry" x="20" y="130" width="185" height="30" rx="6"/>
+        <text class="s" x="32" y="150" style="fill:var(--ink)">手动：命令 / 工作台</text>
+        <path class="ar" d="M205,77 C222,77 222,110 238,110" marker-end="url(#a2)"/>
+        <path class="ar" d="M205,111 H238" marker-end="url(#a2)"/>
+        <path class="ar" d="M205,145 C222,145 222,110 238,110" marker-end="url(#a2)"/>
+
+        <!-- scheduler -->
+        <rect class="bx-core" x="240" y="60" width="165" height="100" rx="8"/>
+        <text class="t" x="256" y="86">调度器</text>
+        <text class="m" x="256" y="106">runForDateNow</text>
+        <text class="s" x="256" y="125">运行锁 · 记 running</text>
+        <text class="s" x="256" y="143">时间窗 · 周末跳过</text>
+        <path class="fl" d="M405,110 H427" marker-end="url(#f2)"/>
+
+        <!-- stages 1-4 -->
+        <rect class="bx" x="430" y="60" width="165" height="100" rx="8"/>
+        <text class="t" x="446" y="86">① 发现</text>
+        <text class="s" x="446" y="107">arXiv 当日新论文列表</text>
+        <text class="s" x="446" y="124">并补全摘要</text>
+        <g class="bdg ext"><rect x="446" y="134" width="44" height="16" rx="8"/><text x="468" y="145.5">arXiv</text></g>
+        <path class="fl" d="M595,110 H614" marker-end="url(#f2)"/>
+
+        <rect class="bx" x="617" y="60" width="165" height="100" rx="8"/>
+        <text class="t" x="633" y="86">② LLM 过滤</text>
+        <text class="s" x="633" y="107">按研究主题与方向分类</text>
+        <text class="s" x="633" y="124">严格 JSON 校验</text>
+        <g class="bdg ext"><rect x="633" y="134" width="34" height="16" rx="8"/><text x="650" y="145.5">LLM</text></g>
+        <path class="fl" d="M782,110 H801" marker-end="url(#f2)"/>
+
+        <rect class="bx" x="804" y="60" width="165" height="100" rx="8"/>
+        <text class="t" x="820" y="86">③ 入索引</text>
+        <text class="s" x="820" y="107">写入 Paper Index</text>
+        <text class="s" x="820" y="124">ignored 的论文不再出现</text>
+        <g class="bdg data"><rect x="820" y="134" width="34" height="16" rx="8"/><text x="837" y="145.5">数据</text></g>
+        <path class="fl" d="M969,110 H988" marker-end="url(#f2)"/>
+
+        <rect class="bx" x="991" y="60" width="165" height="100" rx="8"/>
+        <text class="t" x="1007" y="86">④ 抓正文</text>
+        <text class="s" x="1007" y="107">并发 6 路抓取全文</text>
+        <text class="s" x="1007" y="124">失败用占位，不中断</text>
+        <g class="bdg ext"><rect x="1007" y="134" width="44" height="16" rx="8"/><text x="1029" y="145.5">arXiv</text></g>
+
+        <!-- early exits -->
+        <path class="ar dash" d="M512,160 V178"/>
+        <text class="xs" x="512" y="194" text-anchor="middle">列表为空 → pending</text>
+        <text class="xs" x="512" y="211" text-anchor="middle">不写空文件，稍后再跑</text>
+        <path class="ar dash" d="M699,160 V178"/>
+        <text class="xs" x="699" y="194" text-anchor="middle">全部 skip → completed（0 篇）</text>
+        <text class="xs" x="699" y="211" text-anchor="middle">JSON 不合规 → failed_transient</text>
+
+        <!-- wrap to row 2 -->
+        <path class="fl" d="M1073.5,160 V242 Q1073.5,250 1065.5,250 H58 Q50,250 50,258 V332 Q50,340 58,340 H87" marker-end="url(#f2)"/>
+
+        <!-- stages 5-8 -->
+        <rect class="bx" x="90" y="290" width="170" height="100" rx="8"/>
+        <text class="t" x="106" y="316">⑤ 选论文总结</text>
+        <text class="s" x="106" y="337">相关度阈值 + 软上限</text>
+        <text class="s" x="106" y="354">已有总结不占名额</text>
+        <g class="bdg ext"><rect x="106" y="364" width="34" height="16" rx="8"/><text x="123" y="375.5">LLM</text></g>
+        <path class="fl" d="M260,340 H277" marker-end="url(#f2)"/>
+
+        <rect class="bx" x="280" y="290" width="170" height="100" rx="8"/>
+        <text class="t" x="296" y="316">⑥ 写论文总结</text>
+        <text class="s" x="296" y="337">逐篇长篇总结</text>
+        <text class="m" x="296" y="354">→ papers/&lt;id&gt;.md</text>
+        <g class="bdg ext"><rect x="296" y="364" width="34" height="16" rx="8"/><text x="313" y="375.5">LLM</text></g>
+        <g class="bdg data"><rect x="336" y="364" width="66" height="16" rx="8"/><text x="369" y="375.5">Vault 写入</text></g>
+        <path class="fl" d="M450,340 H467" marker-end="url(#f2)"/>
+
+        <rect class="bx" x="470" y="290" width="170" height="100" rx="8"/>
+        <text class="t" x="486" y="316">⑦ 日报摘要</text>
+        <text class="s" x="486" y="337">每篇一段结构化摘要</text>
+        <text class="s" x="486" y="354">失败时 rescue 补救</text>
+        <g class="bdg ext"><rect x="486" y="364" width="34" height="16" rx="8"/><text x="503" y="375.5">LLM</text></g>
+        <path class="fl" d="M640,340 H657" marker-end="url(#f2)"/>
+
+        <rect class="bx" x="660" y="290" width="170" height="100" rx="8"/>
+        <text class="t" x="676" y="316">⑧ 写日报</text>
+        <text class="m" x="676" y="337">daily/YYYY-MM-DD.md</text>
+        <text class="s" x="676" y="354">更新索引中的日报链接</text>
+        <g class="bdg data"><rect x="676" y="364" width="66" height="16" rx="8"/><text x="709" y="375.5">Vault 写入</text></g>
+        <path class="fl" d="M830,340 H852" marker-end="url(#f2)"/>
+
+        <rect class="bx-key" x="855" y="290" width="150" height="100" rx="8"/>
+        <text class="t c-core" x="869" y="316">确认完成</text>
+        <text class="m" x="869" y="337">run-state 回读确认</text>
+        <text class="s" x="869" y="356">确认后记历史、</text>
+        <text class="s" x="869" y="373">再触发邮件</text>
+        <path class="ar dash" d="M1005,340 H1027" marker-end="url(#a2)"/>
+
+        <rect class="bx-ext opt" x="1030" y="290" width="150" height="100" rx="8"/>
+        <text class="t" x="1044" y="316">邮件（可选）</text>
+        <text class="s" x="1044" y="337">手机友好的 digest</text>
+        <text class="s" x="1044" y="354">自发 / 官方中继</text>
+        <text class="xs" x="1044" y="373">失败不改运行状态</text>
+
+        <!-- run results -->
+        <text class="s" x="90" y="442" style="font-weight:600">运行结果（写入 run-state）</text>
+        <g class="pill ok"><rect x="90" y="456" width="80" height="24" rx="12"/><text x="130" y="472">completed</text></g>
+        <g class="pill wait"><rect x="180" y="456" width="68" height="24" rx="12"/><text x="214" y="472">pending</text></g>
+        <g class="pill wait"><rect x="258" y="456" width="148" height="24" rx="12"/><text x="332" y="472">cancelled → pending</text></g>
+        <g class="pill warn"><rect x="416" y="456" width="128" height="24" rx="12"/><text x="480" y="472">failed_transient</text></g>
+        <g class="pill bad"><rect x="554" y="456" width="128" height="24" rx="12"/><text x="618" y="472">failed_permanent</text></g>
+        <text class="s" x="698" y="472">瞬态失败按退避重试，累计 10 次升级为永久失败</text>
+      </svg>
+    </div>
+    <figcaption>标 <b>LLM</b> 的阶段调用模型，标 <b>arXiv</b> 的阶段访问 arXiv，标 <b>Vault 写入</b> 的阶段产出 Markdown 文件。插件在 Obsidian 打开期间按时间窗定时运行；CLI 不常驻，由系统 cron 每次调用一次 <code>run --today</code>。重跑一个已有日报的日期只会修复索引。</figcaption>
+  </figure>
+</section>
+
+<!-- ============ FIG 3 ============ -->
+<section id="library">
+  <div class="sec-head">
+    <div>
+      <div class="fig-no">图 3</div>
+      <h2>个人文献库如何变成研究方向</h2>
+      <p class="sec-text">文献库是可选的，而且不直接影响日报。模型只负责提议；研究者接受的方向会以普通文本写进研究主题，之后与手写的方向没有区别。</p>
+    </div>
+    <button class="fs" type="button" data-fs="fig3">全屏查看</button>
+  </div>
+  <figure id="fig3">
+    <div class="plate">
+      <svg class="d" viewBox="0 0 1200 530" role="img" aria-label="文献库流程：选目录、扫描识别、全文索引、知识库，再到检索；知识库经聚类、模型提议方向、研究者复审，接受的方向写入研究主题并用于每日过滤。">
+        <defs>
+          <marker id="a3" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="ah" d="M0,0 L10,5 L0,10 z"/></marker>
+          <marker id="f3" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path class="ahf" d="M0,0 L10,5 L0,10 z"/></marker>
+        </defs>
+
+        <text class="s" x="30" y="44" style="font-weight:600">准备：建立本地知识库</text>
+
+        <rect class="bx-data" x="30" y="60" width="165" height="100" rx="8"/>
+        <text class="t" x="46" y="86">文献库目录</text>
+        <text class="s" x="46" y="107">研究者选的本地目录</text>
+        <text class="s" x="46" y="124">只读，不跟随符号链接</text>
+        <g class="bdg data"><rect x="46" y="134" width="34" height="16" rx="8"/><text x="63" y="145.5">本地</text></g>
+        <path class="fl" d="M195,110 H219" marker-end="url(#f3)"/>
+
+        <rect class="bx" x="222" y="60" width="165" height="100" rx="8"/>
+        <text class="t" x="238" y="86">扫描识别</text>
+        <text class="s" x="238" y="107">从文件名 / PDF 内容</text>
+        <text class="s" x="238" y="124">找 arXiv ID → 元数据</text>
+        <g class="bdg ext"><rect x="238" y="134" width="44" height="16" rx="8"/><text x="260" y="145.5">arXiv</text></g>
+        <path class="fl" d="M387,110 H411" marker-end="url(#f3)"/>
+
+        <rect class="bx" x="414" y="60" width="165" height="100" rx="8"/>
+        <text class="t" x="430" y="86">全文索引</text>
+        <text class="s" x="430" y="107">pdf.js 解析 → 分块</text>
+        <text class="s" x="430" y="124">向量：本地 e5 或远程</text>
+        <g class="bdg ext"><rect x="430" y="134" width="70" height="16" rx="8"/><text x="465" y="145.5">远程需许可</text></g>
+        <path class="fl" d="M579,110 H603" marker-end="url(#f3)"/>
+
+        <rect class="bx-data" x="606" y="60" width="165" height="100" rx="8"/>
+        <text class="t" x="622" y="86">知识库</text>
+        <text class="s" x="622" y="107">分块证据 + 向量</text>
+        <text class="s" x="622" y="124">manifest 为权威索引</text>
+        <g class="bdg data"><rect x="622" y="134" width="34" height="16" rx="8"/><text x="639" y="145.5">数据</text></g>
+        <path class="ar" d="M771,110 H817" marker-end="url(#a3)"/>
+        <text class="xs lbl" x="794" y="102" text-anchor="middle">查询</text>
+
+        <rect class="bx" x="820" y="60" width="160" height="100" rx="8"/>
+        <text class="t" x="836" y="86">混合检索</text>
+        <text class="s" x="836" y="107">语义向量 + BM25 词法</text>
+        <text class="s" x="836" y="124">RRF 融合排序</text>
+        <path class="ar" d="M980,110 H1017" marker-end="url(#a3)"/>
+
+        <rect class="bx-entry" x="1020" y="60" width="160" height="100" rx="8"/>
+        <text class="t" x="1036" y="86">搜索 · 相似论文</text>
+        <text class="s" x="1036" y="107">Dashboard / 工作台</text>
+        <text class="m" x="1036" y="124">library search</text>
+
+        <!-- notes under row 1 -->
+        <path class="ar dash" d="M304.5,160 V178"/>
+        <text class="xs" x="304.5" y="194" text-anchor="middle">识别不了 → unresolved</text>
+        <text class="xs" x="304.5" y="211" text-anchor="middle">仍可按内容做全文索引</text>
+        <path class="ar dash" d="M496.5,160 V178"/>
+        <text class="xs" x="496.5" y="194" text-anchor="middle">增量：未变的文件直接复用</text>
+        <text class="xs" x="496.5" y="211" text-anchor="middle">换嵌入模型须删除重建</text>
+
+        <!-- wrap -->
+        <path class="fl" d="M688.5,160 V242 Q688.5,250 680.5,250 H28 Q20,250 20,258 V332 Q20,340 28,340 H57" marker-end="url(#f3)"/>
+        <text class="s" x="60" y="276" style="font-weight:600">理解与回流：从库里提议方向</text>
+
+        <rect class="bx" x="60" y="290" width="172" height="100" rx="8"/>
+        <text class="t" x="76" y="316">聚类</text>
+        <text class="s" x="76" y="337">论文间最强分块相似度</text>
+        <text class="s" x="76" y="354">相对停止线 · 小簇入缓冲池</text>
+        <path class="fl" d="M232,340 H259" marker-end="url(#f3)"/>
+
+        <rect class="bx" x="262" y="290" width="172" height="100" rx="8"/>
+        <text class="t" x="278" y="316">方向提议</text>
+        <text class="s" x="278" y="337">每个簇一次 LLM 调用</text>
+        <text class="s" x="278" y="354">提议主题 + 一行方向</text>
+        <g class="bdg ext"><rect x="278" y="364" width="34" height="16" rx="8"/><text x="295" y="375.5">LLM</text></g>
+        <g class="bdg ext"><rect x="318" y="364" width="46" height="16" rx="8"/><text x="341" y="375.5">需许可</text></g>
+        <path class="fl" d="M434,340 H461" marker-end="url(#f3)"/>
+
+        <rect class="bx-human" x="464" y="290" width="172" height="100" rx="8"/>
+        <text class="t c-entry" x="480" y="316">研究者复审</text>
+        <text class="s" x="480" y="337">看证据，可改写、选主题</text>
+        <text class="s" x="480" y="354">只有「接受」才生效</text>
+        <g class="bdg entry"><rect x="480" y="364" width="58" height="16" rx="8"/><text x="509" y="375.5">人工决定</text></g>
+        <path class="fl" d="M636,340 H663" marker-end="url(#f3)"/>
+
+        <rect class="bx" x="666" y="290" width="172" height="100" rx="8"/>
+        <text class="t" x="682" y="316">研究主题 · 方向</text>
+        <text class="s" x="682" y="337">接受后就是普通文本</text>
+        <text class="s" x="682" y="354">不保留库证据</text>
+        <g class="bdg host"><rect x="682" y="364" width="34" height="16" rx="8"/><text x="699" y="375.5">设置</text></g>
+        <path class="fl" d="M838,340 H865" marker-end="url(#f3)"/>
+
+        <rect class="bx-key" x="868" y="290" width="172" height="100" rx="8"/>
+        <text class="t c-core" x="884" y="316">每日过滤</text>
+        <text class="s" x="884" y="337">即图 2 第 ② 步</text>
+        <text class="s" x="884" y="354">日报写明命中的方向</text>
+
+        <!-- nudge -->
+        <rect class="note" x="262" y="440" width="410" height="72" rx="8"/>
+        <text class="tc" x="278" y="463">新论文提醒</text>
+        <text class="xs" x="278" y="483">再次索引后，若有 ≥3 篇新论文从未被分析过，就提醒一次；</text>
+        <text class="xs" x="278" y="500">研究者点「更新方向建议」才重扫，只发新论文和现有方向。</text>
+        <path class="ar dash" d="M348,440 V393" marker-end="url(#a3)"/>
+
+        <text class="xs" x="700" y="463">模型处理许可绑定：目录、端点、处理深度。</text>
+        <text class="xs" x="700" y="480">任何一项变化都要重新授权。</text>
+        <text class="xs" x="700" y="497">撤销许可只停用索引和提议，已接受的方向照常工作。</text>
+      </svg>
+    </div>
+    <figcaption>标 <b>需许可</b> 的步骤会把库里的内容发给外部模型，必须先取得研究者的“模型处理许可”。扫描、本地全文索引和检索都在本机完成，不需要许可。</figcaption>
+  </figure>
+</section>
+
+<!-- ============ FIG 4 + 5 ============ -->
+<section id="delivery">
+  <div class="sec-head">
+    <div>
+      <div class="fig-no">图 4 · 图 5</div>
+      <h2>邮件投递与依赖边界</h2>
+      <p class="sec-text">邮件宁可漏发也不重发。代码依赖只能单向流向业务核，CI 里的边界脚本会拦下反向依赖。</p>
+    </div>
+  </div>
+  <div class="pair">
+    <figure id="fig4">
+      <h3>图 4 · 邮件投递</h3>
+      <div class="plate half">
+        <svg class="d" viewBox="0 0 580 380" role="img" aria-label="邮件投递：当天 digest 先落盘 claim，再经自发 Resend 或官方中继 Worker 发出，最后到收件箱。">
+          <defs>
+            <marker id="a4" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="ah" d="M0,0 L10,5 L0,10 z"/></marker>
+            <marker id="f4" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path class="ahf" d="M0,0 L10,5 L0,10 z"/></marker>
+          </defs>
+
+          <rect class="bx-core" x="20" y="40" width="150" height="64" rx="8"/>
+          <text class="ts" x="34" y="66">当天 digest</text>
+          <text class="s" x="34" y="87">运行状态确认之后</text>
+          <path class="fl" d="M95,104 V137" marker-end="url(#f4)"/>
+
+          <rect class="bx-data" x="20" y="140" width="150" height="100" rx="8"/>
+          <text class="ts" x="34" y="166">落盘 claim</text>
+          <text class="s" x="34" y="187">同日同收件人只一次</text>
+          <text class="s" x="34" y="205">先记「已尝试」</text>
+          <text class="s" x="34" y="223">再调用服务商</text>
+
+          <path class="fl" d="M170,180 C210,180 210,72 247,72" marker-end="url(#f4)"/>
+          <text class="m lbl" x="205" y="118" text-anchor="middle">self</text>
+          <path class="fl" d="M170,200 H247" marker-end="url(#f4)"/>
+          <text class="m lbl" x="208" y="192" text-anchor="middle">hosted</text>
+
+          <rect class="bx" x="250" y="40" width="150" height="64" rx="8"/>
+          <text class="ts" x="264" y="66">自发 Resend</text>
+          <text class="s" x="264" y="87">用你自己的 API key</text>
+
+          <rect class="bx-ext" x="250" y="140" width="150" height="132" rx="8"/>
+          <text class="ts" x="264" y="166">官方中继</text>
+          <text class="m" x="264" y="185">/v1/deliver</text>
+          <text class="s" x="264" y="206">设备令牌校验</text>
+          <text class="s" x="264" y="224">Durable Object 台账</text>
+          <text class="s" x="264" y="242">每日配额</text>
+          <text class="m" x="264" y="261">Cloudflare Worker</text>
+
+          <path class="fl" d="M400,72 C418,72 412,128 427,128" marker-end="url(#f4)"/>
+          <path class="fl" d="M400,206 C418,206 412,156 427,156" marker-end="url(#f4)"/>
+
+          <rect class="bx" x="430" y="110" width="130" height="64" rx="8"/>
+          <text class="ts" x="444" y="136">Resend</text>
+          <text class="s" x="444" y="157">幂等 key 去重</text>
+          <path class="fl" d="M495,174 V297" marker-end="url(#f4)"/>
+
+          <rect class="bx-entry" x="430" y="300" width="130" height="50" rx="8"/>
+          <text class="ts" x="444" y="331">收件箱</text>
+
+          <text class="xs" x="20" y="300">结果不明（ambiguous）时不自动重发：</text>
+          <text class="xs" x="20" y="318">宁可漏发一封，也不重复发送。</text>
+          <text class="xs" x="20" y="342">邮件失败不改写当天的运行状态。</text>
+        </svg>
+      </div>
+      <figcaption>两种模式共用同一套防重逻辑。官方中继在服务端再做一次按收件人和日期的去重与配额。</figcaption>
+    </figure>
+
+    <figure id="fig5">
+      <h3>图 5 · 包依赖边界</h3>
+      <div class="plate half">
+        <svg class="d" viewBox="0 0 580 380" role="img" aria-label="依赖边界：plugin 和 apps/cli 都依赖 core；cli 还依赖 node-runtime，node-runtime 依赖 core；plugin 只例外地使用 node-runtime 的一个子路径。">
+          <defs>
+            <marker id="a5" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="ah" d="M0,0 L10,5 L0,10 z"/></marker>
+            <marker id="f5" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path class="ahf" d="M0,0 L10,5 L0,10 z"/></marker>
+          </defs>
+
+          <rect class="bx-entry" x="30" y="40" width="170" height="56" rx="8"/>
+          <text class="mt" x="46" y="64">plugin/</text>
+          <text class="s" x="46" y="84">Obsidian 插件</text>
+
+          <rect class="bx-entry" x="380" y="40" width="170" height="56" rx="8"/>
+          <text class="mt" x="396" y="64">apps/cli</text>
+          <text class="s" x="396" y="84">CLI + 浏览器工作台</text>
+
+          <rect class="bx-host" x="205" y="160" width="170" height="56" rx="8"/>
+          <text class="mt" x="221" y="184">packages/node-runtime</text>
+          <text class="s" x="221" y="204">Node 宿主适配</text>
+
+          <rect class="bx-key" x="30" y="280" width="520" height="56" rx="8"/>
+          <text class="mt c-core" x="290" y="304" text-anchor="middle">packages/core</text>
+          <text class="s" x="290" y="324" text-anchor="middle">业务核 · 生产依赖只有 pako</text>
+
+          <path class="fl" d="M115,96 V277" marker-end="url(#f5)"/>
+          <path class="fl" d="M465,96 V277" marker-end="url(#f5)"/>
+          <path class="fl" d="M290,216 V277" marker-end="url(#f5)"/>
+          <path class="ar" d="M420,96 L345,157" marker-end="url(#a5)"/>
+          <path class="ar dash" d="M160,96 L235,157" marker-end="url(#a5)"/>
+          <text class="xs lbl" x="186" y="140" text-anchor="end">例外：仅一个子路径</text>
+
+          <rect class="note" x="30" y="350" width="520" height="24" rx="6"/>
+          <text class="m" x="290" y="366" text-anchor="middle">独立包：email-relay · vscode-arxiv-daily · dsh-arxiv-daily</text>
+        </svg>
+      </div>
+      <figcaption>箭头表示“依赖于”。插件只允许引用 <code>node-runtime/scoped-library-source</code>，用于读取外部文献库目录。业务核里禁止出现 Node 内置模块，规则由 <code>scripts/check-boundaries.mjs</code> 执行。</figcaption>
+    </figure>
+  </div>
+</section>
+
+<footer>
+  <ul class="stack" aria-label="技术栈">
+    <li>TypeScript</li><li>Node ≥ 20.19</li><li>npm workspaces</li><li>esbuild</li><li>Vitest</li>
+    <li>Obsidian Plugin API</li><li>pdf.js</li><li>transformers.js · multilingual-e5-small</li>
+    <li>Cloudflare Workers · KV · Durable Objects</li><li>Resend</li>
+  </ul>
+  <p style="margin:0">依据 <code>docs/technical-report.md</code>、<code>CONTEXT.md</code> 与 2026-10-21 的 main 分支源码整理。</p>
+</footer>
+
+</main>
+
+<script>
+document.querySelectorAll('button.fs').forEach(function (btn) {
+  btn.addEventListener('click', function () {
+    var el = document.getElementById(btn.dataset.fs);
+    if (el && el.requestFullscreen) {
+      el.requestFullscreen().catch(function () {});
+    }
+  });
+});
+</script>
+</body>
+</html>
