@@ -35,7 +35,7 @@ THE SOFTWARE.
 
 The Node CLI bundle also includes the following Markdown and math rendering libraries. Their notices are embedded in the CLI and available from the local workbench.
 
-### markdown-it 15.0.2
+### markdown-it 15.0.3
 
 Source: markdown-it/markdown-it
 
@@ -92,7 +92,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
 
-### entities 8.0.0
+### entities 8.1.0
 
 Source: https://github.com/fb55/entities.git
 
