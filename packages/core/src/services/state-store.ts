@@ -6,7 +6,13 @@ import { derivePaperInboxPaths } from "./paper-index";
 const MAX_TRANSIENT_ATTEMPTS = 10;
 export const STALE_RUNNING_RECOVERY_MS = 60 * 60 * 1000;
 
-export type StateLoadFn = () => Promise<{ runState: RunState }>;
+/** A run-state file that cannot be parsed, so every write to it is refused. */
+export interface RunStateDamage {
+  path: string;
+  reason: string;
+}
+
+export type StateLoadFn = () => Promise<{ runState: RunState; damaged?: RunStateDamage }>;
 export type StateSaveFn = (data: { runState: RunState }) => Promise<void>;
 type StateStoreLogger = { warn(message: string, ...rest: unknown[]): void };
 
@@ -17,6 +23,24 @@ export interface StorageStateStorePaths {
 }
 
 const stateMutationQueues = new Map<string, Promise<unknown>>();
+
+/**
+ * The file that mutations build on holds no valid run state. Distinct from an
+ * unsupported schema or invalid optional field, which may be newer data that
+ * must survive and so are never cleared.
+ */
+export class CorruptRunStateError extends Error {
+  readonly code = "CORRUPT_RUN_STATE" as const;
+
+  constructor(readonly path: string, readonly reason: string) {
+    super(
+      `run-state is damaged and was left untouched: ${path} (${reason}). ` +
+        `Run "Clear arXiv Daily run state" in Obsidian, or move the file aside, to start a new history; ` +
+        `clearing keeps the damaged file as ${path}.corrupt-<time>.`,
+    );
+    this.name = "CorruptRunStateError";
+  }
+}
 
 class UnsupportedRunStateSchemaError extends Error {
   readonly code = "UNSUPPORTED_RUN_STATE_SCHEMA" as const;
@@ -38,19 +62,26 @@ class InvalidRunStateOptionalFieldError extends Error {
 
 export class StateStore {
   private state: RunState = {};
+  private damaged: RunStateDamage | undefined;
   private mutationQueue: Promise<unknown> = Promise.resolve();
 
+  /**
+   * `quarantineFn` moves an unreadable durable file aside (keeping it) so that
+   * clearAll can start over; without it a damaged file blocks every mutation.
+   */
   constructor(
     private readonly loadFn: StateLoadFn,
     private readonly saveFn: StateSaveFn,
     private readonly mutationQueueKey?: string,
     private readonly authoritativeLoadFn: StateLoadFn = loadFn,
+    private readonly quarantineFn?: (path: string) => Promise<void>,
   ) {}
 
   async load(): Promise<void> {
     await this.enqueueStateOperation(async () => {
       const data = await this.loadFn();
       this.state = cloneRunState(data.runState);
+      this.damaged = data.damaged;
     });
   }
 
@@ -58,7 +89,17 @@ export class StateStore {
     await this.enqueueStateOperation(async () => {
       const data = await this.authoritativeLoadFn();
       this.state = cloneRunState(data.runState);
+      this.damaged = undefined;
     });
+  }
+
+  /**
+   * Set when the last load found a run-state file it could not parse. Loading
+   * still succeeds, with whatever the backup held or an empty history, but
+   * every mutation fails until the file is cleared, so hosts should say so.
+   */
+  damage(): RunStateDamage | undefined {
+    return this.damaged;
   }
 
   get(date: string): RunStateEntry {
@@ -170,11 +211,17 @@ export class StateStore {
     });
   }
 
+  /**
+   * Also the way out of a damaged run-state file: the user asked for the old
+   * content to go, so it is moved aside instead of blocking the clear.
+   * replaceAll does not do this; it only serves the automatic legacy
+   * migration, which must not discard a file on its own.
+   */
   async clearAll(): Promise<void> {
     await this.enqueueMutation((candidate) => {
       for (const date of Object.keys(candidate)) delete candidate[date];
       return { result: undefined, persist: true };
-    });
+    }, true);
   }
 
   async replaceAll(runState: RunState): Promise<void> {
@@ -249,9 +296,10 @@ export class StateStore {
     mutate: (
       candidate: RunState,
     ) => Promise<{ result: T; persist: boolean }> | { result: T; persist: boolean },
+    discardDamaged = false,
   ): Promise<T> {
     return this.enqueueStateOperation(async () => {
-      const data = await this.authoritativeLoadFn();
+      const data = await this.loadForMutation(discardDamaged);
       const durableState = cloneRunState(data.runState);
       const candidate = cloneRunState(durableState);
       const { result, persist } = await mutate(candidate);
@@ -292,6 +340,19 @@ export class StateStore {
       this.state = durableReadback;
       return result;
     });
+  }
+
+  private async loadForMutation(discardDamaged: boolean): Promise<{ runState: RunState }> {
+    try {
+      const data = await this.authoritativeLoadFn();
+      this.damaged = undefined;
+      return data;
+    } catch (error) {
+      if (!discardDamaged || !(error instanceof CorruptRunStateError) || !this.quarantineFn) throw error;
+      await this.quarantineFn(error.path);
+      this.damaged = undefined;
+      return { runState: {} };
+    }
   }
 
   private async enqueueStateOperation<T>(job: () => Promise<T>): Promise<T> {
@@ -398,7 +459,9 @@ export function createStorageStateStore(
   );
   return new StateStore(
     async () => {
-      return loadRunStateWithFallback(storage, paths.runStatePath, logger);
+      const loaded = await loadRunStateWithFallback(storage, paths.runStatePath, logger);
+      const damaged = await findRunStateDamage(storage, paths.runStatePath);
+      return damaged ? { ...loaded, damaged } : loaded;
     },
     async ({ runState }) => {
       await ensureDirDeep(storage, paths.indexDir);
@@ -410,7 +473,29 @@ export function createStorageStateStore(
     },
     paths.runStatePath,
     async () => loadAuthoritativeRunState(storage, paths.runStatePath),
+    async (damagedPath) => quarantineRunStateFile(storage, damagedPath),
   );
+}
+
+/** The lenient load papers over damage; the strict one that mutations use does not. */
+async function findRunStateDamage(
+  storage: StorageAdapter,
+  path: string,
+): Promise<RunStateDamage | undefined> {
+  try {
+    await loadAuthoritativeRunState(storage, path);
+  } catch (error) {
+    if (error instanceof CorruptRunStateError) return { path: error.path, reason: error.reason };
+  }
+  return undefined;
+}
+
+/** Keeps the damaged file for inspection instead of deleting it. */
+async function quarantineRunStateFile(storage: StorageAdapter, path: string): Promise<void> {
+  const stamp = new Date().toISOString().replace(/[-:.]/g, "");
+  let target = `${path}.corrupt-${stamp}`;
+  for (let n = 1; await storage.exists(target); n += 1) target = `${path}.corrupt-${stamp}-${n}`;
+  await storage.rename(path, target);
 }
 
 async function loadAuthoritativeRunState(
@@ -423,11 +508,24 @@ async function loadAuthoritativeRunState(
     // unusable backup fails closed instead of silently starting from nothing.
     const backupPath = `${path}.bak`;
     if (await storage.exists(backupPath)) {
-      return parseRunState(await storage.readText(backupPath), true);
+      return parseAuthoritativeRunState(await storage.readText(backupPath), backupPath);
     }
     return { runState: {} };
   }
-  return parseRunState(await storage.readText(path), true);
+  return parseAuthoritativeRunState(await storage.readText(path), path);
+}
+
+function parseAuthoritativeRunState(raw: string, path: string): { runState: RunState } {
+  try {
+    return parseRunState(raw, true);
+  } catch (error) {
+    // A newer schema or an unreadable optional field may be data worth keeping.
+    if (
+      error instanceof UnsupportedRunStateSchemaError ||
+      error instanceof InvalidRunStateOptionalFieldError
+    ) throw error;
+    throw new CorruptRunStateError(path, error instanceof Error ? error.message : String(error));
+  }
 }
 
 async function loadRunStateWithFallback(

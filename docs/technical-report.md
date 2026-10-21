@@ -350,7 +350,7 @@ Dashboard 历史同步（`packages/core/src/dashboard/history-sync.ts`）先扫�
 
 ### 原子写与状态一致性
 
-`StateStore` 的普通启动读取可从损坏 primary 回退 `.bak`，但显式未知 schema，以及 schema 1/无 schema 记录中类型非法的 `error` 或 `papersWritten` 会 fail closed。mutation 使用按 run-state 路径共享的进程内队列，并通过 candidate 保存与权威 primary 精确回读确认提交；backup 不参与 mutation 的 authoritative confirmation。
+`StateStore` 的普通启动读取可从损坏 primary 回退 `.bak`，但显式未知 schema，以及 schema 1/无 schema 记录中类型非法的 `error` 或 `papersWritten` 会 fail closed。mutation 使用按 run-state 路径共享的进程内队列，并通过 candidate 保存与权威 primary 精确回读确认提交；backup 不参与 mutation 的 authoritative confirmation。primary（无 primary 时的 backup）无法解析或结构非法时，mutation 抛出带路径与处理指引的 `CorruptRunStateError`（运行因此以可读原因失败，而不是裸 JSON 错误）；`clearAll()`（插件命令 “Clear arXiv Daily run state”）是唯一出口：它把损坏文件改名为 `run-state.json.corrupt-<时间戳>`（不删除、不覆盖已有副本）后写入空状态，而未知 schema 与非法可选字段仍拒绝清除；`replaceAll()` 只服务旧版迁移，不做这种隔离。宽松读取仍回退 `.bak` 或空状态，但 `StateStore.damage()` 会告诉宿主“写入被损坏文件挡住”（插件启动时提示，`arxiv-daily status` 的 `runStateDamaged` 字段）。
 
 插件输出路径重载会先构造并加载候选 `StateStore` / `RunHistoryStore`，再由 scheduler 的 active/pending guard 接受 store 替换，最后同步发布 plugin 引用；guard 拒绝时各消费者继续使用旧 store。该输出配置协调和 pending completion 仍是单进程语义；日运行通过 `RunLock.withLock` 额外获取 Vault-wide `daily-run` 共享锁，不同日期也互斥。两端启动时的 Markdown 临时文件清理使用同一锁：忙时跳过，锁服务失败时不执行删除。共享锁按 canonical Vault root 与资源名隔离，默认记录位于机器本地 `~/.arxiv-daily/host-locks`，不进入 Vault 数据导出；用 OS PID 存活检查恢复崩溃持有者，不因墙钟超时抢占仍存活或状态不明的持有者。共享锁与宿主组合测试在六平台原生矩阵内运行；真实桌面宿主由隔离 Obsidian 验收入口驱动。
 

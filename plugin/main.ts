@@ -457,6 +457,14 @@ export default class ArxivDailyPlugin extends Plugin {
       this.logger,
     );
     await this.stateStore.load();
+    const runStateDamage = this.stateStore.damage();
+    if (runStateDamage) {
+      this.logger.error(`run state is damaged: ${runStateDamage.path} (${runStateDamage.reason})`);
+      new Notice(
+        'arXiv Daily: run-state.json is damaged, so the run history looks empty and new runs will fail. Run "Clear arXiv Daily run state" to reset it; the damaged file is kept.',
+        15_000,
+      );
+    }
     this.pendingLegacyRunState = await migrateLegacyRunState(
       this.stateStore,
       this.legacyRunState,
