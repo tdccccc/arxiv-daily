@@ -45,8 +45,8 @@ export interface PersonalLibraryFileIdentifier {
    * `null` is a judgement: the content names no arXiv paper. It is remembered
    * under `version` and not asked again while the file is unchanged. A throw
    * means the file could not be judged this time (arXiv unreachable, rate
-   * limited): the file stays unresolved but nothing is remembered, so the next
-   * scan asks again.
+   * limited): nothing new is remembered, so the next scan asks again. The file
+   * stays unresolved, or as an earlier scan identified it if it is unchanged.
    */
   identify(
     logicalPath: string,
@@ -243,6 +243,12 @@ export async function reconcilePersonalLibraryCatalog(
       }
     }
     if (!arxivId) {
+      if (!judged && previous?.status === "ready" && previous.observationFingerprint === observationFingerprint) {
+        // Not judged again, so nothing changes: the file keeps what an earlier
+        // scan concluded, under its old rule version, and is asked again next scan.
+        defineRecordEntry(files, entry.path, clone(previous));
+        continue;
+      }
       defineRecordEntry(files, entry.path, {
         path: entry.path,
         status: "unresolved",

@@ -379,6 +379,70 @@ describe("content-based file identification (strategy v2)", () => {
     });
   });
 
+  it("keeps an unchanged file's earlier identity when the rules advanced and it cannot be judged again", async () => {
+    const path = "paper-without-an-id.pdf";
+    const first = await reconcilePersonalLibraryCatalog({
+      current: emptyCatalog(),
+      inventory: { entries: [file(path)], truncated: false },
+      eligibleExtensions: [".pdf"],
+      resolver: resolver([metadata("2001.04385")]),
+      identifyFile: { version: 3, identify: vi.fn(async () => "2001.04385") },
+      now,
+    });
+    expect(first.catalog.files[path]).toMatchObject({ status: "ready", contentIdentificationVersion: 3 });
+
+    // Offline after an upgrade: the file is not judged again, so nothing about it changes.
+    const offline = { version: 4, identify: vi.fn(async () => { throw new Error("arXiv unreachable"); }) };
+    const second = await reconcilePersonalLibraryCatalog({
+      current: first.catalog,
+      inventory: { entries: [file(path)], truncated: false },
+      eligibleExtensions: [".pdf"],
+      resolver: resolver([]),
+      identifyFile: offline,
+      now,
+    });
+    expect(offline.identify).toHaveBeenCalledTimes(1);
+    expect(second.catalog.files[path]).toEqual(first.catalog.files[path]);
+    expect(second.catalog.papers).toEqual(first.catalog.papers);
+    expect(second.catalog.lastScan).toMatchObject({ ready: 1, unresolved: 0, papers: 1 });
+
+    // It keeps its old rule version, so the next scan with a working lookup judges it again.
+    const online = { version: 4, identify: vi.fn(async () => null) };
+    const third = await reconcilePersonalLibraryCatalog({
+      current: second.catalog,
+      inventory: { entries: [file(path)], truncated: false },
+      eligibleExtensions: [".pdf"],
+      resolver: resolver([]),
+      identifyFile: online,
+      now,
+    });
+    expect(online.identify).toHaveBeenCalledTimes(1);
+    expect(third.catalog.files[path]).toMatchObject({ status: "unresolved", contentIdentificationVersion: 4 });
+  });
+
+  it("does not keep an earlier identity for a file that changed", async () => {
+    const path = "paper-without-an-id.pdf";
+    const first = await reconcilePersonalLibraryCatalog({
+      current: emptyCatalog(),
+      inventory: { entries: [file(path)], truncated: false },
+      eligibleExtensions: [".pdf"],
+      resolver: resolver([metadata("2001.04385")]),
+      identifyFile: { version: 3, identify: vi.fn(async () => "2001.04385") },
+      now,
+    });
+    const second = await reconcilePersonalLibraryCatalog({
+      current: first.catalog,
+      inventory: { entries: [file(path, 101)], truncated: false },
+      eligibleExtensions: [".pdf"],
+      resolver: resolver([]),
+      identifyFile: { version: 4, identify: vi.fn(async () => { throw new Error("arXiv unreachable"); }) },
+      now,
+    });
+    expect(second.catalog.files[path]).toMatchObject({ status: "unresolved" });
+    expect(second.catalog.files[path]).not.toHaveProperty("contentIdentificationVersion");
+    expect(second.catalog.papers).toEqual({});
+  });
+
   it("remembers a judgement that the content names no paper, and does not ask again", async () => {
     const path = "not-on-arxiv.pdf";
     const judging = { version: 4, identify: vi.fn(async () => null) };
