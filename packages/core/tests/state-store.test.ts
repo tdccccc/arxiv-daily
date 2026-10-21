@@ -157,6 +157,72 @@ describe("StateStore", () => {
     expect(store.get("2026-06-13").error).toMatch(/^retries exhausted after 10 attempts: /);
   });
 
+  it("recovers one running date at any age when the caller proved no run is alive", async () => {
+    const { store, save } = makeStore({
+      "2026-06-13": { status: "running", lastAttempt: 5_000, attempts: 3, failureAttempts: 2, outcome: "papers_written" },
+      "2026-06-14": { status: "running", lastAttempt: 5_000, attempts: 1 },
+    });
+    await store.load();
+
+    await expect(store.recoverRunningDate("2026-06-13", 6_000, 0)).resolves.toBe(true);
+
+    expect(store.get("2026-06-13")).toMatchObject({
+      status: "failed_transient",
+      attempts: 3,
+      failureAttempts: 3,
+      lastAttempt: 5_000,
+      outcome: undefined,
+    });
+    expect(store.get("2026-06-13").error).toMatch(/^recovered stale running state/);
+    expect(store.get("2026-06-14").status).toBe("running");
+    expect(save).toHaveBeenCalledTimes(1);
+  });
+
+  it("recovers a lock-proven leftover even when its timestamp is ahead of the caller's clock", async () => {
+    const { store } = makeStore({ d: { status: "running", lastAttempt: 9_000, attempts: 1 } });
+    await store.load();
+
+    await expect(store.recoverRunningDate("d", 1_000, 0)).resolves.toBe(true);
+    expect(store.get("d").status).toBe("failed_transient");
+  });
+
+  it("only recovers a running date that is old enough when the caller cannot prove no run is alive", async () => {
+    const { store, save } = makeStore({ d: { status: "running", lastAttempt: 1_000, attempts: 1 } });
+    await store.load();
+
+    await expect(store.recoverRunningDate("d", 1_000 + 3_599_999, 3_600_000)).resolves.toBe(false);
+    expect(store.get("d").status).toBe("running");
+    expect(save).not.toHaveBeenCalled();
+
+    await expect(store.recoverRunningDate("d", 1_000 + 3_600_000, 3_600_000)).resolves.toBe(true);
+    expect(store.get("d").status).toBe("failed_transient");
+  });
+
+  it("ignores dates that are not running when recovering a single date", async () => {
+    const { store, save } = makeStore({
+      done: { status: "completed", lastAttempt: 1, attempts: 1, papersWritten: 2 },
+      failed: { status: "failed_transient", lastAttempt: 1, attempts: 1, error: "x" },
+    });
+    await store.load();
+
+    for (const date of ["done", "failed", "unknown"]) {
+      await expect(store.recoverRunningDate(date, 10_000, 0)).resolves.toBe(false);
+    }
+    expect(store.get("done").status).toBe("completed");
+    expect(store.get("failed").error).toBe("x");
+    expect(save).not.toHaveBeenCalled();
+  });
+
+  it("recovers a running date permanently once its retries are exhausted", async () => {
+    const { store } = makeStore({ d: { status: "running", lastAttempt: 1, attempts: 10, failureAttempts: 9 } });
+    await store.load();
+
+    await store.recoverRunningDate("d", 2, 0);
+
+    expect(store.get("d").status).toBe("failed_permanent");
+    expect(store.get("d").error).toMatch(/^retries exhausted after 10 attempts: recovered stale running state/);
+  });
+
   it("isDone returns true for completed and failed_permanent", async () => {
     const { store } = makeStore();
     await store.load();
@@ -402,6 +468,11 @@ describe("StateStore", () => {
       name: "recoverStaleRunning",
       initial: { d: { status: "running", lastAttempt: 1, attempts: 1 } },
       mutate: (store) => store.recoverStaleRunning(100, 10),
+    },
+    {
+      name: "recoverRunningDate",
+      initial: { d: { status: "running", lastAttempt: 1, attempts: 1 } },
+      mutate: (store) => store.recoverRunningDate("d", 100, 0),
     },
   ];
 

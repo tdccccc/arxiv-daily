@@ -194,26 +194,39 @@ export class StateStore {
       for (const [date, entry] of Object.entries(candidate)) {
         if (entry.status !== "running") continue;
         if (now - entry.lastAttempt < maxAgeMs) continue;
-        // A crash or force-quit is transient; the retry cap still applies.
-        const message = "recovered stale running state after startup";
-        const failureAttempts = priorFailureAttempts(entry) + 1;
-        const retriesExhausted = failureAttempts >= MAX_TRANSIENT_ATTEMPTS;
-        candidate[date] = {
-          ...entry,
-          status: retriesExhausted ? "failed_permanent" : "failed_transient",
-          failureAttempts,
-          outcome: undefined,
-          lastAttempt: now,
-          error: retriesExhausted
-            ? `retries exhausted after ${failureAttempts} attempts: ${message}`
-            : message,
-        };
+        candidate[date] = recoveredRunningEntry(
+          entry,
+          "recovered stale running state after startup",
+          now,
+        );
         recovered.push(date);
       }
       return {
         result: recovered.sort(),
         persist: recovered.length > 0,
       };
+    });
+  }
+
+  /**
+   * Recovers one date left `running` by a run that no longer exists. The caller
+   * sets the minimum age: 0 when it holds the Vault-wide run lock (nothing can
+   * be running), STALE_RUNNING_RECOVERY_MS when it cannot prove that. Returns
+   * false when the durable record is not `running` or is younger than that.
+   * The crashed attempt keeps its own time, so the retry backoff counts from
+   * when it started rather than from the recovery.
+   */
+  async recoverRunningDate(date: string, now: number, minAgeMs: number): Promise<boolean> {
+    return await this.enqueueMutation((candidate) => {
+      const entry = candidate[date];
+      if (entry?.status !== "running" || (minAgeMs > 0 && now - entry.lastAttempt < minAgeMs)) {
+        return { result: false, persist: false };
+      }
+      candidate[date] = recoveredRunningEntry(
+        entry,
+        "recovered stale running state: the previous run did not finish",
+      );
+      return { result: true, persist: true };
     });
   }
 
@@ -303,6 +316,26 @@ export function isFinalTransientAttempt(entry: RunStateEntry): boolean {
 // Legacy running attempts already include the in-flight attempt.
 function priorFailureAttempts(entry: RunStateEntry): number {
   return entry.failureAttempts ?? Math.max(0, entry.attempts - (entry.status === "running" ? 1 : 0));
+}
+
+// A crash or force-quit is transient; the retry cap still applies.
+function recoveredRunningEntry(
+  entry: RunStateEntry,
+  message: string,
+  lastAttempt = entry.lastAttempt,
+): RunStateEntry {
+  const failureAttempts = priorFailureAttempts(entry) + 1;
+  const retriesExhausted = failureAttempts >= MAX_TRANSIENT_ATTEMPTS;
+  return {
+    ...entry,
+    status: retriesExhausted ? "failed_permanent" : "failed_transient",
+    failureAttempts,
+    outcome: undefined,
+    lastAttempt,
+    error: retriesExhausted
+      ? `retries exhausted after ${failureAttempts} attempts: ${message}`
+      : message,
+  };
 }
 
 function getRunStateEntry(runState: RunState, date: string): RunStateEntry {

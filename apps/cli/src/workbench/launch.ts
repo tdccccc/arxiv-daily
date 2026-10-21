@@ -2,7 +2,7 @@ import { spawn } from "node:child_process";
 import { clearTimer, setTimer } from "@arxiv-daily/core";
 import { loadCliConfig, type CliRuntimeConfig } from "../config";
 import { resolveCliConfigPath } from "../config-path";
-import { isCliRunEvent, type CliIo } from "../main-types";
+import { CLI_CANCEL_MESSAGE, isCliRunEvent, type CliIo } from "../main-types";
 import { startWorkbench } from "./server";
 import { workbenchAssets } from "./assets";
 import { WorkbenchError } from "./documents";
@@ -36,22 +36,8 @@ export async function runWorkbench(config: CliRuntimeConfig | undefined, io: Cli
     run: async (args, output, signal) => {
       await beforeWrite();
       if (signal.aborted) return 1;
-      return new Promise<number>((resolve, reject) => {
-        // Dispatch the same executable; do not reconstruct scheduler / manual-fetch behavior here.
-        const child = spawn(process.execPath, [executable, ...args], { env: options.env, stdio: ["ignore", "pipe", "pipe", "ipc"], windowsHide: true });
-        child.on("message", (message: unknown) => {
-          if (!message || typeof message !== "object") return;
-          const envelope = message as { type?: unknown; event?: unknown };
-          if (envelope.type === "arxiv-daily/run-result" && isCliRunEvent(envelope.event)) output.onRunResult?.(envelope.event);
-        });
-        child.stdout!.setEncoding("utf8").on("data", (chunk: string) => output.stdout.write(chunk));
-        child.stderr!.setEncoding("utf8").on("data", (chunk: string) => output.stderr.write(chunk));
-        const cancel = () => { child.kill("SIGINT"); };
-        signal.addEventListener("abort", cancel, { once: true });
-        child.once("spawn", () => { if (signal.aborted) cancel(); });
-        child.once("error", error => { signal.removeEventListener("abort", cancel); reject(error); });
-        child.once("close", code => { signal.removeEventListener("abort", cancel); resolve(code ?? 1); });
-      });
+      // Dispatch the same executable; do not reconstruct scheduler / manual-fetch behavior here.
+      return runCliChild(executable, args, options.env, output, signal);
     },
   });
   let stopping = false;
@@ -71,6 +57,33 @@ export async function runWorkbench(config: CliRuntimeConfig | undefined, io: Cli
   io.stdout.write(`Workbench: ${app.url}\nKeep this process running. Press Ctrl+C to stop.\n`);
   if (options.open && !await openBrowser(app.url)) io.stderr.write("Could not open a browser automatically. Open the Workbench URL above.\n");
   return stopped;
+}
+
+export function runCliChild(executable: string, args: string[], env: Record<string, string | undefined>, output: CliIo, signal: AbortSignal): Promise<number> {
+  return new Promise<number>((resolve, reject) => {
+    const child = spawn(process.execPath, [executable, ...args], { env, stdio: ["ignore", "pipe", "pipe", "ipc"], windowsHide: true });
+    child.on("message", (message: unknown) => {
+      if (!message || typeof message !== "object") return;
+      const envelope = message as { type?: unknown; event?: unknown };
+      if (envelope.type === "arxiv-daily/run-result" && isCliRunEvent(envelope.event)) output.onRunResult?.(envelope.event);
+    });
+    child.stdout!.setEncoding("utf8").on("data", (chunk: string) => output.stdout.write(chunk));
+    child.stderr!.setEncoding("utf8").on("data", (chunk: string) => output.stderr.write(chunk));
+    // Cancel exactly once, over IPC. A terminal Ctrl+C has already sent the
+    // child its own SIGINT; a second signal would make it exit before it can
+    // record the cancellation, and on Windows kill("SIGINT") ends it abruptly.
+    let cancelled = false;
+    const cancel = () => {
+      if (cancelled) return;
+      cancelled = true;
+      if (child.connected) child.send({ type: CLI_CANCEL_MESSAGE }, error => { if (error) child.kill("SIGINT"); });
+      else child.kill("SIGINT");
+    };
+    signal.addEventListener("abort", cancel, { once: true });
+    child.once("spawn", () => { if (signal.aborted) cancel(); });
+    child.once("error", error => { signal.removeEventListener("abort", cancel); reject(error); });
+    child.once("close", code => { signal.removeEventListener("abort", cancel); resolve(code ?? 1); });
+  });
 }
 
 async function openBrowser(url: string): Promise<boolean> {

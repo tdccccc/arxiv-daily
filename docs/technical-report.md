@@ -201,6 +201,7 @@ extensions/vscode-arxiv-daily → 独立 CommonJS 扩展（不在 npm workspaces
 - 流水线返回 `completed` 后，driver 先把原始 completed result 与 digest 保留为进程内 pending completion。`run-state.json` 的 completed candidate 被确认后才显示完成、写 completed history 并调用 `onDailyCompleted`；提交未确认时返回 `failed_transient`，后续调度或手动入口只重试该状态提交，不重跑流水线；
 - 瞬态失败在 `setFailed` 时若 `attempts >= MAX_TRANSIENT_ATTEMPTS`（**10**）则升级为 `failed_permanent`；
 - 超过 `STALE_RUNNING_RECOVERY_MS`（1 小时）的 `running` 在启动/恢复时标为 **`failed_transient`**（错误文案：`recovered stale running state after startup`），由正常调度继续重试；`attempts` 已达 `MAX_TRANSIENT_ATTEMPTS` 时标为 `failed_permanent`；
+- `running` 只在持有运行锁期间写入，所以 `tryRun` 在持锁并重读权威状态后即可回收残留：`RunLock.withLock` 告诉回调是否真正持有跨进程的 Vault 锁（`crossProcess`），是则任何 `running` 都是已死进程留下的，立即标为 `failed_transient`（错误文案 `recovered stale running state: the previous run did not finish`，计入重试上限，保留崩溃那次尝试的 `lastAttempt`，手动运行/强制重跑/重试失败立即执行，定时 tick 按瞬态失败退避）；宿主没有跨进程锁（如移动端）时保持一小时规则，但对每次 tick 访问到的日期都按此规则回收，不再只在启动时；本进程自己待提交的完成/取消记录先于这一步处理，不会被当作残留；
 - run history、进度/日志、取消清理和 `onDailyCompleted` 是 completed hard commit 之后的 best-effort effect，任一失败不撤销已确认的 run-state。pending completion 不持久化为 outbox；进程退出后不保证原 digest、history 或完成回调重放。
 
 **插件 vs CLI 调度：**
@@ -335,7 +336,7 @@ core 的 `ScopedLibrarySource` 只暴露 `inventory` 与 `readBinary`，没有�
 
 ### 操作与取消
 
-`OperationRegistry` 跟踪 `daily-run`、`detail-summary`、`pdf-download`、`personal-library-scan`、`personal-library-direction-generation`、`personal-library-fulltext-index`；增量方向更新与全量生成共用 `personal-library-direction-generation` kind（同一授权门与撤销取消范围）。`RunCancellationService` 与 scheduler 协作。插件卸载 `cancelAll`；CLI 安装信号处理器取消活动操作。
+`OperationRegistry` 跟踪 `daily-run`、`detail-summary`、`pdf-download`、`personal-library-scan`、`personal-library-direction-generation`、`personal-library-fulltext-index`；增量方向更新与全量生成共用 `personal-library-direction-generation` kind（同一授权门与撤销取消范围）。`RunCancellationService` 与 scheduler 协作。插件卸载 `cancelAll`；CLI 安装信号处理器取消活动操作。工作台启动的生成子进程由工作台通过 IPC 消息 `arxiv-daily/cancel` 取消（只发一次，不再转发第二个 SIGINT：终端 Ctrl+C 已经向整个前台进程组发过信号，而第二个信号会让子进程在写回取消状态前强退）；子进程在入口处就挂好该消息的监听，启动期间收到的取消不会丢，连按两次终端 Ctrl+C 仍是强制退出。
 插件另以 `paper-index` / `paper-note` output lease 保护跨输出目录切换；`RunCancellationService` 与 scheduler 协作。设置输出 transition 与 operation registry 双向互斥。插件卸载 `cancelAll`；CLI 安装信号处理器取消活动操作。
 ### Paper Index 持久化与 History Sync
 
