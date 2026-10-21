@@ -1,5 +1,5 @@
-import { describe, expect, it } from "vitest";
-import { deflate } from "pako";
+import { describe, expect, it, vi } from "vitest";
+import { deflate, Deflate, Inflate } from "pako";
 import { extractPdfIdentificationEvidence } from "../src/library/pdf-identification-evidence";
 import { extractArxivIdsFromText } from "../src/library/pdf-text-utils";
 
@@ -16,14 +16,19 @@ function bytesOf(parts: Array<string | Uint8Array>): Uint8Array {
   return out;
 }
 
-function pdfWith(streams: Array<{ text: string; raw?: boolean }>, trailer: string[] = []): Uint8Array {
+function pdfWith(
+  streams: Array<{ text: string; raw?: boolean } | { compressed: Uint8Array }>,
+  trailer: string[] = [],
+): Uint8Array {
   const parts: Array<string | Uint8Array> = ["%PDF-1.4\n%\xE2\xE3\xCF\xD3\n"];
   let object = 1;
-  for (const { text, raw } of streams) {
-    if (raw) {
-      parts.push(`${object} 0 obj\n<< /Length ${text.length} >>\nstream\n`, text, "\nendstream\nendobj\n");
+  for (const stream of streams) {
+    if ("compressed" in stream) {
+      parts.push(`${object} 0 obj\n<< /Length ${stream.compressed.length} /Filter /FlateDecode >>\nstream\n`, stream.compressed, "\nendstream\nendobj\n");
+    } else if (stream.raw) {
+      parts.push(`${object} 0 obj\n<< /Length ${stream.text.length} >>\nstream\n`, stream.text, "\nendstream\nendobj\n");
     } else {
-      const compressed = deflate(text);
+      const compressed = deflate(stream.text);
       parts.push(`${object} 0 obj\n<< /Length ${compressed.length} /Filter /FlateDecode >>\nstream\n`, compressed, "\nendstream\nendobj\n");
     }
     object += 1;
@@ -130,6 +135,91 @@ describe("pdf identification evidence", () => {
     const big = `${"A".repeat(200)} ${"x".repeat(6000)}`.repeat(3000); // > 8 MiB inflated
     const pdf = pdfWith([{ text: big }, { text: "arXiv:2402.18634 [astro-ph.CO]\nTitle" }]);
     expect(extractPdfIdentificationEvidence(pdf).arxivId).toBeUndefined();
+  });
+});
+
+const MIB = 1024 * 1024;
+
+/** A FlateDecode stream that inflates to `mib` MiB of zeros from about a thousandth of that. */
+function zeroBomb(mib: number): Uint8Array {
+  const parts: Uint8Array[] = [];
+  const deflater = new Deflate({ level: 9 });
+  deflater.onData = (chunk: Uint8Array) => { parts.push(chunk); };
+  const block = new Uint8Array(MIB);
+  for (let index = 0; index < mib; index += 1) deflater.push(block, false);
+  deflater.push(new Uint8Array(0), true);
+  return bytesOf(parts);
+}
+
+/** Extract evidence and report how many bytes pako inflated doing it: the memory and time a stream can cost. */
+function extractCountingInflation(pdf: Uint8Array) {
+  let inflated = 0;
+  const push = Inflate.prototype.push;
+  const spy = vi.spyOn(Inflate.prototype, "push").mockImplementation(function (this: Inflate, data, mode) {
+    const handler = this.onData;
+    this.onData = (chunk) => {
+      inflated += chunk.byteLength;
+      handler.call(this, chunk);
+    };
+    return push.call(this, data, mode);
+  });
+  try {
+    return { evidence: extractPdfIdentificationEvidence(pdf), inflated };
+  } finally {
+    spy.mockRestore();
+  }
+}
+
+describe("pdf identification evidence inflation budget", () => {
+  const title = "The Cluster Mass Calibration Project";
+  const bomb = zeroBomb(64);
+  const stamp = { text: "(arXiv:2302.05010v2 [astro-ph.CO] 10 Feb 2023) Tj\n(Some title) Tj" };
+
+  it("stops inflating a bomb stream at a small limit and identifies nothing from it", () => {
+    expect(bomb.length).toBeLessThan(0.1 * MIB);
+    const { evidence, inflated } = extractCountingInflation(pdfWith([{ compressed: bomb }]));
+    expect(evidence).toEqual({});
+    expect(inflated).toBeLessThanOrEqual(4 * MIB);
+  });
+
+  it("still reads the Info title and the ordinary streams around a bomb", () => {
+    const xmp = "<x:xmpmeta><rdf:Description><dc:identifier><rdf:li>https://arxiv.org/abs/2309.03258v3</rdf:li></dc:identifier></rdf:Description></x:xmpmeta>";
+    const withStamp = extractCountingInflation(pdfWith(
+      [{ compressed: bomb }, stamp, { compressed: bomb }, { text: xmp }],
+      [`/Title (${title}) `],
+    ));
+    expect(withStamp.evidence).toEqual({ arxivId: "2302.05010", title });
+    expect(withStamp.inflated).toBeLessThanOrEqual(2 * 4 * MIB);
+
+    const xmpOnly = extractCountingInflation(pdfWith([{ compressed: bomb }, { text: xmp }]));
+    expect(xmpOnly.evidence).toEqual({ arxivId: "2309.03258" });
+  });
+
+  it("counts a discarded stream against the total, so many bombs cannot keep the scan busy", () => {
+    const smaller = zeroBomb(16);
+    const { evidence, inflated } = extractCountingInflation(
+      pdfWith(Array.from({ length: 24 }, () => ({ compressed: smaller }))),
+    );
+    expect(evidence).toEqual({});
+    // 24 x 16 MiB would be 384 MiB; the total budget stops it far short of that.
+    expect(inflated).toBeLessThanOrEqual(34 * MIB);
+  });
+
+  it("stops reading once the total of ordinary streams is spent", () => {
+    const oneMiB = zeroBomb(1);
+    const streams = [...Array.from({ length: 40 }, () => ({ compressed: oneMiB })), stamp];
+    const { evidence, inflated } = extractCountingInflation(pdfWith(streams));
+    expect(inflated).toBeLessThanOrEqual(34 * MIB);
+    expect(evidence.arxivId).toBeUndefined();
+  });
+
+  it("leaves the evidence of an ordinary PDF unchanged", () => {
+    const xmp = `<x:xmpmeta><rdf:Description><dc:identifier><rdf:li>https://arxiv.org/abs/2309.03258v3</rdf:li></dc:identifier><dc:title><rdf:li>${title}</rdf:li></dc:title></rdf:Description></x:xmpmeta>`;
+    const filler = { text: "BT /F1 12 Tf (Body text of the first page) Tj ET\n".repeat(2000) };
+    expect(extractPdfIdentificationEvidence(pdfWith([filler, { text: xmp }])))
+      .toEqual({ arxivId: "2309.03258", title });
+    expect(extractPdfIdentificationEvidence(pdfWith([filler, stamp], [`/Title (${title}) `])))
+      .toEqual({ arxivId: "2302.05010", title });
   });
 });
 

@@ -1,4 +1,4 @@
-import { inflate } from "pako";
+import { Inflate } from "pako";
 
 /**
  * Lightweight PDF identification-evidence extraction (identification v2).
@@ -34,13 +34,21 @@ export interface PdfIdentificationEvidence {
  * identifies it again.
  *
  * 4 — a title search answers with the Atom entry's own id (earlier versions could
- * take an id cited in its summary or comment) and IDs are taken in text order.
+ * take an id cited in its summary or comment), IDs are taken in text order, and a
+ * stream that inflates past 2 MiB is dropped (8 MiB before).
  */
 export const PDF_IDENTIFICATION_EVIDENCE_VERSION = 4 as const;
 
 const META_REGION_BYTES = 256 * 1024;
 const STREAM_REGEX = /(?:\r?\n)stream\r?\n/g;
-const MAX_INFLATED_STREAM_BYTES = 8 * 1024 * 1024;
+/**
+ * Inflation limits, enforced while a stream inflates: a stream can expand a
+ * thousandfold, so a size checked afterwards comes too late. Only the opening
+ * text of a content stream and the first elements of an XMP packet are used, so
+ * a stream that inflates past the per-stream limit is dropped. The total counts
+ * everything inflated, dropped or kept, which bounds the work a file can cost.
+ */
+const MAX_INFLATED_STREAM_BYTES = 2 * 1024 * 1024;
 const MAX_TOTAL_INFLATED_BYTES = 32 * 1024 * 1024;
 const STREAM_TEXT_PREFIX_CHARS = 512;
 const TITLE_MIN_LENGTH = 10;
@@ -84,19 +92,45 @@ function inflateFlateStreams(bytes: Uint8Array, latin: string): string[] {
     const end = latin.indexOf("endstream", start);
     if (end < 0) break;
     if (end - start > MAX_INFLATED_STREAM_BYTES) continue;
-    let text: string | undefined;
-    try {
-      const inflated = inflate(bytes.subarray(start, end));
-      if (inflated.byteLength > MAX_INFLATED_STREAM_BYTES) continue;
-      total += inflated.byteLength;
-      if (total > MAX_TOTAL_INFLATED_BYTES) break;
-      text = latin1Decode(inflated);
-    } catch {
-      // Non-Flate streams (e.g. raw) are skipped; identification is best-effort.
-    }
+    const limit = Math.min(MAX_INFLATED_STREAM_BYTES, MAX_TOTAL_INFLATED_BYTES - total);
+    if (limit <= 0) break;
+    const inflated = inflateWithin(bytes.subarray(start, end), limit);
+    total += inflated.produced;
+    const text = inflated.bytes ? latin1Decode(inflated.bytes) : undefined;
     if (text) outputs.push(text);
   }
   return outputs;
+}
+
+/**
+ * Inflate one stream, giving up as soon as it has produced more than `limit`
+ * bytes. `produced` is what was inflated either way; `bytes` is undefined for a
+ * stream that is malformed, not Flate, or too large.
+ */
+function inflateWithin(data: Uint8Array, limit: number): { bytes?: Uint8Array; produced: number } {
+  const chunks: Uint8Array[] = [];
+  let produced = 0;
+  try {
+    const inflator = new Inflate();
+    inflator.onData = (chunk: Uint8Array) => {
+      produced += chunk.length;
+      if (produced > limit) throw new Error("stream inflates past the limit");
+      chunks.push(chunk);
+    };
+    inflator.push(data, true);
+    if (inflator.err) return { produced };
+  } catch {
+    // Non-Flate streams (e.g. raw) are skipped, as are streams past the limit;
+    // identification is best-effort.
+    return { produced };
+  }
+  const bytes = new Uint8Array(produced);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.length;
+  }
+  return { bytes, produced };
 }
 
 /** Extract text operators `(...)` and `<hex>` string literals in stream order. */
