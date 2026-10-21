@@ -119,15 +119,25 @@ export class StateStore {
 
   async setSkipped(date: string, reason: string): Promise<void> {
     await this.enqueueMutation((candidate) => {
-      const prev = getRunStateEntry(candidate, date);
-      candidate[date] = {
-        ...prev,
-        status: "skipped",
-        outcome: undefined,
-        lastAttempt: Date.now(),
-        error: reason,
-      };
+      candidate[date] = skippedEntry(getRunStateEntry(candidate, date), reason);
       return { result: undefined, persist: true };
+    });
+  }
+
+  /**
+   * Skips a date on the user's say-so, but only while it still has no outcome
+   * to lose: a completed, failed-for-good or running date is left untouched
+   * and false is returned. The check is made on the durable state, so a run
+   * that finished while the user was deciding is never overwritten.
+   */
+  async skipIfOpen(date: string, reason: string): Promise<boolean> {
+    return await this.enqueueMutation((candidate) => {
+      const prev = getRunStateEntry(candidate, date);
+      if (prev.status !== "pending" && prev.status !== "failed_transient") {
+        return { result: false, persist: false };
+      }
+      candidate[date] = skippedEntry(prev, reason);
+      return { result: true, persist: true };
     });
   }
 
@@ -396,6 +406,16 @@ function recoveredRunningEntry(
     error: retriesExhausted
       ? `retries exhausted after ${failureAttempts} attempts: ${message}`
       : message,
+  };
+}
+
+function skippedEntry(prev: RunStateEntry, reason: string): RunStateEntry {
+  return {
+    ...prev,
+    status: "skipped",
+    outcome: undefined,
+    lastAttempt: Date.now(),
+    error: reason,
   };
 }
 

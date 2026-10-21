@@ -158,6 +158,50 @@ describe("StateStore", () => {
     expect(store.get("2026-06-13").error).toMatch(/^retries exhausted after 10 attempts: /);
   });
 
+  it("skipIfOpen skips a date that has no outcome yet and keeps its attempt history", async () => {
+    const { store, save } = makeStore({
+      waiting: { status: "pending", lastAttempt: 1, attempts: 2, outcome: "awaiting_announcement", error: "not announced" },
+      flaky: { status: "failed_transient", lastAttempt: 1, attempts: 3, failureAttempts: 3, error: "offline" },
+    });
+    await store.load();
+
+    await expect(store.skipIfOpen("waiting", "opted out")).resolves.toBe(true);
+    await expect(store.skipIfOpen("flaky", "opted out")).resolves.toBe(true);
+    await expect(store.skipIfOpen("fresh", "opted out")).resolves.toBe(true);
+
+    expect(store.get("waiting")).toMatchObject({ status: "skipped", attempts: 2, error: "opted out", outcome: undefined });
+    expect(store.get("flaky")).toMatchObject({ status: "skipped", failureAttempts: 3, error: "opted out" });
+    expect(store.get("fresh")).toMatchObject({ status: "skipped", error: "opted out" });
+    expect(save).toHaveBeenCalledTimes(3);
+  });
+
+  it.each(["completed", "failed_permanent", "skipped", "running"] as const)(
+    "skipIfOpen leaves a %s date untouched",
+    async (status) => {
+      const { store, save } = makeStore({
+        d: { status, lastAttempt: 1, attempts: 1, papersWritten: 4, error: "kept" },
+      });
+      await store.load();
+
+      await expect(store.skipIfOpen("d", "opted out")).resolves.toBe(false);
+
+      expect(store.get("d")).toMatchObject({ status, papersWritten: 4, error: "kept" });
+      expect(save).not.toHaveBeenCalled();
+    },
+  );
+
+  it("skipIfOpen decides on the durable state, not on a stale in-memory view", async () => {
+    const { store, data } = makeStore();
+    await store.load();
+    expect(store.get("d").status).toBe("pending");
+    data.runState.d = { status: "completed", lastAttempt: 2, attempts: 1, papersWritten: 7 };
+
+    await expect(store.skipIfOpen("d", "opted out")).resolves.toBe(false);
+
+    expect(data.runState.d).toMatchObject({ status: "completed", papersWritten: 7 });
+    expect(store.get("d").status).toBe("completed");
+  });
+
   it("recovers one running date at any age when the caller proved no run is alive", async () => {
     const { store, save } = makeStore({
       "2026-06-13": { status: "running", lastAttempt: 5_000, attempts: 3, failureAttempts: 2, outcome: "papers_written" },

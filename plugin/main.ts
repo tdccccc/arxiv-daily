@@ -2441,7 +2441,7 @@ export default class ArxivDailyPlugin extends Plugin {
       const selected = await this.chooseScheduleEnableAction();
       if (revision !== this.scheduleIntentRevision || this.unloading) return false;
       if (selected === null || selected === "cancel") return false;
-      choice = selected === "run" ? "run" : "skip";
+      choice = selected === "run" ? "run" : selected === "none" ? "none" : "skip";
     }
 
     return this.enqueueScheduleIntent(async () => {
@@ -2454,9 +2454,11 @@ export default class ArxivDailyPlugin extends Plugin {
 
       if (choice === "skip") {
         const today = formatDate(todayInTz(new Date(), this.settings.arxiv.timezone));
-        await this.stateStore.setSkipped(today, "user opted out at enable time");
+        const skipped = await this.stateStore.skipIfOpen(today, "user opted out at enable time");
         if (revision === this.scheduleIntentRevision) {
-          this.logger.notice("arXiv Daily: enabled. Today skipped — will run on next workday.");
+          this.logger.notice(skipped
+            ? "arXiv Daily: enabled. Today skipped — will run on next workday."
+            : "arXiv Daily: enabled. Today already has a result, which was left as it is.");
         }
       } else {
         // Today's run can take minutes; it reports through the status bar and
@@ -2480,7 +2482,17 @@ export default class ArxivDailyPlugin extends Plugin {
     });
   }
 
+  /** Today can still be skipped or run: it has no final outcome and nothing is running. */
+  private todayIsOpen(): boolean {
+    const today = formatDate(todayInTz(new Date(), this.settings.arxiv.timezone));
+    const status = this.stateStore.get(today).status;
+    return status === "pending" || status === "failed_transient";
+  }
+
   private chooseScheduleEnableAction(): Promise<string | null> {
+    // Skipping or running a day that already has its report would only
+    // overwrite that report's record, so there is nothing to ask.
+    if (!this.todayIsOpen()) return Promise.resolve("none");
     return chooseModal(
       this.app,
       "Enable arXiv Daily",
