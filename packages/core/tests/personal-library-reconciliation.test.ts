@@ -288,7 +288,7 @@ describe("entries whose names the catalog cannot hold", () => {
   });
 
   it("does not identify a skipped file from its content either", async () => {
-    const identifyFile = { version: 1, identify: vi.fn(async () => null) };
+    const identifyFile = { version: 1, identify: vi.fn(async (_path: string) => null) };
     await reconcilePersonalLibraryCatalog({
       current: emptyCatalog(),
       inventory: { entries: [file("old\\paper.pdf"), file("kept.pdf")], truncated: false },
