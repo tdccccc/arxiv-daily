@@ -151,6 +151,12 @@ export class LibraryWorkflow {
       now: this.now(), signal: run.signal,
     });
     await this.check(run.signal);
+    if (reconciled.skippedPaths.length > 0) {
+      this.options.logger?.warn(
+        `library: ${reconciled.skippedPaths.length} entries were left out of the scan because their names cannot be stored `
+        + `(a backslash, or a drive-like prefix such as "A:"); rename them to include them. First: ${reconciled.skippedPaths.slice(0, 3).join(", ")}`,
+      );
+    }
     const saved = await this.catalogStore.replace(reconciled.catalog);
     // Cancellation after the atomic promotion does not undo a committed scan.
     await this.options.assertCurrent();

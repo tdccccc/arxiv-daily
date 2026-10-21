@@ -12,6 +12,7 @@ import { PersonalLibraryDirectionProposalStore } from "../src/library/personal-l
 import { DEFAULT_SETTINGS } from "../src/settings/defaults";
 import { PDF_IDENTIFICATION_HEAD_BYTES, PDF_IDENTIFICATION_TAIL_BYTES } from "../src/library/pdf-library-file-identifier";
 import { resetArxivRequestCoordinatorForTests } from "../src/pipeline/arxiv-fetcher";
+import { Logger } from "../src/services/logger";
 
 function memoryStorage() {
   const text = new Map<string, string>();
@@ -297,6 +298,55 @@ describe("shared LibraryWorkflow", () => {
     expect(f.options.source.readBinary).toHaveBeenCalledWith("renamed.pdf", expect.objectContaining({ start: 0, end: PDF_IDENTIFICATION_HEAD_BYTES }));
     expect(f.options.source.readBinary).toHaveBeenCalledWith("renamed.pdf", expect.objectContaining({ start: pdf.length - PDF_IDENTIFICATION_TAIL_BYTES, end: pdf.length }));
     expect(f.parser.parse).not.toHaveBeenCalled();
+  });
+
+  describe("entries whose names the catalog cannot hold", () => {
+    const unsafe = ["old\\2610.00009.pdf", "A:b 2610.00010.pdf"];
+    const withUnsafeEntries = () => {
+      const logger = new Logger("warn");
+      const warn = vi.spyOn(logger, "warn").mockImplementation(() => undefined);
+      const f = fixture({ logger });
+      const listed = vi.mocked(f.options.source.inventory).getMockImplementation()!;
+      vi.mocked(f.options.source.inventory).mockImplementation(async (options) => {
+        const inventory = await listed(options);
+        return {
+          ...inventory,
+          entries: [
+            ...inventory.entries,
+            ...unsafe.map((path) => ({ path, type: "file" as const, size: 1, mtimeMs: 1 })),
+            { path: "bad\\folder", type: "ignored" as const, ignoredReason: "unsafe-name" as const },
+          ],
+        };
+      });
+      return { ...f, warn };
+    };
+
+    it("scans the rest of the library and names the first skipped entries in the log", async () => {
+      const f = withUnsafeEntries();
+      const catalog = await f.workflow.scan();
+
+      expect(Object.keys(catalog.papers)).toHaveLength(6);
+      expect(Object.keys(catalog.files)).not.toContain(unsafe[0]);
+      expect(catalog.lastScan).toMatchObject({ ready: 6, skipped: 3 });
+      expect(f.warn).toHaveBeenCalledTimes(1);
+      expect(f.warn.mock.calls[0]![0]).toMatch(/3 entries/);
+      expect(f.warn.mock.calls[0]![0]).toContain(unsafe[0]);
+    });
+
+    it("does not take them for changes when indexing right after the scan", async () => {
+      const f = withUnsafeEntries();
+      await f.workflow.scan();
+      const onFolderChange = vi.fn();
+      await f.workflow.index({ onFolderChange });
+      expect(onFolderChange).not.toHaveBeenCalled();
+    });
+
+    it("stays quiet when nothing was skipped", async () => {
+      const logger = new Logger("warn");
+      const warn = vi.spyOn(logger, "warn").mockImplementation(() => undefined);
+      await fixture({ logger }).workflow.scan();
+      expect(warn).not.toHaveBeenCalled();
+    });
   });
 
   describe("a PDF whose name carries no id and whose title is searched on arXiv", () => {

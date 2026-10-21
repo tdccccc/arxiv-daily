@@ -71,6 +71,8 @@ export interface ReconcilePersonalLibraryCatalogResult {
   catalog: PersonalLibraryCatalog;
   resolvedArxivIds: string[];
   reusedFileCount: number;
+  /** Entries left out for a name the catalog cannot hold, in listing order. */
+  skippedPaths: string[];
 }
 
 interface IdentifiedFile {
@@ -181,12 +183,12 @@ export async function reconcilePersonalLibraryCatalog(
   >;
   const identified: IdentifiedFile[] = [];
   let reusedFileCount = 0;
-  let skipped = 0;
+  const skippedPaths: string[] = [];
 
   for (const entry of input.inventory.entries) {
     throwIfCancelled(input.signal);
     if (hasUnusableName(entry)) {
-      skipped += 1;
+      skippedPaths.push(entry.path);
       continue;
     }
     if (entry.type !== "file") continue;
@@ -347,11 +349,12 @@ export async function reconcilePersonalLibraryCatalog(
 
   next.files = sortRecord(files);
   next.papers = sortRecord(papers);
-  next.lastScan = summarize(next, input.inventory.truncated, skipped);
+  next.lastScan = summarize(next, input.inventory.truncated, skippedPaths.length);
   return {
     catalog: next,
     resolvedArxivIds: idsToResolve,
     reusedFileCount,
+    skippedPaths,
   };
 }
 

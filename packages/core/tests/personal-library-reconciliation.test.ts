@@ -271,6 +271,7 @@ describe("entries whose names the catalog cannot hold", () => {
     }, [], emptyCatalog(), metadataResolver);
 
     expect(Object.keys(result.catalog.files).sort()).toEqual(["notes/draft.md", "papers/2610.00001.pdf"]);
+    expect(result.skippedPaths).toEqual([...unsafeFiles, "bad\\folder"]);
     expect(result.catalog.files["papers/2610.00001.pdf"]).toMatchObject({ status: "ready" });
     expect(result.catalog.lastScan).toEqual({
       ready: 1, unresolved: 0, unrelated: 1, failed: 0, papers: 1, truncated: false, skipped: 5,
@@ -283,6 +284,7 @@ describe("entries whose names the catalog cannot hold", () => {
   it("reports no skipped count when nothing was skipped", async () => {
     const result = await reconcile({ entries: [file("papers/2610.00001.pdf")], truncated: false }, [metadata("2610.00001")]);
     expect(result.catalog.lastScan).not.toHaveProperty("skipped");
+    expect(result.skippedPaths).toEqual([]);
   });
 
   it("does not identify a skipped file from its content either", async () => {
