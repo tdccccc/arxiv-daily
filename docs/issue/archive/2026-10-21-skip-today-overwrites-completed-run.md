@@ -1,7 +1,7 @@
 # 开启调度器时选"Skip today"，会把今天已经完成的日报运行记录改写成"已跳过"，向导退回"还没生成第一份报告"
 
 > 发现日期：2026-10-21 · 来源：main `d999037` 深度代码审查 · 编号 OBS-01
-> 范围：Obsidian 插件的"启用调度器"流程（设置页开关、引导页第 5 步、Dashboard"More"菜单） · 严重程度：中 · 状态：未修复 · 置信度：已复现
+> 范围：Obsidian 插件的"启用调度器"流程（设置页开关、引导页第 5 步、Dashboard"More"菜单） · 严重程度：中 · 状态：已修复（分支 `fix/2026-10-21-batch1`，提交 69f88f5） · 置信度：已复现
 
 ## 问题
 
@@ -35,3 +35,9 @@
 - 今天已 `completed` 时选 skip：状态仍是 `completed`，`firstReportComplete` 仍为 `true`。
 - 今天已 `completed` 时开启调度器：不弹对话框（或弹但不改状态），调度器正常启动。
 - 今天无记录或 `pending` 时选 skip：仍写入 `skipped`（原有行为）。
+
+## 修复情况
+
+开启调度器时，如果今天已经是 `completed`、`failed_permanent`、`skipped` 或 `running`，不再弹"Skip today / Run today"这一问，直接启用调度器，今天的记录原样保留，引导页的"首份报告完成"不会再被改回未完成。只有今天没有记录、`pending` 或 `failed_transient` 时才会问。选 Skip today 也改走新的 `StateStore.skipIfOpen`，在持久化的状态上判断：弹窗期间另一个进程（CLI 定时任务等）刚好把今天跑完，也不会被改写，提示会说今天已有结果、原样保留。
+
+测试：`plugin/tests/schedule-enable-today.test.ts`（9 例，旧代码下 5 例失败，其余是原有行为的保护用例）、`state-store.test.ts` 的 `skipIfOpen`（6 例）。

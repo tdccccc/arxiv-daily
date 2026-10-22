@@ -1,7 +1,7 @@
 # 进程被强杀或崩溃后留下的"运行中"状态：一小时内谁都不能重跑，长期开着的 Obsidian 甚至永远不会自动恢复
 
 > 发现日期：2026-10-21 · 来源：main `d999037` 深度代码审查 · 编号 STATE-01
-> 范围：核心调度器（Obsidian 插件、CLI、工作台、DSH 共用） · 严重程度：中 · 状态：未修复 · 置信度：已复现
+> 范围：核心调度器（Obsidian 插件、CLI、工作台、DSH 共用） · 严重程度：中 · 状态：已修复（分支 `fix/2026-10-21-batch1`，提交 e79a7ba） · 置信度：已复现
 > 相关：CLI-01（`2026-10-21-workbench-ctrl-c-leaves-date-running.md`）修的是工作台 Ctrl+C 这一个触发点；本条是核心侧的恢复策略，覆盖其余所有"没来得及写回状态就死掉"的路径。
 
 ## 问题
@@ -60,3 +60,9 @@ runForDateNow@14:00      -> {"kind":"skipped","reason":"already running"}  state
 - 共享锁被另一个活着的持有者占用（`acquireShared` 返回 `null`）：`running` 状态保持不动，返回 `lock held`。
 - 本进程自己有待提交的完成记录（`setCompleted` 失败后保留）时，不把该日期当作残留。
 - 无跨进程锁的宿主：一小时内的 `running` 保持原行为；长期运行的调度器过了一小时之后的下一次 tick 会回收它。
+
+## 修复情况
+
+`running` 只会在持有日报运行锁期间写入，所以现在 `tryRun` 在拿到锁并重读磁盘状态后，如果该日期仍是 `running` 且本进程没有它的待提交结果，就把它当作已死运行的残留，按 `failed_transient` 回收（计入重试上限，保留崩溃那次尝试的时间，定时 tick 的退避从那时算起）。`RunLock.withLock` 为此新增 `crossProcess` 提示，只有真正持有跨进程的 Vault 锁时才这样做。崩溃 15 分钟后再点"运行今天 / 强制重跑 / 重试失败"会立即执行，常开的 Obsidian 下一次 tick 也会自己恢复；另一个活着的进程持锁时仍返回 `lock held`，记录不动。没有跨进程锁的宿主（如移动端）保持一小时规则，但改为每次 tick 访问到的日期都检查，而不只在启动时。工作台日历是只读展示，在恢复发生（下一次运行或 tick）之前仍会把这样的残留显示为"运行中"。
+
+测试：`packages/core/tests/scheduler-stale-running.test.ts`（10 例，其中 7 例在旧代码下失败）、`state-store.test.ts` 的 `recoverRunningDate`、`run-lock.test.ts`。另外用真实构建的 CLI 在隔离网络命名空间里验证：同一份残留，修复前 `run --date` 输出 `skipped (already running)`，修复后会真正执行。

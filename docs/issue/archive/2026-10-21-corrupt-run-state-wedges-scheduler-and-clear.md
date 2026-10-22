@@ -1,7 +1,7 @@
 # run-state.json 一旦损坏，所有日报运行都以含糊的 JSON 报错失败，连"清除运行状态"也无法修复
 
 > 发现日期：2026-10-21 · 来源：main `d999037` 深度代码审查 · 编号 STATE-02
-> 范围：运行状态存储 `run-state.json`（Obsidian 插件、CLI、工作台共用） · 严重程度：中 · 状态：未修复 · 置信度：已复现
+> 范围：运行状态存储 `run-state.json`（Obsidian 插件、CLI、工作台共用） · 严重程度：中 · 状态：已修复（分支 `fix/2026-10-21-batch1`，提交 284ace6） · 置信度：已复现
 
 ## 问题
 
@@ -58,3 +58,9 @@ file still conflicted: true
 - 同样的损坏文件下，运行返回的失败原因包含 `run-state.json` 的路径和修复指引。
 - 未知 `schemaVersion` 仍然拒绝写入，`clearAll()` 对它也保持拒绝（或要求显式确认），不会悄悄丢掉新版本写入的状态。
 - 宽松读取遇到损坏主文件时，宿主能拿到"已损坏"信号。
+
+## 修复情况
+
+`run-state.json` 无法解析（冲突标记、被截断、手改坏）时，运行不再以裸 JSON 报错失败，而是返回带文件路径和处理办法的错误（`CorruptRunStateError`）；"Clear arXiv Daily run state" 现在能成功：把损坏文件改名为 `run-state.json.corrupt-<时间戳>`（不删除，也不覆盖已有副本；只有备份坏时则隔离备份）后从空状态开始，之后的运行恢复正常。未知 schema 版本和非法可选字段仍然拒绝清除，以免丢掉新版本写下的数据。`StateStore.damage()` 让宿主得知宽松读取遇到了损坏：插件启动时弹出提示并写 error 日志，`arxiv-daily status` 输出 `runStateDamaged`。与 write-up 的差别：`replaceAll()` 没有改成隔离损坏文件，因为它只服务旧版数据的自动迁移，不该在用户不知情时自己丢弃文件；工作台网页也没有加损坏横幅。
+
+测试：`state-store.test.ts`（11 例）、`scheduler-corrupt-run-state.test.ts`、`apps/cli/tests/cli-inspect.test.ts`、`plugin/tests/run-state-damage.test.ts`。
