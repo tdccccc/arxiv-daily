@@ -607,6 +607,7 @@ describe("runDateFromCalendar", () => {
         }),
         hasDate: vi.fn(() => false),
       },
+      stateStore: { get: vi.fn(() => ({ status: "pending", lastAttempt: 0, attempts: 0 })) },
       scheduler: {
         runForDateNow: vi.fn(async () => {
           events.push("scheduler");

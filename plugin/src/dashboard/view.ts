@@ -1312,9 +1312,15 @@ class ArxivDailyDashboardView extends ItemView {
     await this.plugin.recentDates.refresh();
 
     this.plugin.logger.info(`dashboard: manual calendar run requested for ${date}`);
-    const result = await this.plugin.scheduler.runForDateNow(date, {
-      trigger: "calendar",
-    });
+    // The calendar only offers a completed date when its daily report is gone.
+    // A normal run would answer "already done", so clear the date first (the
+    // same as Force run for date).
+    const reportMissing =
+      this.plugin.stateStore.get(date).status === "completed" &&
+      !this.calendarDailyReports.has(date);
+    const result = reportMissing
+      ? await this.plugin.scheduler.forceRunForDate(date)
+      : await this.plugin.scheduler.runForDateNow(date, { trigger: "calendar" });
     this.notice(`arXiv Daily ${date}: ${describeResult(result)}`);
 
     // Refresh dashboard
