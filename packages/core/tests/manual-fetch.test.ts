@@ -5,6 +5,7 @@ import {
   normalizeArxivId,
 } from "../src/services/manual-fetch";
 import { Logger } from "../src/services/logger";
+import { MarkdownWriter } from "../src/pipeline/markdown-writer";
 import { PaperIndexStore } from "../src/services/paper-index";
 import { DEFAULT_SETTINGS } from "../src/settings/defaults";
 import type { StorageAdapter } from "../src/core/adapters";
@@ -828,6 +829,105 @@ describe("ManualFetchService", () => {
       }),
       "papers/2605.08080.md",
     );
+  });
+
+  describe("a paper that is already in the index", () => {
+    /** The daily run indexed the paper under the research topic; the manual summary then sees only its arXiv category. */
+    async function summarizeIndexedPaper(dailyTopics: string[]) {
+      const d = makeDeps();
+      d.fetcher.fetchMetadataByIds.mockResolvedValue(new Map([["2605.08080", {
+        id: "2605.08080",
+        title: "Test paper title",
+        authors: "Foo Bar et al.",
+        abstract: "Abstract body.",
+        published: "2026-02-02T02:28:06Z",
+        updated: "2026-06-15T02:34:08Z",
+        primaryCategory: "cs.AI",
+        categories: ["cs.AI", "cs.LG"],
+      }]]));
+      const output = { ...DEFAULT_SETTINGS.output };
+      const logger = new Logger("error");
+      const paperIndex = new PaperIndexStore(
+        d.storage,
+        output,
+        () => new Date("2026-06-11T01:30:00.000Z"),
+      );
+      for (const [day, topic] of dailyTopics.entries()) {
+        await paperIndex.upsertFromDailyPaper({
+          arxivId: "2605.08080",
+          title: "Indexed paper",
+          authors: "A. Author",
+          date: `2026-05-1${day}`,
+          published: "2026-05-10",
+          updated: "2026-05-10",
+          arxivCategory: "cs.AI",
+          primaryTopic: topic,
+          detail: false,
+          dailyReport: `arxiv-daily/daily/2026-05-1${day}.md`,
+        });
+      }
+      const writer = new MarkdownWriter({
+        storage: d.storage,
+        logger,
+        arxiv: DEFAULT_SETTINGS.arxiv,
+        output,
+      });
+      const svc = new ManualFetchService({
+        markupParser,
+        storage: d.storage,
+        fetcher: d.fetcher as any,
+        paperFetcher: d.paperFetcher as any,
+        writer,
+        paperIndex,
+        llm: d.llm as any,
+        logger,
+        arxiv: DEFAULT_SETTINGS.arxiv,
+        advanced: DEFAULT_SETTINGS.advanced,
+        output,
+        llmSettings: DEFAULT_SETTINGS.llm,
+      });
+      const result = await svc.fetchAndSummarize("2605.08080", "2026-05-12");
+      return { result, paperIndex, files: d.files };
+    }
+
+    it("keeps its research topic instead of replacing it with the arXiv category", async () => {
+      const { result, paperIndex, files } = await summarizeIndexedPaper(["research"]);
+
+      expect(result.kind).toBe("done");
+      // The user's status stays as it was; only the detail fields are new.
+      await expect(paperIndex.get("2605.08080")).resolves.toMatchObject({
+        primaryTopic: "research",
+        topics: ["research"],
+        detail: true,
+        paperPath: "arxiv-daily/papers/2605.08080.md",
+        status: "inbox",
+        category: "cs.AI",
+      });
+      const note = files["arxiv-daily/papers/2605.08080.md"]!;
+      expect(note).toContain("primary_topic: research");
+      expect(note).toContain("tags: [arxiv, paper, research]");
+      expect(note).not.toContain("cs.AI");
+    });
+
+    it("keeps every topic the daily runs gave it, and which one is primary", async () => {
+      const { result, paperIndex } = await summarizeIndexedPaper(["research", "agents"]);
+
+      expect(result.kind).toBe("done");
+      await expect(paperIndex.get("2605.08080")).resolves.toMatchObject({
+        primaryTopic: "agents",
+        topics: ["research", "agents"],
+      });
+    });
+
+    it("falls back to the arXiv category only when the paper has no topic at all", async () => {
+      const { result, paperIndex } = await summarizeIndexedPaper([""]);
+
+      expect(result.kind).toBe("done");
+      await expect(paperIndex.get("2605.08080")).resolves.toMatchObject({
+        primaryTopic: "cs.AI",
+        topics: ["cs.AI"],
+      });
+    });
   });
 
   it("uses an existing daily report date over a stale Atom published date", async () => {
