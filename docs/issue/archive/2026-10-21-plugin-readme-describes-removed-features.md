@@ -1,7 +1,7 @@
 # 插件 README 和新手教程描述了已不存在的功能：日报里的"关注/重点"复选框、API 密钥显示为 Configured、回溯天数/高级项/文件类型等设置
 
 > 发现日期：2026-10-21 · 来源：main `d999037` 深度代码审查 · 编号 OBS-07
-> 范围：`plugin/README.md`、`plugin/README.zh-CN.md`、`docs/getting-started.md`、`docs/getting-started.zh-CN.md` · 严重程度：低 · 状态：未修复 · 置信度：代码推断（按代码和提交历史逐条核对，未在真实 Obsidian 里点验）
+> 范围：`plugin/README.md`、`plugin/README.zh-CN.md`、`docs/getting-started.md`、`docs/getting-started.zh-CN.md` · 严重程度：低 · 状态：已修复（分支 `fix/2026-10-21-batch2`，提交 434bc25） · 置信度：代码推断（按代码和提交历史逐条核对，未在真实 Obsidian 里点验）
 
 ## 问题
 
@@ -27,3 +27,9 @@
 ## 修复后应补的测试
 
 - 文档改动不需要代码测试；可以加一条文档检查，列出 README 里提到的设置名，确认它们都出现在 `packages/core/src/settings/schema.ts` 的业务设置清单里。
+
+## 修复情况
+
+插件 README 和新手教程（中英文）逐条对照代码核对后改写：删掉“每日勾选”一节，改为说明标记论文的入口（星标按钮、`Set paper mark…`、`Mark current paper as <mark>`）；API 密钥改为“输入框默认遮蔽，点眼睛图标可查看，保存在插件目录里的 `data.json`”；设置概览按设置页逐行重写（去掉回溯天数、文件类型、处理深度、请求延迟、缓存保留、分段/字符上限，补上 Enable、Automatic detail notes、Timezone）。核对时一并改了几处同样过时的说法：开启定时只在今天还没有结果时才询问；`Cancel active tasks` 同时会停文献库的扫描、索引和方向生成；Dashboard 的筛选项和行内操作；教程里不再有“选择 provider”。排障表新增一行，说明 `data.json` 无法读取的提示（见 OBS-08）。
+
+测试：新增 `readme-settings.test.ts`：概览里的分区和行名都必须来自共享设置清单，LLM / Output & schedule / Email delivery / Advanced 四行列出的设置名必须与设置页完全一致，四份文档不得再出现已删除功能的说法（改动前 15 条里有 9 条失败）。
