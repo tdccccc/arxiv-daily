@@ -687,7 +687,10 @@ describe("public liveness and readiness contracts", () => {
       blocked,
     );
     expect(blockedReady.status).toBe(503);
-    expect(await blockedReady.json()).toEqual({ automatic: "locked" });
+    expect(await blockedReady.json()).toEqual({
+      automatic: "locked",
+      reason: "cutover_locked",
+    });
 
     const pendingKv = memoryKv();
     const pending = envWith(pendingKv);
@@ -745,7 +748,10 @@ describe("public liveness and readiness contracts", () => {
         env,
       );
       expect(response.status, label).toBe(503);
-      expect(await response.json(), label).toEqual({ automatic: "locked" });
+      expect(await response.json(), label).toEqual({
+        automatic: "locked",
+        reason: "runtime_not_configured",
+      });
     }
   });
 
@@ -789,25 +795,33 @@ describe("public liveness and readiness contracts", () => {
         env,
       );
       expect(response.status, label).toBe(503);
-      expect(await response.json(), label).toEqual({ automatic: "locked" });
+      expect(await response.json(), label).toEqual({
+        automatic: "locked",
+        reason: "cutover_locked",
+      });
     }
   });
 
   it("fails ready closed instead of accepting client identity when readiness is unverifiable", async () => {
     const injectedBuild = "client-injected-build";
-    for (const env of [
-      envWith(memoryKv(), { binding: false }),
-      (() => {
+    for (const [env, reason] of [
+      [envWith(memoryKv(), { binding: false }), "runtime_not_configured"],
+      [(() => {
         const configured = envWith(memoryKv());
         configured.BUILD_IDENTITY = "";
         return configured;
-      })(),
-      (() => {
+      })(), "build_identity_missing"],
+      [(() => {
+        const unset = envWith(memoryKv());
+        delete unset.BUILD_IDENTITY;
+        return unset;
+      })(), "build_identity_missing"],
+      [(() => {
         const malformed = envWith(memoryKv());
         malformed.BUILD_IDENTITY = "email-relay-v2-not-a-full-sha";
         return malformed;
-      })(),
-      (() => {
+      })(), "build_identity_missing"],
+      [(() => {
         const corrupted = envWith(memoryKv());
         corrupted._namespace!.get(
           corrupted._namespace!.idFromName("delivery-cutover:v3"),
@@ -817,17 +831,46 @@ describe("public liveness and readiness contracts", () => {
           { schemaVersion: 2, phase: "ready" },
         );
         return corrupted;
-      })(),
-    ]) {
+      })(), "cutover_locked"],
+    ] as const) {
       const response = await worker.fetch(new Request(
         `https://relay.test/ready?buildIdentity=${injectedBuild}&protocolGeneration=99`,
         { headers: { "X-Build-Identity": injectedBuild } },
       ), env);
       const text = await response.text();
       expect(response.status).toBe(503);
-      expect(JSON.parse(text)).toEqual({ automatic: "locked" });
+      // Only a name: neither the configured identity nor the client's is echoed.
+      expect(JSON.parse(text)).toEqual({ automatic: "locked", reason });
       expect(text).not.toContain(injectedBuild);
+      expect(text).not.toContain("email-relay-v2-");
     }
+  });
+
+  it("tells a forgotten BUILD_IDENTITY from a mismatch with the cutover binding, while health stays 200", async () => {
+    const env = envWith(memoryKv());
+    await completeCutover(env);
+
+    const bound = env.BUILD_IDENTITY!;
+    const ready = () => worker.fetch(new Request("https://relay.test/ready"), env);
+    const health = () => worker.fetch(new Request("https://relay.test/health"), env);
+
+    // A bare `wrangler deploy` removes the variable.
+    delete env.BUILD_IDENTITY;
+    const missing = await ready();
+    expect(missing.status).toBe(503);
+    expect(await missing.json()).toEqual({ automatic: "locked", reason: "build_identity_missing" });
+    expect((await health()).status).toBe(200);
+
+    // Another valid identity than the one the cutover bound.
+    env.BUILD_IDENTITY = `email-relay-v2-${"b".repeat(40)}`;
+    const mismatched = await ready();
+    expect(mismatched.status).toBe(503);
+    expect(await mismatched.json()).toEqual({ automatic: "locked", reason: "cutover_locked" });
+    expect((await health()).status).toBe(200);
+
+    // Putting the bound identity back restores it.
+    env.BUILD_IDENTITY = bound;
+    expect((await ready()).status).toBe(200);
   });
 });
 
@@ -1521,7 +1564,10 @@ describe("ready-bound token issuance", () => {
     );
 
     expect(readiness.status).toBe(503);
-    expect(await readiness.json()).toEqual({ automatic: "locked" });
+    expect(await readiness.json()).toEqual({
+      automatic: "locked",
+      reason: "runtime_not_configured",
+    });
     expect(internal.status).toBe(503);
     expect(await internal.json()).toEqual({ status: "locked" });
     expect(publicResponse.status).toBe(503);

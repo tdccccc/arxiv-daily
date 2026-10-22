@@ -14,7 +14,7 @@ cd services/email-relay
 npm ci
 ```
 
-- 确认要部署的精确 commit SHA：`git rev-parse HEAD`（40 位 hex）。该 SHA 会成为永久 cutover build binding，之后不能静默更换。
+- 确认要部署的精确 commit SHA：`git rev-parse HEAD`（40 位 hex）。该 SHA 会成为永久 cutover build binding，之后不能静默更换。**把 `email-relay-v2-<该 SHA>` 记下来**：cutover 之后每一次发布都要继续注入这个 identity（第 9 节）。
 - 确认 `IDENTITY_SECRET` 与 `TOKEN_SECRET`：前者必须长期稳定（轮换会锁定 automatic 并丢失已签发 token 的 identity），后者可轮换。
 - 准备一个新的 64 位 hex 操作 ID（每次 action 一个，用于幂等收敛）：`openssl rand -hex 32`。
 
@@ -38,8 +38,11 @@ node scripts/cutover-preflight.mjs --check-readonly  # 静态自检（CI 亦会�
 ## 2. 部署新 Worker（以 automatic-locked 启动）
 
 ```bash
-npx wrangler deploy --var "BUILD_IDENTITY:email-relay-v2-$(git rev-parse HEAD)"
+npm run deploy -- --dry-run   # 只做检查并打印将要执行的命令
+npm run deploy
 ```
+
+`npm run deploy` 在 `services/email-relay` 下运行 `scripts/deploy-with-identity.mjs`：要求工作区干净（含未跟踪文件）、`HEAD` 是 40 位 SHA，读取线上 `GET /ready`（已绑定到别的 identity 时拒绝），然后只执行一次 `wrangler deploy --var "BUILD_IDENTITY:email-relay-v2-<HEAD>"`，不需要任何 secret。**不要运行不带 `--var` 的 `wrangler deploy`**：它会删掉 `BUILD_IDENTITY`，部署后自动邮件和验证链接全部 503，而测试邮件仍然成功（见第 8 节）。
 
 - 部署后 `GET https://mail.arxiv-daily.top/ready` 必须返回 503 locked（新 Worker 不允许直接开放 automatic）。
 - **确认点**：只读 status 显示 `phase: locked` 或 `inventoried` 之前的状态；若显示 ready，停止并调查（不允许在未完成 cutover 前 ready）。
@@ -125,10 +128,22 @@ curl -s https://mail.arxiv-daily.top/ready
 
 ## 8. 异常与恢复
 
+- **部署后自动邮件或验证链接 503、`/ready` 为 503**：先看 `curl -s https://mail.arxiv-daily.top/ready` 里的 `reason`（只有名字，不含值）。`build_identity_missing`：`BUILD_IDENTITY` 缺失或格式不对（典型原因是运行了裸 `wrangler deploy`），用 `npm run deploy -- --identity email-relay-v2-<第 0 步记录的 SHA>` 重新部署；`runtime_not_configured`：缺少 binding、secret 或 var；`cutover_locked`：identity 或 `IDENTITY_SECRET` 与永久 binding 不一致，或状态不可读，按下一条处理。注意此时**测试邮件仍会成功**，不能用它验证部署。
 - **任何 fail closed**（`identity-locked`、binding 不匹配、marker 不一致、结果不明）：停止所有操作，只读查询 status 与 `/ready`，记录现场，按 fix-forward 修复（如重新注入正确 build identity、repair action），不盲目重试 mutation。
 - **恢复**：所有恢复路径都以只读 status 判定为先；不能通过状态确认的操作一律视为未完成，需要你重新授权。
 - **回滚**：不支持自动 rollback；旧 Worker 的凭据已撤销，恢复的唯一路径是 fix-forward 完成 cutover。
 
+## 9. cutover 之后发布新代码
+
+`BUILD_IDENTITY` 只标识 cutover 时绑定的“协议/ledger 世代”，不是每次代码发布的 SHA：binding 是永久的，之后任何不同的 identity 都会让 status、readiness、token 签发、automatic 授权和所有 cutover action（包括 `repair`）全部 locked，也没有重新绑定的动作。所以发布新代码时继续注入**第 0 步记录的 identity**：
+
+1. 提交代码，`services/email-relay` 下 `npm test && npm run typecheck`，工作区保持干净。
+2. `npm run deploy -- --dry-run`。线上 `/ready` 已绑定到别的 identity 时脚本会拒绝，并打印要传给 `--identity` 的值；`/ready` 读不到（locked 或不可达）时它只能警告，此时直接用第 0 步记录的值。
+3. `npm run deploy -- --identity email-relay-v2-<绑定的 SHA>`。
+4. 验证：`GET /ready` 返回 200，`automatic: "ready"`，`buildIdentity` 仍是绑定值、`readyGeneration` 不变；再确认一次**自动路径**（下一次日报，或带 `arxiv-daily:auto:` key 的真实投递），不要只发测试邮件。
+
+绑定的 SHA 之后不再对应已部署的代码；要查线上跑的是哪个版本，用 Cloudflare 的 deployment/version 记录和 git tag，不要看 `/ready` 的 `buildIdentity`。换绑（新的 identity）等于新的 cutover 世代，是一次设计变更，不属于本 runbook。
+
 ## CI 边界
 
-CI（`.github/workflows/email-relay.yml`）只执行测试、typecheck 和 Wrangler `--dry-run`，并运行 `cutover-preflight.mjs --check-readonly` 证明 preflight 脚本只读。任何 CI 步骤都不部署、不读写生产 KV、不调用验证/投递端点。
+CI（`.github/workflows/email-relay.yml`）只执行测试、typecheck 和 Wrangler `--dry-run`，并运行 `cutover-preflight.mjs --check-readonly` 证明 preflight 脚本只读。任何 CI 步骤都不部署（`scripts/deploy-with-identity.mjs` 只由操作者在本地运行，其测试使用注入的假命令）、不读写生产 KV、不调用验证/投递端点。

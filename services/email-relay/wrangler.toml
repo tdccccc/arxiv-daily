@@ -36,4 +36,9 @@ DAILY_QUOTA = "5"
 # Secrets (never commit):
 #   npx wrangler secret put RESEND_API_KEY
 #   npx wrangler secret put TOKEN_SECRET
+#   npx wrangler secret put IDENTITY_SECRET
 #   npx wrangler secret put DELIVERY_V2_CUTOVER_TOKEN
+#
+# BUILD_IDENTITY (email-relay-v2-<40-hex commit SHA>) is deliberately not set here:
+# `npm run deploy` injects it with --var. A bare `wrangler deploy` replaces every
+# variable with the ones in this file and so removes it, which locks automatic delivery.

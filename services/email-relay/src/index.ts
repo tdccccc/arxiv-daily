@@ -2,6 +2,7 @@ import { isPlausibleEmail, normalizeEmail, randomToken, sha256Hex } from "./cryp
 import {
   authenticateDevice,
   automaticRuntimeConfigured,
+  configuredBuildIdentity,
   hashPendingToken,
   putPending,
   type Env,
@@ -61,7 +62,9 @@ async function handle(request: Request, env: Env): Promise<Response> {
   }
   if (request.method === "GET" && path === "/ready") {
     const readiness = await fetchPublicReadiness(env);
-    if (!readiness) return json({ automatic: "locked" }, 503);
+    if (!readiness) {
+      return json({ automatic: "locked", reason: lockedReason(env) }, 503);
+    }
     const ready = readiness.phase === "ready" &&
       readiness.automatic === "ready" &&
       readiness.readyGeneration !== null &&
@@ -342,6 +345,20 @@ async function relayJson(response: Response): Promise<Response> {
       ...CORS_HEADERS,
     },
   });
+}
+
+/**
+ * Why /ready cannot report a cutover state at all, as a name and never a value,
+ * so an operator can tell a forgotten BUILD_IDENTITY from a binding mismatch.
+ * The 503 bodies of /v1/deliver stay as they are: installed clients accept
+ * "nothing was sent" only for exactly {error, ambiguous:false}.
+ */
+function lockedReason(
+  env: Env,
+): "build_identity_missing" | "runtime_not_configured" | "cutover_locked" {
+  if (!configuredBuildIdentity(env)) return "build_identity_missing";
+  if (!automaticRuntimeConfigured(env)) return "runtime_not_configured";
+  return "cutover_locked";
 }
 
 function clientIp(request: Request): string {
