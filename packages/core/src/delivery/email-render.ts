@@ -6,11 +6,7 @@ import { digestLanguage } from "./digest";
 
 export function renderEmailSubject(digest: DailyDigest): string {
   const language = digestLanguage(digest);
-  const n = digest.paperCount;
-  if (language === "en") {
-    return `arXiv Daily ${digest.date} · ${n} ${n === 1 ? "paper" : "papers"}`;
-  }
-  return `arXiv Daily ${digest.date} · ${n} 篇`;
+  return `arXiv Daily ${digest.date} · ${paperCountLabel(digest.paperCount, language)}`;
 }
 
 export function renderEmailHtml(digest: DailyDigest): string {
@@ -40,9 +36,12 @@ export function renderEmailHtml(digest: DailyDigest): string {
     }
   }
 
+  parts.push(`<hr style="border:none;border-top:1px solid #ddd;margin:1.5rem 0 0.75rem;" />`);
+  const footer = footerLine(digest, language);
+  if (footer) {
+    parts.push(`<p style="margin:0;font-size:0.9rem;color:#666;">${escapeHtml(footer)}</p>`);
+  }
   parts.push(
-    `<hr style="border:none;border-top:1px solid #ddd;margin:1.5rem 0 0.75rem;" />`,
-    `<p style="margin:0;font-size:0.9rem;color:#666;">${escapeHtml(footerLine(digest, language))}</p>`,
     `<p style="margin:0.25rem 0 0;font-size:0.85rem;color:#888;">arXiv Daily</p>`,
     `</div></body></html>`,
   );
@@ -75,23 +74,36 @@ export function renderEmailText(digest: DailyDigest): string {
   }
 
   lines.push("---");
-  lines.push(footerLine(digest, language));
+  const footer = footerLine(digest, language);
+  if (footer) lines.push(footer);
   lines.push("arXiv Daily");
   return lines.join("\n").trimEnd() + "\n";
 }
 
+/** "1 paper" / "2 papers" / "2 篇"; the subject and the header must agree. */
+function paperCountLabel(count: number, language: SummaryLanguage): string {
+  if (language === "en") return `${count} ${count === 1 ? "paper" : "papers"}`;
+  return `${count} 篇`;
+}
+
 function headerMetaLine(digest: DailyDigest, language: SummaryLanguage): string {
+  const count = paperCountLabel(digest.paperCount, language);
   if (language === "en") {
-    return `Date: ${digest.date} · ${digest.paperCount} papers · Categories: ${digest.categories}`;
+    return `Date: ${digest.date} · ${count} · Categories: ${digest.categories}`;
   }
-  return `日期：${digest.date} · ${digest.paperCount} 篇 · 分类：${digest.categories}`;
+  return `日期：${digest.date} · ${count} · 分类：${digest.categories}`;
 }
 
 function zeroDayLead(language: SummaryLanguage): string {
   return language === "en" ? "No relevant papers today." : "今日无相关论文";
 }
 
-function footerLine(digest: DailyDigest, language: SummaryLanguage): string {
+/** A day without relevant papers writes no report file, so there is no path to give. */
+function footerLine(
+  digest: DailyDigest,
+  language: SummaryLanguage,
+): string | undefined {
+  if (digest.paperCount === 0) return undefined;
   return language === "en"
     ? `Full Markdown daily report: ${digest.dailyPath}`
     : `完整 Markdown 日报路径：${digest.dailyPath}`;
@@ -200,8 +212,8 @@ export function emailProse(value: string): string {
     .replace(/\n{3,}/g, "\n\n")
     .replace(/[ \t]{2,}/g, " ")
     .replace(/\s+([,.;:!?])/g, "$1")
-    .replace(/([([])\s+/g, "$1")
-    .replace(/\s+([)\]])/g, "$1")
+    .replace(/([([⟨])\s+/g, "$1")
+    .replace(/\s+([)\]⟩])/g, "$1")
     .trim();
 }
 
@@ -244,13 +256,75 @@ function texCmd(name: string): RegExp {
   return new RegExp(`\\\\${name}${TEX_END}`, "g");
 }
 
+// Private-use marks around the index of a piece of text that simplifyLatex sets
+// aside and puts back unchanged.
+const KEEP_OPEN = "";
+const KEEP_CLOSE = "";
+
+/** Environments that stay as TeX: flattening a matrix or aligned equation reads worse than the source. */
+const TEX_ENVIRONMENTS = new Set([
+  "matrix", "pmatrix", "bmatrix", "Bmatrix", "vmatrix", "Vmatrix", "smallmatrix",
+  "cases", "array", "align", "align*", "aligned", "alignedat", "gather", "gather*",
+  "gathered", "split", "equation", "equation*", "eqnarray", "eqnarray*", "multline",
+  "multline*",
+]);
+
+const BLACKBOARD_LETTERS: Record<string, string> = {
+  R: "ℝ",
+  N: "ℕ",
+  Z: "ℤ",
+  Q: "ℚ",
+  C: "ℂ",
+};
+
+/** Commands that are words (operators), so dropping the backslash reads fine. */
+const TEX_FUNCTION_NAMES =
+  "sin|cos|tan|cot|sec|csc|arcsin|arccos|arctan|sinh|cosh|tanh|coth|log|ln|lg|exp|lim|liminf|limsup|max|min|sup|inf|arg|det|dim|ker|gcd|deg|Pr|hom";
+
+/**
+ * Park each known environment (\begin{pmatrix} ... \end{pmatrix}) behind a
+ * mark. Scans with indexOf rather than a lazy regex, and gives up on a name
+ * once its \end is missing, so repeated unterminated openers stay linear.
+ */
+function keepEnvironments(input: string, keep: (text: string) => string): string {
+  const begin = /\\begin\{([A-Za-z]{1,12}\*?)\}/g;
+  const unterminated = new Set<string>();
+  let out = "";
+  let cursor = 0;
+  for (let match = begin.exec(input); match; match = begin.exec(input)) {
+    const name = match[1]!;
+    if (!TEX_ENVIRONMENTS.has(name) || unterminated.has(name)) continue;
+    const closer = `\\end{${name}}`;
+    const close = input.indexOf(closer, match.index + match[0].length);
+    if (close < 0) {
+      unterminated.add(name);
+      continue;
+    }
+    const end = close + closer.length;
+    out += input.slice(cursor, match.index) + keep(input.slice(match.index, end));
+    cursor = end;
+    begin.lastIndex = end;
+  }
+  return out + input.slice(cursor);
+}
+
 function simplifyLatex(raw: string): string {
-  let s = raw;
+  // Text that must come through unchanged (environments, commands this cannot
+  // render) is set aside behind marks while everything else is rewritten.
+  const kept: string[] = [];
+  const keep = (text: string): string =>
+    `${KEEP_OPEN}${kept.push(text) - 1}${KEEP_CLOSE}`;
+  let s = keepEnvironments(raw.replace(/[]/g, ""), keep);
 
   // Spaces first so content inside \mathrm{km\,s} becomes "km s" before unwrap.
   s = s.replace(/\\[,;]/g, " ");
   s = s.replace(/\\!/g, "");
   s = s.replace(/\\(?:quad|qquad)(?![A-Za-z])/g, " ");
+
+  s = s.replace(
+    /\\mathbb\s*\{\s*([RNZQC])\s*\}/g,
+    (_, letter: string) => BLACKBOARD_LETTERS[letter]!,
+  );
 
   // Unwrap \mathrm{...} / \text{...} even when the body still has ^ / _ / spaces.
   // (Simple [^{}]* fails on nested braces; balanced scan handles one level deep.)
@@ -259,10 +333,31 @@ function simplifyLatex(raw: string): string {
   for (let i = 0; i < 3; i += 1) {
     s = s.replace(/\\frac\s*\{([^{}]*)\}\s*\{([^{}]*)\}/g, "($1)/($2)");
   }
+  // \sqrt[n]{x} and \sqrt{x}; innermost first, so nested roots take a few passes.
+  for (let i = 0; i < 3; i += 1) {
+    s = s.replace(/\\sqrt\s*\[([A-Za-z0-9]{1,8})\]\s*\{([^{}]*)\}/g, "$1√($2)");
+    s = s.replace(/\\sqrt\s*\{([^{}]*)\}/g, "√($1)");
+  }
+  s = s.replace(/\\sqrt(?![A-Za-z])\s*/g, "√");
 
   // \rm / \it / \bf as font switches (common in N_{\rm side})
   s = s.replace(/\\(?:rm|it|bf|cal|tt)\s+/g, "");
   s = s.replace(/\\(?:rm|it|bf|cal|tt)(?=[A-Za-z])/g, "");
+
+  // Sizing and style commands only affect the layout the reader cannot see here.
+  s = s.replace(/\\(?:left|right)\s*\./g, "");
+  s = s.replace(
+    /\\(?:left|right|bigg?[lr]?|Bigg?[lr]?|displaystyle|textstyle|scriptstyle|scriptscriptstyle|limits|nolimits)(?![A-Za-z])\s*/g,
+    "",
+  );
+  // Accents the braced form of unwrapLatexGroups did not reach (\vec v, \hat x).
+  s = s.replace(
+    /\\(?:hat|widehat|bar|vec|tilde|widetilde|dot|ddot|overline|underline)(?![A-Za-z])\s*/g,
+    "",
+  );
+
+  // A degree sign, not a composition circle.
+  s = s.replace(/\^\s*(?:\\circ(?![A-Za-z])|\{\s*\\circ\s*\})/g, "°");
 
   // Common symbols — use (?![A-Za-z]) so \Omega_m / \sum_i match
   const symbols: Array<[RegExp, string]> = [
@@ -271,24 +366,73 @@ function simplifyLatex(raw: string): string {
     [texCmd("leq"), "≤"],
     [texCmd("geq"), "≥"],
     [texCmd("neq"), "≠"],
+    [texCmd("le"), "≤"],
+    [texCmd("ge"), "≥"],
+    [texCmd("ne"), "≠"],
+    [texCmd("ll"), "≪"],
+    [texCmd("gg"), "≫"],
+    [texCmd("equiv"), "≡"],
+    [texCmd("cong"), "≅"],
     [texCmd("approx"), "≈"],
     [texCmd("simeq"), "≃"],
     [texCmd("sim"), "~"],
     [texCmd("lesssim"), "≲"],
     [texCmd("gtrsim"), "≳"],
     [texCmd("times"), "×"],
+    [texCmd("otimes"), "⊗"],
+    [texCmd("oplus"), "⊕"],
+    [texCmd("odot"), "⊙"],
+    [texCmd("star"), "⋆"],
+    [texCmd("ast"), "∗"],
+    [texCmd("dagger"), "†"],
+    [texCmd("circ"), "∘"],
+    [texCmd("degree"), "°"],
+    [texCmd("AA"), "Å"],
     [texCmd("cdot"), "·"],
     [texCmd("pm"), "±"],
     [texCmd("mp"), "∓"],
     [texCmd("infty"), "∞"],
     [texCmd("propto"), "∝"],
+    [texCmd("perp"), "⊥"],
+    [texCmd("parallel"), "∥"],
+    [texCmd("prime"), "′"],
     [texCmd("rightarrow"), "→"],
     [texCmd("leftarrow"), "←"],
     [texCmd("leftrightarrow"), "↔"],
+    [texCmd("longrightarrow"), "→"],
+    [texCmd("Rightarrow"), "⇒"],
+    [texCmd("Leftarrow"), "⇐"],
+    [texCmd("Leftrightarrow"), "⇔"],
+    [texCmd("iff"), "⇔"],
+    [texCmd("mapsto"), "↦"],
     [texCmd("to"), "→"],
     [texCmd("subseteq"), "⊆"],
     [texCmd("subset"), "⊂"],
+    [texCmd("supseteq"), "⊇"],
+    [texCmd("supset"), "⊃"],
+    [texCmd("notin"), "∉"],
     [texCmd("in"), "∈"],
+    [texCmd("cup"), "∪"],
+    [texCmd("cap"), "∩"],
+    [texCmd("emptyset"), "∅"],
+    [texCmd("varnothing"), "∅"],
+    [texCmd("forall"), "∀"],
+    [texCmd("exists"), "∃"],
+    [texCmd("neg"), "¬"],
+    [texCmd("wedge"), "∧"],
+    [texCmd("vee"), "∨"],
+    [texCmd("setminus"), "∖"],
+    [texCmd("colon"), ":"],
+    [texCmd("bullet"), "•"],
+    [texCmd("langle"), "⟨"],
+    [texCmd("rangle"), "⟩"],
+    [texCmd("lfloor"), "⌊"],
+    [texCmd("rfloor"), "⌋"],
+    [texCmd("lceil"), "⌈"],
+    [texCmd("rceil"), "⌉"],
+    [texCmd("Vert"), "‖"],
+    [texCmd("vert"), "|"],
+    [texCmd("mid"), "|"],
     [texCmd("sum"), "∑"],
     [texCmd("prod"), "∏"],
     [texCmd("int"), "∫"],
@@ -311,7 +455,9 @@ function simplifyLatex(raw: string): string {
     [texCmd("pi"), "π"],
     [texCmd("varpi"), "ϖ"],
     [texCmd("rho"), "ρ"],
+    [texCmd("varrho"), "ϱ"],
     [texCmd("sigma"), "σ"],
+    [texCmd("varsigma"), "ς"],
     [texCmd("tau"), "τ"],
     [texCmd("upsilon"), "υ"],
     [texCmd("phi"), "φ"],
@@ -326,6 +472,7 @@ function simplifyLatex(raw: string): string {
     [texCmd("Xi"), "Ξ"],
     [texCmd("Pi"), "Π"],
     [texCmd("Sigma"), "Σ"],
+    [texCmd("Upsilon"), "Υ"],
     [texCmd("Phi"), "Φ"],
     [texCmd("Psi"), "Ψ"],
     [texCmd("Omega"), "Ω"],
@@ -346,9 +493,14 @@ function simplifyLatex(raw: string): string {
   s = s.replace(/_([A-Za-z0-9+-]+)/g, "_$1");
   s = s.replace(/\^([A-Za-z0-9+-]+)/g, "^$1");
 
-  // Drop remaining \commands (not letter-boundary; leave following _ attached)
-  s = s.replace(/\\([a-zA-Z]+)/g, "$1");
-  // Stray braces and backslashes
+  // Operators such as \log and \max are words; any other command is kept as
+  // written, with its arguments, so it reads as TeX instead of fusing its name
+  // onto the argument (\foo{x} -> "foox").
+  s = s.replace(new RegExp(`\\\\(${TEX_FUNCTION_NAMES})${TEX_END}`, "g"), "$1");
+  s = s.replace(/\\[A-Za-z]+\*?(?:\s*\{[^{}]*\})*/g, keep);
+  // Row breaks, norm bars, stray braces and escapes (\%, \&, \_).
+  s = s.replace(/\\\\/g, " ");
+  s = s.replace(/\\\|/g, "‖");
   s = s.replace(/[{}]/g, "");
   s = s.replace(/\\/g, "");
 
@@ -356,13 +508,19 @@ function simplifyLatex(raw: string): string {
   s = s.replace(/\s+(_[A-Za-z0-9+-]+)/g, "$1");
   s = s.replace(/\s+(\^[A-Za-z0-9+-]+)/g, "$1");
 
-  return s.replace(/\s+/g, " ").trim();
+  let out = s.replace(/\s+/g, " ").trim();
+  // A kept command can hold a kept environment, so unpack a few levels.
+  const marked = new RegExp(`${KEEP_OPEN}(\\d+)${KEEP_CLOSE}`, "g");
+  for (let pass = 0; pass < 3 && out.includes(KEEP_OPEN); pass += 1) {
+    out = out.replace(marked, (_, index: string) => kept[Number(index)] ?? "");
+  }
+  return out;
 }
 
 const GROUP_CMD_OPEN =
-  /^\\(?:text|mathrm|mathbf|mathit|textrm|textit|textbf|operatorname|mathsf|mathtt)\s*\{/i;
+  /^\\(?:text|mathrm|mathbf|mathit|textrm|textit|textbf|operatorname|mathsf|mathtt|mathcal|mathscr|mathfrak|mathbb|boldsymbol|bm|emph|textsc|textsf|textup|mbox|hat|widehat|bar|vec|tilde|widetilde|dot|ddot|overline|underline)\s*\{/i;
 
-/** Replace \mathrm{...} / \text{...} with inner text (balanced braces). */
+/** Replace \mathrm{...} / \text{...} (and typesetting-only wrappers like \mathcal{...}) with inner text (balanced braces). */
 function unwrapLatexGroups(input: string): string {
   let s = input;
   for (let pass = 0; pass < 8; pass += 1) {

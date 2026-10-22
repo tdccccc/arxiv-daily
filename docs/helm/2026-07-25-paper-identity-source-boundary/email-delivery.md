@@ -81,7 +81,7 @@ When `N = 0` and run `completed`:
 2. Header: date, count 0, categories
 3. **Lead line:** 「今日无相关论文」 / English equivalent
 4. **Each configured topic** still listed with empty-topic one-liner
-5. Footer: vault daily path
+5. Footer: no vault daily path (a zero-paper day writes no daily file)
 
 ## delivery-state (sketch)
 
