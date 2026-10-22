@@ -6,7 +6,7 @@ import { mountSettingsNavigation } from "./settings-navigation";
 import { settingsSetupGuide } from "./settings-setup";
 import type { CliLibraryConnectionInspection } from "../../library-connection-cmd";
 import type { WorkbenchSettings as SettingsSnapshot } from "../settings";
-import { deriveTopicDescription, normalizeTopic, slugify, isCompletedDiscovery, ARXIV_CATEGORIES, getBusinessSettingsSections, getBusinessSetting, getTopicSettingField, runWindowTimeOptions, isBusinessSettingVisible, TIMEZONE_OPTIONS, type BusinessSetting, type BusinessSettingId, type BusinessSettingsContext, DEFAULT_SETTINGS, DEFAULT_UI_APPEARANCE, libraryRowPresentation, type Topic } from "@arxiv-daily/core";
+import { deriveTopicDescription, normalizeTopic, topicTagFromName, DIRECTION_TEXT_MAX_LENGTH, isCompletedDiscovery, ARXIV_CATEGORIES, getBusinessSettingsSections, getBusinessSetting, getTopicSettingField, runWindowTimeOptions, isBusinessSettingVisible, TIMEZONE_OPTIONS, type BusinessSetting, type BusinessSettingId, type BusinessSettingsContext, DEFAULT_SETTINGS, DEFAULT_UI_APPEARANCE, libraryRowPresentation, type Topic } from "@arxiv-daily/core";
 import { descriptions } from './settings-copy';
 export type { WorkbenchSettings as SettingsSnapshot } from "../settings";
 const button = (action: string, label: string) => h("button", { type: "button", "data-settings": action }, t(label));
@@ -51,7 +51,7 @@ function categoryRow(value: string, index: number): HTMLElement {
 }
 function directionRow(direction: Topic['directions'][number]): HTMLElement {
  return h("div", { "data-direction-id": direction.id, "data-direction-origin": direction.origin },
-  h("textarea", { name: "topicDirection", rows: 2, "aria-label": t(getTopicSettingField('directions').name), placeholder: t(getTopicSettingField('directions').placeholder) }, direction.text),
+  h("textarea", { name: "topicDirection", rows: 2, maxlength: DIRECTION_TEXT_MAX_LENGTH, "aria-label": t(getTopicSettingField('directions').name), placeholder: t(getTopicSettingField('directions').placeholder) }, direction.text),
   button('remove-direction', 'Remove direction'),
  );
 }
@@ -177,9 +177,9 @@ export function bindSettings(form: HTMLFormElement, snapshot: SettingsSnapshot, 
   });
   const tags=new Set(topics.map(topic=>topic.tag).filter(Boolean));
   for(const topic of topics){
-   const oldBase=slugify(topic.originalName);
+   const oldBase=topicTagFromName(topic.originalName);
    if(!topic.tag || /^topic-\d+$/.test(topic.tag) || (topic.name!==topic.originalName && oldBase && (topic.tag===oldBase || new RegExp(`^${oldBase}-\\d+$`).test(topic.tag)))){
-    tags.delete(topic.tag);const base=slugify(topic.name)||'topic';let tag=base;let suffix=2;while(tags.has(tag))tag=`${base}-${suffix++}`;topic.tag=tag;tags.add(tag);
+    tags.delete(topic.tag);const base=topicTagFromName(topic.name)||'topic';let tag=base;let suffix=2;while(tags.has(tag))tag=`${base}-${suffix++}`;topic.tag=tag;tags.add(tag);
    }
   }
 

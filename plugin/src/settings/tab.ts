@@ -45,7 +45,7 @@ import {
   topicFromSeed,
 } from "@arxiv-daily/core";
 import type { Topic } from "@arxiv-daily/core";
-import { slugify } from "@arxiv-daily/core";
+import { DIRECTION_TEXT_MAX_LENGTH, topicTagFromName } from "@arxiv-daily/core";
 import {
   validateVaultRelativeDirectory,
   vaultRelativeDirectoriesCollide,
@@ -3024,7 +3024,7 @@ export class ArxivDailySettingTab extends PluginSettingTab {
           || isPlaceholderTopicTag(current.tag) || !current.tag;
         current.name = name;
         if (tagFollowsName) {
-          current.tag = uniqueTopicTag(currentTopics, currentIndex, slugify(name) || `topic-${currentIndex + 1}`);
+          current.tag = uniqueTopicTag(currentTopics, currentIndex, topicTagFromName(name) || `topic-${currentIndex + 1}`);
         }
       }, () => {
         topic.name = liveTopic()?.name ?? storedTopic.name;
@@ -3106,6 +3106,8 @@ export class ArxivDailySettingTab extends PluginSettingTab {
         dirInput.dataset.directionId = direction.id;
         dirInput.value = direction.text;
         dirInput.rows = 1;
+        // The daily report holds no longer direction; saving one is refused.
+        dirInput.maxLength = DIRECTION_TEXT_MAX_LENGTH;
         dirInput.placeholder = "One specific direction";
         // A textarea cannot render a marker over its own text, so the "there
         // is more" badge is a sibling, shown only when the collapsed field is
@@ -3328,7 +3330,7 @@ export function autoTopicTag(name: string, topics: readonly Topic[], selfId: str
   const taken = new Set(
     topics.filter((topic) => topic.id !== selfId).map((topic) => topic.tag.trim()),
   );
-  const base = slugify(name);
+  const base = topicTagFromName(name);
   if (!base) {
     const position = topics.findIndex((topic) => topic.id === selfId);
     let n = (position >= 0 ? position : topics.length) + 1;
@@ -3357,7 +3359,7 @@ export function isPlaceholderTopicTag(tag: string): boolean {
  * for "nobody chose this tag on purpose", so renaming may replace it.
  */
 export function isDerivedTopicTag(tag: string, name: string): boolean {
-  const base = slugify(name);
+  const base = topicTagFromName(name);
   if (!base) return false;
   // `base` is a slug, so it holds no regular-expression metacharacters.
   return tag === base || new RegExp(`^${base}-\\d+$`).test(tag);

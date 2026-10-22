@@ -3,7 +3,7 @@ import { isValidMaxDailyPapers } from "./daily-paper-limit";
 import { getBusinessSetting } from "./schema";
 import type { PluginSettings } from "./types";
 import { isDetailSelectionProfile, sanitizeDetailSelection } from "./detail-selection";
-import { validateLocalPdfParserSidecarConfig, validateScheduleConfig, validateSchedulerConfig, validateVaultRelativeDirectory, vaultRelativeDirectoriesCollide } from "./validation";
+import { validateLocalPdfParserSidecarConfig, validateScheduleConfig, validateSchedulerConfig, validateTopicLimits, validateVaultRelativeDirectory, vaultRelativeDirectoriesCollide } from "./validation";
 import { hasControlCharacter } from "../utils/control-characters";
 
 // Tab, LF, and CR are the only control characters a multiline text field may contain.
@@ -49,6 +49,9 @@ export function normalizeSettingsEdits(candidate: PluginSettings, changedKeys: r
       });
       return { ...topic, id, name: text(topic.name, "arxiv.topics.name"), tag: text(topic.tag, "arxiv.topics.tag"), directions, description: deriveTopicDescription(directions) };
     });
+    // A direction or tag the daily report cannot hold is refused here, with the topic it belongs to, not after the day's model calls.
+    const tooLong = validateTopicLimits(result.arxiv.topics);
+    if (tooLong.length > 0) throw new Error(tooLong.join("; "));
   }
   if (touches("arxiv.timezone")) {
     result.arxiv.timezone = text(result.arxiv.timezone, "arxiv.timezone");
