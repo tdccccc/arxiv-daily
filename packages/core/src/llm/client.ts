@@ -75,6 +75,32 @@ export function isLlmOutputTruncatedError(error: unknown): error is LlmOutputTru
     error.code === LLM_OUTPUT_TRUNCATED_ERROR_CODE;
 }
 
+export const LLM_CONTENT_BLOCKED_ERROR_CODE = "ARXIV_LLM_CONTENT_BLOCKED" as const;
+
+/**
+ * The provider's content-safety filter refused this input (an HTTP 400 whose
+ * error code or text says so). The same input is refused every time, so it is
+ * never retried; unlike an auth or quota failure it says nothing about the
+ * other papers of the day, which lets callers set this one input aside.
+ */
+export class LlmContentBlockedError extends Error {
+  readonly code = LLM_CONTENT_BLOCKED_ERROR_CODE;
+  readonly status?: number;
+
+  constructor(message: string, status?: number) {
+    super(message);
+    this.name = "LlmContentBlockedError";
+    if (status !== undefined) this.status = status;
+  }
+}
+
+export function isLlmContentBlockedError(error: unknown): error is LlmContentBlockedError {
+  if (error instanceof LlmContentBlockedError) return true;
+  return isErrorLike(error) &&
+    error.name === "LlmContentBlockedError" &&
+    error.code === LLM_CONTENT_BLOCKED_ERROR_CODE;
+}
+
 export class StreamIdleTimeoutError extends Error {
   constructor(message = "LLM stream idle timeout") {
     super(message);
@@ -551,7 +577,9 @@ export class LlmClient {
 
 /** Failures a repeat of the same request would reproduce; never retried or re-typed. */
 function isDeterministicOutputFailure(error: unknown): boolean {
-  return error instanceof LlmOutputLimitExceededError || isLlmOutputTruncatedError(error);
+  return error instanceof LlmOutputLimitExceededError
+    || isLlmOutputTruncatedError(error)
+    || isLlmContentBlockedError(error);
 }
 
 /**
@@ -617,6 +645,7 @@ export function isUnsupportedStreamOptionsError(err: unknown): boolean {
 const TRANSIENT_CLIENT_STATUSES: ReadonlySet<number> = new Set([408, 409, 425, 429]);
 
 export function isPermanentLlmError(err: unknown): boolean {
+  if (isLlmContentBlockedError(err)) return true;
   const status = (err as LlmStatusError | undefined)?.status;
   return (
     typeof status === "number" &&
@@ -626,21 +655,72 @@ export function isPermanentLlmError(err: unknown): boolean {
   );
 }
 
+interface ProviderErrorFields {
+  message?: string;
+  code?: string;
+  type?: string;
+}
+
+/** Error codes (and types) providers document for input their content-safety filter refused. */
+const CONTENT_BLOCK_CODES: ReadonlySet<string> = new Set([
+  "content_filter", // Azure OpenAI, Moonshot
+  "content_policy_violation",
+  "data_inspection_failed", // Alibaba DashScope
+  "1301", // Zhipu GLM: input or output may contain unsafe or sensitive content
+]);
+/** Provider texts that name a content-safety refusal without a dedicated error code. */
+const CONTENT_BLOCK_MESSAGES: readonly RegExp[] = [
+  /content exists risk/i, // DeepSeek
+  /不安全或敏感内容/, // Zhipu GLM 1301
+];
+
+/** `code`, `type` and `message` of a provider error body, nested under `error` or at the top level. */
+function providerErrorFields(body: unknown): ProviderErrorFields {
+  if (typeof body !== "object" || body === null) return {};
+  const nested = (body as { error?: unknown }).error;
+  const source = typeof nested === "object" && nested !== null ? nested : body;
+  const { message, code, type } = source as Record<string, unknown>;
+  return {
+    message: typeof message === "string" ? message : undefined,
+    code: typeof code === "string" || typeof code === "number" ? String(code) : undefined,
+    type: typeof type === "string" ? type : undefined,
+  };
+}
+
+/**
+ * True only when the provider's own error code or text says its content-safety
+ * filter refused the input. Deliberately narrow: any other client error is a
+ * request problem the caller has to see, not an input to quietly set aside.
+ */
+function isContentBlockedBody(fields: ProviderErrorFields, message: string): boolean {
+  const code = fields.code?.toLowerCase();
+  const type = fields.type?.toLowerCase();
+  if ((code && CONTENT_BLOCK_CODES.has(code)) || (type && CONTENT_BLOCK_CODES.has(type))) return true;
+  // OpenAI flags a prompt with the generic `invalid_prompt` code; only its policy wording makes it a refusal.
+  if (code === "invalid_prompt" && /usage polic|safety/i.test(message)) return true;
+  return CONTENT_BLOCK_MESSAGES.some((pattern) => pattern.test(message));
+}
+
 function createStatusError(
   status: number,
   bodyText: string,
   secrets: readonly string[] = [],
 ): LlmStatusError {
   let message = bodyText.trim();
+  let fields: ProviderErrorFields = {};
   try {
     const parsed = JSON.parse(bodyText) as { error?: { message?: string } };
     message = parsed.error?.message ?? message;
+    fields = providerErrorFields(parsed);
   } catch {
     // Use raw response text.
   }
-  const error = new Error(
-    redactText(message || `LLM request failed with HTTP ${status}`, { secrets }),
-  ) as LlmStatusError;
+  const text = redactText(message || `LLM request failed with HTTP ${status}`, { secrets });
+  // Refusals arrive as HTTP 400; a 401/403/404 names the account or the model, never one input.
+  if (status === 400 && isContentBlockedBody(fields, message)) {
+    return new LlmContentBlockedError(text, status);
+  }
+  const error = new Error(text) as LlmStatusError;
   error.status = status;
   return error;
 }

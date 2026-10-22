@@ -1,4 +1,5 @@
 import {
+  isLlmContentBlockedError,
   isLlmOutputTruncatedError,
   isLlmTransientExhaustedError,
   type LlmClient,
@@ -248,6 +249,16 @@ export async function summarizeDailyPaperWithValidationRetry(
         return {
           kind: "fallback",
           reasonCode: "validation-exhausted",
+          attempts: attempt,
+          originalAbstract: resolveTrustedOriginalAbstract(paper),
+        };
+      }
+      if (isLlmContentBlockedError(error)) {
+        // The provider refuses this paper's text every time; the day's other
+        // papers are unaffected, so set this one aside instead of failing them.
+        return {
+          kind: "fallback",
+          reasonCode: "content-blocked",
           attempts: attempt,
           originalAbstract: resolveTrustedOriginalAbstract(paper),
         };

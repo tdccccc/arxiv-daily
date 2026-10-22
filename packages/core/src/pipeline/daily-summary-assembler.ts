@@ -50,7 +50,9 @@ export interface DailySummaryAssemblyPaper {
 
 export type DailyPaperFallbackReasonCode =
   | "validation-exhausted"
-  | "transport-exhausted";
+  | "transport-exhausted"
+  /** The model provider's content-safety filter refused this paper's text. */
+  | "content-blocked";
 
 export type DailyPaperResult =
   | { kind: "structured"; summary: StructuredPaperSummary }
@@ -130,6 +132,7 @@ export function validateDailySummaryOmissions(
 const FALLBACK_REASON_CODES = new Set<DailyPaperFallbackReasonCode>([
   "validation-exhausted",
   "transport-exhausted",
+  "content-blocked",
 ]);
 const STRUCTURED_FIELDS = [
   "id",
@@ -333,7 +336,14 @@ function groupSlots(
 
 function renderSlot(slot: DailyPaperSlot, language: SummaryLanguage, reportDate: string): string {
   if (slot.result.kind === "fallback") {
-    return renderFallbackBlock(slot.paper, slot.result.originalAbstract, language, [], reportDate);
+    return renderFallbackBlock(
+      slot.paper,
+      slot.result.originalAbstract,
+      language,
+      [],
+      reportDate,
+      slot.result.reasonCode,
+    );
   }
   return [
     ...renderPaperHeader(slot.paper, language, [], reportDate),

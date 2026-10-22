@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it, vi } from "vitest";
-import { LlmOutputTruncatedError, LlmTransientExhaustedError } from "../src/llm/client";
+import { LlmContentBlockedError, LlmOutputTruncatedError, LlmTransientExhaustedError } from "../src/llm/client";
 import {
   classifyJsonParseFailure,
   DAILY_PAPER_SUMMARY_VALIDATION_ERROR_CODE,
@@ -553,6 +553,29 @@ describe("summarizeDailyPaperWithValidationRetry", () => {
       originalAbstract: "Trusted abstract from metadata.",
     });
     expect(llm.call).toHaveBeenCalledTimes(1);
+  });
+
+  it("falls back without repeating a request the provider's content filter refused", async () => {
+    const llm = { call: vi.fn().mockRejectedValue(new LlmContentBlockedError("Content Exists Risk", 400)) };
+
+    await expect(
+      summarizeDailyPaperWithValidationRetry(paper, { llm: llm as any }),
+    ).resolves.toEqual({
+      kind: "fallback",
+      reasonCode: "content-blocked",
+      attempts: 1,
+      originalAbstract: "Trusted abstract from metadata.",
+    });
+    expect(llm.call).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not take a plain 400 for a content refusal", async () => {
+    const error = Object.assign(new Error("messages: text content blocks must be non-empty"), { status: 400 });
+    const llm = { call: vi.fn().mockRejectedValue(error) };
+
+    await expect(
+      summarizeDailyPaperWithValidationRetry(paper, { llm: llm as any }),
+    ).rejects.toBe(error);
   });
 
   it("propagates arbitrary non-LLM errors instead of misclassifying fallback", async () => {

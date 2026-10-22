@@ -2,6 +2,7 @@ import type { PaperSummary } from "../services/paper-index";
 import type { SummaryLanguage } from "../settings/types";
 import { noCategoryPapersText } from "../settings/summary-language";
 import type {
+  DailyPaperFallbackReasonCode,
   DailySummaryAssemblyPaper,
   StructuredPaperSummary,
 } from "./daily-summary-assembler";
@@ -276,12 +277,18 @@ export function renderFallbackBlock(
   language: SummaryLanguage,
   leadingMarkers: string[] = [],
   reportDate?: string,
+  reasonCode?: DailyPaperFallbackReasonCode,
 ): string {
   const lines = renderPaperHeader(paper, language, leadingMarkers, reportDate);
   const arxivUrl = trustedArxivUrl(paper.id);
+  const refused = reasonCode === "content-blocked";
   const warning = language === "en"
-    ? `> **Summary unavailable.** Read the [original paper on arXiv](${arxivUrl}) directly.`
-    : `> **自动摘要不可用。** 请直接阅读 [arXiv 原文](${arxivUrl})。`;
+    ? refused
+      ? `> **Summary unavailable.** The model provider refused to summarize this paper; read the [original paper on arXiv](${arxivUrl}) directly.`
+      : `> **Summary unavailable.** Read the [original paper on arXiv](${arxivUrl}) directly.`
+    : refused
+      ? `> **自动摘要不可用。** 模型服务商拒绝为这篇论文生成摘要，请直接阅读 [arXiv 原文](${arxivUrl})。`
+      : `> **自动摘要不可用。** 请直接阅读 [arXiv 原文](${arxivUrl})。`;
   const abstractLabel = language === "en" ? "Original abstract" : "原始摘要";
   const unavailable = language === "en" ? "Unavailable." : "不可用。";
   const abstract = normalizeMarkdownLine(originalAbstract);

@@ -44,6 +44,13 @@ const transportFallback: DailyPaperResult = {
   originalAbstract: "Abstract.",
 };
 
+const blockedFallback: DailyPaperResult = {
+  kind: "fallback",
+  reasonCode: "content-blocked",
+  attempts: 1,
+  originalAbstract: "Abstract.",
+};
+
 function compatibility(
   overrides: Partial<DailySummaryCheckpointCompatibilityInput> = {},
 ): DailySummaryCheckpointCompatibilityInput {
@@ -375,6 +382,20 @@ describe("DailySummaryCheckpointStore", () => {
       expect(await makeStore(storage).lookupReusable(reportDate, compatibility())).toEqual(result);
     },
   );
+
+  it("reuses a content-blocked fallback: the provider refuses the same text again", async () => {
+    const { files, storage } = makeStorage();
+    await makeStore(storage).upsert(reportDate, compatibility(), blockedFallback);
+
+    expect(JSON.parse(files[documentPath]!)).toMatchObject({
+      entries: { "arxiv:2608.00001": { result: blockedFallback } },
+    });
+    expect(await makeStore(storage).lookupReusable(reportDate, compatibility())).toEqual(blockedFallback);
+    // Another model or changed paper text is a different fingerprint, so it is asked again.
+    expect(await makeStore(storage).lookupReusable(reportDate, compatibility({
+      llm: { ...compatibility().llm, model: "another-model" },
+    }))).toBeNull();
+  });
 
   it.each([
     ["prompt", { promptContractVersion: 99 }],
