@@ -492,11 +492,22 @@ export default class ArxivDailyPlugin extends Plugin {
       this.progress = new NoopProgressReporter();
     }
     this.host.progress = this.progress;
+    let cancelNoticeShown = false;
     this.unsubscribeOperations = this.operations.subscribe((active) => {
       if (this.unloading || !(this.progress instanceof StatusBarController)) return;
       if (active.length > 0 && active.every((operation) => operation.cancellationRequested)) {
         this.progress.setTask("Cancelling active tasks", `${active.length} unwinding`);
+        cancelNoticeShown = true;
+        return;
       }
+      // Cancelled library, PDF and detail-summary tasks end without a word on
+      // the bar (they skip their failure text when cancelled), so once they
+      // have all unwound nothing else would take the notice down. A task
+      // started meanwhile writes its own text over it.
+      if (cancelNoticeShown && active.length === 0) {
+        this.progress.setIdle(latestCompletedDate(this.stateStore));
+      }
+      cancelNoticeShown = false;
     });
     await this.buildMarkdownWriter().cleanupTemporaryFiles().catch((e) =>
       this.logger.warn("markdown temp cleanup failed", e),
@@ -2519,7 +2530,11 @@ export default class ArxivDailyPlugin extends Plugin {
       this.scheduler.start();
     } else {
       this.scheduler.stop();
-      this.progress.setDisabled();
+    }
+    // The bar says "disabled" or "idle" from the toggle, not from whichever
+    // run happened to end last.
+    if (this.progress instanceof StatusBarController) {
+      this.progress.setSchedulerEnabled(enabled);
     }
   }
 

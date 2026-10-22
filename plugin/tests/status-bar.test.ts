@@ -289,13 +289,60 @@ describe("StatusBarController", () => {
     expect(el.textContent).toBe("arXiv: disabled");
   });
 
-  it("setIdle after disabled re-enables and uses idle text", async () => {
+  it("setIdle does not switch a disabled scheduler back on", async () => {
     const store = makeStore();
     await store.load();
     const el = makeEl();
     const ctrl = new StatusBarController(el, store, { initiallyEnabled: false });
+    // A manual run ends in setIdle too; it says nothing about the scheduler toggle.
     ctrl.setIdle("2026-05-11");
-    expect(el.textContent).toBe("arXiv: idle · last 2026-05-11");
+    expect(el.textContent).toBe("arXiv: disabled");
+  });
+
+  it("setIdle without a completed date forgets the one it remembered", async () => {
+    const store = makeStore({
+      "2026-05-10": { status: "completed", lastAttempt: 1, attempts: 1, papersWritten: 3 },
+    });
+    await store.load();
+    const el = makeEl();
+    const ctrl = new StatusBarController(el, store, { initiallyEnabled: true });
+    expect(el.textContent).toBe("arXiv: idle · last 2026-05-10");
+
+    ctrl.setIdle(undefined);
+
+    expect(el.textContent).toBe("arXiv: idle");
+  });
+
+  it("setSchedulerEnabled changes the resting text at once", async () => {
+    const store = makeStore({
+      "2026-05-10": { status: "completed", lastAttempt: 1, attempts: 1, papersWritten: 3 },
+    });
+    await store.load();
+    const el = makeEl();
+    const ctrl = new StatusBarController(el, store, { initiallyEnabled: false });
+    expect(el.textContent).toBe("arXiv: disabled");
+
+    ctrl.setSchedulerEnabled(true);
+    expect(el.textContent).toBe("arXiv: idle · last 2026-05-10");
+
+    ctrl.setSchedulerEnabled(false);
+    expect(el.textContent).toBe("arXiv: disabled");
+  });
+
+  it("setSchedulerEnabled leaves a running task on the bar and applies when it ends", async () => {
+    vi.useFakeTimers();
+    const store = makeStore();
+    await store.load();
+    const el = makeEl();
+    const ctrl = new StatusBarController(el, store, { initiallyEnabled: false });
+
+    ctrl.setTask("Scanning personal library", "Identifying library papers");
+    ctrl.setSchedulerEnabled(true);
+    expect(el.textContent).toBe("arXiv: Scanning personal library · Identifying library papers");
+
+    ctrl.setComplete("Personal library scan complete");
+    vi.advanceTimersByTime(4_000);
+    expect(el.textContent).toBe("arXiv: idle");
   });
 
   it("dispose clears pending timers and removes the floating panel", async () => {
