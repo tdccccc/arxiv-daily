@@ -30,6 +30,16 @@ describe("RunLock", () => {
     expect(lock.isHeld("date")).toBe(false);
   });
 
+  it("tells the holder whether a lock shared with other processes backs it", async () => {
+    const shared = new RunLock(async () => ({ release: async () => {} }));
+    expect(await shared.withLock("date", async hold => hold)).toEqual({ crossProcess: true });
+
+    // A host without file locking resolves to nothing: only this process is excluded.
+    const noop = new RunLock(() => undefined);
+    expect(await noop.withLock("date", async hold => hold)).toEqual({ crossProcess: false });
+    expect(await new RunLock().withLock("date", async hold => hold)).toEqual({ crossProcess: false });
+  });
+
   it("clears local ownership when acquisition or release throws", async () => {
     const acquiring = new RunLock(async () => { throw new Error("acquire failed"); });
     const work = vi.fn(async () => 42);

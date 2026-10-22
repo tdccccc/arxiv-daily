@@ -1,7 +1,7 @@
 # 崩溃留下的一个空 claim 文件，会让之后每一天的自动日报邮件都发不出去，且没有恢复办法
 
 > 发现日期：2026-10-21 · 来源：main `d999037` 深度代码审查 · 编号 MAIL-01
-> 范围：自动邮件投递状态（`delivery-state.json.claims/`，插件与 CLI 共用） · 严重程度：中 · 状态：未修复 · 置信度：已复现
+> 范围：自动邮件投递状态（`delivery-state.json.claims/`，插件与 CLI 共用） · 严重程度：中 · 状态：已修复（分支 `fix/2026-10-21-batch1`，提交 a2e9b83） · 置信度：已复现
 
 ## 问题
 
@@ -47,3 +47,9 @@
 - 0 字节的 result 文件：对应日期保持阻断（不重发），其他日期不受影响。
 - 内容被改坏（非空、非 JSON）的 sidecar：只阻断对应 stem，日志指明文件名。
 - 同一个 `createTextExclusive` 在写入前被中断的集成测试（`afterTargetCreated` 钩子里抛错/终止），之后的 `claimAutomaticDelivery` 能恢复。
+
+## 修复情况
+
+崩溃留下的 0 字节（或写到一半）的 claim / decision / result 文件，不再让所有日期的自动邮件失败：读取 sidecar 时坏内容不再抛错，重建主状态会跳过这样的日期（保留它原有的记录）并在日志里写出文件名，每个日期只读最新的一代。空的或无法解析的 claim（且没有 decision/result）按"从未写完的 claim"处理，下一次发送同一日期时用 decision 文件仲裁（`recovered_before_provider_attempt`）并进入下一代：这样的 claim 不可能发出过邮件，原 owner 之后也发不出。无法判断是否已发的情形一律失败即关闭且只影响该日期：decision 不可读、没有 decision 的 result 不可读、未知 schema 的 claim 返回 `failed / delivery_claim_unreadable`，日志写出完整路径（插件会弹一次通知）；decision 为 `provider_attempt_started` 而 result 不可读仍按已开始发送阻断。与 write-up 的差别：0 字节 decision 没有按"未写完"忽略，因为它可能属于正要调用 provider 的活着的 owner；`createTextExclusive` 本身仍是先建后写，没有改。
+
+测试：`packages/core/tests/delivery/delivery-damaged-sidecars.test.ts`（23 例，22 例在旧代码下失败）、`packages/node-runtime/tests/delivery-crash.test.ts`（在 `createTextExclusive` 里真正 SIGKILL 一个投递进程，覆盖 claim / decision / result 三种文件、原生存储与 Linux 描述符回退两种后端，旧代码下全部失败）。

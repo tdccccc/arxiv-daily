@@ -105,6 +105,7 @@ export type EmailDeliveryReason =
   | "delivery_storage_unsupported"
   | "delivery_claim_contention"
   | "delivery_claim_storage_failed"
+  | "delivery_claim_unreadable"
   | "delivery_state_update_failed"
   | "cancelled_before_provider_attempt"
   | "provider_not_invoked"

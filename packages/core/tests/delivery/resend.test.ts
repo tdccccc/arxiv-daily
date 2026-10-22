@@ -839,6 +839,110 @@ describe("deliverDailyEmailIfEnabled", () => {
     expect(request).toHaveBeenCalledTimes(1);
   });
 
+  describe("a transport failure that proves the request was never sent", () => {
+    const email = {
+      enabled: true,
+      mode: "self" as const,
+      to: "you@example.com",
+      fromEmail: "from@example.com",
+      apiKey: "re_key",
+    };
+    const unsent = (code = "ENOTFOUND") => new HttpTransportError("network", `getaddrinfo ${code}`, {
+      retryableAttempt: true,
+      requestNotSent: true,
+    });
+    const ok = { status: 200, headers: {}, bodyText: JSON.stringify({ id: "msg_after_recovery" }) };
+
+    it("releases the claim after every attempt failed before sending, so a later run sends exactly once", async () => {
+      const storage = memoryStorage();
+      const request = vi.fn()
+        .mockRejectedValueOnce(unsent())
+        .mockRejectedValueOnce(unsent())
+        .mockRejectedValueOnce(unsent("EAI_AGAIN"))
+        .mockResolvedValue(ok);
+      const run = () => deliverDailyEmailIfEnabled(digest, {
+        storage, http: { request }, output, email, maxAttempts: 3, sleep: async () => {},
+      });
+
+      const offline = await run();
+      expect(offline).toEqual({ kind: "failed", reason: "provider_not_invoked", attempts: 0 });
+      expect(request).toHaveBeenCalledTimes(3);
+      expect(shouldSendEmail(await loadDeliveryState(storage, output), digest.date, email.to)).toBe(true);
+
+      expect(await run()).toEqual({ kind: "delivered", attempts: 1 });
+      expect(request).toHaveBeenCalledTimes(4);
+      expect(await run()).toEqual({ kind: "skipped", reason: "already_delivered" });
+      expect(request).toHaveBeenCalledTimes(4);
+    });
+
+    it("keeps the claim blocking when any attempt may have reached the provider", async () => {
+      for (const attempts of [
+        [unsent(), { status: 500, headers: {}, bodyText: "boom" }, { status: 500, headers: {}, bodyText: "boom" }],
+        [{ status: 500, headers: {}, bodyText: "boom" }, unsent(), unsent()],
+        [unsent(), new HttpTransportError("network", "reset", { retryableAttempt: true }), unsent()],
+      ]) {
+        const storage = memoryStorage();
+        const request = vi.fn();
+        for (const attempt of attempts) {
+          if (attempt instanceof Error) request.mockRejectedValueOnce(attempt);
+          else request.mockResolvedValueOnce(attempt);
+        }
+        request.mockResolvedValue(ok);
+        const run = () => deliverDailyEmailIfEnabled(digest, {
+          storage, http: { request }, output, email, maxAttempts: 3, sleep: async () => {},
+        });
+
+        expect(await run()).toMatchObject({ kind: "ambiguous", reason: "provider_outcome_ambiguous" });
+        expect(await run()).toEqual({ kind: "skipped", reason: "provider_outcome_ambiguous" });
+        expect(request).toHaveBeenCalledTimes(3);
+      }
+    });
+
+    it("trusts neither a bare retryable flag nor a timeout", async () => {
+      for (const failure of [
+        new HttpTransportError("network", "older host", { retryableAttempt: true }),
+        new HttpTransportError("timeout", "no answer", { retryableAttempt: false }),
+        new HttpTransportError("timeout", "no answer", { retryableAttempt: true }),
+      ]) {
+        const storage = memoryStorage();
+        const request = vi.fn().mockRejectedValue(failure);
+        const run = () => deliverDailyEmailIfEnabled(digest, {
+          storage, http: { request }, output, email, maxAttempts: 2, sleep: async () => {},
+        });
+
+        expect(await run()).toMatchObject({ kind: "ambiguous" });
+        expect(await run()).toEqual({ kind: "skipped", reason: "provider_outcome_ambiguous" });
+      }
+    });
+
+    it("releases after a single unsent attempt when the host cannot repeat it", async () => {
+      const storage = memoryStorage();
+      const request = vi.fn()
+        .mockRejectedValueOnce(new HttpTransportError("network", "proxy refused", { requestNotSent: true }))
+        .mockResolvedValue(ok);
+      const run = () => deliverDailyEmailIfEnabled(digest, {
+        storage, http: { request }, output, email, maxAttempts: 3, sleep: async () => {},
+      });
+
+      expect(await run()).toMatchObject({ kind: "failed", reason: "provider_not_invoked" });
+      expect(request).toHaveBeenCalledTimes(1);
+      expect(await run()).toEqual({ kind: "delivered", attempts: 1 });
+    });
+
+    it("tells the log that nothing was sent", async () => {
+      const storage = memoryStorage();
+      const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() };
+
+      await deliverDailyEmailIfEnabled(digest, {
+        storage, http: { request: vi.fn().mockRejectedValue(unsent()) }, output, email,
+        maxAttempts: 1, logger, sleep: async () => {},
+      });
+
+      expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining("not sent"));
+      expect(JSON.stringify(logger.warn.mock.calls)).not.toContain(email.to);
+    });
+  });
+
   it("uses one stable PII-free formal key and fresh keys for explicit tests", async () => {
     const storage = memoryStorage();
     const request = vi.fn(async () => ({

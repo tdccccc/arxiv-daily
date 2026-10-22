@@ -1,7 +1,8 @@
-import { isCliRunEvent } from "../src/main-types";
+import { CLI_CANCEL_MESSAGE, isCliRunEvent } from "../src/main-types";
 import { readFileSync } from "node:fs";
 import { describe, expect, it, vi } from "vitest";
-import { runCli, type CliCommandRuntime } from "../src/main";
+import { EventEmitter } from "node:events";
+import { installSignalHandlers, runCli, WorkbenchCancel, type CliCommandRuntime } from "../src/main";
 import { CliConfigError } from "../src/config";
 import * as emailCommands from "../src/email-cmd";
 import { buildNodeHostAdapters } from "@arxiv-daily/node-runtime";
@@ -545,5 +546,116 @@ describe("CLI main", () => {
       expect((await run(["email", "test", "--date", "2026-06-13"])).capture.stderr.join("")).not.toContain("Usage:");
       expect((await run(["email-test", "--date", "2026-06-13"])).capture.stderr.join("")).not.toContain("Usage:");
     });
+  });
+});
+
+function fakeProcess(connected = true) {
+  const emitter = new EventEmitter();
+  const exit = vi.fn();
+  return Object.assign(emitter, { connected, exit }) as EventEmitter & { connected: boolean; exit: typeof exit };
+}
+
+describe("cancelling a run from the workbench", () => {
+  it("cancels the active tasks once from an IPC message, without counting toward the forced exit", () => {
+    const host = fakeProcess();
+    const cancellation = new WorkbenchCancel(host as never);
+    const operations = new OperationRegistry();
+    const operation = operations.begin("daily-run", "Daily run");
+    const capture = captureIo();
+    const remove = installSignalHandlers(operations, capture.io, host as never, cancellation);
+
+    host.emit("message", { type: CLI_CANCEL_MESSAGE });
+    expect(operation.signal.aborted).toBe(true);
+    expect(operation.signal.reason).toBe("cancelled by user");
+    expect(capture.stderr.join("")).toContain("cancel requested by the workbench; cancelling 1 active task and waiting");
+
+    // A terminal Ctrl+C reaches the run as a signal too: that is still its first one.
+    host.emit("SIGINT", "SIGINT");
+    host.emit("message", { type: CLI_CANCEL_MESSAGE });
+    expect(host.exit).not.toHaveBeenCalled();
+
+    // Pressing it again keeps meaning "stop now".
+    host.emit("SIGINT", "SIGINT");
+    expect(host.exit).toHaveBeenCalledWith(130);
+
+    remove();
+    cancellation.stop();
+    expect(host.listenerCount("SIGINT")).toBe(0);
+    expect(host.listenerCount("SIGTERM")).toBe(0);
+    expect(host.listenerCount("message")).toBe(0);
+  });
+
+  it("keeps terminal signals as they were: the first cancels, the second exits", () => {
+    const host = fakeProcess(false);
+    const operations = new OperationRegistry();
+    const operation = operations.begin("daily-run", "Daily run");
+    const capture = captureIo();
+    installSignalHandlers(operations, capture.io, host as never);
+
+    host.emit("SIGTERM", "SIGTERM");
+    expect(operation.signal.reason).toBe("cancelled by SIGTERM");
+    expect(host.exit).not.toHaveBeenCalled();
+    host.emit("SIGTERM", "SIGTERM");
+    expect(host.exit).toHaveBeenCalledWith(143);
+  });
+
+  it("listens only on a process the workbench spawned, and ignores other messages", () => {
+    const standalone = fakeProcess(false);
+    new WorkbenchCancel(standalone as never);
+    expect(standalone.listenerCount("message")).toBe(0);
+
+    const spawned = fakeProcess();
+    const cancellation = new WorkbenchCancel(spawned as never);
+    spawned.emit("message", { type: "arxiv-daily/something-else" });
+    spawned.emit("message", "arxiv-daily/cancel");
+    spawned.emit("message", null);
+    expect(cancellation.requested).toBe(false);
+    spawned.emit("message", { type: CLI_CANCEL_MESSAGE });
+    expect(cancellation.requested).toBe(true);
+  });
+
+  it("does not start a run that was cancelled while its runtime was still being built", async () => {
+    const host = fakeProcess();
+    const cancellation = new WorkbenchCancel(host as never);
+    host.emit("message", { type: CLI_CANCEL_MESSAGE });
+    const capture = captureIo();
+    const runForDateNow = vi.fn(async () => ({ kind: "completed" as const, papersWritten: 1 }));
+
+    const code = await runCli({
+      argv: ["run", "--date", "2026-06-13"], io: capture.io, workbenchCancel: cancellation,
+      loadConfig: async () => testConfig(),
+      buildRuntime: () => ({ ...fakeRuntime(), operations: new OperationRegistry(), scheduler: { runForDateNow } }),
+    });
+
+    expect(code).toBe(130);
+    expect(runForDateNow).not.toHaveBeenCalled();
+    expect(capture.stderr.join("")).toContain("cancelled before the run started");
+  });
+
+  it("cancels a run in progress when the workbench asks, and lets it write the cancellation back", async () => {
+    const host = fakeProcess();
+    const cancellation = new WorkbenchCancel(host as never);
+    const operations = new OperationRegistry();
+    const capture = captureIo();
+    const scheduler = {
+      runForDateNow: vi.fn(async () => {
+        const operation = operations.begin("daily-run", "Daily run");
+        await new Promise<void>(resolve => operation.signal.addEventListener("abort", () => resolve(), { once: true }));
+        operation.finish();
+        return { kind: "cancelled" as const, reason: String(operation.signal.reason) };
+      }),
+    };
+
+    const running = runCli({
+      argv: ["run", "--date", "2026-06-13"], io: capture.io, workbenchCancel: cancellation,
+      loadConfig: async () => testConfig(),
+      buildRuntime: () => ({ ...fakeRuntime(), operations, scheduler }),
+    });
+    await vi.waitFor(() => expect(operations.snapshot()).toHaveLength(1));
+    host.emit("message", { type: CLI_CANCEL_MESSAGE });
+
+    expect(await running).toBe(1);
+    expect(capture.stderr.join("")).toContain("run 2026-06-13: cancelled (cancelled by user)");
+    expect(host.exit).not.toHaveBeenCalled();
   });
 });

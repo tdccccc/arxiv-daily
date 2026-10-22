@@ -115,13 +115,17 @@ function toTransportError(error: unknown, req: HttpRequest): Error {
     return cancelled as Error;
   }
   if (isHttpTransportError(error)) return error;
+  // Only a failure that provably happened before any request bytes were
+  // sent may be repeated blindly; anything else (reset, hang up) might
+  // have reached the server.
   return new HttpTransportError(
     "network",
     `HTTP network failure: ${req.url}`,
-    // Only a failure that provably happened before any request bytes were
-    // sent may be repeated blindly; anything else (reset, hang up) might
-    // have reached the server.
-    { cause: error, retryableAttempt: failedBeforeRequestSent(error) },
+    {
+      cause: error,
+      retryableAttempt: failedBeforeRequestSent(error),
+      requestNotSent: requestProvablyNotSent(error),
+    },
   );
 }
 
@@ -176,17 +180,40 @@ function streamBody(
   return { [Symbol.asyncIterator]: () => iterator };
 }
 
-const PRE_SEND_ERROR_CODES: ReadonlySet<string> = new Set([
-  // Name resolution and connection establishment.
+/** Name resolution and connection establishment: no connection ever existed. */
+const CONNECT_ERROR_CODES: ReadonlySet<string> = new Set([
   "ENOTFOUND", "EAI_AGAIN", "ECONNREFUSED", "EHOSTUNREACH", "ENETUNREACH", "ENETDOWN",
   "UND_ERR_CONNECT_TIMEOUT",
-  // TLS handshake / certificate failures (the request is sent after the handshake).
-  "EPROTO", "CERT_HAS_EXPIRED", "DEPTH_ZERO_SELF_SIGNED_CERT", "SELF_SIGNED_CERT_IN_CHAIN",
+]);
+/** The client rejects the server's certificate before it sends the request. */
+const CERTIFICATE_ERROR_CODES: ReadonlySet<string> = new Set([
+  "CERT_HAS_EXPIRED", "DEPTH_ZERO_SELF_SIGNED_CERT", "SELF_SIGNED_CERT_IN_CHAIN",
   "UNABLE_TO_VERIFY_LEAF_SIGNATURE", "UNABLE_TO_GET_ISSUER_CERT_LOCALLY",
+  "ERR_TLS_CERT_ALTNAME_INVALID",
 ]);
 
 /** True when `error` (or a cause in its chain) is a connect-phase failure: nothing was sent. */
 export function failedBeforeRequestSent(error: unknown): boolean {
+  return errorChainHasCode(error, (code) =>
+    CONNECT_ERROR_CODES.has(code) ||
+    CERTIFICATE_ERROR_CODES.has(code) ||
+    // Other TLS failures are treated as pre-send for blind repetition, but a
+    // protocol alert can also arrive after the request went out.
+    code === "EPROTO" ||
+    /^ERR_(?:TLS|SSL)_/.test(code));
+}
+
+/**
+ * Stricter than failedBeforeRequestSent: the failure can only happen before the
+ * first request byte. Used to decide that a one-shot request such as an email
+ * may be treated as never sent and tried again later.
+ */
+export function requestProvablyNotSent(error: unknown): boolean {
+  return errorChainHasCode(error, (code) =>
+    CONNECT_ERROR_CODES.has(code) || CERTIFICATE_ERROR_CODES.has(code));
+}
+
+function errorChainHasCode(error: unknown, matches: (code: string) => boolean): boolean {
   const seen = new Set<unknown>();
   const pending: unknown[] = [error];
   while (pending.length > 0 && seen.size < 16) {
@@ -194,9 +221,7 @@ export function failedBeforeRequestSent(error: unknown): boolean {
     if (!current || typeof current !== "object" || seen.has(current)) continue;
     seen.add(current);
     const { code, cause, errors } = current as { code?: unknown; cause?: unknown; errors?: unknown };
-    if (typeof code === "string" && (PRE_SEND_ERROR_CODES.has(code) || /^ERR_(?:TLS|SSL)_/.test(code))) {
-      return true;
-    }
+    if (typeof code === "string" && matches(code)) return true;
     pending.push(cause);
     if (Array.isArray(errors)) pending.push(...errors);
   }

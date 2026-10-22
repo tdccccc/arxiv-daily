@@ -1,7 +1,7 @@
 # 在运行工作台的终端按 Ctrl+C，正在生成的日期会卡在"正在运行"，一小时内无法重新生成
 
 > 发现日期：2026-10-21 · 来源：main `d999037` 深度代码审查 · 编号 CLI-01
-> 范围：CLI 阅读工作台（生成任务的取消与退出） · 严重程度：中 · 状态：未修复 · 置信度：已复现
+> 范围：CLI 阅读工作台（生成任务的取消与退出） · 严重程度：中 · 状态：已修复（分支 `fix/2026-10-21-batch1`，提交 e79a7ba） · 置信度：已复现
 > 相关：STATE-01（`2026-10-21-crash-left-running-state-blocks-rerun.md`）是核心侧的"陈旧 running 恢复"策略；本条只处理工作台 Ctrl+C 这个会主动制造残留状态的触发点，两条可以分别修。
 
 ## 问题
@@ -53,3 +53,9 @@ Windows 上 `child.kill("SIGINT")` 没有 POSIX 信号语义，Node 会直接强
 - 子进程在 workbench 同进程组时（模拟终端 Ctrl+C，对进程组发一次 SIGINT），任务结束后 `run-state` 为 `pending` 而不是 `running`。
 - `cancel` 只给子进程发一次取消（POSIX 信号或 Windows IPC）。
 - 取消后，同一天的日历状态不是"正在运行"，`canGenerate` 为 true。
+
+## 修复情况
+
+工作台现在通过子进程已有的 IPC 通道发一条 `arxiv-daily/cancel` 消息来取消生成任务（`runCliChild`），不再给子进程转发第二个 SIGINT。终端 Ctrl+C 已经把 SIGINT 发给整个前台进程组，之前工作台又补发一次，子进程把第二次当成"强制退出"，来不及把取消写回就走了；现在子进程只收到一次信号，优雅取消后日期回到 `pending`。连按两次终端 Ctrl+C 仍是强制退出，Windows 上也不再依赖会直接终止进程的 `kill("SIGINT")`。CLI 入口在第一个 `await` 之前就挂好这条消息的监听（`WorkbenchCancel`），启动阶段收到的取消不会丢，而是在运行开始前就退出 130。没有采用 write-up 的 `detached: true`，因为那样第二次 Ctrl+C 就无法强制结束卡住的子进程。
+
+测试：`apps/cli/tests/workbench-run-child.test.ts`（真实子进程，3 例，旧代码下全部失败，终端同时发信号的用例在旧代码下得到退出码 130）、`cli-main.test.ts` 新增 5 例。用真实构建的 CLI 在隔离网络命名空间里验证：对整个进程组发 SIGINT，修复前日期停在 `running`，修复后是 `pending`；单独给工作台发 SIGINT、点"取消任务"同样得到 `pending`。

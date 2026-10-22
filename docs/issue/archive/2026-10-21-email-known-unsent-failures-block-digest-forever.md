@@ -1,7 +1,7 @@
 # 邮件在“确定没发出去”时（断网、DNS 失败、中继维护中）也被记成“结果不明”，那一天的邮件永远不会再发
 
 > 发现日期：2026-10-21 · 来源：main `d999037` 深度代码审查 · 编号 MAIL-02
-> 范围：自动日报邮件的结果分类（`self` 与 `hosted` 两种模式，CLI / DSH 工作台 / 插件） · 严重程度：中 · 状态：未修复 · 置信度：已复现
+> 范围：自动日报邮件的结果分类（`self` 与 `hosted` 两种模式，CLI / DSH 工作台 / 插件） · 严重程度：中 · 状态：已修复（分支 `fix/2026-10-21-batch1`，提交 4d61b32） · 置信度：已复现
 
 ## 问题
 
@@ -47,3 +47,9 @@
 - `hosted`：`ECONNREFUSED`（`retryableAttempt: true`）→ 可重试；`retryableAttempt: false` 的超时 → 仍是 `ambiguous`。
 - `hosted`：`503 {"error":"delivery cutover is not ready","ambiguous":false}` → 未调用，可重试；`503` 无该响应体、`500`、`502` → 仍是 `ambiguous`（保留现有的 408/418/500 测试）。
 - 插件/CLI 在 `ambiguous`、`failed` 时给出可见提示的测试。
+
+## 修复情况
+
+能证明请求根本没发出的失败（离线、DNS 失败、中继维护中）不再被记成"结果不明"。Node 宿主的 HTTP 客户端只对连接建立和证书校验失败标 `requestNotSent`（EPROTO、重置、超时不算）；self 模式要求每一次尝试都如此，hosted 模式接受传输层的这个证明，或中继返回的 503 且响应体恰为 `{error, ambiguous:false}`（中继只在接触任何 provider 之前这样拒绝）。这时该日期的 claim 被释放，返回 `failed / provider_not_invoked`，之后对同一日期的投递可以重新 claim，仍用同一个 provider 幂等键。其他状态码和响应形状、混合历史（先有一次可能已发出的尝试）、以及无法判断的宿主（Obsidian）保持"结果不明"并阻断。插件对失败或不明的自动邮件按日期弹一次通知，CLI 日志里有对应的 warn 行。尚未处理：hosted 模式每次运行仍只请求一次，没有重试；已经 `completed` 的日期不会自动再次触发投递，需要一次带 digest 的新 completed 运行才会补发（见 PIPE-08）；Obsidian 宿主仍分辨不出。
+
+测试：`resend.test.ts`、`hosted-deliver.test.ts`、`packages/node-runtime/tests/node-adapters.test.ts`（含经 `NodeHttpClient` 和原生 claim 存储的真实拒绝连接 / 中途断开连接用例）、`plugin/tests/email-delivery.test.ts`；其中 8 个 core 用例和 19 个 node-runtime 用例在旧代码下失败，其余保护"仍然不明"的情形。

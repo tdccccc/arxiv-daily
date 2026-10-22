@@ -199,6 +199,33 @@ describe("NodeHttpClient failure phase", () => {
     });
   });
 
+  it.each([
+    "ENOTFOUND", "EAI_AGAIN", "ECONNREFUSED", "EHOSTUNREACH", "ENETUNREACH", "UND_ERR_CONNECT_TIMEOUT",
+    "ERR_TLS_CERT_ALTNAME_INVALID", "UNABLE_TO_VERIFY_LEAF_SIGNATURE", "CERT_HAS_EXPIRED",
+  ])("proves nothing was sent for %s", async (code) => {
+    const client = new NodeHttpClient(async () => { throw withCode(code); });
+    await expect(client.request({ url: "https://example.test" })).rejects.toMatchObject({
+      name: "HttpTransportError", kind: "network", requestNotSent: true,
+    });
+  });
+
+  it.each(["EPROTO", "ERR_SSL_BAD_RECORD_MAC", "ECONNRESET", "UND_ERR_SOCKET", "EPIPE", "ETIMEDOUT"])(
+    "does not claim nothing was sent for %s, which can also happen after the request went out",
+    async (code) => {
+      const client = new NodeHttpClient(async () => { throw withCode(code); });
+      await expect(client.request({ url: "https://example.test" })).rejects.toMatchObject({
+        kind: "network", requestNotSent: false,
+      });
+    },
+  );
+
+  it("never claims nothing was sent for a timeout", async () => {
+    const client = new NodeHttpClient(() => new Promise<Response>(() => {}));
+    await expect(client.request({ url: "https://example.test", timeoutMs: 5 })).rejects.toMatchObject({
+      kind: "timeout", retryableAttempt: false, requestNotSent: false,
+    });
+  });
+
   it.each(["ECONNRESET", "UND_ERR_SOCKET", "EPIPE", "ETIMEDOUT"])(
     "keeps %s ambiguous because the request may have reached the server",
     async (code) => {
@@ -222,7 +249,7 @@ describe("NodeHttpClient failure phase", () => {
     const port = (server.address() as { port: number }).port;
     await new Promise((resolve) => server.close(resolve));
     await expect(new NodeHttpClient().request({ url: `http://127.0.0.1:${port}/` })).rejects.toMatchObject({
-      kind: "network", retryableAttempt: true,
+      kind: "network", retryableAttempt: true, requestNotSent: true,
     });
   });
 
@@ -233,10 +260,50 @@ describe("NodeHttpClient failure phase", () => {
     const port = (server.address() as { port: number }).port;
     try {
       await expect(new NodeHttpClient().request({ url: `http://127.0.0.1:${port}/` })).rejects.toMatchObject({
-        kind: "network", retryableAttempt: false,
+        kind: "network", retryableAttempt: false, requestNotSent: false,
       });
     } finally {
       await new Promise((resolve) => server.close(resolve));
+    }
+  });
+
+  it("lets automatic email be sent again after a real refused connection, but not after a dropped one", async () => {
+    const { createServer } = await import("node:net");
+    const root = await makeTempDir();
+    // The native backend exists on every platform; the fallback only on Linux.
+    const nativeBinding = createRequire(import.meta.url)("../native/build/Release/private_storage.node") as NativeStorageBinding;
+    const digest = sampleDailyDigest({ date: "2026-08-12" });
+    const email = { enabled: true, mode: "hosted" as const, to: "net@example.test", hostedToken: "device_token_hex", fromEmail: "" };
+    const deliver = (baseUrl: string) => deliverDailyEmailIfEnabled(digest, {
+      storage: new NodeStorageAdapter(root, { nativeBinding }), http: new NodeHttpClient(), output: DEFAULT_SETTINGS.output,
+      email: { ...email, hostedBaseUrl: baseUrl }, sleep: async () => {},
+    });
+    const listen = async (handler?: (socket: import("node:net").Socket) => void) => {
+      const server = createServer(handler).listen(0, "127.0.0.1");
+      await new Promise((resolve) => server.once("listening", resolve));
+      return { server, url: `http://127.0.0.1:${(server.address() as { port: number }).port}` };
+    };
+    const closed = await listen();
+    await new Promise((resolve) => closed.server.close(resolve));
+    const dropping = await listen((socket) => socket.destroy());
+    const answering = await listen((socket) => {
+      socket.once("data", () => socket.end('HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 11\r\nConnection: close\r\n\r\n{"ok":true}'));
+    });
+    try {
+      expect(await deliver(closed.url)).toEqual({ kind: "failed", reason: "provider_not_invoked", attempts: 0 });
+      expect(await deliver(answering.url)).toEqual({ kind: "delivered", attempts: 1 });
+      expect(await deliver(answering.url)).toEqual({ kind: "skipped", reason: "already_delivered" });
+
+      const other = sampleDailyDigest({ date: "2026-08-13" });
+      const attempt = (baseUrl: string) => deliverDailyEmailIfEnabled(other, {
+        storage: new NodeStorageAdapter(root, { nativeBinding }), http: new NodeHttpClient(), output: DEFAULT_SETTINGS.output,
+        email: { ...email, hostedBaseUrl: baseUrl }, sleep: async () => {},
+      });
+      expect(await attempt(dropping.url)).toMatchObject({ kind: "ambiguous", attempts: 1 });
+      expect(await attempt(answering.url)).toEqual({ kind: "skipped", reason: "provider_outcome_ambiguous" });
+    } finally {
+      await new Promise((resolve) => dropping.server.close(resolve));
+      await new Promise((resolve) => answering.server.close(resolve));
     }
   });
 });
