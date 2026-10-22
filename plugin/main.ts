@@ -2538,9 +2538,43 @@ export default class ArxivDailyPlugin extends Plugin {
     }
   }
 
+  /**
+   * A data.json that is not valid JSON would fail the whole load and leave no
+   * settings page to repair it in. Keep the unreadable file beside the
+   * original, start on default settings and say so. Any other reason the file
+   * cannot be read (permissions, a busy file) still fails the load, because
+   * defaults would then stand in for settings that may be fine.
+   */
+  private async readPersistedData(): Promise<{ raw: unknown; warning?: string }> {
+    try {
+      return { raw: await this.loadData() };
+    } catch (error) {
+      if (!isJsonSyntaxError(error)) throw error;
+      const adapter = this.app.vault.adapter;
+      const dataPath = `${this.pluginDir()}/data.json`;
+      // No colons: the name has to be valid on Windows too.
+      const keptPath = `${dataPath}.corrupt-${new Date().toISOString().replace(/[:.]/g, "-")}`;
+      try {
+        await adapter.write(keptPath, await adapter.read(dataPath));
+      } catch {
+        // Defaults could later be saved over the only record of the settings.
+        throw error;
+      }
+      new Notice(
+        `arXiv Daily: data.json could not be read, so the plugin started with default settings. The unreadable file was kept as ${keptPath}; restore your settings from it or enter them again.`,
+        20_000,
+      );
+      return {
+        raw: null,
+        warning: `data.json is not valid JSON; started with default settings and kept the file as ${keptPath}`,
+      };
+    }
+  }
+
   private async loadSettingsAndState(): Promise<string[]> {
-    const raw: unknown = await this.loadData();
+    const { raw, warning } = await this.readPersistedData();
     const loaded = settingsAndStateFromPersistedData(raw);
+    if (warning) loaded.warnings.unshift(warning);
     this.legacyRunState = loaded.runState;
     this.settings = loaded.settings;
     const persisted = raw && typeof raw === "object"
@@ -3165,6 +3199,12 @@ export default class ArxivDailyPlugin extends Plugin {
       );
     }
   }
+}
+
+/** JSON.parse failures are SyntaxErrors; compare by name too, the error may come from another window's realm. */
+function isJsonSyntaxError(error: unknown): boolean {
+  return error instanceof SyntaxError
+    || (typeof error === "object" && error !== null && (error as { name?: unknown }).name === "SyntaxError");
 }
 
 function abortedSignal(reason: string): AbortSignal {

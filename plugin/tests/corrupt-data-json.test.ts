@@ -1,0 +1,193 @@
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { Notice } from "obsidian";
+import { DEFAULT_SETTINGS, type StorageAdapter } from "@arxiv-daily/core";
+import * as obsidianHost from "../src/hosts/obsidian";
+import ArxivDailyPlugin from "../main.ts";
+
+const PLUGIN_DIR = ".obsidian/plugins/arxiv-daily";
+const DATA_JSON = `${PLUGIN_DIR}/data.json`;
+const HALF_WRITTEN = '{"settings":{"llm":{"apiKey":"sk-secret","model":"m"},"arxiv":{"cat';
+
+/** A plugin folder as the vault adapter sees it. */
+function pluginFolder(files: Record<string, string>) {
+  const data = new Map(Object.entries(files));
+  const adapter = {
+    read: vi.fn(async (path: string) => {
+      const value = data.get(path);
+      if (value === undefined) throw new Error(`ENOENT: ${path}`);
+      return value;
+    }),
+    write: vi.fn(async (path: string, content: string) => { data.set(path, content); }),
+    exists: vi.fn(async (path: string) => data.has(path)),
+  };
+  return { data, adapter };
+}
+
+function pluginOn(
+  adapter: ReturnType<typeof pluginFolder>["adapter"],
+  loadData: () => Promise<unknown>,
+) {
+  const plugin = new ArxivDailyPlugin();
+  Object.assign(plugin, {
+    app: { vault: { configDir: ".obsidian", adapter } },
+    manifest: { id: "arxiv-daily", dir: PLUGIN_DIR },
+    loadData,
+  });
+  return plugin as ArxivDailyPlugin & { loadSettingsAndState(): Promise<string[]> };
+}
+
+const asideFiles = (data: Map<string, string>) =>
+  [...data.keys()].filter((path) => path.startsWith(`${DATA_JSON}.corrupt-`));
+
+beforeEach(() => {
+  Notice.calls = [];
+});
+
+describe("a data.json that is not valid JSON", () => {
+  it("starts on default settings and keeps the unreadable file beside the original", async () => {
+    const { data, adapter } = pluginFolder({ [DATA_JSON]: HALF_WRITTEN });
+    const plugin = pluginOn(adapter, async () => {
+      throw new SyntaxError("Unexpected end of JSON input");
+    });
+
+    const warnings = await plugin.loadSettingsAndState();
+
+    expect(plugin.settings).toEqual(expect.objectContaining({
+      schedule: DEFAULT_SETTINGS.schedule,
+      output: DEFAULT_SETTINGS.output,
+    }));
+    expect(plugin.settings.llm.apiKey).toBe("");
+    const [aside] = asideFiles(data);
+    expect(asideFiles(data)).toHaveLength(1);
+    expect(data.get(aside!)).toBe(HALF_WRITTEN);
+    expect(data.get(DATA_JSON)).toBe(HALF_WRITTEN);
+    expect(warnings.join("\n")).toContain(aside!.slice(aside!.lastIndexOf("/") + 1));
+  });
+
+  it("tells the user the settings were not loaded and where the file went", async () => {
+    const { data, adapter } = pluginFolder({ [DATA_JSON]: HALF_WRITTEN });
+    const plugin = pluginOn(adapter, async () => {
+      throw new SyntaxError("Unexpected token < in JSON at position 0");
+    });
+
+    await plugin.loadSettingsAndState();
+
+    const [aside] = asideFiles(data);
+    const notices = Notice.calls.map((call) => call.message);
+    expect(notices).toHaveLength(1);
+    expect(notices[0]).toContain("default settings");
+    expect(notices[0]).toContain(aside!);
+    expect(notices[0]).not.toContain("sk-secret");
+  });
+
+  it("names the copy without characters a Windows file name cannot hold", async () => {
+    const { data, adapter } = pluginFolder({ [DATA_JSON]: HALF_WRITTEN });
+    const plugin = pluginOn(adapter, async () => {
+      throw new SyntaxError("Unexpected end of JSON input");
+    });
+
+    await plugin.loadSettingsAndState();
+
+    const [aside] = asideFiles(data);
+    expect(aside!.slice(PLUGIN_DIR.length + 1)).toMatch(/^data\.json\.corrupt-[0-9A-Za-z-]+$/);
+  });
+
+  it("does not guess when the cause is not a parse error", async () => {
+    const { data, adapter } = pluginFolder({ [DATA_JSON]: '{"settings":{}}' });
+    const denied = Object.assign(new Error("EACCES: permission denied"), { code: "EACCES" });
+    const plugin = pluginOn(adapter, async () => { throw denied; });
+
+    await expect(plugin.loadSettingsAndState()).rejects.toBe(denied);
+
+    expect(asideFiles(data)).toEqual([]);
+    expect(Notice.calls).toEqual([]);
+  });
+
+  it("still fails the load rather than risk the only copy when it cannot be kept", async () => {
+    const { data, adapter } = pluginFolder({ [DATA_JSON]: HALF_WRITTEN });
+    adapter.write.mockRejectedValue(new Error("disk full"));
+    const parseError = new SyntaxError("Unexpected end of JSON input");
+    const plugin = pluginOn(adapter, async () => { throw parseError; });
+
+    await expect(plugin.loadSettingsAndState()).rejects.toBe(parseError);
+
+    expect(asideFiles(data)).toEqual([]);
+    expect(data.get(DATA_JSON)).toBe(HALF_WRITTEN);
+  });
+});
+
+describe("a data.json that loads", () => {
+  it("is used as before, with no copy and no notice", async () => {
+    const { data, adapter } = pluginFolder({ [DATA_JSON]: "{}" });
+    const plugin = pluginOn(adapter, async () => ({
+      settings: { llm: { apiKey: "kept", model: "m", baseUrl: "https://example.test/v1" } },
+    }));
+
+    const warnings = await plugin.loadSettingsAndState();
+
+    expect(plugin.settings.llm.apiKey).toBe("kept");
+    expect(warnings).toEqual([]);
+    expect(asideFiles(data)).toEqual([]);
+    expect(Notice.calls).toEqual([]);
+    expect(adapter.write).not.toHaveBeenCalled();
+  });
+
+  it("starts on defaults, quietly, when there is no data.json yet", async () => {
+    const { data, adapter } = pluginFolder({});
+    const plugin = pluginOn(adapter, async () => null);
+
+    await plugin.loadSettingsAndState();
+
+    expect(plugin.settings.llm.apiKey).toBe("");
+    expect(asideFiles(data)).toEqual([]);
+    expect(Notice.calls).toEqual([]);
+  });
+});
+
+function memoryStorage(): StorageAdapter {
+  const data = new Map<string, string>();
+  return {
+    normalizePath: (path) => path.replace(/\\/g, "/"),
+    readText: async (path) => {
+      const value = data.get(path);
+      if (value === undefined) throw new Error(`missing: ${path}`);
+      return value;
+    },
+    writeText: async (path, content) => { data.set(path, content); },
+    exists: async (path) => data.has(path),
+    mkdir: async () => {},
+    remove: async (path) => { data.delete(path); },
+    rename: async (from, to) => { data.set(to, data.get(from)!); data.delete(from); },
+    writeTextAtomic: async () => {},
+    acquireLock: vi.fn(async () => null),
+    list: vi.fn(async () => []),
+  };
+}
+
+describe("loading the plugin with a data.json that is not valid JSON", () => {
+  it("completes onload on default settings instead of failing the whole plugin", async () => {
+    const { data, adapter } = pluginFolder({ [DATA_JSON]: HALF_WRITTEN });
+    const plugin = pluginOn(adapter, async () => {
+      throw new SyntaxError("Unexpected end of JSON input");
+    });
+    const buildHost = vi.spyOn(obsidianHost, "buildObsidianHostAdapters")
+      .mockReturnValue({ storage: memoryStorage(), http: {}, markupParser: {} } as never);
+    Object.assign(plugin, {
+      cleanupCachesIfDue: vi.fn(),
+      saveData: vi.fn(),
+      addStatusBarItem: () => document.createElement("div"),
+      addSettingTab: () => { throw new Error("stop once the settings are loaded"); },
+    });
+    try {
+      // Reaching the settings tab means loading the settings did not fail.
+      await expect(plugin.onload()).rejects.toThrow("stop once the settings are loaded");
+
+      expect(plugin.settings.schedule.enabled).toBe(false);
+      expect(asideFiles(data)).toHaveLength(1);
+      expect(Notice.calls.map((call) => call.message).join("\n")).toContain("default settings");
+    } finally {
+      plugin.onunload();
+      buildHost.mockRestore();
+    }
+  });
+});
