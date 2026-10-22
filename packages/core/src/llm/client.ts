@@ -889,6 +889,9 @@ async function* singleChunk(text: string): AsyncIterable<string> {
   yield text;
 }
 
+/** How an event stream opens: an SSE field (`data:`, `event:`, `id:`, `retry:`) or a comment line. */
+const SSE_OPENING = /^(?:(?:data|event|id|retry)[ \t]*:|:)/;
+
 /**
  * Incrementally parses an SSE byte stream into JSON event payloads. `data:
  * [DONE]` ends it with {@link STREAM_END}; a body that is not an event stream
@@ -896,16 +899,15 @@ async function* singleChunk(text: string): AsyncIterable<string> {
  */
 async function* parseSseStream(chunks: AsyncIterable<string>): AsyncIterable<unknown> {
   let buffer = "";
-  // Kept only until the body shows itself to be an event stream (it starts
-  // with a field name or a comment); a plain JSON reply never does.
+  // Kept only until the body shows itself to be an event stream (it opens with
+  // a field or a comment); a plain JSON or HTML reply never does.
   let plain: string | undefined = "";
   let sawEvent = false;
   for await (const chunk of chunks) {
     buffer += chunk;
     if (plain !== undefined) {
       plain += chunk;
-      const first = plain.trimStart()[0];
-      if (first !== undefined && ":deir".includes(first)) plain = undefined;
+      if (SSE_OPENING.test(plain.trimStart())) plain = undefined;
       else if (plain.length > SSE_MAX_PENDING_EVENT_CHARS) {
         throw new Error("LLM stream event exceeded the size limit");
       }

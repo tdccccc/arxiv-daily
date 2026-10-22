@@ -275,6 +275,53 @@ describe("a server that ignores stream: true", () => {
   });
 });
 
+describe("what counts as an event stream", () => {
+  afterEach(() => vi.useRealTimers());
+
+  it.each([
+    ["error: upstream gateway timeout"],
+    ["internal server error"],
+    ["rate limited, retry later"],
+    ["denied by policy"],
+    ["event stream not supported here"],
+    ["identity check failed"],
+  ])("names a plain-text reply that merely starts like a field name: %s", async (body) => {
+    vi.useFakeTimers();
+    const { llm } = clientFor([body]);
+
+    const error = await outcome(llm.call(messages));
+
+    expect(error).toBeInstanceOf(LlmTransientExhaustedError);
+    expect((error as Error).message).toMatch(/not an event stream/);
+    expect((error as Error).message).toContain(body.slice(0, 20));
+  });
+
+  it("still reads a stream that opens with a comment, an event name or an id", async () => {
+    for (const opening of [": ping\n\n", "event: message\nid: 1\n", "id: 7\n", "retry: 3000\n\n"]) {
+      const { llm } = clientFor([opening + text("answer", "stop")]);
+
+      await expect(llm.call(messages)).resolves.toBe("answer");
+    }
+  });
+
+  it("reads a stream whose first network chunk ends inside the field name", async () => {
+    const wire = text("answer", "stop") + DONE;
+    const request = vi.fn(async (): Promise<HttpResponse> => ok(wire));
+    const requestStream = vi.fn(async (): Promise<HttpStreamResponse> => ({
+      status: 200,
+      headers: {},
+      body: (async function* () { yield wire.slice(0, 2); yield wire.slice(2, 3); yield wire.slice(3); })(),
+    }));
+    const llm = new LlmClient(
+      { ...DEFAULT_SETTINGS.llm, apiKey: "sk-full-secret", model: "test" },
+      new Logger("error"),
+      { request, requestStream } as HttpClient,
+    );
+
+    await expect(llm.call(messages)).resolves.toBe("answer");
+  });
+});
+
 describe("streams that finish normally are unaffected", () => {
   it.each([
     ["stop", text("answer", "stop") + DONE],
