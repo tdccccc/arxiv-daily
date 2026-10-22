@@ -23,6 +23,33 @@ describe("secret redaction", () => {
     expect(safe).toContain("model=x");
   });
 
+  // Local model servers need a non-empty key but ignore its value, so people enter a word.
+  it.each(["local", "none", "test", "ollama", "EMPTY", "dummy", "lm-studio", "not-needed"])(
+    "leaves ordinary text alone when the key is the placeholder %s",
+    (placeholder) => {
+      const text = `A ${placeholder} approach to calibration: ${placeholder.toUpperCase()} methods work on non-${placeholder} data.`;
+      expect(redactText(text, { secrets: [placeholder] })).toBe(text);
+    },
+  );
+
+  it("still redacts a short key where it is assigned", () => {
+    const secrets = ["local"];
+    expect(redactText("api_key=local", { secrets })).toBe("api_key=[REDACTED]");
+    expect(redactText("Authorization: Bearer local", { secrets })).toBe("Authorization: Bearer [REDACTED]");
+    expect(redactText('{"api_key":"local","note":"a local run"}', { secrets }))
+      .toBe('{"api_key":"[REDACTED]","note":"a local run"}');
+  });
+
+  it("redacts a key anywhere once it is long enough to be one", () => {
+    expect(redactText("echoed abcd1234 here", { secrets: ["abcd1234"] })).toBe("echoed [REDACTED] here");
+    expect(redactText("echoed abcd123 here", { secrets: ["abcd123"] })).toBe("echoed abcd123 here");
+  });
+
+  it("skips a placeholder without dropping the real key listed beside it", () => {
+    expect(redactText("local xk29-real-key-77 local", { secrets: ["local", "xk29-real-key-77"] }))
+      .toBe("local [REDACTED] local");
+  });
+
   it("returns a sanitized Error while retaining status", () => {
     const source = Object.assign(new Error(`provider echoed ${secret}`), { status: 401 });
     const safe = redactError(source, { secrets: [secret] }) as Error & { status?: number };

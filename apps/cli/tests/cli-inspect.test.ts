@@ -108,3 +108,16 @@ it("exposes optional library status through the ordinary product CLI", async () 
   expect(result.code).toBe(0);
   expect(JSON.parse(result.stdout).status.kind).toBe("disconnected");
 });
+
+// Local servers need a non-empty key but ignore it, so the key is often an ordinary word.
+it("prints topics and papers as stored when the model key is an ordinary word", async () => {
+  const { config, index } = await setup();
+  config.settings.llm.apiKey = "local";
+  config.settings.arxiv.topics = [{ id: "t", name: "Cosmology", tag: "cosmo", description: "photometric redshift estimation in the local universe", detail: false }];
+  await index.upsertFromDailyPaper({ arxivId: "2605.08082", title: "A local approach to calibration", authors: "An Author", date: "2026-05-11", arxivCategory: "cs.AI", primaryTopic: "cosmo", detail: false });
+  const status = await invoke(config, ["status"]);
+  const papers = await invoke(config, ["papers"]);
+  expect(JSON.parse(status.stdout).topics[0].description).toBe("photometric redshift estimation in the local universe");
+  expect(JSON.parse(papers.stdout).papers[0].title).toBe("A local approach to calibration");
+  expect(status.stdout + papers.stdout).not.toContain("[REDACTED]");
+});

@@ -21,6 +21,9 @@ import { readWorkbenchSettings, saveWorkbenchSettings } from "./settings";
 import { WorkbenchSchedule } from "./schedule";
 import { readPreferences, savePreferences } from "./preferences";
 
+/** Response fields that hold error text, persisted run errors (the calendar's message) or run output. */
+const DIAGNOSTIC_FIELDS = new Set(["error", "message", "output"]);
+
 export interface WorkbenchAsset { type: string; body: string; encoding?: "base64" }
 export interface WorkbenchOptions {
   config?: CliRuntimeConfig;
@@ -60,7 +63,8 @@ export async function startWorkbench(options: WorkbenchOptions) {
   let papers = config && documents ? new WorkbenchPapers(config, documents) : undefined;
   const prefix = `/${randomBytes(24).toString("hex")}/`;
   const secrets: string[] = [];
-  const rememberSecrets = (value: CliRuntimeConfig) => { secrets.push(...[value.settings.llm.apiKey, value.settings.embedding.apiKey, value.settings.email.apiKey, value.settings.email.hostedToken].filter((key): key is string => Boolean(key))); };
+  // Rotated keys stay registered: output captured under the old key may still hold it.
+  const rememberSecrets = (value: CliRuntimeConfig) => { for (const key of [value.settings.llm.apiKey, value.settings.embedding.apiKey, value.settings.email.apiKey, value.settings.email.hostedToken]) if (key && !secrets.includes(key)) secrets.push(key); };
   if (config) rememberSecrets(config);
   let libraryPreview: { runId: string; preview: LibraryDirectionPreview | null } | null = null;
   let saving = false;
@@ -69,9 +73,12 @@ export async function startWorkbench(options: WorkbenchOptions) {
   let run: WorkbenchRun | null = null;
   let controller: AbortController | null = null;
   let running: Promise<void> | null = null;
+  // A key can only turn up in text about a failure or a run. Documents, papers and settings are the user's
+  // own content and are served as stored: rewriting them also rewrites what the settings form saves back.
+  const scrub = (key: string, value: unknown) => typeof value === "string" && DIAGNOSTIC_FIELDS.has(key) ? redact(value) : value;
   const json = (res: ServerResponse, code: number, value: unknown) => {
     res.writeHead(code, { "Content-Type": "application/json; charset=utf-8" });
-    res.end(redact(JSON.stringify(value)));
+    res.end(JSON.stringify(value, scrub));
   };
 
   const autoSchedule = new WorkbenchSchedule(() => saving || run?.status === "running" || !options.run, () => {

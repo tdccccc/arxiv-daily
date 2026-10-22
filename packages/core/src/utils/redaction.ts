@@ -4,6 +4,12 @@ const BEARER_RE = /\bBearer\s+[^\s,;]+/gi;
 const KEY_VALUE_RE = /\b(api[-_]?key|access[-_]?token|token|secret|password)(\s*[=:]\s*)([^\s,;&]+)/gi;
 const JSON_SECRET_RE = /(["'](?:api[-_]?key|access[-_]?token|token|secret|password)["']\s*:\s*["'])([^"']*)(["'])/gi;
 const COMMON_API_KEY_RE = /\b(?:sk|rk|pk|api)[-_][A-Za-z0-9_-]{8,}\b/g;
+// A local model server needs a non-empty key but ignores its value, so people enter a word such as
+// `local`, `none` or `ollama`. Replacing such a value wherever it occurs rewrites ordinary text, so a
+// value is only replaced everywhere once it is long enough to be a key and is not a documented
+// stand-in. A shorter one is still redacted where it is assigned (`api_key=…`, `Bearer …`).
+const MIN_SECRET_LENGTH = 8;
+const PLACEHOLDER_SECRETS = new Set(["lm-studio", "not-needed"]);
 
 export interface RedactionOptions {
   secrets?: readonly string[];
@@ -59,8 +65,12 @@ export function sanitizeValue(value: unknown, options: RedactionOptions = {}): u
 }
 
 function normalizedSecrets(secrets: readonly string[] | undefined): string[] {
-  return [...new Set((secrets ?? []).map((value) => value.trim()).filter((value) => value.length >= 4))]
+  return [...new Set((secrets ?? []).map((value) => value.trim()).filter(isKeyLike))]
     .sort((a, b) => b.length - a.length);
+}
+
+function isKeyLike(value: string): boolean {
+  return value.length >= MIN_SECRET_LENGTH && !PLACEHOLDER_SECRETS.has(value.toLowerCase());
 }
 
 function stringify(value: unknown): string {
