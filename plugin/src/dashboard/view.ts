@@ -292,6 +292,8 @@ class ArxivDailyDashboardView extends ItemView {
   private lastSyncedHistoryPaths: Set<string> | null = null;
   private calendarRefreshSeq = 0;
   private isOpen = false;
+  private statusLineEl: HTMLElement | null = null;
+  private unsubscribeOperations: (() => void) | null = null;
 
   constructor(
     leaf: WorkspaceLeaf,
@@ -314,11 +316,14 @@ class ArxivDailyDashboardView extends ItemView {
 
   async onOpen(): Promise<void> {
     this.isOpen = true;
+    this.watchOperations();
     await this.reloadIndex();
   }
 
   async onClose(): Promise<void> {
     this.isOpen = false;
+    this.unsubscribeOperations?.();
+    this.unsubscribeOperations = null;
     this.clearSearchDebounce();
     this.librarySearchToken += 1;
     this.cancelLibrarySearch();
@@ -328,6 +333,37 @@ class ArxivDailyDashboardView extends ItemView {
   async refreshFromVault(): Promise<void> {
     this.lastSyncedHistoryPaths = null;
     await this.reloadIndex();
+  }
+
+  /**
+   * The scheduler starts runs on its own (the catch-up at load, every timer
+   * tick) without going through this view, so the operation registry is the
+   * only sign that one began or ended. The status line follows every change;
+   * the page is read again when a daily run ended and left the run state
+   * different, which skips the batches that found nothing to do (a weekend,
+   * a day that is already done).
+   */
+  private watchOperations(): void {
+    this.unsubscribeOperations?.();
+    let runStateBefore: string | null = null;
+    this.unsubscribeOperations = this.plugin.operations.subscribe((active) => {
+      if (!this.isOpen) return;
+      const running = active.some((operation) => operation.kind === "daily-run");
+      if (running && runStateBefore === null) runStateBefore = this.runStateSignature();
+      if (!running && runStateBefore !== null) {
+        const changed = runStateBefore !== this.runStateSignature();
+        runStateBefore = null;
+        if (changed) {
+          this.runDetached(this.refreshFromVault(), "refresh after the daily run");
+          return;
+        }
+      }
+      this.refreshStatusLine();
+    });
+  }
+
+  private runStateSignature(): string {
+    return JSON.stringify(this.plugin.stateStore.snapshot());
   }
 
   private async reloadIndex(): Promise<void> {
@@ -769,15 +805,23 @@ class ArxivDailyDashboardView extends ItemView {
       cls: "arxiv-daily-dashboard__header-main",
     });
     titleGroup.createEl("h2", { text: "Reading dashboard" });
-    titleGroup.createDiv({
+    this.statusLineEl = titleGroup.createDiv({
       cls: "arxiv-daily-dashboard__status-line",
-      text: dashboardHeaderStatusText({
-        isRunning: this.plugin.operations.snapshot().length > 0,
-        lastCompletedDate: latestCompletedRunDate(
-          this.plugin.stateStore.snapshot(),
-        ),
-      }),
+      text: this.headerStatusText(),
     });
+  }
+
+  private headerStatusText(): string {
+    return dashboardHeaderStatusText({
+      isRunning: this.plugin.operations.snapshot().length > 0,
+      lastCompletedDate: latestCompletedRunDate(
+        this.plugin.stateStore.snapshot(),
+      ),
+    });
+  }
+
+  private refreshStatusLine(): void {
+    if (this.statusLineEl) this.statusLineEl.textContent = this.headerStatusText();
   }
 
   private renderErrorToolbar(contentEl: HTMLElement): void {
