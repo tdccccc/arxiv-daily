@@ -2552,10 +2552,15 @@ export default class ArxivDailyPlugin extends Plugin {
       if (!isJsonSyntaxError(error)) throw error;
       const adapter = this.app.vault.adapter;
       const dataPath = `${this.pluginDir()}/data.json`;
-      // No colons: the name has to be valid on Windows too.
-      const keptPath = `${dataPath}.corrupt-${new Date().toISOString().replace(/[:.]/g, "-")}`;
+      // Named after when the broken file was written, so starting again
+      // without fixing it finds its copy instead of adding another. No colons:
+      // the name has to be valid on Windows too.
+      const writtenAt = (await adapter.stat(dataPath).catch(() => null))?.mtime ?? Date.now();
+      const keptPath = `${dataPath}.corrupt-${new Date(writtenAt).toISOString().replace(/[:.]/g, "-")}`;
       try {
-        await adapter.write(keptPath, await adapter.read(dataPath));
+        if (!await adapter.exists(keptPath)) {
+          await adapter.write(keptPath, await adapter.read(dataPath));
+        }
       } catch {
         // Defaults could later be saved over the only record of the settings.
         throw error;

@@ -8,10 +8,17 @@ const PLUGIN_DIR = ".obsidian/plugins/arxiv-daily";
 const DATA_JSON = `${PLUGIN_DIR}/data.json`;
 const HALF_WRITTEN = '{"settings":{"llm":{"apiKey":"sk-secret","model":"m"},"arxiv":{"cat';
 
+/** The modified time the folder reports for data.json, so a copy's name can be predicted. */
+const WRITTEN_AT = Date.UTC(2026, 9, 21, 8, 30, 15, 250);
+const COPY_NAME = `${DATA_JSON}.corrupt-2026-10-21T08-30-15-250Z`;
+
 /** A plugin folder as the vault adapter sees it. */
 function pluginFolder(files: Record<string, string>) {
   const data = new Map(Object.entries(files));
   const adapter = {
+    stat: vi.fn(async (path: string) => (
+      data.has(path) ? { type: "file", ctime: WRITTEN_AT, mtime: WRITTEN_AT, size: data.get(path)!.length } : null
+    )),
     read: vi.fn(async (path: string) => {
       const value = data.get(path);
       if (value === undefined) throw new Error(`ENOENT: ${path}`);
@@ -57,11 +64,43 @@ describe("a data.json that is not valid JSON", () => {
       output: DEFAULT_SETTINGS.output,
     }));
     expect(plugin.settings.llm.apiKey).toBe("");
-    const [aside] = asideFiles(data);
-    expect(asideFiles(data)).toHaveLength(1);
-    expect(data.get(aside!)).toBe(HALF_WRITTEN);
+    expect(asideFiles(data)).toEqual([COPY_NAME]);
+    expect(data.get(COPY_NAME)).toBe(HALF_WRITTEN);
     expect(data.get(DATA_JSON)).toBe(HALF_WRITTEN);
-    expect(warnings.join("\n")).toContain(aside!.slice(aside!.lastIndexOf("/") + 1));
+    expect(warnings.join("\n")).toContain("data.json.corrupt-2026-10-21T08-30-15-250Z");
+  });
+
+  it("finds its copy again when started again without the file being fixed", async () => {
+    const { data, adapter } = pluginFolder({ [DATA_JSON]: HALF_WRITTEN });
+    const load = () => pluginOn(adapter, async () => {
+      throw new SyntaxError("Unexpected end of JSON input");
+    }).loadSettingsAndState();
+
+    await load();
+    adapter.write.mockClear();
+    await load();
+
+    expect(asideFiles(data)).toEqual([COPY_NAME]);
+    expect(adapter.write).not.toHaveBeenCalled();
+    // Still running on defaults, so the user is told again.
+    expect(Notice.calls).toHaveLength(2);
+  });
+
+  it("keeps a separate copy when the broken file has changed since", async () => {
+    const { data, adapter } = pluginFolder({ [DATA_JSON]: HALF_WRITTEN });
+    const load = () => pluginOn(adapter, async () => {
+      throw new SyntaxError("Unexpected end of JSON input");
+    }).loadSettingsAndState();
+
+    await load();
+    const changed = `${HALF_WRITTEN}"x`;
+    data.set(DATA_JSON, changed);
+    adapter.stat.mockResolvedValue({ type: "file", ctime: WRITTEN_AT, mtime: WRITTEN_AT + 60_000, size: changed.length });
+    await load();
+
+    expect(asideFiles(data)).toHaveLength(2);
+    expect(data.get(COPY_NAME)).toBe(HALF_WRITTEN);
+    expect(data.get(`${DATA_JSON}.corrupt-2026-10-21T08-31-15-250Z`)).toBe(changed);
   });
 
   it("tells the user the settings were not loaded and where the file went", async () => {
@@ -72,11 +111,10 @@ describe("a data.json that is not valid JSON", () => {
 
     await plugin.loadSettingsAndState();
 
-    const [aside] = asideFiles(data);
     const notices = Notice.calls.map((call) => call.message);
     expect(notices).toHaveLength(1);
     expect(notices[0]).toContain("default settings");
-    expect(notices[0]).toContain(aside!);
+    expect(notices[0]).toContain(COPY_NAME);
     expect(notices[0]).not.toContain("sk-secret");
   });
 
@@ -90,6 +128,20 @@ describe("a data.json that is not valid JSON", () => {
 
     const [aside] = asideFiles(data);
     expect(aside!.slice(PLUGIN_DIR.length + 1)).toMatch(/^data\.json\.corrupt-[0-9A-Za-z-]+$/);
+  });
+
+  it("still keeps a copy, named by the clock, when the file's time cannot be read", async () => {
+    const { data, adapter } = pluginFolder({ [DATA_JSON]: HALF_WRITTEN });
+    adapter.stat.mockRejectedValue(new Error("stat failed"));
+    const plugin = pluginOn(adapter, async () => {
+      throw new SyntaxError("Unexpected end of JSON input");
+    });
+
+    await plugin.loadSettingsAndState();
+
+    const [aside] = asideFiles(data);
+    expect(asideFiles(data)).toHaveLength(1);
+    expect(data.get(aside!)).toBe(HALF_WRITTEN);
   });
 
   it("does not guess when the cause is not a parse error", async () => {
