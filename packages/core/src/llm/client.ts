@@ -162,6 +162,10 @@ interface StreamResult {
   usage?: TokenUsage;
   /** True when the provider reported that it stopped at the token limit. */
   truncated?: boolean;
+  /** The last `finish_reason` the provider reported, as sent. */
+  finishReason?: string;
+  /** True when the provider sent its explicit end of stream (`data: [DONE]`, Anthropic `message_stop`). */
+  ended?: boolean;
 }
 
 interface LlmStatusError extends Error {
@@ -378,7 +382,7 @@ export class LlmClient {
               );
               finalUsage = result.usage;
               throwIfCancelled(opts.signal);
-              if (result.truncated) throw new LlmOutputTruncatedError();
+              this.assertCompleted(result);
               return result.content;
             } catch (error) {
               if (isCancellationError(error) || isDeterministicOutputFailure(error)) throw error;
@@ -391,7 +395,7 @@ export class LlmClient {
                   fallback, abort.controller, opts.signal, limits.maxOutputCodeUnits,
                 );
                 finalUsage = result.usage;
-                if (result.truncated) throw new LlmOutputTruncatedError();
+                this.assertCompleted(result);
                 return result.content;
               } catch (fallbackError) {
                 if (isCancellationError(fallbackError)
@@ -573,6 +577,82 @@ export class LlmClient {
     }
     return safe;
   }
+
+  /**
+   * A reply is an answer only when the provider says it finished. Text from a
+   * stream that was cut off, filtered or ended without a completion signal is
+   * a fragment, and callers persist what `call()` returns.
+   */
+  private assertCompleted(result: StreamResult): void {
+    const reason = result.finishReason;
+    if (result.truncated) throw new LlmOutputTruncatedError();
+    if (reason !== undefined) {
+      switch (classifyFinishReason(reason)) {
+        case "complete":
+          return;
+        case "truncated":
+          throw new LlmOutputTruncatedError();
+        case "blocked":
+          throw new LlmContentBlockedError(
+            `LLM reply was stopped by the provider's content filter (finish_reason: ${reason})`,
+          );
+        case "interrupted":
+          throw streamInterrupted(`the provider stopped the reply (finish_reason: ${reason})`);
+        case "unknown":
+          // Providers invent finish reasons; an explicit end of stream still
+          // says the reply is whole, so only that case is let through.
+          if (!result.ended) {
+            throw streamInterrupted(`the provider ended the reply with finish_reason: ${reason}`);
+          }
+          this.logger.warn(
+            `LLM finish_reason "${reason}" is not recognised; accepting the reply because the stream ended normally`,
+          );
+          return;
+      }
+    }
+    if (!result.ended) {
+      throw streamInterrupted("the stream ended before the provider reported completion");
+    }
+  }
+}
+
+/**
+ * The reply stopped without being finished. Same standing as a connection reset
+ * mid-reply: the client re-sends it once, never more (the first try was billed).
+ */
+function streamInterrupted(detail: string): HttpTransportError {
+  return new HttpTransportError("network", `LLM reply was cut off: ${detail}`, {
+    retryableAttempt: false,
+  });
+}
+
+type FinishReasonKind = "complete" | "truncated" | "blocked" | "interrupted" | "unknown";
+
+const COMPLETE_FINISH_REASONS: ReadonlySet<string> = new Set([
+  "stop", "end_turn", "stop_sequence", "eos", "eos_token", "end", "normal", "complete", "completed",
+  "finished", "done", "tool_calls", "tool_call", "tool_use", "function_call",
+]);
+const TRUNCATED_FINISH_REASONS: ReadonlySet<string> = new Set([
+  "length", "max_tokens", "model_length", "model_context_window_exceeded",
+]);
+/** The provider's safety layer ended the reply (Zhipu `sensitive`, Azure `content_filter`, Anthropic `refusal`, ...). */
+const BLOCKED_FINISH_REASONS: ReadonlySet<string> = new Set([
+  "content_filter", "content_filtered", "sensitive", "refusal", "safety", "blocklist",
+  "prohibited_content", "spii", "recitation", "guardrail_intervened",
+]);
+/** The provider gave up on the reply (DeepSeek `insufficient_system_resource`, Zhipu `network_error`, gateway `error`, ...). */
+const INTERRUPTED_FINISH_REASONS: ReadonlySet<string> = new Set([
+  "error", "network_error", "insufficient_system_resource", "abort", "aborted", "cancelled",
+  "canceled", "timeout", "interrupted", "incomplete", "failed", "failure", "unavailable", "overloaded",
+]);
+
+function classifyFinishReason(reason: string): FinishReasonKind {
+  const value = reason.trim().toLowerCase().replace(/[\s-]+/g, "_");
+  if (COMPLETE_FINISH_REASONS.has(value)) return "complete";
+  if (TRUNCATED_FINISH_REASONS.has(value)) return "truncated";
+  if (BLOCKED_FINISH_REASONS.has(value)) return "blocked";
+  if (INTERRUPTED_FINISH_REASONS.has(value)) return "interrupted";
+  return "unknown";
 }
 
 /** Failures a repeat of the same request would reproduce; never retried or re-typed. */
@@ -725,9 +805,52 @@ function createStatusError(
   return error;
 }
 
+/**
+ * The failure behind an `error` event a provider or gateway sent inside a 200
+ * response stream, where there is no HTTP status to go by. A content-safety
+ * block is typed like an HTTP refusal; a numeric code in the HTTP range is the
+ * provider's own verdict; anything else is a server-side failure worth a retry.
+ */
+function createStreamEventError(error: unknown): Error {
+  const fields = providerErrorFields({ error: typeof error === "string" ? { message: error } : error });
+  const message = fields.message?.trim() || "the provider reported an error in the response stream";
+  const text = redactText(message);
+  if (isContentBlockedBody(fields, message)) return new LlmContentBlockedError(text);
+  const code = Number(fields.code);
+  const status = Number.isInteger(code) && code >= 400 && code < 600
+    ? code
+    : fields.type === "invalid_request_error" ? 400 : 500;
+  return Object.assign(new Error(text), { status });
+}
+
+/** The `error` of a stream chunk, when the chunk reports a failure instead of content. */
+function streamErrorEvent(chunk: unknown): unknown {
+  if (typeof chunk !== "object" || chunk === null) return undefined;
+  const error = (chunk as { error?: unknown }).error;
+  if (typeof error === "string") return error.trim() ? error : undefined;
+  return typeof error === "object" && error !== null && Object.keys(error).length > 0
+    ? error
+    : undefined;
+}
+
+/** In-band marker the parsers emit when the provider itself says the reply is over. */
+const STREAM_END = Symbol("llm-stream-end");
+
+/** Anthropic `stop_reason` in the `finish_reason` vocabulary the collector reads. */
+function anthropicFinishReason(stopReason: string): string {
+  if (stopReason === "max_tokens" || stopReason === "model_context_window_exceeded") return "length";
+  if (stopReason === "refusal") return "content_filter";
+  if (stopReason === "end_turn" || stopReason === "stop_sequence") return "stop";
+  return stopReason;
+}
+
 async function* parseAnthropicEvents(events: AsyncIterable<unknown>): AsyncIterable<unknown> {
   let usage: Record<string, number> = {};
   for await (const value of events) {
+    if (value === STREAM_END) {
+      yield STREAM_END;
+      return;
+    }
     const event = value as {
       type?: string;
       message?: { usage?: Record<string, number> };
@@ -736,10 +859,7 @@ async function* parseAnthropicEvents(events: AsyncIterable<unknown>): AsyncItera
       content_block?: { type?: string; text?: string };
       error?: { type?: string; message?: string };
     };
-    if (event.type === "error") {
-      const status = event.error?.type === "invalid_request_error" ? 400 : 500;
-      throw createStatusError(status, JSON.stringify({ error: event.error }), []);
-    }
+    if (event.type === "error") throw createStreamEventError(event.error);
     if (event.type === "content_block_start" && event.content_block?.type === "text") {
       yield { choices: [{ delta: { content: event.content_block.text ?? "" } }] };
     }
@@ -756,9 +876,12 @@ async function* parseAnthropicEvents(events: AsyncIterable<unknown>): AsyncItera
     }
     const stopReason = event.delta?.stop_reason;
     if (event.type === "message_delta" && typeof stopReason === "string") {
-      yield { choices: [{ delta: {}, finish_reason: stopReason === "max_tokens" || stopReason === "model_context_window_exceeded" ? "length" : "stop" }] };
+      yield { choices: [{ delta: {}, finish_reason: anthropicFinishReason(stopReason) }] };
     }
-    if (event.type === "message_stop") return;
+    if (event.type === "message_stop") {
+      yield STREAM_END;
+      return;
+    }
   }
 }
 
@@ -766,18 +889,40 @@ async function* singleChunk(text: string): AsyncIterable<string> {
   yield text;
 }
 
-/** Incrementally parses an SSE byte stream into JSON event payloads. */
+/**
+ * Incrementally parses an SSE byte stream into JSON event payloads. `data:
+ * [DONE]` ends it with {@link STREAM_END}; a body that is not an event stream
+ * at all is read as the plain reply of a server that ignored `stream: true`.
+ */
 async function* parseSseStream(chunks: AsyncIterable<string>): AsyncIterable<unknown> {
   let buffer = "";
+  // Kept only until the body shows itself to be an event stream (it starts
+  // with a field name or a comment); a plain JSON reply never does.
+  let plain: string | undefined = "";
+  let sawEvent = false;
   for await (const chunk of chunks) {
     buffer += chunk;
+    if (plain !== undefined) {
+      plain += chunk;
+      const first = plain.trimStart()[0];
+      if (first !== undefined && ":deir".includes(first)) plain = undefined;
+      else if (plain.length > SSE_MAX_PENDING_EVENT_CHARS) {
+        throw new Error("LLM stream event exceeded the size limit");
+      }
+    }
     const separator = /\r?\n\r?\n/g;
     let start = 0;
     for (let match = separator.exec(buffer); match; match = separator.exec(buffer)) {
       const parsed = parseSseEvent(buffer.slice(start, match.index));
       start = match.index + match[0].length;
-      if (parsed.done) return;
-      if (parsed.value !== undefined) yield parsed.value;
+      if (parsed.done) {
+        yield STREAM_END;
+        return;
+      }
+      if (parsed.value !== undefined) {
+        sawEvent = true;
+        yield parsed.value;
+      }
     }
     buffer = buffer.slice(start);
     if (buffer.length > SSE_MAX_PENDING_EVENT_CHARS) {
@@ -785,7 +930,58 @@ async function* parseSseStream(chunks: AsyncIterable<string>): AsyncIterable<unk
     }
   }
   const parsed = parseSseEvent(buffer);
-  if (!parsed.done && parsed.value !== undefined) yield parsed.value;
+  if (parsed.done) {
+    yield STREAM_END;
+  } else if (parsed.value !== undefined) {
+    yield parsed.value;
+  } else if (!sawEvent && plain?.trim()) {
+    yield* plainBodyEvents(plain.trim());
+  }
+}
+
+/**
+ * Events equivalent to a non-streamed reply, for a server that ignored
+ * `stream: true` and answered with one chat-completion JSON object (or an
+ * error object). Anything else is reported rather than read as an empty reply.
+ */
+function* plainBodyEvents(body: string): Iterable<unknown> {
+  let value: unknown;
+  try {
+    value = JSON.parse(body);
+  } catch {
+    throw notAnEventStream(body);
+  }
+  const reply = (typeof value === "object" && value !== null ? value : {}) as {
+    error?: unknown;
+    choices?: unknown;
+    usage?: unknown;
+  };
+  if (streamErrorEvent(reply) !== undefined) {
+    yield reply;
+    return;
+  }
+  const choice = (Array.isArray(reply.choices) ? reply.choices[0] : undefined) as
+    | { message?: { content?: unknown }; finish_reason?: unknown }
+    | undefined;
+  if (typeof choice !== "object" || choice === null) throw notAnEventStream(body);
+  const content = choice.message?.content;
+  yield {
+    choices: [{
+      delta: typeof content === "string" ? { content } : {},
+      finish_reason: choice.finish_reason,
+    }],
+    usage: reply.usage,
+  };
+  yield STREAM_END;
+}
+
+function notAnEventStream(body: string): HttpTransportError {
+  const snippet = redactText(body.replace(/\s+/g, " ").trim().slice(0, 200));
+  return new HttpTransportError(
+    "network",
+    `LLM server answered with something that is not an event stream or a chat completion: ${snippet}`,
+    { retryableAttempt: false },
+  );
 }
 
 function parseSseEvent(event: string): { done: boolean; value?: unknown } {
@@ -836,12 +1032,20 @@ async function collectParsedStream(
   let outputCodeUnits = 0;
   let usage: TokenUsage | undefined;
   let truncated = false;
+  let finishReason: string | undefined;
+  let ended = false;
   const iterator = stream[Symbol.asyncIterator]();
   while (true) {
     throwIfCancelled(signal);
     const next = await nextStreamChunk(iterator, controller, idleTimeoutMs, signal);
     if (next.done) break;
     throwIfCancelled(signal);
+    if (next.value === STREAM_END) {
+      ended = true;
+      continue;
+    }
+    const failure = streamErrorEvent(next.value);
+    if (failure !== undefined) throw createStreamEventError(failure);
     const delta = streamDeltaContent(next.value);
     if (delta) {
       outputCodeUnits += delta.length;
@@ -851,12 +1055,19 @@ async function collectParsedStream(
       }
       chunks.push(delta);
     }
-    const finishReason = streamFinishReason(next.value);
-    if (finishReason === "length" || finishReason === "max_tokens") truncated = true;
+    const reason = streamFinishReason(next.value);
+    if (reason) finishReason = reason;
+    if (reason === "length" || reason === "max_tokens") truncated = true;
     usage = parseTokenUsage(next.value) ?? usage;
   }
   throwIfCancelled(signal);
-  return { content: chunks.join(""), usage, ...(truncated ? { truncated } : {}) };
+  return {
+    content: chunks.join(""),
+    usage,
+    ...(truncated ? { truncated } : {}),
+    ...(finishReason ? { finishReason } : {}),
+    ...(ended ? { ended } : {}),
+  };
 }
 
 /**
