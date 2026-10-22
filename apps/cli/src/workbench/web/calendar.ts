@@ -1,5 +1,6 @@
 import { t } from "./i18n";
 import { h, fragment } from "./dom";
+import { announcementOffer } from "./run-status";
 import type { WorkbenchCalendar, WorkbenchCalendarDay } from "../calendar";
 
 export const calendarStateLabels: Record<WorkbenchCalendarDay["state"], string> = {
@@ -101,6 +102,7 @@ export function mountCalendar(host: HTMLElement, options: CalendarOptions) {
             selected.canGenerate
               ? h("button", { class: "quiet-button", "data-action": "generate-date", "data-date": selected.date }, t(selected.actionLabel || "生成日报"), " ", h("span", { "aria-hidden": "true" }, "↗"))
               : null,
+            selected.latestAnnounced ? announcementOffer(selected.date, selected.latestAnnounced) : null,
           )
         : h("span", { class: "calendar-hint" }, t("选择日期查看日报或运行状态")),
     );

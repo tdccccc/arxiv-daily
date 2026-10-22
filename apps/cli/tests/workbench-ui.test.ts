@@ -191,14 +191,14 @@ it.each([
     if (url.pathname.endsWith("api/runs") && init?.method === "POST") { started = true; return json({ run: generated }, 202); }
     if (url.pathname.endsWith("api/runs/current")) return json({ run: started ? generated : { ...waiting, latestAnnounced: "2026-10-09" } });
   }, 10000);
-  await vi.waitFor(() => expect(root.querySelector(".run-announcement")?.textContent).toContain(sentence));
+  await vi.waitFor(() => expect(root.querySelector(".announcement-offer")?.textContent).toContain(sentence));
   const instead = root.querySelector<HTMLButtonElement>('[data-action="generate-announced"]')!;
   expect(instead.textContent).toBe(action);
   instead.click();
   await vi.waitFor(() => expect(root.querySelector(".run-tray")?.textContent).toContain("2026-10-09"));
   const submitted = fetcher.mock.calls.find(([url, init]) => String(url).endsWith("api/runs") && init?.method === "POST");
   expect(JSON.parse(String(submitted?.[1]?.body))).toEqual({ kind: "daily", date: "2026-10-09" });
-  await vi.waitFor(() => expect(root.querySelector(".run-announcement")).toBeNull());
+  await vi.waitFor(() => expect(root.querySelector(".announcement-offer")).toBeNull());
   expect(root.querySelector(".run-state")?.classList.contains("running")).toBe(true);
 });
 
@@ -208,7 +208,7 @@ it("shows no announcement offer when the newest announced day is unknown", async
     if (url.pathname.endsWith("api/runs/current")) return json({ run: waiting });
   }, 10000);
   await vi.waitFor(() => expect(root.querySelector(".run-state")?.textContent).toBe("等待公告发布"));
-  expect(root.querySelector(".run-announcement")).toBeNull();
+  expect(root.querySelector(".announcement-offer")).toBeNull();
   expect(root.querySelector(".run-tray pre")?.textContent).toContain("awaiting_announcement");
 });
 

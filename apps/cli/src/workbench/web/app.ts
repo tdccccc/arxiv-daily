@@ -7,7 +7,7 @@ import type { inspectProduct } from "../../inspect-cmd";
 import { mountLibraryReview } from "./library-review";
 import { mountLibrary } from "./library";
 import { generationFooter } from "./generation-footer";
-import { runStateLabel } from "./run-status";
+import { announcementOffer, runStateLabel } from "./run-status";
 import { mountCalendar } from "./calendar";
 import { mountSidebar } from "./sidebar";
 import type { WorkbenchPaper, WorkbenchPaperList, PaperScope } from "../papers";
@@ -689,11 +689,7 @@ function mountWorkbenchContent(root: HTMLElement, options: WorkbenchClientOption
           ? h("button", { class: "quiet-button", "data-action": "cancel-run" }, t("取消任务"))
           : h("button", { class: "icon-button", "data-action": "dismiss-run", "aria-label": t("关闭任务状态") }, "×"),
       ),
-      // The day is not announced yet, but an earlier one is: say so and offer it in one click.
-      ...(currentRun.status === "pending" && currentRun.date && currentRun.latestAnnounced ? [h("div", { class: "run-announcement" },
-        h("p", null, t("{0} 的论文还没公告，最近一次公告是 {1}。", currentRun.date, currentRun.latestAnnounced)),
-        h("button", { class: "quiet-button", "data-action": "generate-announced", "data-date": currentRun.latestAnnounced }, t("改为生成 {0} 的日报", currentRun.latestAnnounced)),
-      )] : []),
+      ...(currentRun.status === "pending" && currentRun.date && currentRun.latestAnnounced ? [announcementOffer(currentRun.date, currentRun.latestAnnounced)] : []),
       h("details", { open: keepOpen || currentRun.status === "failed" }, h("summary", null, t("查看运行详情")), pre),
     );
     pre.textContent = t(currentRun.output) || t("等待运行输出…");

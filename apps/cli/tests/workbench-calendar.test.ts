@@ -11,7 +11,7 @@ const cleanup: Array<() => Promise<unknown>> = [];
 afterEach(async () => { for (const close of cleanup.splice(0).reverse()) await close(); });
 const state = (status: RunStateEntry["status"], extra: Partial<RunStateEntry> = {}): RunStateEntry => ({ status, lastAttempt: 1, attempts: 1, ...extra });
 
-async function setup(options: { timezone?: string; now?: string; records?: RunState; reports?: string[]; run?: WorkbenchOptions["run"] } = {}) {
+async function setup(options: { timezone?: string; now?: string; records?: RunState; reports?: string[]; run?: WorkbenchOptions["run"]; latestAnnouncedDay?: WorkbenchOptions["latestAnnouncedDay"] } = {}) {
   const root = await mkdtemp(join(tmpdir(), "arxiv-calendar-"));
   cleanup.push(() => rm(root, { recursive: true, force: true }));
   const settings = structuredClone(DEFAULT_SETTINGS);
@@ -25,7 +25,7 @@ async function setup(options: { timezone?: string; now?: string; records?: RunSt
   await writeFile(join(config.vaultRoot, "research/.index/run-state.json"), JSON.stringify({ schemaVersion: 1, runState: options.records ?? {} }));
   await writeFile(config.configPath, "secret-calendar-key");
   const run = options.run ?? vi.fn(async () => 0);
-  const app = await startWorkbench({ config, run, now: () => new Date(options.now ?? "2026-10-01T00:30:00.000Z") });
+  const app = await startWorkbench({ config, run, latestAnnouncedDay: options.latestAnnouncedDay, now: () => new Date(options.now ?? "2026-10-01T00:30:00.000Z") });
   cleanup.push(app.close);
   return { ...app, config, root, run, get: (path: string, init?: RequestInit) => fetch(new URL(path, app.url), init) };
 }
@@ -179,4 +179,18 @@ it('does not hide a durable failure behind an older owned waiting outcome', asyn
  await vi.waitFor(async()=>expect((await(await get('api/runs/current')).json()).run.status).toBe('pending'));
  const calendar=await(await get('api/calendar?month=2026-10')).json();
  expect(calendar.cells.find((cell:{date:string}|null)=>cell?.date==='2026-10-02')).toMatchObject({state:'failed',message:'network offline'});
+});
+
+it("names the newest announced day on a day whose announcement is awaited, only for the run that waited", async () => {
+  const { get } = await setup({
+    now: "2026-10-21T12:00:00Z", latestAnnouncedDay: async () => "2026-10-09",
+    run: async (_args, io) => { io.onRunResult?.({ date: "2026-10-21", kind: "pending", outcome: "awaiting_announcement" }); return 0; },
+  });
+  await get("api/runs", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ kind: "daily" }) });
+  await vi.waitFor(async () => expect((await (await get("api/runs/current")).json()).run.status).toBe("pending"));
+  const result = await (await get("api/calendar?month=2026-10")).json();
+  const day = (date: string) => result.cells.find((cell: { date: string } | null) => cell?.date === date);
+  expect(day("2026-10-21")).toMatchObject({ state: "awaiting-announcement", canGenerate: true, actionLabel: "重新检查公告", latestAnnounced: "2026-10-09" });
+  expect(day("2026-10-20")).toMatchObject({ state: "not-generated" });
+  expect(day("2026-10-20")).not.toHaveProperty("latestAnnounced");
 });

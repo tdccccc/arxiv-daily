@@ -5,6 +5,7 @@ import { h } from "./dom";
 import { t } from "./i18n";
 import type { WorkbenchPaper, WorkbenchPaperList } from "../papers";
 import { calendarStateLabels } from "./calendar";
+import { announcementOffer } from "./run-status";
 
 // Titles and snippets are inside controls: format scientific text without nesting links.
 export const scientificInline = (source: string): DocumentFragment => markdownInline(renderInlineMarkdownNodes(source, { resolveLink: () => null }));
@@ -44,6 +45,7 @@ export function dayHeading(day: WorkbenchPaperList["day"]): HTMLElement | null {
     h("div", null,
       h("span", { class: "day-eyebrow" }, `${day.date} · ${t(calendarStateLabels[day.state])}`),
       h("p", null, t(day.message)),
+      day.latestAnnounced ? announcementOffer(day.date, day.latestAnnounced) : null,
     ),
     day.reportPath
       ? h("button", { class: "primary-button", "data-action": "read-day" }, t("阅读完整日报 ↗"))

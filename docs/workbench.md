@@ -45,7 +45,7 @@ Four outcomes are shown distinctly, so you can tell them apart at a glance:
 | No match | Filtering ran, but no paper matched your topics |
 | Failed | A real failure occurred |
 
-When a run ends waiting for an announcement, the task panel names the newest day arXiv has announced and offers **Generate the report for that day instead** in one click.
+When a run ends waiting for an announcement, the task panel and that day's calendar card and heading name the newest day arXiv has announced and offer **Generate the report for that day instead** in one click.
 
 The reading footer shows input/output/total tokens, generation duration, and the generation timestamp (UTC). Older reports missing this data show "not recorded" rather than substituting a file's modification time.
 
