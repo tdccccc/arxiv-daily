@@ -8,11 +8,13 @@ import {
   ARXIV_CATEGORIES,
   DEFAULT_SETTINGS,
   DEFAULT_MAX_DAILY_PAPERS,
+  DIRECTION_TEXT_MAX_LENGTH,
   LlmClient,
   Logger,
   PROVIDER_PRESETS,
   getBusinessSetting,
   TIMEZONE_OPTIONS,
+  TOPIC_TAG_MAX_LENGTH,
   normalizeSettingsEdits,
   startHostedEmailVerification,
 } from "@arxiv-daily/core";
@@ -767,6 +769,9 @@ async function runStep(
         message: `Topic tag slug (default: ${state.topicTag})`,
         initialValue: state.topicTag,
         allowBack: true,
+        validate: (s) => s.trim().length > TOPIC_TAG_MAX_LENGTH
+          ? `A tag can have at most ${TOPIC_TAG_MAX_LENGTH} characters`
+          : undefined,
       });
       if (tag.nav !== "next") return tag.nav;
       state.topicTag = tag.value.trim() || "my-research";
@@ -774,6 +779,9 @@ async function runStep(
         message: "Topic description (default placeholder is fine to edit later)",
         initialValue: state.topicDescription,
         allowBack: true,
+        validate: (s) => s.trim().length > DIRECTION_TEXT_MAX_LENGTH
+          ? `A topic description can have at most ${DIRECTION_TEXT_MAX_LENGTH} characters`
+          : undefined,
       });
       if (desc.nav !== "next") return desc.nav;
       state.topicDescription =

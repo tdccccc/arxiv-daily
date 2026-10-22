@@ -7,10 +7,18 @@
  * §4). Sharing one validator would mean loosening that requirement for both.
  */
 
+import {
+  DIRECTION_ID_MAX_LENGTH,
+  DIRECTION_TEXT_MAX_LENGTH,
+  TOPIC_TAG_MAX_LENGTH,
+} from "../settings/topics";
+
 export const TOPIC_DIRECTION_HIT_MAX_COUNT = 256 as const;
-export const TOPIC_DIRECTION_HIT_MAX_TAG_LENGTH = 120 as const;
-export const TOPIC_DIRECTION_HIT_MAX_ID_LENGTH = 128 as const;
-export const TOPIC_DIRECTION_HIT_MAX_TEXT_LENGTH = 1_000 as const;
+// The settings pages hold to these same limits (settings/topics.ts), so a topic
+// they accept can always be recorded here.
+export const TOPIC_DIRECTION_HIT_MAX_TAG_LENGTH = TOPIC_TAG_MAX_LENGTH;
+export const TOPIC_DIRECTION_HIT_MAX_ID_LENGTH = DIRECTION_ID_MAX_LENGTH;
+export const TOPIC_DIRECTION_HIT_MAX_TEXT_LENGTH = DIRECTION_TEXT_MAX_LENGTH;
 
 export interface TopicDirectionHit {
   /** Tag of the topic the paper was filed under. */

@@ -1,6 +1,6 @@
 import type { MarkupParser } from "../core/adapters";
 import type { ArxivFetcher } from "../pipeline/arxiv-fetcher";
-import { parseRecent } from "../pipeline/arxiv-parser";
+import { parseRecentListing } from "../pipeline/arxiv-parser";
 import { arxivCategories } from "../settings/categories";
 import type { PluginSettings } from "../settings/types";
 import type { Logger } from "./logger";
@@ -127,8 +127,11 @@ export class RecentDatesCache {
         // Obsidian requestUrl cannot be interrupted. The shared refresh remains
         // independent from any one caller and may complete after callers cancel.
         const html = await fetcher.fetchRecent(category);
-        const buckets = parseRecent(html, this.deps.markupParser);
-        for (const bucket of buckets) dates.add(bucket.announceDate);
+        // The day links name every day of the listing, also those a long one
+        // pushes past the first page.
+        const listing = parseRecentListing(html, this.deps.markupParser);
+        for (const bucket of listing.buckets) dates.add(bucket.announceDate);
+        for (const day of listing.days) dates.add(day.announceDate);
       } catch (e) {
         const message = (e as Error).message;
         errors.push(`${category}: ${message}`);

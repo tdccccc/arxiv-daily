@@ -3,7 +3,8 @@ import { describe, it, expect } from "vitest";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, resolve } from "node:path";
-import { parseRecent } from "../src/pipeline/arxiv-parser";
+import { parseRecent, parseRecentListing } from "../src/pipeline/arxiv-parser";
+import { listingIds, recentListingWorld } from "./recent-listing-world";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const fixture = readFileSync(
@@ -127,5 +128,81 @@ describe("parseRecent", () => {
     const buckets = parseRecent(html, markupParser);
     expect(buckets[0].papers[0].title).toBe("Example Paper");
     expect(JSON.stringify(buckets)).not.toContain("never closed");
+  });
+});
+
+describe("parseRecentListing", () => {
+  it("reads the total, the day links with their offsets and what each day declares", () => {
+    const listing = parseRecentListing(fixture, markupParser);
+
+    expect(listing.totalEntries).toBe(403);
+    expect(listing.days).toEqual([
+      { announceDate: "2026-05-11", skip: 0 },
+      { announceDate: "2026-05-08", skip: 59 },
+      { announceDate: "2026-05-07", skip: 144 },
+      { announceDate: "2026-05-06", skip: 221 },
+      { announceDate: "2026-05-05", skip: 296 },
+    ]);
+    expect(listing.buckets.map((b) => [b.announceDate, b.declaredEntries, b.listedEntries])).toEqual([
+      ["2026-05-11", 59, 59],
+      ["2026-05-08", 85, 85],
+      ["2026-05-07", 77, 77],
+      ["2026-05-06", 75, 75],
+      ["2026-05-05", 107, 107],
+    ]);
+  });
+
+  it("is what parseRecent returns the buckets of", () => {
+    expect(parseRecent(fixture, markupParser)).toEqual(parseRecentListing(fixture, markupParser).buckets);
+  });
+
+  it("shows a day cut by the page as listing fewer entries than it declares", () => {
+    const world = recentListingWorld([
+      { date: "2026-05-11", ids: listingIds("2605", 10000, 5) },
+      { date: "2026-05-08", ids: listingIds("2605", 20000, 4) },
+    ]);
+    const listing = parseRecentListing(world.page(0, 7), markupParser);
+
+    const cut = listing.buckets.find((b) => b.announceDate === "2026-05-08")!;
+    expect(cut.listedEntries).toBe(2);
+    expect(cut.declaredEntries).toBe(4);
+    expect(cut.papers.map((paper) => paper.id)).toEqual(["2605.20000", "2605.20001"]);
+    expect(listing.days.map((day) => day.skip)).toEqual([0, 5]);
+  });
+
+  it("counts a listed entry the parser cannot use, so a day is not mistaken for cut", () => {
+    const html = `
+      <dl id="articles">
+        <h3>Wed, 10 Jun 2026 (showing 2 of 2 entries )</h3>
+        <dt><a title="Abstract" href="/abs/2606.11165">arXiv:2606.11165</a></dt>
+        <dd><div class="list-title">Title: Example</div><div class="list-authors"><a>Jane Doe</a></div></dd>
+        <dt><a title="Abstract" href="/abs/bogus">arXiv:bogus</a></dt>
+        <dd><div class="list-title">Title: Odd one</div></dd>
+      </dl>`;
+    const [bucket] = parseRecentListing(html, markupParser).buckets;
+
+    expect(bucket!.papers).toHaveLength(1);
+    expect(bucket!.listedEntries).toBe(2);
+    expect(bucket!.declaredEntries).toBe(2);
+  });
+
+  it("works on a minimal page that has no total, no day links and no counts", () => {
+    const html = `<dl id="articles"><h3>Wed, 10 Jun 2026</h3>
+      <dt><a title="Abstract" href="/abs/2606.11165">arXiv:2606.11165</a></dt>
+      <dd><div class="list-title">Title: Example</div></dd></dl>`;
+    const listing = parseRecentListing(html, markupParser);
+
+    expect(listing.totalEntries).toBeUndefined();
+    expect(listing.days).toEqual([]);
+    expect(listing.buckets[0]!.declaredEntries).toBeUndefined();
+    expect(listing.buckets[0]!.papers).toHaveLength(1);
+  });
+
+  it("ignores links that are not day links", () => {
+    const html = `<ul><li><a href="/list/cs.LG/recent?skip=0&amp;show=1000">fewer</a></li>
+      <li><a href="/list/cs.LG/new">Mon, 11 May 2026</a></li>
+      <li><a href="/list/cs.LG/recent?skip=12&amp;show=2000">Fri, 8 May 2026</a></li></ul>`;
+
+    expect(parseRecentListing(html, markupParser).days).toEqual([{ announceDate: "2026-05-08", skip: 12 }]);
   });
 });

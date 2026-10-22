@@ -3044,6 +3044,33 @@ describe("topic edits share the settings transaction queue", () => {
     made.tab.containerEl.remove();
   });
 
+  it("holds a direction to what the daily report can carry", () => {
+    const made = editor();
+    expect(made.input().maxLength).toBe(1000);
+    made.tab.containerEl.remove();
+  });
+
+  it("gives a sentence-long topic name a tag that still fits the report, and keeps it following the name", async () => {
+    const made = editor();
+    const name = made.tab.containerEl.querySelector<HTMLInputElement>(".arxiv-daily-settings__topic-name-input")!;
+    const rename = async (value: string) => {
+      name.value = value;
+      name.dispatchEvent(new Event("input"));
+      await made.settle();
+    };
+
+    await rename(`${"first ".repeat(50)}end`);
+    const first = made.settings.arxiv.topics[0]!.tag;
+    expect(first.length).toBeLessThanOrEqual(100);
+    expect(first.startsWith("first-first-")).toBe(true);
+    expect(made.saved.at(-1)!.arxiv.topics[0]!.tag).toBe(first);
+
+    await rename(`${"second ".repeat(50)}end`);
+    expect(made.settings.arxiv.topics[0]!.tag.startsWith("second-second-")).toBe(true);
+    expect(made.settings.arxiv.topics[0]!.tag.length).toBeLessThanOrEqual(100);
+    made.tab.containerEl.remove();
+  });
+
   it("derives a renamed topic's unique tag from topics committed ahead of its edit", async () => {
     const made = editor();
     const gate = made.pauseSave();

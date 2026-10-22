@@ -39,6 +39,9 @@ export const DEFAULT_ARXIV_BINARY_TIMEOUT_MS = 180_000;
 const MIN_ARXIV_TIMEOUT_MS = 1;
 const MAX_ARXIV_TIMEOUT_MS = 30 * 60 * 1000;
 const MIN_ARXIV_REQUEST_DELAY_MS = 3_000;
+
+/** Entries arXiv puts on one /recent page at most ("Showing up to 2000 entries per page"). */
+export const ARXIV_RECENT_PAGE_SIZE = 2_000;
 const MAX_INLINE_ARXIV_COOLDOWN_MS = 30 * 60 * 1000;
 const MAX_COOLDOWN_CHUNK_MS = 30_000;
 /** Host of the Atom query API. A 429 from it is never retried. */
@@ -341,12 +344,26 @@ const sharedMetadataWorkers = new Set<Promise<void>>();
 export class ArxivFetcher {
   constructor(private opts: ArxivFetcherOptions) {}
 
-  /** Fetch the /list/<cat>/recent page with show=2000 to capture all 5 days in one shot. */
+  /**
+   * Fetch one page of the /list/<cat>/recent listing: by default the first
+   * ARXIV_RECENT_PAGE_SIZE entries, which hold all five days of an ordinary
+   * category. A busier one continues on later pages, read with `skip`/`show`;
+   * every page is an ordinary request under the shared spacing and cooldowns.
+   */
   async fetchRecent(
     category = this.primaryCategory(),
     signal?: AbortSignal,
+    range: { skip?: number; show?: number } = {},
   ): Promise<string> {
-    const url = `https://arxiv.org/list/${category}/recent?skip=0&show=2000`;
+    const skip = range.skip ?? 0;
+    const show = range.show ?? ARXIV_RECENT_PAGE_SIZE;
+    if (!Number.isSafeInteger(skip) || skip < 0) {
+      throw new RangeError(`arXiv /recent skip must be a non-negative integer, got ${skip}`);
+    }
+    if (!Number.isSafeInteger(show) || show < 1 || show > ARXIV_RECENT_PAGE_SIZE) {
+      throw new RangeError(`arXiv /recent show must be an integer from 1 to ${ARXIV_RECENT_PAGE_SIZE}, got ${show}`);
+    }
+    const url = `https://arxiv.org/list/${category}/recent?skip=${skip}&show=${show}`;
     return this.fetchHtml(url, { allow404: false }, signal);
   }
 

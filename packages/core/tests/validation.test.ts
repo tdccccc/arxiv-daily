@@ -292,6 +292,85 @@ describe("validateFilterConfig", () => {
   });
 });
 
+describe("validateFilterConfig topic constraints of the daily report", () => {
+  const withTopics = (topics: ReturnType<typeof normalizeTopic>[]) => validateFilterConfig(makeSettings({
+    llm: { ...DEFAULT_SETTINGS.llm, apiKey: "x" },
+    arxiv: { ...DEFAULT_SETTINGS.arxiv, topics },
+  }));
+  const topic = (name: string, tag: string, directions: string[] = ["a direction"]) => normalizeTopic({
+    id: tag, name, tag, detail: false, directions: directions.map((text, i) => ({ id: `d${i}`, text, origin: "manual" })),
+  });
+
+  it("names the topics that share a display name", () => {
+    const r = withTopics([topic("Photo-z", "photo-z"), topic("Other", "other"), topic("Photo-z", "photo-z-2")]);
+
+    expect(r.ok).toBe(false);
+    expect(r.reasons).toEqual(['Topics 1 and 3 are both named "Photo-z"; give each topic its own name']);
+  });
+
+  it("leaves names that only differ in case alone: the report keeps them apart", () => {
+    expect(withTopics([topic("Photo-z", "a"), topic("photo-z", "b")]).ok).toBe(true);
+  });
+
+  it("compares names the way the report does: exactly, so a stray space is not a duplicate", () => {
+    expect(withTopics([topic("Photo-z", "a"), topic("Photo-z ", "b")]).ok).toBe(true);
+  });
+
+  it("measures a tag as it is stored, spaces included", () => {
+    const padded = topic("Padded", "t".repeat(119));
+    padded.tag = `${padded.tag}  `;
+
+    expect(withTopics([padded]).reasons).toEqual(['Topic 1 "Padded" tag is 121 characters long; the limit is 120, shorten the topic name']);
+  });
+
+  it("names the topic and the direction whose text is too long for the report", () => {
+    const r = withTopics([
+      topic("Short", "short"),
+      topic("Photo-z", "photo-z", ["fine", "also fine", "x".repeat(1001)]),
+    ]);
+
+    expect(r.ok).toBe(false);
+    expect(r.reasons).toEqual(['Topic 2 "Photo-z" direction 3 is 1001 characters long; the limit is 1000, shorten it']);
+  });
+
+  it("accepts the longest direction and tag the report can carry", () => {
+    expect(withTopics([topic("Long", "t".repeat(120), ["x".repeat(1000)])]).ok).toBe(true);
+  });
+
+  it("flags a tag that no longer fits the report", () => {
+    const r = withTopics([topic("A very long name", "t".repeat(121))]);
+
+    expect(r.reasons).toEqual(['Topic 1 "A very long name" tag is 121 characters long; the limit is 120, shorten the topic name']);
+  });
+
+  it("shortens a long display name in the message", () => {
+    const name = "N".repeat(200);
+    const r = withTopics([topic(name, "a"), topic(name, "b")]);
+
+    expect(r.reasons).toHaveLength(1);
+    expect(r.reasons[0]!.length).toBeLessThan(120);
+    expect(r.reasons[0]).toContain("…");
+  });
+
+  it("flags a direction id the report cannot carry", () => {
+    const bad = normalizeTopic({
+      id: "a", name: "A", tag: "a", detail: false,
+      directions: [{ id: "i".repeat(129), text: "fine", origin: "manual" }],
+    });
+
+    expect(withTopics([bad]).reasons).toEqual(['Topic 1 "A" direction 1 has an id of 129 characters; the limit is 128']);
+  });
+
+  it("reports every problem in one pass", () => {
+    const r = withTopics([
+      topic("Dup", "dup", ["x".repeat(1200)]),
+      topic("Dup", "t".repeat(130)),
+    ]);
+
+    expect(r.reasons).toHaveLength(3);
+  });
+});
+
 describe("advanced default char limits", () => {
   it("uses the relaxed extraction budgets", () => {
     expect(DEFAULT_SETTINGS.advanced.paperCharLimit).toBe(100_000);

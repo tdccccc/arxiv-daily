@@ -14,6 +14,7 @@ import type {
 } from "../settings/types";
 import { arxivCategories } from "../settings/categories";
 import { normalizeMaxDailyPapers } from "../settings/daily-paper-limit";
+import { validateTopicsForReport } from "../settings/validation";
 import type { ArxivFetcher } from "./arxiv-fetcher";
 import type { PaperContentFetcher } from "./paper-content";
 import type { MarkdownWriter } from "./markdown-writer";
@@ -59,6 +60,7 @@ import {
   type SourceAdapter,
 } from "../sources";
 import { classifyPaperNote } from "../dashboard/paper-note-classifier";
+import { contentFetchFailedText } from "./content-fetch-failure";
 
 /** Pipeline-local paper meta after source listing (arXiv-compatible shape). */
 interface SourcePaperMeta extends PaperMeta {
@@ -257,6 +259,15 @@ export class ArxivPipeline {
     this.progress.setStage("enrich-abstract");
     stageEnd("enrich-abstract");
 
+    // The report is assembled around the topic list. One it cannot be assembled
+    // around would otherwise fail after the filter and detail model calls were
+    // paid for, and as a transient failure that is retried until it turns
+    // permanent: say what to fix instead, before the first call.
+    const topicProblems = validateTopicsForReport(this.deps.arxiv.topics ?? []);
+    if (topicProblems.length > 0) {
+      return { kind: "failed_permanent", reason: `invalid topic settings: ${topicProblems.join("; ")}` };
+    }
+
     // 5. LLM filter
     stageStart("filter");
     this.progress.setStage("filter");
@@ -397,7 +408,7 @@ export class ArxivPipeline {
           logger.error(`pipeline: content fetch failed for ${p.id}`, e);
           return {
             ...p,
-            abstractConclusion: `[获取失败] arXiv ID: ${p.id}`,
+            abstractConclusion: contentFetchFailedText(p.id),
             fullSections: null,
             inboxStatus: p.indexEntry?.status,
             seenBefore: p.seenBefore,

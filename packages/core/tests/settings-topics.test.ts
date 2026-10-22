@@ -1,5 +1,10 @@
 import { describe, it, expect } from "vitest";
-import { normalizeTopic, topicFromSeed } from "../src/settings/topics";
+import {
+  TOPIC_TAG_MAX_LENGTH,
+  normalizeTopic,
+  topicFromSeed,
+  topicTagFromName,
+} from "../src/settings/topics";
 import { TOPIC_TEMPLATES } from "../src/settings/topic-templates";
 
 /**
@@ -154,5 +159,38 @@ describe("topicFromSeed — quick-start templates", () => {
     );
     expect(new Set(topicIds).size).toBe(topicIds.length);
     expect(new Set(directionIds).size).toBe(directionIds.length);
+  });
+});
+
+/**
+ * The settings pages derive a topic's tag from its name, and the tag is
+ * carried in the daily report's direction record, which holds at most
+ * TOPIC_TAG_MAX_LENGTH characters. A sentence used as a name must still leave
+ * room for the "-2" a duplicate gets.
+ */
+describe("topicTagFromName", () => {
+  it("is the plain slug for an ordinary name", () => {
+    expect(topicTagFromName("Photometric redshift")).toBe("photometric-redshift");
+    expect(topicTagFromName("弱引力透镜")).toBe("弱引力透镜");
+    expect(topicTagFromName("!!!")).toBe("");
+  });
+
+  it("keeps a name of up to 100 slug characters as it is", () => {
+    const name = "a".repeat(100);
+    expect(topicTagFromName(name)).toBe(name);
+  });
+
+  it("shortens a sentence-long name and never ends on a separator", () => {
+    const tag = topicTagFromName(`${"word ".repeat(60)}end`);
+
+    expect(tag.length).toBeLessThanOrEqual(100);
+    expect(tag.endsWith("-")).toBe(false);
+    expect(tag.startsWith("word-word-")).toBe(true);
+  });
+
+  it("leaves room for a uniqueness suffix inside the report limit", () => {
+    const tag = topicTagFromName("b".repeat(5000));
+
+    expect(`${tag}-99999999`.length).toBeLessThanOrEqual(TOPIC_TAG_MAX_LENGTH);
   });
 });

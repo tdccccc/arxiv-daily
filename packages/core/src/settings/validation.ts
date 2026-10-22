@@ -1,5 +1,6 @@
-import type { PluginSettings } from "./types";
+import type { PluginSettings, Topic } from "./types";
 import { arxivCategories } from "./categories";
+import { DIRECTION_ID_MAX_LENGTH, DIRECTION_TEXT_MAX_LENGTH, TOPIC_TAG_MAX_LENGTH } from "./topics";
 import { minutesFromHHMM } from "../utils/time";
 import { requireLoopbackSidecarUrl } from "../documents/sidecar-document-parser";
 import { hasControlCharacter } from "../utils/control-characters";
@@ -132,18 +133,9 @@ export function validateFilterConfig(
     seenCategories.add(trimmed);
   }
   if (settings.arxiv.topics.length === 0) reasons.push("No research topics defined");
-  const seenTags = new Set<string>();
+  reasons.push(...validateTopicsForReport(settings.arxiv.topics));
   settings.arxiv.topics.forEach((topic, i) => {
     const label = `Topic ${i + 1}`;
-    if (!topic.name.trim()) reasons.push(`${label} name is empty`);
-    const tag = topic.tag.trim();
-    if (!tag) {
-      reasons.push(`${label} tag is empty`);
-    } else if (seenTags.has(tag)) {
-      reasons.push(`Duplicate topic tag: ${tag}`);
-    } else {
-      seenTags.add(tag);
-    }
     // Directions are what the classifier judges against (ADR 0012 §1), so an
     // empty list is what the researcher has to fix. `description` is the
     // rollback shadow of the first direction and is never edited directly, so
@@ -156,6 +148,75 @@ export function validateFilterConfig(
     }
   });
   return { ok: reasons.length === 0, reasons };
+}
+
+/** A topic name for a message: one line, and short enough to read. */
+function quotedTopicName(name: string): string {
+  const flat = name.trim().replace(/\s+/gu, " ");
+  return `"${flat.length > 40 ? `${flat.slice(0, 40)}…` : flat}"`;
+}
+
+/**
+ * Lengths the daily report cannot carry (see {@link TOPIC_TAG_MAX_LENGTH}).
+ * Unlike a blank or repeated name these are never a draft worth keeping: no
+ * report can hold them, so the settings pages refuse them when they are saved.
+ */
+export function validateTopicLimits(topics: readonly Topic[]): string[] {
+  const reasons: string[] = [];
+  topics.forEach((topic, i) => {
+    const subject = `Topic ${i + 1} ${quotedTopicName(typeof topic.name === "string" ? topic.name : "")}`;
+    const tagLength = typeof topic.tag === "string" ? topic.tag.length : 0;
+    if (tagLength > TOPIC_TAG_MAX_LENGTH) {
+      reasons.push(`${subject} tag is ${tagLength} characters long; the limit is ${TOPIC_TAG_MAX_LENGTH}, shorten the topic name`);
+    }
+    (topic.directions ?? []).forEach((direction, j) => {
+      const textLength = typeof direction?.text === "string" ? direction.text.length : 0;
+      if (textLength > DIRECTION_TEXT_MAX_LENGTH) {
+        reasons.push(`${subject} direction ${j + 1} is ${textLength} characters long; the limit is ${DIRECTION_TEXT_MAX_LENGTH}, shorten it`);
+      }
+      const idLength = typeof direction?.id === "string" ? direction.id.length : 0;
+      if (idLength > DIRECTION_ID_MAX_LENGTH) {
+        reasons.push(`${subject} direction ${j + 1} has an id of ${idLength} characters; the limit is ${DIRECTION_ID_MAX_LENGTH}`);
+      }
+    });
+  });
+  return reasons;
+}
+
+/**
+ * Everything about the topic list that the daily report cannot be assembled
+ * around: a blank or repeated tag, two topics under one heading, and the
+ * lengths of {@link validateTopicLimits}. Hosts check it before a run is
+ * offered, and the pipeline checks it again before the first model call, so
+ * none of it first shows up after the day's model calls were paid for.
+ */
+export function validateTopicsForReport(topics: readonly Topic[]): string[] {
+  const reasons: string[] = [];
+  const tags = new Set<string>();
+  const nameOwners = new Map<string, number>();
+  topics.forEach((topic, i) => {
+    const label = `Topic ${i + 1}`;
+    const name = typeof topic.name === "string" ? topic.name : "";
+    if (!name.trim()) reasons.push(`${label} name is empty`);
+    const tag = typeof topic.tag === "string" ? topic.tag.trim() : "";
+    if (!tag) {
+      reasons.push(`${label} tag is empty`);
+    } else if (tags.has(tag)) {
+      reasons.push(`Duplicate topic tag: ${tag}`);
+    } else {
+      tags.add(tag);
+    }
+    // The report gives every topic a heading of its own name, and the daily
+    // preflight compares names exactly, so this does too.
+    const owner = name.trim() ? nameOwners.get(name) : undefined;
+    if (owner !== undefined) {
+      reasons.push(`Topics ${owner + 1} and ${i + 1} are both named ${quotedTopicName(name)}; give each topic its own name`);
+    } else if (name.trim()) {
+      nameOwners.set(name, i);
+    }
+  });
+  reasons.push(...validateTopicLimits(topics));
+  return reasons;
 }
 
 export function validateScheduleConfig(settings: PluginSettings): ValidationResult {

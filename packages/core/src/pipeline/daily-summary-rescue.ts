@@ -15,6 +15,7 @@ import {
 } from "../settings/summary-language";
 import type { SummaryLanguage } from "../settings/types";
 import type {
+  DailyPaperFallbackReasonCode,
   DailySummaryAssemblyInput,
   DailySummaryAssemblyPaper,
   StructuredPaperSummary,
@@ -113,7 +114,7 @@ type RescueContract = {
       | { kind: "structured"; summary: StructuredPaperSummary }
       | {
           kind: "fallback";
-          reasonCode: "validation-exhausted" | "transport-exhausted";
+          reasonCode: DailyPaperFallbackReasonCode;
           attempts: number;
           originalAbstract: string;
         };
@@ -377,6 +378,7 @@ function renderRescueSlot(
       language,
       [marker],
       reportDate,
+      slot.result.reasonCode,
     );
   }
   return [

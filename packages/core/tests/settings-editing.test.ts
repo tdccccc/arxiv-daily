@@ -43,6 +43,43 @@ describe("shared settings editing", () => {
     input.arxiv.topics = [{ id: "", name: "", tag: "", description: "", directions: [], detail: false }];
     expect(() => normalizeSettingsEdits(input, ["arxiv.topics"])).toThrow(/topic/i);
   });
+  describe("topic limits of the daily report", () => {
+    const topicWith = (overrides: { tag?: string; directions?: string[]; name?: string }) => {
+      const input = fresh();
+      input.arxiv.topics = [{
+        id: "t1", name: overrides.name ?? "Photo-z", tag: overrides.tag ?? "photo-z", description: "",
+        directions: (overrides.directions ?? ["a direction"]).map((text, i) => ({ id: `d${i}`, text, origin: "manual" as const })),
+        detail: false,
+      }];
+      return input;
+    };
+    it("accepts the longest direction and tag the report can carry", () => {
+      const result = normalizeSettingsEdits(topicWith({ tag: "t".repeat(120), directions: ["x".repeat(1000)] }), ["arxiv.topics"]);
+      expect(result.arxiv.topics[0]!.directions[0]!.text).toHaveLength(1000);
+    });
+    it("rejects a direction over 1000 characters and says which one", () => {
+      const input = topicWith({ directions: ["short", "x".repeat(1001)] });
+      expect(() => normalizeSettingsEdits(input, ["arxiv.topics"]))
+        .toThrow('Topic 1 "Photo-z" direction 2 is 1001 characters long; the limit is 1000, shorten it');
+    });
+    it("counts the direction after line breaks are folded into spaces", () => {
+      const folded = `${"x".repeat(499)}\n\n${"y".repeat(499)}`;
+      expect(normalizeSettingsEdits(topicWith({ directions: [folded] }), ["arxiv.topics"]).arxiv.topics[0]!.directions[0]!.text).toHaveLength(999);
+    });
+    it("rejects a tag over 120 characters and says which topic", () => {
+      expect(() => normalizeSettingsEdits(topicWith({ tag: "t".repeat(121) }), ["arxiv.topics"]))
+        .toThrow('Topic 1 "Photo-z" tag is 121 characters long; the limit is 120, shorten the topic name');
+    });
+    it("checks topics only when they are what changed", () => {
+      const input = topicWith({ directions: ["x".repeat(5000)], tag: "t".repeat(500) });
+      expect(normalizeSettingsEdits(input, ["llm.model"]).arxiv.topics[0]!.directions[0]!.text).toHaveLength(5000);
+    });
+    it("still saves duplicate display names: they are reported when a run is attempted", () => {
+      const input = topicWith({});
+      input.arxiv.topics.push({ ...input.arxiv.topics[0]!, id: "t2", tag: "photo-z-2", directions: [{ id: "d9", text: "other", origin: "manual" }] });
+      expect(normalizeSettingsEdits(input, ["arxiv.topics"]).arxiv.topics.map(({ name }) => name)).toEqual(["Photo-z", "Photo-z"]);
+    });
+  });
   it("enforces run-window ordering and readiness only when scheduling is enabled", () => {
     const input = fresh(); input.schedule.enabled = false; input.schedule.runAtLocal = "18:00"; input.schedule.runUntilLocal = "09:00";
     expect(() => normalizeSettingsEdits(input, ["schedule"])).toThrow();

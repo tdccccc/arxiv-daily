@@ -113,6 +113,30 @@ describe("CLI init template", () => {
     for (const option of TIMEZONE_OPTIONS) expect(display.join(" ")).toContain(option.label);
 
   });
+  it("re-prompts a topic tag or description the daily report cannot carry", async () => {
+    const tags = ["t".repeat(121), "photo-z"];
+    const descriptions = ["x".repeat(1001), "photo-z methods"];
+    let body = ""; const errors: string[] = [];
+    const code = await runInit({
+      configPath:"/tmp/init-topic-limits.toml", isTTY:true,
+      ask: async prompt => {
+        if (prompt.startsWith("API base URL")) return "https://model.test/v1";
+        if (prompt.startsWith("LLM API key")) return "test-key";
+        if (prompt.startsWith("Topic tag slug")) return tags.shift() ?? "photo-z";
+        if (prompt.startsWith("Topic description")) return descriptions.shift() ?? "photo-z methods";
+        if (/fetch|connect|thinking|schedule/i.test(prompt)) return "n";
+        return "";
+      },
+      fetchModels: async () => [],
+      readFile: async () => {throw Object.assign(new Error("missing"),{code:"ENOENT"});},
+      mkdir:async()=>{}, writeFile:async(_path,text)=>{body=text;}, stdout:{write:()=>{}},stderr:{write:text=>errors.push(text)},
+    });
+    expect(code).toBe(0); expect(tags).toEqual([]); expect(descriptions).toEqual([]);
+    expect(errors.join(" ")).toContain("A tag can have at most 120 characters");
+    expect(errors.join(" ")).toContain("A topic description can have at most 1000 characters");
+    expect(body).toContain('tag = "photo-z"');
+    expect(body).toContain("photo-z methods");
+  });
   it("re-prompts custom endpoints and timezones using shared settings validation", async () => {
     const urls = ["file:///tmp/model", "https://user:secret@model.test/v1", "https://model.test/v1?api_key=secret", "https://model.test/v1"];
     const zones = ["invalid/timezone", "Pacific/Auckland"];

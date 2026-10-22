@@ -178,6 +178,19 @@ it("uses the newly selected timezone and mirrors topic names and detail indicato
  await vi.waitFor(()=>expect(fetcher.mock.calls.some(([,init])=>init?.method==='POST')).toBe(true));
  expect(JSON.parse(String(fetcher.mock.calls.find(([,init])=>init?.method==='POST')![1]!.body)).values.timezone).toBe('UTC');
 });
+it("holds a direction to what the daily report can carry and keeps a sentence-long topic name's tag short", async () => {
+ const {root,fetcher}=setup();
+ await vi.waitFor(()=>expect(root.querySelector('.paper-workspace')).toBeTruthy());
+ root.querySelector<HTMLButtonElement>('[data-action="settings"]')!.click();
+ await vi.waitFor(()=>expect(root.querySelector('.settings-form')).toBeTruthy());
+ expect(root.querySelector<HTMLTextAreaElement>('[name="topicDirection"]')!.maxLength).toBe(1000);
+ input(root,'topicName',`${'word '.repeat(60)}end`); root.querySelector('[name="topicName"]')!.dispatchEvent(new Event('input',{bubbles:true}));
+ submit(root);
+ await vi.waitFor(()=>expect(fetcher.mock.calls.some(([,init])=>init?.method==='POST')).toBe(true));
+ const tag=JSON.parse(String(fetcher.mock.calls.find(([,init])=>init?.method==='POST')![1]!.body)).values.topics[0].tag as string;
+ expect(tag.length).toBeLessThanOrEqual(100);
+ expect(tag.startsWith('word-word-')).toBe(true);
+});
 it("shows busy labels while fetching models and sending email", async () => {
  let release!: (r:Response)=>void;
  const {root}=setup(false,false,undefined,(path)=>path==='api/settings/action'?new Promise<Response>(resolve=>{release=resolve;}):undefined);

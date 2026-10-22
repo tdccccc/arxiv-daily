@@ -4,6 +4,7 @@ import { isCancellationError, throwIfCancelled } from "../services/cancellation"
 import { formatPaperKey } from "../services/paper-key";
 import { modernArxivResources } from "../utils/arxiv";
 import {
+  ARXIV_RECENT_PAGE_SIZE,
   formatArxivHttpError,
   isArxivHttpError,
   isArxivRetryDeferredError,
@@ -11,13 +12,15 @@ import {
   type ArxivFetcher,
 } from "../pipeline/arxiv-fetcher";
 import {
-  parseRecent,
+  parseRecentListing,
   type DateBucket,
   type PaperMeta,
+  type RecentListing,
 } from "../pipeline/arxiv-parser";
 import type {
   PaperContentFetcher,
 } from "../pipeline/paper-content";
+import { isContentFetchFailure } from "../pipeline/content-fetch-failure";
 import type {
   NormalizedPaperContent,
   PaperContentQuality,
@@ -44,6 +47,8 @@ export interface ArxivSourceAdapterDeps {
 const ABS_FALLBACK_NETWORK_LIMIT = 500;
 /** The abs-page fallback gives up after this many failures in a row. */
 const ABS_FALLBACK_FAILURE_LIMIT = 3;
+/** Pages read to list one day: a day longer than this is a broken listing, not a busy category. */
+const MAX_DAY_PAGES = 10;
 
 type FailureKind = "failed_transient" | "failed_permanent";
 
@@ -90,9 +95,9 @@ export class ArxivSourceAdapter implements SourceAdapter {
         continue;
       }
 
-      let buckets: DateBucket[];
+      let listing: RecentListing;
       try {
-        buckets = parseRecent(recentHtml, this.deps.markupParser);
+        listing = parseRecentListing(recentHtml, this.deps.markupParser);
       } catch (e) {
         if (isCancellationError(e)) throw e;
         failures.push({
@@ -105,18 +110,47 @@ export class ArxivSourceAdapter implements SourceAdapter {
         continue;
       }
 
-      const bucket = buckets.find((b) => b.announceDate === dateStr);
-      if (!bucket) {
-        const bounds = recentDateBounds(buckets);
-        if (bounds && dateStr > bounds.newest) {
-          awaiting.push({ channel: category, reason: missingRecentDateReason(dateStr, category, buckets, bounds) });
+      // The first page holds the whole day, unless the day is cut by the end of
+      // the page or lies beyond it: arXiv serves 2000 entries per page, and a
+      // busy category's five days run longer than that.
+      const bucket = listing.buckets.find((b) => b.announceDate === dateStr);
+      let papers: PaperMeta[] | undefined = bucket && isWholeDay(bucket) ? bucket.papers : undefined;
+      if (!papers) {
+        const span = daySpan(listing, dateStr, bucket);
+        if (span) {
+          const read = await this.readDaySpan(category, dateStr, span, listing, signal);
+          if (read.kind === "failed") {
+            failures.push(read.failure);
+            logger.warn(`arxiv-source: ${read.failure.reason}, continuing`);
+            continue;
+          }
+          papers = read.papers;
+        } else if (bucket) {
+          failures.push({
+            kind: "failed_transient",
+            reason: `fetch /recent for ${category}: ${dateStr} is cut off by the page (${bucket.listedEntries} of ${bucket.declaredEntries} entries listed) and the page does not say where to read the rest`,
+          });
+          logger.warn(`arxiv-source: ${dateStr} is cut off in ${category} /recent, continuing`);
           continue;
         }
+      }
+      if (!papers) {
+        const dates = listedDates(listing);
+        const bounds = recentDateBounds(dates);
+        if (bounds && dateStr > bounds.newest) {
+          awaiting.push({ channel: category, reason: missingRecentDateReason(dateStr, category, dates, bounds) });
+          continue;
+        }
+        // Without day links the page only proves what it shows: a listing
+        // longer than the page may still hold the date past the page's end.
+        const pageIsPartial = listing.days.length === 0 && listing.totalEntries !== undefined
+          && listing.totalEntries > listing.buckets.reduce((sum, b) => sum + b.listedEntries, 0);
         failures.push({
           // /recent only ever moves forward: a date older than its oldest
           // day can never appear again, so retrying it cannot succeed.
-          kind: bounds && dateStr < bounds.oldest ? "failed_permanent" : "failed_transient",
-          reason: missingRecentDateReason(dateStr, category, buckets, bounds),
+          kind: bounds && dateStr < bounds.oldest && !pageIsPartial ? "failed_permanent" : "failed_transient",
+          reason: missingRecentDateReason(dateStr, category, dates, bounds)
+            + (pageIsPartial ? "; the listing is longer than one page and the page has no day links" : ""),
         });
         logger.warn(
           `arxiv-source: ${dateStr} missing in ${category} /recent, continuing`,
@@ -126,9 +160,9 @@ export class ArxivSourceAdapter implements SourceAdapter {
 
       succeededCategories.push(category);
       logger.info(
-        `arxiv-source: ${bucket.papers.length} papers for ${dateStr} in ${category}`,
+        `arxiv-source: ${papers.length} papers for ${dateStr} in ${category}`,
       );
-      for (const paper of bucket.papers) {
+      for (const paper of papers) {
         addSourcePaper(byId, paper, [category], dateStr);
       }
     }
@@ -163,6 +197,70 @@ export class ArxivSourceAdapter implements SourceAdapter {
       channels: succeededCategories,
       dateWindow: "recent",
     };
+  }
+
+  /**
+   * Read a day that the first page does not hold whole, straight from where the
+   * listing says it starts, in pages of at most ARXIV_RECENT_PAGE_SIZE. The
+   * day is returned only complete: a page that lists fewer entries than the day
+   * has (or the same entry twice, after the listing moved between requests) is
+   * a transient failure, never a shorter day.
+   */
+  private async readDaySpan(
+    category: string,
+    dateStr: string,
+    span: { start: number; count: number },
+    firstPage: RecentListing,
+    signal?: AbortSignal,
+  ): Promise<{ kind: "papers"; papers: PaperMeta[] } | { kind: "failed"; failure: { kind: FailureKind; reason: string } }> {
+    const { fetcher, logger } = this.deps;
+    const failed = (kind: FailureKind, reason: string) => ({ kind: "failed" as const, failure: { kind, reason } });
+    if (span.count > MAX_DAY_PAGES * ARXIV_RECENT_PAGE_SIZE) {
+      return failed("failed_transient", `fetch /recent for ${category}: ${dateStr} claims ${span.count} entries, more than ${MAX_DAY_PAGES} pages`);
+    }
+    logger.info(`arxiv-source: ${dateStr} in ${category} /recent is not on the first page; reading entries ${span.start}-${span.start + span.count}`);
+    const pages = new Map<string, RecentListing>([[`0:${ARXIV_RECENT_PAGE_SIZE}`, firstPage]]);
+    const papers: PaperMeta[] = [];
+    let listed = 0;
+    for (let offset = span.start; offset < span.start + span.count;) {
+      const show = Math.min(ARXIV_RECENT_PAGE_SIZE, span.start + span.count - offset);
+      const key = `${offset}:${show}`;
+      let page = pages.get(key);
+      if (!page) {
+        let html: string;
+        try {
+          html = await fetcher.fetchRecent(category, signal, { skip: offset, show });
+        } catch (e) {
+          if (isCancellationError(e)) throw e;
+          return failed(
+            classifyArxivSourceFailure(e),
+            `fetch /recent failed for ${category} (entries from ${offset}): ${formatArxivHttpError(e)}`,
+          );
+        }
+        throwIfCancelled(signal);
+        try {
+          page = parseRecentListing(html, this.deps.markupParser);
+        } catch (e) {
+          if (isCancellationError(e)) throw e;
+          return failed("failed_permanent", `parse failed for ${category}: ${(e as Error).message}`);
+        }
+        pages.set(key, page);
+      }
+      const part = page.buckets.find((b) => b.announceDate === dateStr);
+      if (!part) {
+        return failed("failed_transient", `fetch /recent for ${category}: the page at entries ${offset}+ has no section for ${dateStr}`);
+      }
+      papers.push(...part.papers);
+      listed += part.listedEntries;
+      offset += show;
+    }
+    if (listed !== span.count) {
+      return failed("failed_transient", `fetch /recent for ${category}: ${dateStr} is incomplete (${listed} of ${span.count} entries listed)`);
+    }
+    if (new Set(papers.map((paper) => paper.id)).size !== papers.length) {
+      return failed("failed_transient", `fetch /recent for ${category}: ${dateStr} lists an entry twice; the listing changed while it was being read`);
+    }
+    return { kind: "papers", papers };
   }
 
   async fetchContent(
@@ -345,14 +443,14 @@ export function legacyContentFromNormalized(
   fullTextSource?: "arxiv-html" | "arxiv-source";
   fullTextFailure?: string;
 } {
+  // The failure placeholder is not an abstract and the failure reasons are not
+  // paper text: neither may reach a prompt dressed up as one.
   const abstractConclusion =
     content.abstract.trim().length > 0
-      ? content.abstract.startsWith("##")
+      ? content.abstract.startsWith("##") || isContentFetchFailure(content.abstract)
         ? content.abstract
         : `## Abstract\n${content.abstract}`
-      : content.fullTextFallback?.slice(0, 2000) ||
-        content.fullTextFailure ||
-        "";
+      : content.fullTextFallback?.slice(0, 2000) || "";
   const fullSections =
     content.fullTextFallback ??
     (content.sections.length > 0
@@ -399,10 +497,11 @@ function deriveQuality(
   abstract: string,
   sections: PaperContentSection[],
 ): PaperContentQuality {
+  const hasAbstract = abstract.trim() !== "" && !isContentFetchFailure(abstract);
   if (sections.length > 0 || (raw.fullSections && raw.fullSections.trim())) {
-    return abstract.trim() ? "full" : "partial";
+    return hasAbstract ? "full" : "partial";
   }
-  if (abstract.trim() || raw.abstractConclusion.trim()) {
+  if (hasAbstract || (raw.abstractConclusion.trim() && !isContentFetchFailure(raw.abstractConclusion))) {
     return raw.fullTextFailure ? "abstract_only" : "partial";
   }
   return "unavailable";
@@ -514,18 +613,51 @@ function dateOnly(value: string | undefined): string {
   return m?.[1] ?? "";
 }
 
+/** Every day the listing names: its day links reach past the page, its sections do not. */
+function listedDates(listing: RecentListing): string[] {
+  return listing.days.length > 0
+    ? listing.days.map((day) => day.announceDate)
+    : listing.buckets.map((bucket) => bucket.announceDate);
+}
+
 function recentDateBounds(
-  buckets: DateBucket[],
+  dates: string[],
 ): { oldest: string; newest: string } | null {
-  const dates = buckets.map((b) => b.announceDate).sort();
-  if (dates.length === 0) return null;
-  return { oldest: dates[0]!, newest: dates[dates.length - 1]! };
+  const sorted = [...dates].sort();
+  if (sorted.length === 0) return null;
+  return { oldest: sorted[0]!, newest: sorted[sorted.length - 1]! };
+}
+
+/** A day whose section lists every entry its heading counts (a heading with no count is taken at its word). */
+function isWholeDay(bucket: DateBucket): boolean {
+  return bucket.declaredEntries === undefined || bucket.listedEntries >= bucket.declaredEntries;
+}
+
+/**
+ * Where a day lies in the listing: the offset its day link gives and the
+ * length that follows from the next day's offset (or the listing's total).
+ * Undefined when the page does not say, which callers treat as "cannot read it".
+ */
+function daySpan(
+  listing: RecentListing,
+  dateStr: string,
+  bucket: DateBucket | undefined,
+): { start: number; count: number } | undefined {
+  const day = listing.days.find((entry) => entry.announceDate === dateStr);
+  if (!day) return undefined;
+  const later = listing.days.map((entry) => entry.skip).filter((skip) => skip > day.skip);
+  const end = later.length > 0 ? Math.min(...later) : listing.totalEntries;
+  const count = end === undefined ? bucket?.declaredEntries : end - day.skip;
+  if (count === undefined || !Number.isSafeInteger(count) || count < 1) return undefined;
+  // The heading and the links describe one listing; if they disagree it moved.
+  if (bucket?.declaredEntries !== undefined && bucket.declaredEntries !== count) return undefined;
+  return { start: day.skip, count };
 }
 
 function missingRecentDateReason(
   dateStr: string,
   category: string,
-  buckets: DateBucket[],
+  dates: string[],
   bounds: { oldest: string; newest: string } | null,
 ): string {
   if (bounds && dateStr > bounds.newest) {
@@ -534,7 +666,7 @@ function missingRecentDateReason(
       `${bounds.newest}; arXiv announce page may not be available yet`
     );
   }
-  const have = buckets.map((b) => b.announceDate).join(",");
+  const have = dates.join(",");
   if (bounds && dateStr < bounds.oldest) {
     return (
       `date ${dateStr} is older than the oldest ${category} /recent bucket ` +

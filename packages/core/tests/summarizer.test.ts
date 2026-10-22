@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { LlmTransientExhaustedError } from "../src/llm/client";
+import { LlmContentBlockedError, LlmTransientExhaustedError } from "../src/llm/client";
 import { GenerationMetricsCollector } from "../src/metrics/generation";
 import {
   DailySummaryRescueExhaustedError,
@@ -644,6 +644,49 @@ describe("summarizeDaily", () => {
     expect(output).toContain("其中 1 篇使用回退内容。");
   });
 
+  it("falls back for a paper the provider refused and keeps the rest of the day", async () => {
+    const llm = {
+      call: vi.fn(async (messages: any[]) => {
+        const id = /ID: (\d{4}\.\d{5})/.exec(messages[1].content)![1]!;
+        if (id === "2607.00001") throw new LlmContentBlockedError("Content Exists Risk", 400);
+        return structured(id);
+      }),
+    };
+    const upsert = vi.fn(async () => ({} as any));
+
+    const dailyResult = await summarizeDaily(
+      [paper("2607.00001"), paper("2607.00002")],
+      "2026-07-22",
+      deps(llm, { checkpointStore: { lookupReusable: vi.fn(async () => null), upsert } }),
+    );
+    const output = dailyResult.markdown;
+
+    expect(llm.call).toHaveBeenCalledTimes(2);
+    expect(extractFallbackPaperIds(output)).toEqual(["2607.00001"]);
+    expect(Object.keys(extractPaperSummaries(output))).toEqual(["2607.00002"]);
+    expect(output).toContain("其中 1 篇使用回退内容。");
+    expect(output).toContain("模型服务商拒绝为这篇论文生成摘要");
+    expect(dailyResult.slots[0]!.result).toMatchObject({
+      kind: "fallback", reasonCode: "content-blocked", attempts: 1, originalAbstract: "abstract 2607.00001",
+    });
+    // Saved like any other finished paper, so a resumed run does not ask again.
+    expect(upsert.mock.calls[0]![2]).toMatchObject({ kind: "fallback", reasonCode: "content-blocked" });
+  });
+
+  it("does not stop a retrying run for a refused paper: asking again cannot help", async () => {
+    const llm = {
+      call: vi.fn(async () => { throw new LlmContentBlockedError("Content Exists Risk", 400); }),
+    };
+
+    const dailyResult = await summarizeDaily(
+      [paper("2607.00001")],
+      "2026-07-22",
+      deps(llm, { failOnTransportExhausted: true }),
+    );
+
+    expect(extractFallbackPaperIds(dailyResult.markdown)).toEqual(["2607.00001"]);
+  });
+
   it("propagates permanent provider errors without fallback", async () => {
     const llm = {
       call: vi
@@ -732,6 +775,11 @@ describe("summarizeDaily", () => {
       name: "rescue transport exhaustion",
       error: new LlmTransientExhaustedError(new Error("rescue unavailable")),
       cause: "transport-exhausted",
+    },
+    {
+      name: "a provider content-safety refusal of the rescue request",
+      error: new LlmContentBlockedError("Content Exists Risk", 400),
+      cause: "content-blocked",
     },
   ])("uses deterministic emergency output after $name without another metric event", async ({ error, cause }) => {
     const onMetrics = vi.fn();

@@ -1,6 +1,34 @@
+import { slugify } from "../utils/slugify";
 import type { Direction, DirectionOrigin, Topic } from "./types";
 
 const DIRECTION_ORIGINS: readonly DirectionOrigin[] = ["manual", "migrated", "library"];
+
+/**
+ * What the daily report can carry of a topic. A report records, per paper, the
+ * directions that selected it (tag, id, text), and that record holds no more
+ * than this; a longer value makes the whole day fail once the model calls are
+ * already paid for, so the settings pages hold to the same limits.
+ */
+export const TOPIC_TAG_MAX_LENGTH = 120 as const;
+export const DIRECTION_TEXT_MAX_LENGTH = 1_000 as const;
+export const DIRECTION_ID_MAX_LENGTH = 128 as const;
+
+/** A derived tag stops here, leaving room for a uniqueness suffix inside {@link TOPIC_TAG_MAX_LENGTH}. */
+const DERIVED_TOPIC_TAG_MAX_LENGTH = 100;
+
+/**
+ * The tag a topic name maps to: its slug, shortened when the name is a
+ * sentence. Every place that derives a tag from a name goes through here, so
+ * a tag recognised as "still following its name" is the one a rename produces.
+ */
+export function topicTagFromName(name: string): string {
+  const slug = slugify(name);
+  if (slug.length <= DERIVED_TOPIC_TAG_MAX_LENGTH) return slug;
+  let tag = slug.slice(0, DERIVED_TOPIC_TAG_MAX_LENGTH);
+  const last = tag.charCodeAt(tag.length - 1);
+  if (last >= 0xd800 && last <= 0xdbff) tag = tag.slice(0, -1);
+  return tag.replace(/-+$/u, "");
+}
 
 /**
  * A topic as a quick-start template describes it, before it is given an

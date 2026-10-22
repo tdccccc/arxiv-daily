@@ -1,4 +1,5 @@
 import {
+  isLlmContentBlockedError,
   isLlmTransientExhaustedError,
   type LlmClient,
 } from "../llm/client";
@@ -254,15 +255,19 @@ export async function summarizeDaily(
         onMetrics: deps.onMetrics,
       });
     } catch (rescueError) {
+      // The rescue request carries the papers' abstracts, so a provider that
+      // refuses one of them refuses the rescue too: fall back like the others.
+      const blocked = isLlmContentBlockedError(rescueError);
       if (
         !isDailySummaryRescueExhaustedError(rescueError) &&
-        !isLlmTransientExhaustedError(rescueError)
+        !isLlmTransientExhaustedError(rescueError) &&
+        !blocked
       ) {
         throw rescueError;
       }
       const cause = isDailySummaryRescueExhaustedError(rescueError)
         ? "validation-exhausted"
-        : "transport-exhausted";
+        : blocked ? "content-blocked" : "transport-exhausted";
       deps.logger.warn(
         `summarizeDaily: degraded emergency report cause=${cause} slots=${slots.length} fallback=${fallbackCount}`,
       );
