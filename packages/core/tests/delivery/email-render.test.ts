@@ -226,6 +226,7 @@ describe("email render", () => {
     ["$\\sin\\theta + \\ln x$", "sinθ + ln x"],
     // What cannot be rendered stays recognisably TeX instead of becoming a word.
     ["$\\foo{x}$", "\\foo{x}"],
+    ["$\\foo{a{b}c}_i$", "\\foo{a{b}c}_i"],
     ["$\\foo x + \\bar{y}$", "\\foo x + y"],
     [
       "$A=\\begin{pmatrix} 1 & 2 \\\\ 3 & 4 \\end{pmatrix}$",
@@ -278,12 +279,14 @@ describe("email render", () => {
     expect(emailProse("$\\gg$ and $\\ggg$")).toContain("≫");
   });
 
-  it("emailProse stays fast on repeated unterminated \\begin and \\sqrt[ openers", () => {
+  it("emailProse stays fast on repeated unterminated \\begin, \\sqrt[ and \\foo{ openers", () => {
     const begin = ("\\begin{pmatrix}" + "a".repeat(20_000)).repeat(50);
     const root = ("\\sqrt[" + "a".repeat(20_000)).repeat(50);
+    const unknown = ("\\foo{" + "a".repeat(20_000)).repeat(50);
     const start = performance.now();
     expect(emailProse(begin).length).toBeGreaterThan(0);
     expect(emailProse(root).length).toBeGreaterThan(0);
+    expect(emailProse(unknown).length).toBeGreaterThan(0);
     expect(performance.now() - start).toBeLessThan(500);
   });
 

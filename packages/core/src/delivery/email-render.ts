@@ -497,7 +497,7 @@ function simplifyLatex(raw: string): string {
   // written, with its arguments, so it reads as TeX instead of fusing its name
   // onto the argument (\foo{x} -> "foox").
   s = s.replace(new RegExp(`\\\\(${TEX_FUNCTION_NAMES})${TEX_END}`, "g"), "$1");
-  s = s.replace(/\\[A-Za-z]+\*?(?:\s*\{[^{}]*\})*/g, keep);
+  s = s.replace(/\\[A-Za-z]+\*?(?:\s*\{(?:[^{}]|\{[^{}]*\})*\})*/g, keep);
   // Row breaks, norm bars, stray braces and escapes (\%, \&, \_).
   s = s.replace(/\\\\/g, " ");
   s = s.replace(/\\\|/g, "‖");
