@@ -367,16 +367,21 @@ export async function deliverDailyEmailIfEnabled(
 
     const attempts = providerAttempts(error, deps.maxAttempts);
     const ambiguous = isCancellationError(error) || providerOutcomeAmbiguous(error);
+    // The claim keeps the coarse code older clients already understand; the
+    // caller and the log get the kind of rejection it was.
+    const recordedCode = ambiguous
+      ? ("provider_outcome_ambiguous" as const)
+      : ("provider_definitive_rejection" as const);
     const reason: EmailDeliveryReason = ambiguous
-      ? "provider_outcome_ambiguous"
-      : "provider_definitive_rejection";
+      ? recordedCode
+      : definitiveRejectionReason(error);
     if (claim) {
       try {
         await finalizeAutomaticDelivery(deps.storage, deps.output, {
           ...claim,
           outcome: ambiguous ? "ambiguous" : "failed",
           attempts,
-          errorCode: reason,
+          errorCode: recordedCode,
           now: now(),
         });
       } catch {
@@ -391,7 +396,11 @@ export async function deliverDailyEmailIfEnabled(
       }
     }
 
-    deps.logger?.warn(`email: ${reason} date=${digest.date}`);
+    const status = providerStatus(error);
+    deps.logger?.warn(
+      `email: ${reason} date=${digest.date}` +
+        (status === undefined ? "" : ` status=${status}`),
+    );
     return ambiguous
       ? { kind: "ambiguous", reason, attempts }
       : { kind: "failed", reason, attempts };
@@ -423,6 +432,29 @@ function providerAttempts(error: unknown, maxAttempts?: number): number {
   if (error instanceof ResendSendError) return error.attempts;
   if (error instanceof HostedDeliveryError) return 1;
   return maxAttempts ?? 1;
+}
+
+/** HTTP status the relay or Resend answered with; never the body, which can hold addresses. */
+function providerStatus(error: unknown): number | undefined {
+  if (error instanceof ResendSendError || error instanceof HostedDeliveryError) {
+    return error.status;
+  }
+  return undefined;
+}
+
+/**
+ * Which kind of definitive rejection an HTTP status means. A Resend 403 covers a
+ * wrong API key as well as an unverified sender domain or a test-only sender
+ * mailing someone other than the account owner, hence the broad name.
+ */
+function definitiveRejectionReason(error: unknown): EmailDeliveryReason {
+  const status = providerStatus(error);
+  const hosted = error instanceof HostedDeliveryError;
+  if (status === 401) return hosted ? "hosted_token_rejected" : "resend_api_key_rejected";
+  if (status === 403) return hosted ? "hosted_recipient_mismatch" : "resend_access_denied";
+  if (status === 429) return "provider_quota_exceeded";
+  if (status === 400 || status === 422) return "provider_request_rejected";
+  return "provider_definitive_rejection";
 }
 
 /** True only for evidence that the request never reached the provider or relay. */

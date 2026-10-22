@@ -1,5 +1,6 @@
 import {
   AUTOMATIC_EMAIL_UNSUPPORTED_MESSAGE,
+  emailFailureHint,
   isEmailCredentialsReady,
   isEmailDeliveryConfigured,
   resolveEmailDeliveryMode,
@@ -75,7 +76,11 @@ export async function emailTest(
     }
     return 0;
   }
-  writeLine(io.stderr, `email test: ${result.kind} (${result.reason})`);
+  const hint = emailFailureHint(result.reason);
+  writeLine(
+    io.stderr,
+    `email test: ${result.kind} (${result.reason})${hint ? `: ${hint}` : ""}`,
+  );
   return 1;
 }
 

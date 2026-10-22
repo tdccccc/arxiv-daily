@@ -5,3 +5,4 @@ export * from "./delivery-state";
 export * from "./resend";
 export * from "./hosted";
 export * from "./deliver-email";
+export * from "./failure-hints";

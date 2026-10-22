@@ -88,6 +88,32 @@ describe("email test", () => {
     expect(stderr.join("")).toContain(AUTOMATIC_EMAIL_UNSUPPORTED_MESSAGE);
   });
 
+  it("tells the user what to fix when the relay rejects the verification code", async () => {
+    const { io, stdout, stderr } = captureIo();
+    const config = testConfig();
+    config.settings.email = {
+      ...config.settings.email,
+      mode: "hosted",
+      hostedToken: "device-token-private",
+    };
+    const host = testHost(true);
+    (host.http.request as ReturnType<typeof vi.fn>).mockResolvedValue({
+      status: 401,
+      headers: {},
+      bodyText: JSON.stringify({ error: "invalid or revoked token" }),
+    });
+
+    const code = await emailTest(config, host, io, "2026-09-24");
+
+    expect(code).toBe(1);
+    expect(stdout.join("")).toBe("");
+    expect(stderr.join("")).toBe(
+      "email test: failed (hosted_token_rejected): The verification code was rejected as invalid or expired. " +
+        "Send a new verification email and paste the new code into the Email settings.\n",
+    );
+    expect(stderr.join("")).not.toContain("device-token-private");
+  });
+
   it("stays quiet when automatic email works here", async () => {
     const { io, stderr } = captureIo();
     const code = await emailTest(testConfig(), testHost(true), io, "2026-09-24");

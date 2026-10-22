@@ -1,5 +1,6 @@
 import {
   AUTOMATIC_EMAIL_UNSUPPORTED_MESSAGE,
+  emailFailureHint,
   type DeliverEmailResult,
 } from "@arxiv-daily/core";
 
@@ -13,7 +14,12 @@ export function testEmailResultMessage(
   automaticSupported: boolean,
 ): string {
   if (result.kind !== "delivered" && result.kind !== "delivered_unrecorded") {
-    throw new Error(`${result.kind}: ${result.reason}`);
+    const hint = emailFailureHint(result.reason);
+    throw new Error(
+      hint
+        ? `${hint} (${result.kind}: ${result.reason})`
+        : `${result.kind}: ${result.reason}`,
+    );
   }
   const message = "Test email delivered" +
     (result.kind === "delivered_unrecorded"
@@ -74,7 +80,11 @@ function describeAutomaticEmailOutcome(
       return `The digest email for ${date} was not sent because the mail service could not be reached. Nothing was delivered.`;
     case "delivery_claim_unreadable":
       return `The digest email for ${date} was not sent because a delivery record file is unreadable. See the developer console for its name.`;
-    default:
-      return `The digest email for ${date} was not sent (${result.reason}). See the developer console for details.`;
+    default: {
+      const hint = emailFailureHint(result.reason);
+      return hint
+        ? `The digest email for ${date} was not sent. ${hint}`
+        : `The digest email for ${date} was not sent (${result.reason}). See the developer console for details.`;
+    }
   }
 }
