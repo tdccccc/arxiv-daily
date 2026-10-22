@@ -1,7 +1,7 @@
 # 邮件摘要里常见的 LaTeX 记号被拼成乱码单词：`M_\odot` 变成 `M_odot`，`\mathcal{O}(n)` 变成 `mathcalO(n)`，`\ge` 变成 `ge`
 
 > 发现日期：2026-10-21 · 来源：main `d999037` 深度代码审查 · 编号 MAIL-07
-> 范围：日报邮件正文（HTML 与纯文本）中标题、作者、五个摘要字段的公式简化 `emailProse` · 严重程度：低 · 状态：未修复 · 置信度：已复现
+> 范围：日报邮件正文（HTML 与纯文本）中标题、作者、五个摘要字段的公式简化 `emailProse` · 严重程度：低 · 状态：已修复（分支 `fix/2026-10-21-batch3`，提交 0004bcf、d20b101） · 置信度：已复现
 
 ## 问题
 
@@ -44,3 +44,9 @@
 - 上表每一行作为表驱动测试，断言新的预期结果。
 - 不变量测试：对随机的 `$…$` 片段，输出中不应出现“已知 TeX 命令名紧跟字母或数字”的粘连（例如 `/(mathcal|mathbb|sqrt|hat|bar|vec|tilde|left|right)[A-Za-z0-9(]/`）。
 - 现有“emailProse simplifies common LaTeX”“display/block math delimiters”“completes quickly on repeated unterminated delimiters”测试保持通过。
+
+## 修复情况
+
+邮件摘要里常见的 LaTeX 记号不再被拼成乱码单词：`\le`、`\ge`、`\ne`、`\ll`、`\gg`、`\odot`、`\star`、`\oplus`、`\forall`、`\exists`、`\langle`、`\rangle`、`\mathbb{R}` 等都有 Unicode 对应（`M_\odot` 变成 `M_⊙`，`50^\circ` 变成 `50°`）；`\sqrt{x}` 写成 `√(x)`；`\mathcal`、`\mathbb`、`\hat`、`\bar`、`\vec`、`\tilde`、`\dot`、`\overline`、`\left`/`\right`、`\displaystyle` 等排版命令只丢掉命令名、保留参数。仍然无法渲染的命令和矩阵、`align` 等环境原样保留为 TeX（`\foo{x}`、`\begin{pmatrix} … \end{pmatrix}`），不再把命令名黏到参数上变成假单词。代价：未知命令现在带着反斜杠出现在邮件里；带强调符号的写法（`\hat{\theta}`）只剩 `θ`，丢掉了帽子。vault 里的日报不受影响，不需要部署。
+
+测试：`packages/core/tests/delivery/email-render.test.ts`（写作里的表格逐行断言，另有常见数学补充行、对随机 TeX 片段的“命令名不黏参数”不变量测试、重复未闭合的 `\begin{…}` 与 `\sqrt[` 上保持线性；原有的 emailProse 用例保持通过）。29 个新用例在旧代码下失败。

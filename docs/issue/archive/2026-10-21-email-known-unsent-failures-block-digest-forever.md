@@ -50,6 +50,6 @@
 
 ## 修复情况
 
-能证明请求根本没发出的失败（离线、DNS 失败、中继维护中）不再被记成"结果不明"。Node 宿主的 HTTP 客户端只对连接建立和证书校验失败标 `requestNotSent`（EPROTO、重置、超时不算）；self 模式要求每一次尝试都如此，hosted 模式接受传输层的这个证明，或中继返回的 503 且响应体恰为 `{error, ambiguous:false}`（中继只在接触任何 provider 之前这样拒绝）。这时该日期的 claim 被释放，返回 `failed / provider_not_invoked`，之后对同一日期的投递可以重新 claim，仍用同一个 provider 幂等键。其他状态码和响应形状、混合历史（先有一次可能已发出的尝试）、以及无法判断的宿主（Obsidian）保持"结果不明"并阻断。插件对失败或不明的自动邮件按日期弹一次通知，CLI 日志里有对应的 warn 行。尚未处理：hosted 模式每次运行仍只请求一次，没有重试；已经 `completed` 的日期不会自动再次触发投递，需要一次带 digest 的新 completed 运行才会补发（见 PIPE-08）；Obsidian 宿主仍分辨不出。
+能证明请求根本没发出的失败（离线、DNS 失败、中继维护中）不再被记成"结果不明"。Node 宿主的 HTTP 客户端只对连接建立和证书校验失败标 `requestNotSent`（EPROTO、重置、超时不算）；self 模式要求每一次尝试都如此，hosted 模式接受传输层的这个证明，或中继返回的 503 且响应体恰为 `{error, ambiguous:false}`（中继只在接触任何 provider 之前这样拒绝）。这时该日期的 claim 被释放，返回 `failed / provider_not_invoked`，之后对同一日期的投递可以重新 claim，仍用同一个 provider 幂等键。其他状态码和响应形状、混合历史（先有一次可能已发出的尝试）、以及无法判断的宿主（Obsidian）保持"结果不明"并阻断。插件对失败或不明的自动邮件按日期弹一次通知，CLI 日志里有对应的 warn 行。尚未处理：hosted 模式每次运行仍只请求一次，没有重试；已经 `completed` 的日期不会自动再次触发投递，需要一次带 digest 的新 completed 运行才会补发（见 PIPE-08）（PIPE-08 修复后，重新运行该日期即可：修复分支也会带着 digest，被释放的那一代 claim 会被重新 claim 并补发）；Obsidian 宿主仍分辨不出。
 
 测试：`resend.test.ts`、`hosted-deliver.test.ts`、`packages/node-runtime/tests/node-adapters.test.ts`（含经 `NodeHttpClient` 和原生 claim 存储的真实拒绝连接 / 中途断开连接用例）、`plugin/tests/email-delivery.test.ts`；其中 8 个 core 用例和 19 个 node-runtime 用例在旧代码下失败，其余保护"仍然不明"的情形。
