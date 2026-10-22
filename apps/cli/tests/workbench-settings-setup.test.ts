@@ -58,6 +58,9 @@ it("shows the first report's progress in its setup step and cannot start it twic
   let accept!: (value: unknown) => void;
   const request = vi.fn(async (url: string) => { if (url === 'api/runs') return new Promise(resolve => { accept = resolve; }); throw new Error(`Unexpected request ${url}`); });
   const { binding, onRun, generate, status, finish } = await guide(request);
+  // The step sits low in the scrolling dialog, so its status is brought into view.
+  const reveal = vi.fn();
+  Object.assign(Element.prototype, { scrollIntoView: reveal });
   try {
     generate().click();
     await vi.waitFor(() => expect(request).toHaveBeenCalledWith('api/runs', { kind: 'daily', latest: true }));
@@ -66,6 +69,8 @@ it("shows the first report's progress in its setup step and cannot start it twic
     generate().click();
     accept({ run: running });
     await vi.waitFor(() => expect(onRun).toHaveBeenCalledWith(running));
+    expect(reveal).toHaveBeenCalledOnce();
+    expect(reveal.mock.contexts[0]).toBe(document.querySelector('.settings-setup-status'));
     expect(status()).toContain('Generating the report for 2026-10-09…');
     expect(generate().disabled).toBe(true);
     expect(generate().textContent).toBe('Generating…');
@@ -76,7 +81,7 @@ it("shows the first report's progress in its setup step and cannot start it twic
     expect(status()).toContain('2026-10-09 · Daily report saved');
     expect(generate().disabled).toBe(false);
     expect(generate().textContent).toBe('Generate first report');
-  } finally { binding.dispose(); document.body.replaceChildren(); setUiLanguage('en'); }
+  } finally { binding.dispose(); document.body.replaceChildren(); setUiLanguage('en'); Reflect.deleteProperty(Element.prototype, 'scrollIntoView'); }
 });
 
 it("says what to do next when the first report ends before its day is announced", async () => {

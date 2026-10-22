@@ -472,6 +472,8 @@ export function bindSettings(form: HTMLFormElement, snapshot: SettingsSnapshot, 
       onRun?.(result.run);
      }
     }finally{firstReportStarting=false;if(name==='generate')refreshVisibleSetupGuide();}
+    // The step sits low in the scrolling dialog: bring what became of the click into view.
+    if(name==='generate')form.querySelector('.settings-setup-status')?.scrollIntoView?.({block:'nearest',behavior:window.matchMedia?.('(prefers-reduced-motion: reduce)').matches?'instant':'smooth'});
    },setup);return;
   }
   const target=event.target instanceof HTMLElement?event.target.closest<HTMLButtonElement>('[data-settings]'):null;if(!target)return;
