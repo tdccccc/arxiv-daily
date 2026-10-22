@@ -2968,7 +2968,7 @@ export default class ArxivDailyPlugin extends Plugin {
     result: Extract<PipelineResult, { kind: "completed" }>,
   ): Promise<void> {
     if (!result.digest) {
-      this.logger.debug(`email: no digest for ${date}; skip auto-send (repair path)`);
+      this.logger.debug(`email: no digest for ${date}; skip auto-send`);
       return;
     }
     const delivery = await deliverDailyEmailIfEnabled(result.digest, {

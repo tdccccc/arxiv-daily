@@ -1,5 +1,6 @@
 export * from "./types";
 export * from "./digest";
+export * from "./digest-from-report";
 export * from "./email-render";
 export * from "./delivery-state";
 export * from "./resend";

@@ -1,6 +1,7 @@
 import { isWeekendDate } from "../utils/time";
 import type { MarkupParser } from "../core/adapters";
 import { buildDailyDigest, emptyDailyDigest } from "../delivery/digest";
+import { digestFromDailyReport } from "../delivery/digest-from-report";
 import type { DailyDigest } from "../delivery/types";
 import type { Logger } from "../services/logger";
 import type { ProgressReporter } from "../services/progress";
@@ -84,6 +85,12 @@ export type PipelineResult =
   | {
     kind: "completed";
     papersWritten: number;
+    /**
+     * The mail for this date. Present when a report was written or repaired (a
+     * repair rebuilds it from the committed report) and on a day with no
+     * matches; absent when nothing was announced. Delivery decides by date and
+     * recipient whether anything is sent.
+     */
     digest?: DailyDigest;
     outcome?: RunOutcome;
     /** Present whenever candidates were listed (count may be 0); absent on empty days and repairs. */
@@ -631,7 +638,7 @@ export class ArxivPipeline {
     };
   }
 
-  /** Zero-paper completed digests (filter empty / all ignored). Repair path omits digest. */
+  /** Zero-paper completed digests (filter empty / all ignored). */
   private buildZeroDigest(dateStr: string): DailyDigest {
     return emptyDailyDigest({
       date: dateStr,
@@ -750,7 +757,19 @@ export class ArxivPipeline {
     signal?: AbortSignal,
   ): Promise<PipelineResult> {
     if (!this.deps.paperIndex) {
-      return { kind: "completed", papersWritten: 0 };
+      let markdown = "";
+      try {
+        throwIfCancelled(signal);
+        markdown = await this.deps.writer.readDaily(dateStr);
+      } catch (e) {
+        if (isCancellationError(e)) throw e;
+        this.deps.logger.warn(`pipeline: could not read the existing daily ${dateStr} for its email`, e);
+      }
+      return {
+        kind: "completed",
+        papersWritten: 0,
+        ...this.committedDailyDigest(markdown, dateStr),
+      };
     }
     try {
       throwIfCancelled(signal);
@@ -786,13 +805,43 @@ export class ArxivPipeline {
       this.deps.logger.info(
         `pipeline: repaired daily and detail index for ${dateStr} (${arxivIds.length} papers)`,
       );
-      return { kind: "completed", papersWritten: arxivIds.length };
+      return {
+        kind: "completed",
+        papersWritten: arxivIds.length,
+        ...this.committedDailyDigest(markdown, dateStr),
+      };
     } catch (e) {
       if (isCancellationError(e)) throw e;
       return {
         kind: "failed_transient",
         reason: `paper index repair failed: ${(e as Error).message}`,
       };
+    }
+  }
+
+  /**
+   * The mail of a report that was already on disk when this run started. The
+   * run that wrote it may have failed (or been cancelled) before it could hand
+   * its digest over, and this completed run is then the first to be able to.
+   * Delivery decides by date and recipient whether anything is sent, so a date
+   * that was already delivered is skipped. Never fails the repair.
+   */
+  private committedDailyDigest(
+    markdown: string,
+    dateStr: string,
+  ): { digest?: DailyDigest } {
+    try {
+      const digest = digestFromDailyReport({
+        markdown,
+        date: dateStr,
+        arxiv: this.deps.arxiv,
+        output: this.deps.output,
+        dailyPath: this.deps.writer.dailyPath(dateStr),
+      });
+      return digest ? { digest } : {};
+    } catch (e) {
+      this.deps.logger.warn(`pipeline: could not rebuild the email digest of ${dateStr} from its report`, e);
+      return {};
     }
   }
 
