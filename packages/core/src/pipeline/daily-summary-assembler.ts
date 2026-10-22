@@ -52,7 +52,9 @@ export type DailyPaperFallbackReasonCode =
   | "validation-exhausted"
   | "transport-exhausted"
   /** The model provider's content-safety filter refused this paper's text. */
-  | "content-blocked";
+  | "content-blocked"
+  /** No paper text could be fetched and the listing had no abstract, so there was nothing to summarize. */
+  | "content-unavailable";
 
 export type DailyPaperResult =
   | { kind: "structured"; summary: StructuredPaperSummary }
@@ -133,6 +135,7 @@ const FALLBACK_REASON_CODES = new Set<DailyPaperFallbackReasonCode>([
   "validation-exhausted",
   "transport-exhausted",
   "content-blocked",
+  "content-unavailable",
 ]);
 const STRUCTURED_FIELDS = [
   "id",

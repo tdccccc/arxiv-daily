@@ -18,6 +18,7 @@ import {
 import type {
   PaperContentFetcher,
 } from "../pipeline/paper-content";
+import { isContentFetchFailure } from "../pipeline/content-fetch-failure";
 import type {
   NormalizedPaperContent,
   PaperContentQuality,
@@ -345,14 +346,14 @@ export function legacyContentFromNormalized(
   fullTextSource?: "arxiv-html" | "arxiv-source";
   fullTextFailure?: string;
 } {
+  // The failure placeholder is not an abstract and the failure reasons are not
+  // paper text: neither may reach a prompt dressed up as one.
   const abstractConclusion =
     content.abstract.trim().length > 0
-      ? content.abstract.startsWith("##")
+      ? content.abstract.startsWith("##") || isContentFetchFailure(content.abstract)
         ? content.abstract
         : `## Abstract\n${content.abstract}`
-      : content.fullTextFallback?.slice(0, 2000) ||
-        content.fullTextFailure ||
-        "";
+      : content.fullTextFallback?.slice(0, 2000) || "";
   const fullSections =
     content.fullTextFallback ??
     (content.sections.length > 0
@@ -399,10 +400,11 @@ function deriveQuality(
   abstract: string,
   sections: PaperContentSection[],
 ): PaperContentQuality {
+  const hasAbstract = abstract.trim() !== "" && !isContentFetchFailure(abstract);
   if (sections.length > 0 || (raw.fullSections && raw.fullSections.trim())) {
-    return abstract.trim() ? "full" : "partial";
+    return hasAbstract ? "full" : "partial";
   }
-  if (abstract.trim() || raw.abstractConclusion.trim()) {
+  if (hasAbstract || (raw.abstractConclusion.trim() && !isContentFetchFailure(raw.abstractConclusion))) {
     return raw.fullTextFailure ? "abstract_only" : "partial";
   }
   return "unavailable";

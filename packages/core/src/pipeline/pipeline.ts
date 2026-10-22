@@ -59,6 +59,7 @@ import {
   type SourceAdapter,
 } from "../sources";
 import { classifyPaperNote } from "../dashboard/paper-note-classifier";
+import { contentFetchFailedText } from "./content-fetch-failure";
 
 /** Pipeline-local paper meta after source listing (arXiv-compatible shape). */
 interface SourcePaperMeta extends PaperMeta {
@@ -397,7 +398,7 @@ export class ArxivPipeline {
           logger.error(`pipeline: content fetch failed for ${p.id}`, e);
           return {
             ...p,
-            abstractConclusion: `[获取失败] arXiv ID: ${p.id}`,
+            abstractConclusion: contentFetchFailedText(p.id),
             fullSections: null,
             inboxStatus: p.indexEntry?.status,
             seenBefore: p.seenBefore,

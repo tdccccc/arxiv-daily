@@ -91,6 +91,44 @@ describe("mapLegacyPaperContent / legacyContentFromNormalized", () => {
   });
 });
 
+describe("content that could not be fetched", () => {
+  const FAILED = "[获取失败] arXiv ID: 2606.12345";
+
+  it("stays a bare placeholder instead of becoming an Abstract section", () => {
+    const normalized = mapLegacyPaperContent(
+      { abstractConclusion: FAILED, fullSections: null, fullTextFailure: "html down; abs down" },
+      "",
+      "2606.12345",
+    );
+
+    expect(normalized.quality).toBe("unavailable");
+    const legacy = legacyContentFromNormalized(normalized);
+    expect(legacy.abstractConclusion).toBe(FAILED);
+    expect(legacy.abstractConclusion).not.toContain("## Abstract");
+    expect(legacy.fullTextFailure).toBe("html down; abs down");
+  });
+
+  it("does not turn the failure reasons into paper text", () => {
+    const legacy = legacyContentFromNormalized(mapLegacyPaperContent(
+      { abstractConclusion: "", fullSections: null, fullTextFailure: "rendered HTML unavailable (HTTP 503)" },
+      "",
+      "2606.12345",
+    ));
+
+    expect(legacy.abstractConclusion).toBe("");
+    expect(legacy.fullTextFailure).toBe("rendered HTML unavailable (HTTP 503)");
+  });
+
+  it("still wraps a real abstract and uses full text when the abstract is missing", () => {
+    expect(legacyContentFromNormalized(mapLegacyPaperContent(
+      { abstractConclusion: "Plain abstract.", fullSections: null }, "", "2606.12345",
+    )).abstractConclusion).toBe("## Abstract\nPlain abstract.");
+    expect(legacyContentFromNormalized(mapLegacyPaperContent(
+      { abstractConclusion: "", fullSections: "## Intro\nBody." }, "", "2606.12345",
+    )).abstractConclusion).toBe("## Intro\nBody.");
+  });
+});
+
 describe("paperMetaFromSourcePaper", () => {
   it("exposes externalId as filter id and categories as arxivCategories", () => {
     const paper: SourcePaperMeta = {

@@ -20,6 +20,7 @@ import type {
   DailyPaperResult,
   StructuredPaperSummary,
 } from "./daily-summary-assembler";
+import { isContentFetchFailure } from "./content-fetch-failure";
 import { escapePaperDataFence } from "./prompt-safety";
 import {
   canonicalizeScientificMarkdownMath,
@@ -192,13 +193,15 @@ export async function summarizeDailyPaper(
   deps: DailyPaperSummaryDeps,
 ): Promise<StructuredPaperSummary> {
   throwIfCancelled(deps.signal);
+  const source = resolveSummarySource(paper);
+  if (!source) throw new Error(`summarizeDailyPaper: no source text for ${paper.id}`);
   const language = normalizeSummaryLanguage(deps.summaryLanguage);
   const systemPrompt = renderPrompt(
     language === "en" ? dailyPaperSummaryTemplateEn : dailyPaperSummaryTemplate,
     { injectionGuard: language === "en" ? injectionGuardEn : injectionGuardZh },
   );
   const userContent = [
-    buildPaperData(paper, language),
+    buildPaperData(paper, source, language),
     deps.previousValidationError
       ? buildCorrectionGuidance(deps.previousValidationError, language)
       : "",
@@ -222,6 +225,17 @@ export async function summarizeDailyPaperWithValidationRetry(
 ): Promise<DailyPaperResult> {
   const { onValidationFailure, ...summaryDeps } = deps;
   let previousValidationError: DailyPaperSummaryValidationError | undefined;
+
+  throwIfCancelled(deps.signal);
+  if (!resolveSummarySource(paper)) {
+    // Neither fetched text nor a listed abstract: a model asked anyway can only invent one.
+    return {
+      kind: "fallback",
+      reasonCode: "content-unavailable",
+      attempts: 1,
+      originalAbstract: resolveTrustedOriginalAbstract(paper),
+    };
+  }
 
   for (let attempt = 1; attempt <= DAILY_PAPER_SUMMARY_MAX_ATTEMPTS; attempt += 1) {
     throwIfCancelled(deps.signal);
@@ -284,15 +298,15 @@ export async function summarizeDailyPaperWithValidationRetry(
 }
 
 export function derivePaperSourceSections(
-  paper: Pick<DailyPaperSummaryInput, "abstractConclusion" | "fullSections">,
+  paper: Pick<DailyPaperSummaryInput, "abstract" | "abstractConclusion" | "fullSections">,
 ): string {
+  const source = resolveSummarySource(paper);
+  if (!source) return "获取失败";
   const titles = [
-    ...extractSectionTitles(paper.abstractConclusion),
-    ...extractSectionTitles(paper.fullSections),
+    ...extractSectionTitles(source.abstractConclusion),
+    ...extractSectionTitles(source.fullSections),
   ].filter((title, index, values) => values.indexOf(title) === index);
-  if (titles.length > 0) return titles.join(", ");
-  if (paper.abstractConclusion.startsWith("[获取失败]")) return "获取失败";
-  return "正文摘录";
+  return titles.length > 0 ? titles.join(", ") : "正文摘录";
 }
 
 export function resolveTrustedOriginalAbstract(
@@ -301,19 +315,48 @@ export function resolveTrustedOriginalAbstract(
   if (typeof paper.abstract === "string" && paper.abstract.trim()) {
     return paper.abstract.trim();
   }
-  return extractAbstractSection(paper.abstractConclusion);
+  return extractAbstractSection(usableAbstractConclusion(paper.abstractConclusion));
+}
+
+interface SummarySource {
+  abstractConclusion: string;
+  fullSections: string | null;
+}
+
+/**
+ * What a summary may be written from, or null when there is nothing. A fetch
+ * failure placeholder and an abs page without an abstract ("N/A") are not
+ * paper text; the abstract the listing already provided stands in for them.
+ */
+function resolveSummarySource(
+  paper: Pick<DailyPaperSummaryInput, "abstract" | "abstractConclusion" | "fullSections">,
+): SummarySource | null {
+  const fullSections = paper.fullSections?.trim() || null;
+  let abstractConclusion = usableAbstractConclusion(paper.abstractConclusion);
+  const listed = typeof paper.abstract === "string" ? paper.abstract.trim() : "";
+  if (!abstractConclusion && listed) abstractConclusion = `## Abstract\n${listed}`;
+  return abstractConclusion || fullSections ? { abstractConclusion, fullSections } : null;
+}
+
+function usableAbstractConclusion(abstractConclusion: string): string {
+  const text = abstractConclusion.trim();
+  if (isContentFetchFailure(text)) return "";
+  // The abs-page fallback writes this when the page has no abstract block.
+  if (text.length <= 32 && /^##\s*abstract\s+n\/a$/i.test(text)) return "";
+  return text;
 }
 
 function buildPaperData(
   paper: DailyPaperSummaryInput,
+  source: SummarySource,
   language: SummaryLanguage,
 ): string {
-  const content = [paper.abstractConclusion.trim()];
-  if (paper.fullSections?.trim()) {
+  const content = [source.abstractConclusion];
+  if (source.fullSections) {
     content.push(
       language === "en"
-        ? `Full-text excerpts:\n${paper.fullSections.trim()}`
-        : `正文摘录：\n${paper.fullSections.trim()}`,
+        ? `Full-text excerpts:\n${source.fullSections}`
+        : `正文摘录：\n${source.fullSections}`,
     );
   }
   const sourceSections = derivePaperSourceSections(paper);

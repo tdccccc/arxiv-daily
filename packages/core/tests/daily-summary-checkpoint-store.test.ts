@@ -383,6 +383,23 @@ describe("DailySummaryCheckpointStore", () => {
     },
   );
 
+  it("reuses a content-unavailable fallback under the same unfetched input only", async () => {
+    const unavailable: DailyPaperResult = {
+      kind: "fallback", reasonCode: "content-unavailable", attempts: 1, originalAbstract: "",
+    };
+    const { storage } = makeStorage();
+    const unfetched = compatibility({
+      paper: {
+        ...compatibility().paper, abstract: "", abstractConclusion: "[获取失败] arXiv ID: 2608.00001", fullSections: null,
+      },
+    });
+    await makeStore(storage).upsert(reportDate, unfetched, unavailable);
+
+    expect(await makeStore(storage).lookupReusable(reportDate, unfetched)).toEqual(unavailable);
+    // Once the content can be fetched the input differs, so the paper is summarized for real.
+    expect(await makeStore(storage).lookupReusable(reportDate, compatibility())).toBeNull();
+  });
+
   it("reuses a content-blocked fallback: the provider refuses the same text again", async () => {
     const { files, storage } = makeStorage();
     await makeStore(storage).upsert(reportDate, compatibility(), blockedFallback);

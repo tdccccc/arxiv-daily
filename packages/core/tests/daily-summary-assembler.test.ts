@@ -306,6 +306,24 @@ describe("assembleDailySummary", () => {
     }
   });
 
+  it("says in both languages that a paper's content could not be retrieved", () => {
+    for (const [summaryLanguage, expected] of [
+      ["zh", "> **自动摘要不可用。** 无法获取这篇论文的内容，请直接阅读 [arXiv 原文](https://arxiv.org/abs/2607.00001)。"],
+      ["en", "> **Summary unavailable.** The paper's content could not be retrieved; read the [original paper on arXiv](https://arxiv.org/abs/2607.00001) directly."],
+    ] as const) {
+      const assemblyInput = input({ summaryLanguage });
+      assemblyInput.slots[0] = fallbackSlot(
+        assemblyInput.slots[0]!.paper, "", "content-unavailable", 1,
+      );
+      const markdown = assembleDailySummary(assemblyInput);
+
+      expect(markdown).toContain(expected);
+      expect(markdown).toContain("<!-- arxiv-daily-fallback:2607.00001 -->");
+      expect(markdown).toContain("<!-- arxiv-daily-fallback-abstract-absent:2607.00001 -->");
+      expect(extractFallbackPaperIds(markdown)).toEqual(["2607.00001"]);
+    }
+  });
+
   it("keeps the generic unavailable text for the other fallback reasons", () => {
     for (const reasonCode of ["validation-exhausted", "transport-exhausted"] as const) {
       const assemblyInput = input();

@@ -10,6 +10,7 @@ import {
   type ExtractSectionsOpts,
 } from "./section-extractor";
 import { extractLatexSource, SOURCE_EXTRACTION_LIMITS } from "./source-extractor";
+import { contentFetchFailedText } from "./content-fetch-failure";
 import { isCancellationError, throwIfCancelled } from "../services/cancellation";
 
 export interface PaperContent {
@@ -205,7 +206,7 @@ export class PaperContentFetcher {
       if (isCancellationError(e)) throw e;
       const failure = `abs/cache failed for ${arxivId}: ${errorMessage(e)}`;
       this.logger.error(`paper-content: ${failure}`, e);
-      return { abstract: `[获取失败] arXiv ID: ${arxivId}`, failure };
+      return { abstract: contentFetchFailedText(arxivId), failure };
     }
   }
 

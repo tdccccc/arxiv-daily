@@ -585,7 +585,8 @@ export function decodeDailyPaperResult(
     if (
       (value.reasonCode !== "validation-exhausted" &&
         value.reasonCode !== "transport-exhausted" &&
-        value.reasonCode !== "content-blocked") ||
+        value.reasonCode !== "content-blocked" &&
+        value.reasonCode !== "content-unavailable") ||
       typeof value.attempts !== "number" ||
       !Number.isSafeInteger(value.attempts) ||
       value.attempts < 1 ||
