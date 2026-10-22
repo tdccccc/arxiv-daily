@@ -178,6 +178,7 @@ Connect one local paper-library folder — including a folder outside your vault
 | Too many papers selected | Fewer categories, or more specific topic descriptions |
 | Test email HTTP **403** | Set **Your email** to the Resend account address named in the error; leave From empty until you verify a domain |
 | A notice says `data.json` could not be read | The plugin started on default settings and kept the unreadable file next to the original as `data.json.corrupt-<time>` in the plugin folder. Open that copy in a text editor to recover your settings (it holds your API keys in plain text, so do not share it), then enter them again. The notice repeats on every start until a save makes `data.json` readable |
+| A notice says arXiv Daily did not start because `data.json` could not be read or kept aside | The plugin stopped on purpose so that nothing can overwrite your settings. Check that the file in the plugin folder is readable, that the folder is writable and the disk is not full, then reload the plugin |
 
 ## CLI (optional)
 
