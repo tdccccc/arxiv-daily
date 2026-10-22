@@ -27,7 +27,7 @@
 - 一个或多个 arXiv 分类（如 `astro-ph`、`cs.LG`、`hep-th`）
 - 每个研究主题的简短描述
 
-生成内容默认写在 vault 的 `arxiv-daily/` 下。API key 保存在本机插件数据里；保存后显示 **Configured**，修改用 **Replace** / **Clear**。
+生成内容默认写在 vault 的 `arxiv-daily/` 下。API key 保存在插件数据文件里（Vault 的 `.obsidian` 文件夹中插件目录下的 `data.json`）。设置页的输入框默认遮蔽，点眼睛图标可查看。
 
 ## 1. 打开设置
 
@@ -49,7 +49,7 @@ Settings → arXiv Daily
 
 ## 2. 连接 AI
 
-选择 provider，填写并保存 API key。按需改 Base URL 和模型。第一次可先用默认高级选项。
+填写并保存 API key。如果不用默认设置，再把 API base URL 和模型改成与你的服务商对应的值。
 
 ## 3. 选择 arXiv 分类
 
@@ -177,6 +177,7 @@ Beta 额度偏小（每个已验证邮箱每个 UTC 日仅少量消息，测试�
 | 运行失败 | Dashboard → More → Show diagnostics |
 | 入选论文太多 | 减少分类，或把 topic 描述写得更具体 |
 | 测试邮件 HTTP **403** | **Your email** 改成报错里的 Resend 账号邮箱；验证域名前 From 留空 |
+| 提示 `data.json` 无法读取 | 插件已按默认设置启动，并把无法读取的文件保存为同目录下的 `data.json.corrupt-<时间>`。用文本编辑器打开这份副本即可找回设置（里面有明文 API key，不要外传），再重新填写。在一次保存让 `data.json` 恢复可读之前，每次启动都会再提示一次 |
 
 ## CLI（可选）
 

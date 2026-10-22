@@ -27,7 +27,7 @@ The workbench and Obsidian share core workflows and settings rules, while config
 - One or more arXiv categories (for example `astro-ph`, `cs.LG`, `hep-th`)
 - A short description of each research topic you want to track
 
-Generated files go in your vault under `arxiv-daily/` by default. API keys are stored in the plugin data file on this device (shown as **Configured** after save—use **Replace** or **Clear** to change them).
+Generated files go in your vault under `arxiv-daily/` by default. API keys are stored in the plugin's data file (`data.json` in the plugin folder inside your vault's `.obsidian` folder). The settings input masks them; click the eye icon to show one.
 
 ## 1. Open settings
 
@@ -49,7 +49,7 @@ Buttons jump to the matching form. Once all five steps are complete, Obsidian re
 
 ## 2. Connect AI
 
-Pick a provider, enter your API key, and save. Adjust base URL and model if needed. Defaults are fine for a first run unless your provider requires otherwise.
+Enter your API key and save. Set the API base URL and model to match your provider if you are not using the defaults.
 
 ## 3. Choose arXiv categories
 
@@ -177,6 +177,7 @@ Connect one local paper-library folder — including a folder outside your vault
 | Run failed | Dashboard → More → Show diagnostics |
 | Too many papers selected | Fewer categories, or more specific topic descriptions |
 | Test email HTTP **403** | Set **Your email** to the Resend account address named in the error; leave From empty until you verify a domain |
+| A notice says `data.json` could not be read | The plugin started on default settings and kept the unreadable file next to the original as `data.json.corrupt-<time>` in the plugin folder. Open that copy in a text editor to recover your settings (it holds your API keys in plain text, so do not share it), then enter them again. The notice repeats on every start until a save makes `data.json` readable |
 
 ## CLI (optional)
 
