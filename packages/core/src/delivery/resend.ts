@@ -36,6 +36,8 @@ export class ResendSendError extends Error {
     readonly permanent = false,
     readonly attempts = 1,
     readonly ambiguous = false,
+    /** Every attempt failed before its request was sent, so nothing reached Resend. */
+    readonly notSent = false,
   ) {
     super(message);
     this.name = "ResendSendError";
@@ -63,6 +65,9 @@ export async function sendViaResend(
   }
 
   let lastError: unknown;
+  // Becomes true once any attempt got a response or failed in a way that may
+  // have happened after the request was sent.
+  let mayHaveReachedProvider = false;
   for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
     throwIfCancelled(opts.signal);
     await opts.beforeProviderAttempt?.();
@@ -86,6 +91,7 @@ export async function sendViaResend(
         responseType: "text",
         signal: opts.signal,
       });
+      mayHaveReachedProvider = true;
 
       if (response.status >= 200 && response.status < 300) {
         if (!hasProviderAcceptance(response.bodyText)) {
@@ -149,13 +155,17 @@ export async function sendViaResend(
         : "Resend transport outcome is unknown";
       const canRetryPhysicalAttempt =
         isHttpTransportError(error) && error.retryableAttempt;
+      if (!(isHttpTransportError(error) && error.requestNotSent)) {
+        mayHaveReachedProvider = true;
+      }
       if (!canRetryPhysicalAttempt || attempt >= maxAttempts) {
         throw new ResendSendError(
           message,
           undefined,
           false,
           attempt,
-          true,
+          mayHaveReachedProvider,
+          !mayHaveReachedProvider,
         );
       }
       lastError = error;

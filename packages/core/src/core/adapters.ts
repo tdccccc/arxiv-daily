@@ -49,12 +49,21 @@ const HTTP_TRANSPORT_ERROR_NAME = "HttpTransportError";
 export interface HttpTransportErrorOptions extends ErrorOptions {
   /** True only when the host knows the physical attempt has stopped before retry. */
   retryableAttempt?: boolean;
+  /**
+   * True only when the host can prove the request never reached the server:
+   * name resolution, connection or TLS handshake failed before any request byte
+   * was sent. Stronger than `retryableAttempt`, which says only that the attempt
+   * has stopped. A reset, hang-up or timeout after sending must leave it false.
+   * Automatic email is released for a later retry on this evidence alone.
+   */
+  requestNotSent?: boolean;
 }
 
 /** Host-neutral failure raised when an HTTP transport cannot produce a response. */
 export class HttpTransportError extends Error {
   readonly kind: HttpTransportErrorKind;
   readonly retryableAttempt: boolean;
+  readonly requestNotSent: boolean;
 
   constructor(
     kind: HttpTransportErrorKind,
@@ -65,6 +74,7 @@ export class HttpTransportError extends Error {
     this.name = HTTP_TRANSPORT_ERROR_NAME;
     this.kind = kind;
     this.retryableAttempt = options.retryableAttempt === true;
+    this.requestNotSent = options.requestNotSent === true;
   }
 }
 
@@ -77,7 +87,9 @@ export function isHttpTransportError(error: unknown): error is HttpTransportErro
     typeof candidate.message === "string" &&
     (candidate.kind === "network" || candidate.kind === "timeout") &&
     (candidate.retryableAttempt === undefined ||
-      typeof candidate.retryableAttempt === "boolean")
+      typeof candidate.retryableAttempt === "boolean") &&
+    (candidate.requestNotSent === undefined ||
+      typeof candidate.requestNotSent === "boolean")
   );
 }
 

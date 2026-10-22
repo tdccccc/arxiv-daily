@@ -336,6 +336,35 @@ export async function deliverDailyEmailIfEnabled(
       return { kind: "failed", reason, attempts: 0 };
     }
 
+    if (providerNeverReceivedRequest(error)) {
+      // The transport proved the request never left (or the relay refused it
+      // before touching a mail provider), so this generation can be released
+      // exactly like one that never reached the provider, and a later run may
+      // try again. The stable provider key still guards a request we mis-judged.
+      if (claim) {
+        try {
+          await releaseAutomaticDeliveryBeforeAttempt(
+            deps.storage,
+            deps.output,
+            claim,
+            "provider_not_invoked",
+            now(),
+          );
+        } catch {
+          deps.logger?.error("email: delivery_claim_storage_failed");
+          return {
+            kind: "ambiguous",
+            reason: "delivery_claim_storage_failed",
+            attempts: 0,
+          };
+        }
+      }
+      deps.logger?.warn(
+        `email: not sent date=${digest.date}: the mail service could not be reached, nothing was delivered`,
+      );
+      return { kind: "failed", reason: "provider_not_invoked", attempts: 0 };
+    }
+
     const attempts = providerAttempts(error, deps.maxAttempts);
     const ambiguous = isCancellationError(error) || providerOutcomeAmbiguous(error);
     const reason: EmailDeliveryReason = ambiguous
@@ -394,6 +423,13 @@ function providerAttempts(error: unknown, maxAttempts?: number): number {
   if (error instanceof ResendSendError) return error.attempts;
   if (error instanceof HostedDeliveryError) return 1;
   return maxAttempts ?? 1;
+}
+
+/** True only for evidence that the request never reached the provider or relay. */
+function providerNeverReceivedRequest(error: unknown): boolean {
+  if (error instanceof ResendSendError) return error.notSent;
+  if (error instanceof HostedDeliveryError) return error.notSent;
+  return false;
 }
 
 function providerOutcomeAmbiguous(error: unknown): boolean {

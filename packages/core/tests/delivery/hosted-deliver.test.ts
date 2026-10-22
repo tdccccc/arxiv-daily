@@ -11,6 +11,7 @@ import {
 import { DEFAULT_SETTINGS } from "../../src/settings/defaults";
 import type { StorageAdapter } from "../../src/core/adapters";
 import { startHostedEmailVerification } from "../../src/delivery/hosted";
+import { HttpTransportError } from "../../src/core/adapters";
 
 async function persistedDeliveryText(
   storage: StorageAdapter,
@@ -449,6 +450,86 @@ describe("hosted deliverDailyEmailIfEnabled", () => {
       expect(request).toHaveBeenCalledTimes(1);
     },
   );
+
+  describe("a failure that proves the relay was never asked to send", () => {
+    const email = {
+      enabled: true,
+      mode: "hosted" as const,
+      to: "you@example.com",
+      hostedToken: "device_token_hex",
+      fromEmail: "",
+    };
+    const ok = { status: 200, headers: {}, bodyText: JSON.stringify({ ok: true }) };
+    const refusal = (error = "delivery cutover is not ready") =>
+      ({ status: 503, headers: {}, bodyText: JSON.stringify({ error, ambiguous: false }) });
+    const runner = (storage: StorageAdapter, request: ReturnType<typeof vi.fn>) => () =>
+      deliverDailyEmailIfEnabled(digest, { storage, http: { request }, output, email });
+
+    it("releases the claim after a connect-phase failure, then sends exactly once when the network is back", async () => {
+      const storage = memoryStorage();
+      const request = vi.fn()
+        .mockRejectedValueOnce(new HttpTransportError("network", "connect ECONNREFUSED", { retryableAttempt: true, requestNotSent: true }))
+        .mockResolvedValue(ok);
+      const run = runner(storage, request);
+
+      expect(await run()).toEqual({ kind: "failed", reason: "provider_not_invoked", attempts: 0 });
+      expect(await run()).toEqual({ kind: "delivered", attempts: 1 });
+      expect(await run()).toEqual({ kind: "skipped", reason: "already_delivered" });
+      expect(request).toHaveBeenCalledTimes(2);
+    });
+
+    it.each([
+      ["a timeout", new HttpTransportError("timeout", "no answer", { retryableAttempt: false })],
+      ["a reset after sending", new HttpTransportError("network", "reset", { retryableAttempt: false })],
+      ["a host that cannot tell", new HttpTransportError("network", "unknown", { retryableAttempt: true })],
+      ["a non-transport error", new Error("something else")],
+    ])("keeps %s ambiguous and blocking", async (_label, failure) => {
+      const storage = memoryStorage();
+      const request = vi.fn().mockRejectedValue(failure);
+      const run = runner(storage, request);
+
+      expect(await run()).toMatchObject({ kind: "ambiguous", attempts: 1 });
+      expect(await run()).toMatchObject({ kind: "skipped", reason: "provider_outcome_ambiguous" });
+      expect(request).toHaveBeenCalledTimes(1);
+    });
+
+    it.each([
+      "delivery cutover is not ready",
+      "delivery ledger is unavailable",
+      "delivery attempt could not be started",
+      "automatic delivery is unavailable",
+    ])("treats the relay's 503 refusal \"%s\" as not sent and retries once it recovers", async (error) => {
+      const storage = memoryStorage();
+      const request = vi.fn().mockResolvedValueOnce(refusal(error)).mockResolvedValue(ok);
+      const run = runner(storage, request);
+
+      expect(await run()).toEqual({ kind: "failed", reason: "provider_not_invoked", attempts: 0 });
+      expect(await run()).toEqual({ kind: "delivered", attempts: 1 });
+      expect(request).toHaveBeenCalledTimes(2);
+    });
+
+    it.each([
+      ["a 503 without a body", { status: 503, headers: {}, bodyText: "" }],
+      ["a 503 error page", { status: 503, headers: {}, bodyText: "<html>Service Unavailable</html>" }],
+      ["a 503 that says the outcome is ambiguous", { status: 503, headers: {}, bodyText: JSON.stringify({ error: "x", ambiguous: true }) }],
+      ["a 503 without the ambiguous flag", { status: 503, headers: {}, bodyText: JSON.stringify({ error: "x" }) }],
+      ["a 503 with extra members", { status: 503, headers: {}, bodyText: JSON.stringify({ error: "x", ambiguous: false, extra: 1 }) }],
+      ["a 503 with a repeated member", { status: 503, headers: {}, bodyText: '{"error":"x","ambiguous":true,"ambiguous":false}' }],
+      ["a 503 array", { status: 503, headers: {}, bodyText: JSON.stringify([{ error: "x", ambiguous: false }]) }],
+      ["a 503 with a non-text error", { status: 503, headers: {}, bodyText: JSON.stringify({ error: 1, ambiguous: false }) }],
+      ["a 500 with the refusal shape", { ...refusal(), status: 500 }],
+      ["a 502 with the refusal shape", { ...refusal(), status: 502 }],
+      ["a 409 with the refusal shape", { ...refusal(), status: 409 }],
+    ])("does not trust %s", async (_label, response) => {
+      const storage = memoryStorage();
+      const request = vi.fn().mockResolvedValue(response);
+      const run = runner(storage, request);
+
+      expect(await run()).toMatchObject({ kind: "ambiguous", attempts: 1 });
+      expect(await run()).toMatchObject({ kind: "skipped", reason: "provider_outcome_ambiguous" });
+      expect(request).toHaveBeenCalledTimes(1);
+    });
+  });
 
   it("does not expose a sensitive verification response body", async () => {
     const sensitiveBody =

@@ -22,6 +22,7 @@ import type { OpenedScopedLibrarySource } from "@arxiv-daily/node-runtime/scoped
 import { ArxivDailySettingTab } from "./src/settings/tab";
 import { migrateLegacyRunState } from "./src/services/legacy-run-state";
 import {
+  createAutomaticEmailOutcomeNotifier,
   createUnsupportedAutomaticEmailNotifier,
   testEmailResultMessage,
 } from "./src/services/email-delivery";
@@ -2908,10 +2909,16 @@ export default class ArxivDailyPlugin extends Plugin {
       logger: this.logger,
     });
     this.notifyUnsupportedAutomaticEmail(delivery);
+    this.notifyAutomaticEmailOutcome(date, delivery);
   }
 
   private readonly notifyUnsupportedAutomaticEmail =
     createUnsupportedAutomaticEmailNotifier((message) => {
+      new Notice(`arXiv Daily: ${message}`, 15_000);
+    });
+
+  private readonly notifyAutomaticEmailOutcome =
+    createAutomaticEmailOutcomeNotifier((message) => {
       new Notice(`arXiv Daily: ${message}`, 15_000);
     });
 

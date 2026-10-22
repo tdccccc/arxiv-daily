@@ -1,4 +1,4 @@
-import type { HttpClient } from "../core/adapters";
+import { isHttpTransportError, type HttpClient } from "../core/adapters";
 import {
   OFFICIAL_DELIVERY_AVAILABLE,
   type DailyDigest,
@@ -18,6 +18,8 @@ export class HostedDeliveryError extends Error {
     readonly status?: number,
     readonly cause?: unknown,
     readonly ambiguous?: boolean,
+    /** Nothing reached the provider: the request was never sent or the relay refused before touching one. */
+    readonly notSent = false,
   ) {
     super(message);
     this.name = "HostedDeliveryError";
@@ -44,6 +46,8 @@ const LEGACY_PROVIDER_ID_MAX_LENGTH = 128;
 // Accepted bodies are tiny even when every ID character is a JSON escape. Bound
 // lexical work before decoding member names and values.
 const HOSTED_SUCCESS_BODY_MAX_LENGTH = 4096;
+// The relay's refusals are one short line of JSON.
+const HOSTED_REFUSAL_BODY_MAX_LENGTH = 1024;
 
 /**
  * POST digest to the project relay. Offline until OFFICIAL_DELIVERY_AVAILABLE.
@@ -142,18 +146,23 @@ export async function sendViaHosted(opts: {
       }),
       signal: opts.signal,
     });
-  } catch {
+  } catch (error) {
+    // Only a failure the host proved happened before the request was sent
+    // leaves the relay untouched; everything else may have reached it.
+    const notSent = isHttpTransportError(error) && error.requestNotSent;
     throw new HostedDeliveryError(
       "Cannot reach Official delivery.",
       undefined,
       undefined,
-      true,
+      !notSent,
+      notSent,
     );
   }
 
   if (res.status < 200 || res.status >= 300) {
+    const notSent = res.status === 503 && relayRefusedBeforeAttempt(res.bodyText);
     const ambiguous =
-      res.status === 408 || res.status === 409 || res.status >= 500;
+      !notSent && (res.status === 408 || res.status === 409 || res.status >= 500);
     let hint = "";
     if (res.status === 401) {
       hint =
@@ -170,6 +179,7 @@ export async function sendViaHosted(opts: {
       res.status,
       undefined,
       ambiguous,
+      notSent,
     );
   }
 
@@ -183,6 +193,34 @@ export async function sendViaHosted(opts: {
   }
 
   return { attempts: 1 };
+}
+
+/**
+ * The relay answers 503 with exactly `{"error": <text>, "ambiguous": false}`
+ * only from checks that run before it contacts any mail provider (cutover not
+ * ready, ledger unavailable, attempt could not be recorded). No other status,
+ * and no other shape, is taken as proof that nothing was sent.
+ */
+function relayRefusedBeforeAttempt(bodyText: string): boolean {
+  if (
+    bodyText.length === 0 ||
+    bodyText.length > HOSTED_REFUSAL_BODY_MAX_LENGTH ||
+    hasDuplicateTopLevelJsonMember(bodyText)
+  ) {
+    return false;
+  }
+  try {
+    const value = JSON.parse(bodyText) as unknown;
+    if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+    const refusal = value as Record<string, unknown>;
+    return (
+      Object.keys(refusal).length === 2 &&
+      typeof refusal.error === "string" &&
+      refusal.ambiguous === false
+    );
+  } catch {
+    return false;
+  }
 }
 
 function isHostedSuccessBody(bodyText: string): boolean {

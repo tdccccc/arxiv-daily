@@ -576,7 +576,9 @@ export async function releaseAutomaticDeliveryBeforeAttempt(
   // The owning caller may have persisted provider_attempt_started and then
   // observed cancellation before the synchronous invocation boundary. Its
   // not-attempted result is durable evidence that makes this generation
-  // releasable; callers must never use this API after onProviderInvocation.
+  // releasable. Callers must not use this API after onProviderInvocation
+  // unless the transport proved the request was never sent (a connect-phase
+  // failure, or the relay refusing before it contacted a provider).
 
   await createResult(storage, handle, {
     schemaVersion: CLAIM_SCHEMA_VERSION,
