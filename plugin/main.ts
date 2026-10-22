@@ -1,4 +1,4 @@
-import { Notice, Plugin, loadPdfJs } from "obsidian";
+import { Notice, Plugin, loadPdfJs, normalizePath } from "obsidian";
 import type {
   LibraryInventory,
   PersonalLibraryCatalog,
@@ -2539,41 +2539,58 @@ export default class ArxivDailyPlugin extends Plugin {
   }
 
   /**
-   * A data.json that is not valid JSON would fail the whole load and leave no
-   * settings page to repair it in. Keep the unreadable file beside the
-   * original, start on default settings and say so. Any other reason the file
-   * cannot be read (permissions, a busy file) still fails the load, because
-   * defaults would then stand in for settings that may be fine.
+   * What Obsidian returns for data.json is the parsed file, `null` when there
+   * is none (a first run) and, for a file it could not read or parse,
+   * `undefined` rather than an error. Taken for "no settings yet" that
+   * `undefined` would start the plugin on defaults and let the next save write
+   * over the only copy of the settings and keys without a word. So an
+   * existing data.json behind it is read again here: if it reads and parses,
+   * the first try failed in passing and its content is used; if it is not
+   * valid JSON it is kept beside the original, the plugin starts on default
+   * settings and says so; if it can be neither read nor kept, the plugin does
+   * not start, so nothing can save over it. A host that rejects with the parse
+   * error instead (test doubles) takes the same road; any other rejection
+   * still fails the load.
    */
   private async readPersistedData(): Promise<{ raw: unknown; warning?: string }> {
     try {
-      return { raw: await this.loadData() };
+      const loaded: unknown = await this.loadData();
+      if (loaded !== undefined) return { raw: loaded };
     } catch (error) {
       if (!isJsonSyntaxError(error)) throw error;
-      const adapter = this.app.vault.adapter;
-      const dataPath = `${this.pluginDir()}/data.json`;
+    }
+    const adapter = this.app.vault.adapter;
+    const dataPath = normalizePath(`${this.pluginDir()}/data.json`);
+    let keptPath: string;
+    try {
+      if (!await adapter.exists(dataPath)) return { raw: null };
+      const text = await adapter.read(dataPath);
+      try {
+        return { raw: JSON.parse(text) as unknown };
+      } catch {
+        // Not valid JSON: kept aside below.
+      }
       // Named after when the broken file was written, so starting again
       // without fixing it finds its copy instead of adding another. No colons:
       // the name has to be valid on Windows too.
       const writtenAt = (await adapter.stat(dataPath).catch(() => null))?.mtime ?? Date.now();
-      const keptPath = `${dataPath}.corrupt-${new Date(writtenAt).toISOString().replace(/[:.]/g, "-")}`;
-      try {
-        if (!await adapter.exists(keptPath)) {
-          await adapter.write(keptPath, await adapter.read(dataPath));
-        }
-      } catch {
-        // Defaults could later be saved over the only record of the settings.
-        throw error;
-      }
+      keptPath = `${dataPath}.corrupt-${new Date(writtenAt).toISOString().replace(/[:.]/g, "-")}`;
+      if (!await adapter.exists(keptPath)) await adapter.write(keptPath, text);
+    } catch (error) {
       new Notice(
-        `arXiv Daily: data.json could not be read, so the plugin started with default settings. The unreadable file was kept as ${keptPath}; restore your settings from it or enter them again.`,
+        `arXiv Daily did not start: ${dataPath} exists but could not be read or kept aside, so the plugin stopped rather than risk overwriting your settings. Check the file and its permissions, then reload the plugin.`,
         20_000,
       );
-      return {
-        raw: null,
-        warning: `data.json is not valid JSON; started with default settings and kept the file as ${keptPath}`,
-      };
+      throw error;
     }
+    new Notice(
+      `arXiv Daily: data.json could not be read, so the plugin started with default settings. The unreadable file was kept as ${keptPath}; restore your settings from it or enter them again.`,
+      20_000,
+    );
+    return {
+      raw: null,
+      warning: `data.json is not valid JSON; started with default settings and kept the file as ${keptPath}`,
+    };
   }
 
   private async loadSettingsAndState(): Promise<string[]> {
