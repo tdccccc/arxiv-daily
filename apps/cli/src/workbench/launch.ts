@@ -3,6 +3,7 @@ import { clearTimer, setTimer } from "@arxiv-daily/core";
 import { loadCliConfig, type CliRuntimeConfig } from "../config";
 import { resolveCliConfigPath } from "../config-path";
 import { CLI_CANCEL_MESSAGE, isCliRunEvent, type CliIo } from "../main-types";
+import { latestAnnouncedDayFrom } from "./announced-day";
 import { startWorkbench } from "./server";
 import { workbenchAssets } from "./assets";
 import { WorkbenchError } from "./documents";
@@ -33,6 +34,7 @@ export async function runWorkbench(config: CliRuntimeConfig | undefined, io: Cli
   const beforeWrite = createWorkbenchConfigGuard(() => config, options.env);
   const app = await startWorkbench({
     config, configPath: config?.configPath ?? resolveCliConfigPath(options.env), onConfigSaved: next => { config = next; }, port: options.port, assets: workbenchAssets(), beforeWrite, frameOrigin: options.frameOrigin,
+    latestAnnouncedDay: latestAnnouncedDayFrom(() => config),
     run: async (args, output, signal) => {
       await beforeWrite();
       if (signal.aborted) return 1;

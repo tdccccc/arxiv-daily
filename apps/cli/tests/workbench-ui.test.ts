@@ -176,3 +176,50 @@ it('shows the arxiv daily wordmark as a font-independent SVG with no reader subt
  expect(root.querySelectorAll('.brand-mark').length).toBe(1);
  expect(root.querySelectorAll('.brand-mark path').length).toBe(2);
 });
+
+// A day whose announcement is not out yet: the tray names the newest announced day and offers it in one click.
+const waiting = { id: "waiting", label: "生成今日日报", date: "2026-10-21", status: "pending", outcome: "awaiting_announcement", output: "run 2026-10-21: awaiting_announcement (date 2026-10-21 is newer than newest cs.AI /recent bucket 2026-10-09)\n", exitCode: 0, startedAt: "2026-10-21", finishedAt: "2026-10-21" };
+
+it.each([
+  ["zh", "2026-10-21 的论文还没公告，最近一次公告是 2026-10-09。", "改为生成 2026-10-09 的日报"],
+  ["en", "The papers for 2026-10-21 are not announced yet. The latest announcement was 2026-10-09.", "Generate the report for 2026-10-09 instead"],
+])("offers the newest announced day when a run is waiting for its own (%s)", async (language, sentence, action) => {
+  const generated = { id: "instead", label: "2026-10-09 日报", date: "2026-10-09", status: "running", output: "", exitCode: null, startedAt: "2026-10-21", finishedAt: null };
+  let started = false;
+  const { root, fetcher } = setup((url, init) => {
+    if (url.pathname.endsWith("api/preferences")) return json({ appearance: { language, theme: "light" } });
+    if (url.pathname.endsWith("api/runs") && init?.method === "POST") { started = true; return json({ run: generated }, 202); }
+    if (url.pathname.endsWith("api/runs/current")) return json({ run: started ? generated : { ...waiting, latestAnnounced: "2026-10-09" } });
+  }, 10000);
+  await vi.waitFor(() => expect(root.querySelector(".run-announcement")?.textContent).toContain(sentence));
+  const instead = root.querySelector<HTMLButtonElement>('[data-action="generate-announced"]')!;
+  expect(instead.textContent).toBe(action);
+  instead.click();
+  await vi.waitFor(() => expect(root.querySelector(".run-tray")?.textContent).toContain("2026-10-09"));
+  const submitted = fetcher.mock.calls.find(([url, init]) => String(url).endsWith("api/runs") && init?.method === "POST");
+  expect(JSON.parse(String(submitted?.[1]?.body))).toEqual({ kind: "daily", date: "2026-10-09" });
+  await vi.waitFor(() => expect(root.querySelector(".run-announcement")).toBeNull());
+  expect(root.querySelector(".run-state")?.classList.contains("running")).toBe(true);
+});
+
+it("shows no announcement offer when the newest announced day is unknown", async () => {
+  const { root } = setup(url => {
+    if (url.pathname.endsWith("api/preferences")) return json({ appearance: { language: "zh", theme: "light" } });
+    if (url.pathname.endsWith("api/runs/current")) return json({ run: waiting });
+  }, 10000);
+  await vi.waitFor(() => expect(root.querySelector(".run-state")?.textContent).toBe("等待公告发布"));
+  expect(root.querySelector(".run-announcement")).toBeNull();
+  expect(root.querySelector(".run-tray pre")?.textContent).toContain("awaiting_announcement");
+});
+
+it("keeps the offer available when starting the earlier day fails", async () => {
+  const { root } = setup((url, init) => {
+    if (url.pathname.endsWith("api/preferences")) return json({ appearance: { language: "zh", theme: "light" } });
+    if (url.pathname.endsWith("api/runs") && init?.method === "POST") return json({ error: "已有任务正在运行，请等待完成或先取消。" }, 409);
+    if (url.pathname.endsWith("api/runs/current")) return json({ run: { ...waiting, latestAnnounced: "2026-10-09" } });
+  }, 10000);
+  await vi.waitFor(() => expect(root.querySelector('[data-action="generate-announced"]')).toBeTruthy());
+  root.querySelector<HTMLButtonElement>('[data-action="generate-announced"]')!.click();
+  await vi.waitFor(() => expect(root.querySelector(".connection-banner")?.textContent).toContain("已有任务正在运行"));
+  expect(root.querySelector<HTMLButtonElement>('[data-action="generate-announced"]')!.hasAttribute("disabled")).toBe(false);
+});

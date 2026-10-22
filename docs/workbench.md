@@ -45,6 +45,8 @@ Four outcomes are shown distinctly, so you can tell them apart at a glance:
 | No match | Filtering ran, but no paper matched your topics |
 | Failed | A real failure occurred |
 
+When a run ends waiting for an announcement, the task panel names the newest day arXiv has announced and offers **Generate the report for that day instead** in one click.
+
 The reading footer shows input/output/total tokens, generation duration, and the generation timestamp (UTC). Older reports missing this data show "not recorded" rather than substituting a file's modification time.
 
 ## Settings
@@ -55,6 +57,7 @@ Settings mirrors the Obsidian plugin's section order: LLM, arXiv categories, res
 - Secret fields (API keys) stay blank and keep the existing saved value when left empty. **Show** reveals a saved key; **Hide** clears the reveal.
 - **Get models** populates the model dropdown for your provider; the field stays freely editable and filterable.
 - Settings can't be saved while a generation task is running.
+- The setup guide's **Generate first report** uses the newest day arXiv has announced (today when it is already out, otherwise the latest earlier day), so it works at weekends and before the announcement; its step shows the progress and result, because the Settings dialog covers the task panel.
 - **Output & schedule** also has an in-process scheduler: **Enable** + **Check every (minutes)** runs while the workbench process stays open (stored separately as `workbench_schedule`, independent of any external cron job you've set up with `schedule install`).
 
 ## Appearance & UI language

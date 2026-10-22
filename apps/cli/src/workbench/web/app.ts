@@ -7,6 +7,7 @@ import type { inspectProduct } from "../../inspect-cmd";
 import { mountLibraryReview } from "./library-review";
 import { mountLibrary } from "./library";
 import { generationFooter } from "./generation-footer";
+import { runStateLabel } from "./run-status";
 import { mountCalendar } from "./calendar";
 import { mountSidebar } from "./sidebar";
 import type { WorkbenchPaper, WorkbenchPaperList, PaperScope } from "../papers";
@@ -677,9 +678,7 @@ function mountWorkbenchContent(root: HTMLElement, options: WorkbenchClientOption
   function renderRun(): void {
     const tray = find(".run-tray");
     if (!currentRun || dismissedRun === currentRun.id) { tray.hidden = true; return; }
-    const labels = { pending: t("等待公告发布"), running: t("正在运行"), completed: t("已完成"), failed: t("生成失败"), cancelled: t("已取消"), skipped: t("已跳过") };
-    const outcomeLabels = { awaiting_announcement: "等待公告发布", no_updates: "当日无更新", no_matches: "无匹配论文", papers_written: "日报已保存" };
-    const label = currentRun.outcome && (currentRun.status === "pending" || currentRun.status === "completed") ? t(outcomeLabels[currentRun.outcome]) : labels[currentRun.status];
+    const label = runStateLabel(currentRun);
     const keepOpen = tray.querySelector("details")?.open;
     tray.hidden = false;
     const pre = h("pre");
@@ -690,6 +689,11 @@ function mountWorkbenchContent(root: HTMLElement, options: WorkbenchClientOption
           ? h("button", { class: "quiet-button", "data-action": "cancel-run" }, t("取消任务"))
           : h("button", { class: "icon-button", "data-action": "dismiss-run", "aria-label": t("关闭任务状态") }, "×"),
       ),
+      // The day is not announced yet, but an earlier one is: say so and offer it in one click.
+      ...(currentRun.status === "pending" && currentRun.date && currentRun.latestAnnounced ? [h("div", { class: "run-announcement" },
+        h("p", null, t("{0} 的论文还没公告，最近一次公告是 {1}。", currentRun.date, currentRun.latestAnnounced)),
+        h("button", { class: "quiet-button", "data-action": "generate-announced", "data-date": currentRun.latestAnnounced }, t("改为生成 {0} 的日报", currentRun.latestAnnounced)),
+      )] : []),
       h("details", { open: keepOpen || currentRun.status === "failed" }, h("summary", null, t("查看运行详情")), pre),
     );
     pre.textContent = t(currentRun.output) || t("等待运行输出…");
@@ -745,6 +749,13 @@ function mountWorkbenchContent(root: HTMLElement, options: WorkbenchClientOption
       errorBox.hidden = false;
       errorBox.textContent = message(error);
     }
+  }
+
+  async function generateAnnounced(button: HTMLElement): Promise<void> {
+    const date = button.dataset.date!;
+    button.setAttribute("disabled", "");
+    try { acceptRun((await request<{ run: WorkbenchRun }>("api/runs", { kind: "daily", date })).run); }
+    catch (error) { button.removeAttribute("disabled"); reportConnection(error); }
   }
 
   async function cancelRun(): Promise<void> {
@@ -847,6 +858,7 @@ function mountWorkbenchContent(root: HTMLElement, options: WorkbenchClientOption
     else if (action === "retry-document" && selectedPath) void openDocument(selectedPath, "none", location.hash);
     else if (action === "back") { void showList(true, true).then(() => reading.focus()); }
     else if (action === "cancel-run") void cancelRun();
+    else if (action === "generate-announced") void generateAnnounced(target.closest<HTMLElement>("[data-action]")!);
     else if (action === "dismiss-run") { dismissedRun = currentRun?.id || ""; renderRun(); }
     else if (action === "font-up" || action === "font-down") { fontSize = Math.max(14, Math.min(22, fontSize + (action === "font-up" ? 1 : -1))); root.style.setProperty("--reading-size", `${fontSize}px`); preference("font-size", String(fontSize)); }
   }

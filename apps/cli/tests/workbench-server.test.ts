@@ -12,7 +12,7 @@ import { startWorkbench, type WorkbenchOptions } from "../src/workbench/server";
 const cleanup: Array<() => Promise<unknown>> = [];
 afterEach(async () => { for (const close of cleanup.splice(0).reverse()) await close(); });
 
-async function setup(run?: WorkbenchOptions["run"]) {
+async function setup(run?: WorkbenchOptions["run"], extra: Partial<WorkbenchOptions> = {}) {
   const root = await mkdtemp(join(tmpdir(), "arxiv-reader-"));
   cleanup.push(() => rm(root, { recursive: true, force: true }));
   const vaultRoot = join(root, "vault");
@@ -31,7 +31,7 @@ async function setup(run?: WorkbenchOptions["run"]) {
   await writeFile(join(vaultRoot, "research/papers/figures/chart.png"), Buffer.from([137, 80, 78, 71]));
   await writeFile(join(vaultRoot, "private.md"), "private note must not be served");
   await writeFile(config.configPath, "secret configuration");
-  const app = await startWorkbench({ config, run, assets: { "index.html": { type: "text/html", body: "<!doctype html><title>arXiv Daily</title>" }, "app.js": { type: "text/javascript", body: "console.log('reader');" } } });
+  const app = await startWorkbench({ config, run, ...extra, assets: { "index.html": { type: "text/html", body: "<!doctype html><title>arXiv Daily</title>" }, "app.js": { type: "text/javascript", body: "console.log('reader');" } } });
   cleanup.push(app.close);
   return { ...app, root, config, daily, paper, vaultRoot, get: (path: string, init?: RequestInit) => fetch(new URL(path, app.url), init) };
 }
@@ -278,4 +278,63 @@ it("rechecks the operation gate after reading a delayed search request body", as
     expect(await response).toBe(409);
     expect(search).not.toHaveBeenCalled();
   } finally { release(); await editing; action.mockRestore(); search.mockRestore(); }
+});
+
+// 2026-10-21 12:00 UTC is still the 21st in the configured Asia/Shanghai timezone.
+const NOW = { now: () => new Date("2026-10-21T12:00:00Z") };
+const postRun = (get: Awaited<ReturnType<typeof setup>>["get"], body: unknown) => get("api/runs", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+
+it("starts the first report on the newest announced day when today has no listing yet", async () => {
+  const run = vi.fn<NonNullable<WorkbenchOptions["run"]>>(async () => 0);
+  const latestAnnouncedDay = vi.fn(async () => "2026-10-09");
+  const { get } = await setup(run, { ...NOW, latestAnnouncedDay });
+  const response = await postRun(get, { kind: "daily", latest: true });
+  expect(response.status).toBe(202);
+  const body = await response.json();
+  expect(body).toMatchObject({ fellBackFrom: "2026-10-21", run: { date: "2026-10-09", label: "2026-10-09 日报" } });
+  expect(latestAnnouncedDay).toHaveBeenCalledWith("2026-10-21", expect.any(AbortSignal));
+  expect(run.mock.calls[0]![0]).toEqual(["run", "--date", "2026-10-09"]);
+});
+
+it.each([
+  ["today is already announced", async () => "2026-10-21"],
+  ["no announced day can be loaded", async () => null],
+  ["loading announced days fails", async () => { throw new Error("offline"); }],
+])("runs the first report for today when %s", async (_name, latestAnnouncedDay) => {
+  const run = vi.fn<NonNullable<WorkbenchOptions["run"]>>(async () => 0);
+  const { get } = await setup(run, { ...NOW, latestAnnouncedDay });
+  const body = await (await postRun(get, { kind: "daily", latest: true })).json();
+  expect(body.fellBackFrom).toBeUndefined();
+  expect(body.run).toMatchObject({ date: "2026-10-21", label: "生成今日日报" });
+  expect(run.mock.calls[0]![0]).toEqual(["run", "--today"]);
+});
+
+it("asks for the announced day only when the request says it is the first report", async () => {
+  const run = vi.fn<NonNullable<WorkbenchOptions["run"]>>(async () => 0);
+  const latestAnnouncedDay = vi.fn(async () => "2026-10-09");
+  const { get } = await setup(run, { ...NOW, latestAnnouncedDay });
+  await postRun(get, { kind: "daily" });
+  await vi.waitFor(async () => expect((await (await get("api/runs/current")).json()).run.status).toBe("completed"));
+  await postRun(get, { kind: "daily", date: "2026-10-02", latest: true });
+  expect(latestAnnouncedDay).not.toHaveBeenCalled();
+  expect(run.mock.calls.map(call => call[0])).toEqual([["run", "--today"], ["run", "--date", "2026-10-02"]]);
+});
+
+it("offers the newest announced day when a run ends waiting for its own", async () => {
+  let release!: () => void;
+  const latestAnnouncedDay = vi.fn(() => new Promise<string | null>(resolve => { release = () => resolve("2026-10-09"); }));
+  const { get } = await setup(async (_args, io) => { io.onRunResult?.({ date: "2026-10-21", kind: "pending", outcome: "awaiting_announcement" }); return 0; }, { ...NOW, latestAnnouncedDay });
+  await postRun(get, { kind: "daily" });
+  await vi.waitFor(() => expect(latestAnnouncedDay).toHaveBeenCalledWith("2026-10-21", expect.any(AbortSignal)));
+  // The tray stops polling once a run is no longer running, so the answer must be in before that.
+  expect((await (await get("api/runs/current")).json()).run.status).toBe("running");
+  release();
+  await vi.waitFor(async () => expect((await (await get("api/runs/current")).json()).run).toMatchObject({ status: "pending", outcome: "awaiting_announcement", latestAnnounced: "2026-10-09" }));
+});
+
+it("still ends a run waiting for the announcement when the announced days cannot be loaded", async () => {
+  const { get } = await setup(async (_args, io) => { io.onRunResult?.({ date: "2026-10-21", kind: "pending", outcome: "awaiting_announcement" }); return 0; }, { ...NOW, latestAnnouncedDay: async () => { throw new Error("offline"); } });
+  await postRun(get, { kind: "daily" });
+  await vi.waitFor(async () => expect((await (await get("api/runs/current")).json()).run).toMatchObject({ status: "pending", outcome: "awaiting_announcement" }));
+  expect((await (await get("api/runs/current")).json()).run.latestAnnounced).toBeUndefined();
 });
