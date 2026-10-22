@@ -214,7 +214,7 @@ extensions/vscode-arxiv-daily → 独立 CommonJS 扩展（不在 npm workspaces
 | 执行 | 需 Obsidian 保持打开 | OS cron 调用一次性 `run --today` |
 | `run` 路径 | `runForDateNow` / force 等 | 同样经 `runForDateNow`，但**不** `start()` 定时器 |
 
-cron install 在读取或修改 crontab 前先校验时间窗和可执行路径；重复运行的结束时间不能早于开始时间，控制字符路径被拒绝，shell 特殊字符及 `%` 被转义。原生 Windows 不支持 crontab install（可提示 WSL 或插件）。
+cron install 在读取或修改 crontab 前先校验时间窗和可执行路径；重复运行的结束时间不能早于开始时间，控制字符路径被拒绝，shell 特殊字符及 `%` 被转义。cron 不读 shell 启动文件，配置不在默认位置时每条任务前缀 `XDG_CONFIG_HOME=<目录>`。原生 Windows 不支持 crontab install（可提示 WSL 或插件）。
 
 ### 邮件流
 

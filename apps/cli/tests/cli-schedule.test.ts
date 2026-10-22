@@ -6,7 +6,8 @@ import { promisify } from "node:util";
 import { describe, expect, it, vi } from "vitest";
 import { DEFAULT_SETTINGS } from "@arxiv-daily/core";
 import { DEFAULT_CLI_SCHEDULE, type CliRuntimeConfig } from "../src/config";
-import { buildCronLines, scheduleInstall, writeUserCrontab, type CronRuntime } from "../src/schedule-cmd";
+import { resolveCliConfigPath } from "../src/config-path";
+import { buildCronLines, defaultCronRuntime, scheduleInstall, writeUserCrontab, type CronRuntime } from "../src/schedule-cmd";
 
 const execFileAsync = promisify(execFile);
 const runtime: CronRuntime = { nodePath: "/opt/node/bin/node", logPath: "/home/u/.config/arxiv-daily/schedule.log" };
@@ -168,5 +169,91 @@ describe("CLI schedule command", () => {
     const written = writeCrontab.mock.calls[0]![0] as string;
     expect(written).toContain("0 0 * * * keep-me");
     expect(written.match(/arxiv-daily-managed/g)).toHaveLength(schedule.count);
+  });
+});
+
+// cron starts jobs with `/bin/sh -c` and a near-empty environment: the shell profile where a custom
+// XDG_CONFIG_HOME is usually exported is never read, so the job would look for the config elsewhere.
+describe("config location under cron", () => {
+  const posix = it.skipIf(process.platform === "win32");
+  const customConfig = (dir: string): CliRuntimeConfig => ({ ...config(), configPath: path.join(dir, "arxiv-daily", "config.toml") });
+
+  posix("pins a custom XDG_CONFIG_HOME on every managed line", () => {
+    const cfg = customConfig("/custom/xdg");
+    cfg.scheduleIntent = { ...cfg.scheduleIntent, on: "09:30", until: "18:00", intervalHours: 4 };
+    const lines = buildCronLines(cfg, "/usr/local/bin/arxiv-daily", { ...defaultCronRuntime(cfg), nodePath: "/opt/node/bin/node" });
+    expect(lines).toHaveLength(3);
+    for (const line of lines) {
+      expect(line).toMatch(/^\d+ \d+ \* \* 1-5 {2}XDG_CONFIG_HOME=\/custom\/xdg \/opt\/node\/bin\/node \/usr\/local\/bin\/arxiv-daily run --today >> \/custom\/xdg\/arxiv-daily\/schedule\.log 2>&1 {2}# arxiv-daily-managed$/);
+    }
+  });
+
+  posix("pins the location in the default runtime too, so show and install agree", () => {
+    const cfg = customConfig("/custom/xdg");
+    expect(buildCronLines(cfg, "/usr/local/bin/arxiv-daily")[0]).toContain("  XDG_CONFIG_HOME=/custom/xdg ");
+    expect(defaultCronRuntime(cfg).configHome).toBe("/custom/xdg");
+  });
+
+  posix("writes a relative XDG_CONFIG_HOME as an absolute path, since cron has no working directory", () => {
+    expect(defaultCronRuntime(customConfig("relative/xdg")).configHome).toBe(path.resolve("relative/xdg"));
+  });
+
+  posix("keeps the output unchanged when the config is in the default location", () => {
+    const cfg = { ...config(), configPath: resolveCliConfigPath({}) };
+    expect(defaultCronRuntime(cfg).configHome).toBeUndefined();
+    const [line] = buildCronLines(cfg, "/usr/local/bin/arxiv-daily");
+    expect(line).not.toContain("XDG_CONFIG_HOME");
+    expect(line).toMatch(/^30 9 \* \* 1-5 {2}\/\S* \/usr\/local\/bin\/arxiv-daily run --today >> /);
+  });
+
+  posix("leaves a config path that does not follow the XDG layout alone", () => {
+    expect(defaultCronRuntime(config()).configHome).toBeUndefined();
+    expect(defaultCronRuntime({ ...config(), configPath: "/etc/arxiv/settings.toml" }).configHome).toBeUndefined();
+  });
+
+  posix("tells the user which config the installed schedule is bound to", async () => {
+    const cfg = customConfig("/custom/xdg");
+    const { io, stdout } = captureIo();
+    const writeCrontab = vi.fn();
+    const runtimeForConfig = { ...defaultCronRuntime(cfg), nodePath: "/opt/node/bin/node" };
+    expect(await scheduleInstall(cfg, io, { binaryPath: "/usr/bin/arxiv-daily", runtime: runtimeForConfig, readCrontab: async () => "", writeCrontab })).toBe(0);
+    expect(writeCrontab.mock.calls[0]![0]).toContain("XDG_CONFIG_HOME=/custom/xdg /opt/node/bin/node /usr/bin/arxiv-daily run --today");
+    expect(stdout.join("")).toContain(cfg.configPath);
+  });
+
+  posix.each([
+    "xdg with space", "xdg%percent", "xdg$HOME", "xdg'\"quote", "xdg\\back\\%slash", "配置 é", "xdg`printf substituted`", "xdg;echo bad",
+  ])("hands the job exactly the XDG_CONFIG_HOME %s that found the config, in cron's environment", async (name) => {
+    const scratch = await fs.mkdtemp(path.join(os.tmpdir(), "arxiv-cron-xdg-"));
+    try {
+      const cfg = customConfig(path.join(scratch, name));
+      await fs.mkdir(path.dirname(cfg.configPath), { recursive: true });
+      const binary = path.join(scratch, "arxiv-daily");
+      // Stands in for the CLI: reports the XDG_CONFIG_HOME it was started with (`env` forwards its environment).
+      await fs.writeFile(binary, '#!/bin/sh\nprintf "%s" "${XDG_CONFIG_HOME-unset}"\n', { mode: 0o700 });
+      const [line] = buildCronLines(cfg, binary, { ...defaultCronRuntime(cfg), nodePath: "/usr/bin/env" });
+      await execFileAsync("env", ["-i", `HOME=${scratch}`, "PATH=/usr/bin:/bin", "/bin/sh", "-c", commandBeforeCronStdin(line!)]);
+      const seen = await fs.readFile(path.join(path.dirname(cfg.configPath), "schedule.log"), "utf8");
+      expect(resolveCliConfigPath({ XDG_CONFIG_HOME: seen === "unset" ? undefined : seen })).toBe(cfg.configPath);
+    } finally {
+      await fs.rm(scratch, { recursive: true, force: true });
+    }
+  });
+
+  posix("starts a job for a config in the default location without any XDG_CONFIG_HOME", async () => {
+    const scratch = await fs.mkdtemp(path.join(os.tmpdir(), "arxiv-cron-home-"));
+    vi.stubEnv("HOME", scratch);
+    try {
+      const cfg = { ...config(), configPath: resolveCliConfigPath({}) };
+      await fs.mkdir(path.dirname(cfg.configPath), { recursive: true });
+      const binary = path.join(scratch, "arxiv-daily");
+      await fs.writeFile(binary, '#!/bin/sh\nprintf "%s" "${XDG_CONFIG_HOME-unset}"\n', { mode: 0o700 });
+      const [line] = buildCronLines(cfg, binary, { ...defaultCronRuntime(cfg), nodePath: "/usr/bin/env" });
+      await execFileAsync("env", ["-i", `HOME=${scratch}`, "PATH=/usr/bin:/bin", "/bin/sh", "-c", commandBeforeCronStdin(line!)]);
+      expect(await fs.readFile(path.join(path.dirname(cfg.configPath), "schedule.log"), "utf8")).toBe("unset");
+    } finally {
+      vi.unstubAllEnvs();
+      await fs.rm(scratch, { recursive: true, force: true });
+    }
   });
 });
