@@ -70,7 +70,12 @@ export function withBusyGuard(
 
 export class StatusBarController implements ProgressReporter {
   private disabled: boolean;
-  /** Whether the scheduler is off when nothing is running; what the bar returns to. */
+  /**
+   * Whether the scheduler is off, so the bar says "disabled" whenever nothing
+   * is running. Only the scheduler toggle (`setSchedulerEnabled`,
+   * `setDisabled`) changes it: a run that ends in `setIdle` says nothing about
+   * the toggle, and a manual run with the scheduler off must not flip it.
+   */
   private restingDisabled: boolean;
   private batch: BatchState | null = null;
   private stage: StageState | null = null;
@@ -146,13 +151,14 @@ export class StatusBarController implements ProgressReporter {
 
   setIdle(lastCompletedDate?: string, reason?: IdleReason): void {
     if (this.disposed) return;
-    this.disabled = false;
-    this.restingDisabled = false;
+    this.disabled = this.restingDisabled;
     this.batch = null;
     this.stage = null;
     this.task = null;
     this.idleReason = reason;
-    if (lastCompletedDate) this.lastCompletedDate = lastCompletedDate;
+    // No date means there is none (run state cleared, another output location),
+    // not "keep the one shown before".
+    this.lastCompletedDate = lastCompletedDate;
     this.render();
     if (this.panelState !== "complete" && this.panelState !== "error") {
       this.scheduleHide(AUTO_HIDE_IDLE_MS);
@@ -169,6 +175,23 @@ export class StatusBarController implements ProgressReporter {
     this.idleReason = undefined;
     this.render();
     this.hidePanel();
+  }
+
+  /**
+   * The scheduler was switched on or off. The resting text follows at once; a
+   * task that is using the bar keeps it, and the bar settles on the new text
+   * when that task ends.
+   */
+  setSchedulerEnabled(enabled: boolean): void {
+    if (this.disposed) return;
+    this.restingDisabled = !enabled;
+    const occupied =
+      this.task || this.batch || this.stage ||
+      this.panelState === "complete" || this.panelState === "error";
+    if (occupied) return;
+    this.disabled = this.restingDisabled;
+    this.idleReason = undefined;
+    this.render();
   }
 
   dispose(): void {

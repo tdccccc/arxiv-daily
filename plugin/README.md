@@ -16,7 +16,7 @@ Part of the [arXiv Daily](../README.md) project. The same discovery and reading 
 - **Personal library (optional)** — index your own PDFs; review and explicitly accept proposed topics/directions before they affect filtering
 - **Scheduling** — an in-process tick loop runs while Obsidian is open; use the [CLI](../apps/cli/README.md) with cron for unattended runs
 - **Optional email** — a short digest after a successful day, via your own Resend key or an official-delivery beta
-- **Config validation & secret-safe storage** — scheduled and manual runs are gated on valid settings; a saved API key only ever displays as `Configured`
+- **Config validation** — scheduled and manual runs are gated on valid settings; API keys are masked in the settings page (a show/hide button reveals them) and kept in the plugin's `data.json` in your vault's plugin folder
 
 Reports land in `arxiv-daily/daily/YYYY-MM-DD.md`; paper notes in `arxiv-daily/papers/<arxiv_id>.md`.
 
@@ -40,9 +40,9 @@ A five-step in-app guide (Connect AI → choose paper sources → describe resea
 
 Open it from the ribbon icon or the **Open reading dashboard** command. It's the usual home after setup:
 
-- **Starred** / **All** tabs, plus search and filters (topic, date range, note presence, detail availability)
+- **Starred** / **All** tabs, plus search and filters (topic, date range, papers with a detail summary)
 - **Calendar** — dates with daily reports; dates within the lookback window that are runnable are highlighted, click to generate
-- Row actions — open/create a paper note, open the daily report, open on arXiv, open or download the PDF
+- Row actions — star, open or generate a paper note, find similar papers, open the daily report, open on arXiv, open or download the PDF
 - **Similar Papers** — deterministic local matches for a paper, with match reasons and resource links
 
 ### Commands
@@ -55,7 +55,7 @@ Open it from the ribbon icon or the **Open reading dashboard** command. It's the
 | `Retry failed dates in lookback window` | Clears failed state for recent dates and reruns them |
 | `Force run for date…` | Clears stored state for one date and reruns it, bypassing schedule guards |
 | `Clear run state…` | Clears persisted run state without deleting notes |
-| `Cancel active tasks` | Cancels active runs, manual paper-note summaries, and PDF downloads |
+| `Cancel active tasks` | Cancels active runs, paper-note summaries, PDF downloads, and personal library scans, indexing and direction generation |
 | `Summarize by paper ID…` | Writes a paper note for one arXiv ID |
 | `Set paper mark…` | Sets a paper's mark to Unmarked / Watch / Highlight / Saved / Ignored |
 | `Create paper note…` | Creates a lightweight note for an indexed paper |
@@ -71,20 +71,13 @@ Personal library adds its own commands (review/accept proposed directions, previ
 
 Manual runs are gated on config validity: `Run today`, `Run all pending`, and `Run for date…` need a valid LLM config and at least one topic; `Summarize by paper ID…` needs a valid LLM config only.
 
-### Daily selections
+### Marking papers
 
-Each paper in a daily report has two checkboxes you can tick directly in the Markdown:
-
-```markdown
-- [ ] 关注 <!-- arxiv-daily:2606.12345:watch -->
-- [ ] 重点 <!-- arxiv-daily:2606.12345:highlight -->
-```
-
-Checking them syncs a `Watch`/`Highlight`-equivalent priority back to the paper index; the Dashboard's star button reflects the same state. Daily report files stay the primary place to triage.
+Star a paper with the star button in the Dashboard (or **Star** / **Unstar** on selected rows). For finer marks use `Set paper mark…` (Unmarked / Watch / Highlight / Saved / Ignored), or `Mark current paper as <mark>` on an open paper note. Marks are stored in the paper index, not in the Markdown, so daily reports have no checkboxes to tick; older reports may still carry tick boxes, and ticking them changes nothing.
 
 ### Scheduling
 
-A single tick loop (every 20 minutes by default) runs **only while Obsidian is open**: it walks the lookback window, skips completed/skipped/weekend/not-yet-due dates, and runs the rest. Enabling the schedule asks whether to run today, skip today, or cancel.
+A single tick loop (every 20 minutes by default) runs **only while Obsidian is open**: it walks the lookback window, skips completed/skipped/weekend/not-yet-due dates, and runs the rest. If today's report is still open, enabling the schedule asks whether to run today, skip today, or cancel; if today already has a result, it simply turns on.
 
 For unattended runs on a machine that stays online, use the [CLI](../apps/cli/README.md) with cron instead.
 
@@ -92,14 +85,19 @@ For unattended runs on a machine that stays online, use the [CLI](../apps/cli/RE
 
 | Section | Covers |
 |---|---|
-| **LLM** | Provider, base URL, API key, model, reasoning effort |
+| **Enable** | Turns the in-app scheduler on or off |
+| **LLM** | API base URL, API key, Model, Reasoning effort |
 | **arXiv categories** | Which arXiv categories to fetch |
-| **Research topics** | Topic cards (name, directions, detail-note eligibility), templates |
-| **Output & schedule** | Daily/paper note paths, link style, run time, tick interval, lookback days (≤ 5) |
-| **Personal library** | Optional local PDF folder, eligible file types, processing depth, proposed directions |
-| **Email delivery** | Send-yourself (Resend key) or official-delivery beta, daily auto-send |
-| **Advanced** | Request delay, cache retention, section/char limits, log level |
-| **Help & feedback** | Links to docs and a prefilled GitHub issue |
+| **Research topics** | Topic cards (name, tag, description, directions, detail report) and templates |
+| **Automatic detail notes** | How often a longer paper note is written automatically (Fewer / Recommended / More) |
+| **Timezone** | Which timezone defines the current day for reports and schedules |
+| **Output & schedule** | Daily paper limit, Daily reports folder, Paper notes folder, Link style, Summary language, Run window, Check every (minutes) |
+| **Personal library** | Library (choose a folder, index it, revoke authorization), Topics from library (review proposed directions), Embedding (local or remote), Better PDF parser (optional local sidecar) |
+| **Email delivery** | How to send, Your email, Verification code, Resend API key, From email, From name, Send test email, Daily auto-send |
+| **Advanced** | Log level |
+| **Help & feedback** | Prefilled bug-report and feature-request issues, documentation, repository |
+
+The lookback window is fixed at 5 days and is not a setting.
 
 ## Email and personal library
 
@@ -107,7 +105,7 @@ Email is optional and never blocks the daily report on failure. Personal library
 
 ## Troubleshooting
 
-See the [Getting Started troubleshooting table](../docs/getting-started.md#troubleshooting) for common issues (disabled run button, no papers in the Dashboard, failed runs, email errors).
+See the [Getting Started troubleshooting table](../docs/getting-started.md#troubleshooting) for common issues (disabled run button, no papers in the Dashboard, failed runs, email errors, an unreadable `data.json`).
 
 A rerun after an interruption resumes from the last completed step instead of repeating paid model calls.
 

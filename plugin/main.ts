@@ -1,4 +1,4 @@
-import { Notice, Plugin, loadPdfJs } from "obsidian";
+import { Notice, Plugin, loadPdfJs, normalizePath } from "obsidian";
 import type {
   LibraryInventory,
   PersonalLibraryCatalog,
@@ -492,11 +492,22 @@ export default class ArxivDailyPlugin extends Plugin {
       this.progress = new NoopProgressReporter();
     }
     this.host.progress = this.progress;
+    let cancelNoticeShown = false;
     this.unsubscribeOperations = this.operations.subscribe((active) => {
       if (this.unloading || !(this.progress instanceof StatusBarController)) return;
       if (active.length > 0 && active.every((operation) => operation.cancellationRequested)) {
         this.progress.setTask("Cancelling active tasks", `${active.length} unwinding`);
+        cancelNoticeShown = true;
+        return;
       }
+      // Cancelled library, PDF and detail-summary tasks end without a word on
+      // the bar (they skip their failure text when cancelled), so once they
+      // have all unwound nothing else would take the notice down. A task
+      // started meanwhile writes its own text over it.
+      if (cancelNoticeShown && active.length === 0) {
+        this.progress.setIdle(latestCompletedDate(this.stateStore));
+      }
+      cancelNoticeShown = false;
     });
     await this.buildMarkdownWriter().cleanupTemporaryFiles().catch((e) =>
       this.logger.warn("markdown temp cleanup failed", e),
@@ -2519,13 +2530,73 @@ export default class ArxivDailyPlugin extends Plugin {
       this.scheduler.start();
     } else {
       this.scheduler.stop();
-      this.progress.setDisabled();
+    }
+    // The bar says "disabled" or "idle" from the toggle, not from whichever
+    // run happened to end last.
+    if (this.progress instanceof StatusBarController) {
+      this.progress.setSchedulerEnabled(enabled);
     }
   }
 
+  /**
+   * What Obsidian returns for data.json is the parsed file, `null` when there
+   * is none (a first run) and, for a file it could not read or parse,
+   * `undefined` rather than an error. Taken for "no settings yet" that
+   * `undefined` would start the plugin on defaults and let the next save write
+   * over the only copy of the settings and keys without a word. So an
+   * existing data.json behind it is read again here: if it reads and parses,
+   * the first try failed in passing and its content is used; if it is not
+   * valid JSON it is kept beside the original, the plugin starts on default
+   * settings and says so; if it can be neither read nor kept, the plugin does
+   * not start, so nothing can save over it. A host that rejects with the parse
+   * error instead (test doubles) takes the same road; any other rejection
+   * still fails the load.
+   */
+  private async readPersistedData(): Promise<{ raw: unknown; warning?: string }> {
+    try {
+      const loaded: unknown = await this.loadData();
+      if (loaded !== undefined) return { raw: loaded };
+    } catch (error) {
+      if (!isJsonSyntaxError(error)) throw error;
+    }
+    const adapter = this.app.vault.adapter;
+    const dataPath = normalizePath(`${this.pluginDir()}/data.json`);
+    let keptPath: string;
+    try {
+      if (!await adapter.exists(dataPath)) return { raw: null };
+      const text = await adapter.read(dataPath);
+      try {
+        return { raw: JSON.parse(text) as unknown };
+      } catch {
+        // Not valid JSON: kept aside below.
+      }
+      // Named after when the broken file was written, so starting again
+      // without fixing it finds its copy instead of adding another. No colons:
+      // the name has to be valid on Windows too.
+      const writtenAt = (await adapter.stat(dataPath).catch(() => null))?.mtime ?? Date.now();
+      keptPath = `${dataPath}.corrupt-${new Date(writtenAt).toISOString().replace(/[:.]/g, "-")}`;
+      if (!await adapter.exists(keptPath)) await adapter.write(keptPath, text);
+    } catch (error) {
+      new Notice(
+        `arXiv Daily did not start: ${dataPath} exists but could not be read or kept aside, so the plugin stopped rather than risk overwriting your settings. Check the file and its permissions, then reload the plugin.`,
+        20_000,
+      );
+      throw error;
+    }
+    new Notice(
+      `arXiv Daily: data.json could not be read, so the plugin started with default settings. The unreadable file was kept as ${keptPath}; restore your settings from it or enter them again.`,
+      20_000,
+    );
+    return {
+      raw: null,
+      warning: `data.json is not valid JSON; started with default settings and kept the file as ${keptPath}`,
+    };
+  }
+
   private async loadSettingsAndState(): Promise<string[]> {
-    const raw: unknown = await this.loadData();
+    const { raw, warning } = await this.readPersistedData();
     const loaded = settingsAndStateFromPersistedData(raw);
+    if (warning) loaded.warnings.unshift(warning);
     this.legacyRunState = loaded.runState;
     this.settings = loaded.settings;
     const persisted = raw && typeof raw === "object"
@@ -3150,6 +3221,12 @@ export default class ArxivDailyPlugin extends Plugin {
       );
     }
   }
+}
+
+/** JSON.parse failures are SyntaxErrors; compare by name too, the error may come from another window's realm. */
+function isJsonSyntaxError(error: unknown): boolean {
+  return error instanceof SyntaxError
+    || (typeof error === "object" && error !== null && (error as { name?: unknown }).name === "SyntaxError");
 }
 
 function abortedSignal(reason: string): AbortSignal {
