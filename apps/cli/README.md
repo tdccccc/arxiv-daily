@@ -50,7 +50,7 @@ arxiv-daily ui           # open the local reading workbench
 | Linux/macOS | `$XDG_CONFIG_HOME/arxiv-daily/config.toml` (default `~/.config/arxiv-daily/config.toml`) |
 | Windows | `%APPDATA%\arxiv-daily\config.toml` |
 
-Default vault from `init`: `~/arxiv-daily`. There are no settings env vars and no `--config`/`--vault-root` flags. The file holds your API keys in plain text — lock it down:
+Default vault from `init`: `~/arxiv-daily`. There are no settings env vars and no `--config`/`--vault-root` flags. You can edit the file by hand; when the workbench's Settings or `library connect` change it, only the values they change are rewritten, so your comments and layout stay. The file holds your API keys in plain text — lock it down:
 
 ```bash
 chmod 600 ~/.config/arxiv-daily/config.toml

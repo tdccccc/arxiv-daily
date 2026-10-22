@@ -50,7 +50,7 @@ arxiv-daily ui           # 打开本地阅读工作台
 | Linux/macOS | `$XDG_CONFIG_HOME/arxiv-daily/config.toml`（默认 `~/.config/arxiv-daily/config.toml`） |
 | Windows | `%APPDATA%\arxiv-daily\config.toml` |
 
-`init` 的默认 vault 路径是 `~/arxiv-daily`。没有配置用的环境变量，也没有 `--config`/`--vault-root` 参数。配置文件以明文保存 API key，建议加权限限制：
+`init` 的默认 vault 路径是 `~/arxiv-daily`。没有配置用的环境变量，也没有 `--config`/`--vault-root` 参数。你可以直接手改这个文件；工作台设置或 `library connect` 修改它时，只会改写它们改动的值，注释和排版都会保留。配置文件以明文保存 API key，建议加权限限制：
 
 ```bash
 chmod 600 ~/.config/arxiv-daily/config.toml
