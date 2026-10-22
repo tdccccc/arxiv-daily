@@ -10,6 +10,28 @@ export interface PaperMeta {
 export interface DateBucket {
   announceDate: string;
   papers: PaperMeta[];
+  /** Entries this page lists for the day, usable or not. */
+  listedEntries: number;
+  /**
+   * The day's whole length as its heading states it ("showing 59 of 59
+   * entries"); more than `listedEntries` when the page ends inside the day.
+   */
+  declaredEntries?: number;
+}
+
+/** Where a day starts in the category's listing, from the day links at the top of the page. */
+export interface RecentListingDay {
+  announceDate: string;
+  skip: number;
+}
+
+/** A /recent page: the days it lists, plus what it says about the listing as a whole. */
+export interface RecentListing {
+  buckets: DateBucket[];
+  /** "Total of N entries": the whole listing, of which a page shows part. */
+  totalEntries?: number;
+  /** Every day of the listing with its offset, including days beyond this page. */
+  days: RecentListingDay[];
 }
 
 const MONTHS: Record<string, number> = {
@@ -72,13 +94,24 @@ function removeUnsafeElements(doc: Document): void {
  * and arXiv id. Callers who need abstracts fetch /abs/<id> separately.
  */
 export function parseRecent(html: string, markupParser: MarkupParser): DateBucket[] {
+  return parseRecentListing(html, markupParser).buckets;
+}
+
+/**
+ * Like {@link parseRecent}, and also what the page says about the listing
+ * beyond it: arXiv shows at most 2000 entries per page, so a busy category's
+ * listing continues on pages the day links (with their `skip` offsets) point
+ * to, and a day can end where the page does.
+ */
+export function parseRecentListing(html: string, markupParser: MarkupParser): RecentListing {
   const doc = markupParser.parseFromString(html, "text/html");
   removeUnsafeElements(doc);
   const buckets: DateBucket[] = [];
   const dls = Array.from(doc.querySelectorAll("dl#articles"));
   for (const dl of dls) {
     const h3 = dl.querySelector("h3");
-    const date = h3 ? parseHeaderDate(h3.textContent ?? "") : null;
+    const heading = h3?.textContent ?? "";
+    const date = h3 ? parseHeaderDate(heading) : null;
     if (!date) continue;
     const dts = Array.from(dl.querySelectorAll("dt")) as unknown as Element[];
     const dds = Array.from(dl.querySelectorAll("dd")) as unknown as Element[];
@@ -88,10 +121,35 @@ export function parseRecent(html: string, markupParser: MarkupParser): DateBucke
       const p = parsePaper(dts[i]!, dds[i]!);
       if (p) papers.push(p);
     }
-    buckets.push({ announceDate: date, papers });
+    const declared = /\(showing\s+(?:first\s+)?\d[\d,]*\s+of\s+(\d[\d,]*)\s+entries/i.exec(heading);
+    buckets.push({
+      announceDate: date,
+      papers,
+      listedEntries: pairs,
+      ...(declared ? { declaredEntries: Number(declared[1]!.replace(/,/g, "")) } : {}),
+    });
   }
   buckets.sort((a, b) => (a.announceDate > b.announceDate ? -1 : 1));
-  return buckets;
+  return { buckets, totalEntries: parseTotalEntries(doc), days: parseDayLinks(doc) };
+}
+
+function parseTotalEntries(doc: Document): number | undefined {
+  for (const paging of Array.from(doc.querySelectorAll(".paging"))) {
+    const match = /Total of\s+(\d[\d,]*)\s+entries/i.exec(paging.textContent ?? "");
+    if (match) return Number(match[1]!.replace(/,/g, ""));
+  }
+  return undefined;
+}
+
+function parseDayLinks(doc: Document): RecentListingDay[] {
+  const days: RecentListingDay[] = [];
+  for (const link of Array.from(doc.querySelectorAll("a[href]"))) {
+    const match = /\/list\/[^/?#]+\/recent\?(?:[^#]*&)?skip=(\d+)/.exec(link.getAttribute("href") ?? "");
+    const date = match ? parseHeaderDate(link.textContent ?? "") : null;
+    if (!match || !date || days.some((day) => day.announceDate === date)) continue;
+    days.push({ announceDate: date, skip: Number(match[1]) });
+  }
+  return days;
 }
 
 function parsePaper(dt: Element, dd: Element): PaperMeta | null {
