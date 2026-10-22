@@ -56,7 +56,7 @@ See [docs/workbench.md](../../docs/workbench.md) for the full feature guide.
 ## Limitations
 
 - **Local DSH only** — the workbench talks to a locally running `arxiv-daily` process; it does not support a remote DSH reaching back into your computer's paper library.
-- **Restart after update** — replacing the plugin package on disk doesn't replace an already-running workbench process; quit and restart DSH, then reload the browser tab.
+- **Restart after update** — replacing the plugin package on disk doesn't replace an already-running workbench process; quit and restart DSH, then reload the browser tab. The workbench process stops together with DSH, also when DSH is force-quit or crashes, so quitting DSH is enough.
 - **One origin per workbench lifetime** — a workbench session binds to a single page origin. If you mix `localhost` and `127.0.0.1` across DSH Web sessions, go back to the original address, or re-enable the plugin after your session ends.
 
 ## Build from source

@@ -26,10 +26,22 @@ it("accepts an explicit port and no-open for background / remote terminals", asy
   expect(ui).toHaveBeenCalledWith(config, expect.anything(), expect.objectContaining({ port: 8123, open: false }));
 });
 
+it("passes exit-on-stdin-close to the workbench, with or without a configuration, only when asked", async () => {
+  const { config, io } = fixture(); const ui = vi.fn(async () => 0);
+  expect(await runCli({ argv: ["ui", "--no-open", "--exit-on-stdin-close", "--frame-origin", "dsh-app://app"], loadConfig: async () => config, io, ui })).toBe(0);
+  expect(ui).toHaveBeenLastCalledWith(config, expect.anything(), expect.objectContaining({ open: false, exitOnStdinClose: true, frameOrigin: "dsh-app://app" }));
+  const { CliConfigError } = await import("../src/config");
+  const missing = async () => { throw new CliConfigError("missing", Object.assign(new Error("ENOENT"), { code: "ENOENT" })); };
+  expect(await runCli({ argv: ["ui", "--exit-on-stdin-close"], loadConfig: missing, io, ui })).toBe(0);
+  expect(ui).toHaveBeenLastCalledWith(undefined, expect.anything(), expect.objectContaining({ exitOnStdinClose: true }));
+  expect(await runCli({ argv: ["ui"], loadConfig: async () => config, io, ui })).toBe(0);
+  expect(ui.mock.lastCall![2]).not.toHaveProperty("exitOnStdinClose");
+});
+
 it("rejects invalid launch options before loading configuration", async () => {
   const { config, io, text } = fixture();
   const loadConfig = vi.fn(async () => config);
-  for (const argv of [["ui", "--port", "-1"], ["ui", "--port", "70000"], ["ui", "--port"], ["ui", "--host", "0.0.0.0"], ["ui", "--unknown"], ["ui", "--port", "1.2"]]) {
+  for (const argv of [["ui", "--port", "-1"], ["ui", "--port", "70000"], ["ui", "--port"], ["ui", "--host", "0.0.0.0"], ["ui", "--unknown"], ["ui", "--port", "1.2"], ["ui", "--exit-on-stdin-close=yes"]]) {
     expect(await runCli({ argv, loadConfig, io })).toBe(2);
   }
   expect(loadConfig).not.toHaveBeenCalled();

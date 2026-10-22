@@ -82,7 +82,7 @@ type CliCommand =
   | { name: "help" }
   | { name: "init" }
   | { name: "status" }
-  | { name: "ui"; port: number; open: boolean; frameOrigin?: string }
+  | { name: "ui"; port: number; open: boolean; frameOrigin?: string; exitOnStdinClose?: boolean }
   | { name: "papers"; query: string; offset: number; limit: number }
   | { name: "library"; args: string[] }
   | { name: "update"; checkOnly?: boolean; yes?: boolean }
@@ -95,7 +95,7 @@ type CliCommand =
 const USAGE = `Usage:
   arxiv-daily init
   arxiv-daily status
-  arxiv-daily ui [--port PORT] [--no-open] [--frame-origin ORIGIN]
+  arxiv-daily ui [--port PORT] [--no-open] [--frame-origin ORIGIN] [--exit-on-stdin-close]
   arxiv-daily papers [--query TEXT] [--offset N] [--limit N]
   arxiv-daily library connect PATH
   arxiv-daily library status|prepare|scan|index|propose|directions|revoke
@@ -168,7 +168,7 @@ export async function runCli(opts: RunCliOptions = {}): Promise<number> {
     try { config = await loadConfig({ env }); }
     catch (error) {
       if (parsed.name === "ui" && error instanceof CliConfigError && (error.cause as NodeJS.ErrnoException)?.code === "ENOENT") {
-        return await (opts.ui ?? runWorkbench)(undefined, io, { port: parsed.port, open: parsed.open, env, ...(parsed.frameOrigin ? { frameOrigin: parsed.frameOrigin } : {}) });
+        return await (opts.ui ?? runWorkbench)(undefined, io, { port: parsed.port, open: parsed.open, env, ...(parsed.frameOrigin ? { frameOrigin: parsed.frameOrigin } : {}), ...(parsed.exitOnStdinClose ? { exitOnStdinClose: true } : {}) });
       }
       throw error;
     }
@@ -184,7 +184,7 @@ export async function runCli(opts: RunCliOptions = {}): Promise<number> {
       return 0;
     }
     if (parsed.name === "ui") {
-      return await (opts.ui ?? runWorkbench)(config, io, { port: parsed.port, open: parsed.open, env, ...(parsed.frameOrigin ? { frameOrigin: parsed.frameOrigin } : {}) });
+      return await (opts.ui ?? runWorkbench)(config, io, { port: parsed.port, open: parsed.open, env, ...(parsed.frameOrigin ? { frameOrigin: parsed.frameOrigin } : {}), ...(parsed.exitOnStdinClose ? { exitOnStdinClose: true } : {}) });
     }
     if (parsed.name === "papers") {
       writeLine(io.stdout, JSON.stringify(await inspectPapers(config, parsed.query, parsed.offset, parsed.limit)));
@@ -357,10 +357,12 @@ function parseCli(argv: string[]): CliCommand {
     let open = true;
     let hasPort = false;
     let frameOrigin: string | undefined;
+    let exitOnStdinClose = false;
     for (let i = 0; i < commandArgs.length; i++) {
       const flag = commandArgs[i];
       if (flag === "--frame-origin" && frameOrigin === undefined) { frameOrigin = validateFrameOrigin(commandArgs[++i] || ""); continue; }
       if (flag === "--no-open") { open = false; continue; }
+      if (flag === "--exit-on-stdin-close") { exitOnStdinClose = true; continue; }
       if (flag === "--port" && !hasPort) {
         const value = commandArgs[++i];
         if (!value || !/^\d+$/.test(value) || Number(value) > 65535) throw new Error("ui --port requires an integer from 0 to 65535");
@@ -368,9 +370,9 @@ function parseCli(argv: string[]): CliCommand {
         hasPort = true;
         continue;
       }
-      throw new Error("ui accepts --port PORT, --no-open and --frame-origin ORIGIN only");
+      throw new Error("ui accepts --port PORT, --no-open, --frame-origin ORIGIN and --exit-on-stdin-close only");
     }
-    return { name: "ui", port, open, ...(frameOrigin ? { frameOrigin } : {}) };
+    return { name: "ui", port, open, ...(frameOrigin ? { frameOrigin } : {}), ...(exitOnStdinClose ? { exitOnStdinClose } : {}) };
   }
   if (commandName === "status") {
     if (commandArgs.length) throw new Error("status takes no arguments");
