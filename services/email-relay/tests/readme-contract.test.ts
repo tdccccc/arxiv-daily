@@ -80,4 +80,9 @@ describe("README matches the relay it documents", () => {
     expect(documented.sort()).toEqual(["DAILY_QUOTA", "FROM_EMAIL", "FROM_NAME", "PUBLIC_BASE_URL"]);
     for (const name of documented) expect(wranglerToml).toMatch(new RegExp(`^${name}\\s*=`, "m"));
   });
+
+  it("states the device token lifetime and its renewal", () => {
+    expect(readme).toMatch(/365 days without use/);
+    expect(readme).toMatch(/half a lifetime/);
+  });
 });

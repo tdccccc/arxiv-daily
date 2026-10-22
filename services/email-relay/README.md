@@ -159,6 +159,10 @@ Answers:
 | `503 {"error":"…","ambiguous":false}` | Refused before any provider call: automatic delivery not configured, cutover not ready, ledger unavailable. Installed clients treat exactly this body shape as "nothing was sent" and retry later, so do not add members to it |
 | `507` | Ledger capacity reached |
 
+## Device token lifetime
+
+A device token expires after **365 days without use**. A token that is used does not: when an authenticated `/v1/deliver` request finds the record at least half a lifetime old (since it was issued or last renewed), the Worker rewrites it with a fresh 365-day expiry, about two KV writes a year per active device. A failed renewal write never changes the outcome of the delivery. A token that does expire answers `401`; the plugin and CLI then report `hosted_token_rejected` and ask the user to send a new verification email. Renewal only exists in a relay that has been deployed with it.
+
 ## Local
 
 ```bash

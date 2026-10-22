@@ -5,6 +5,7 @@ import {
   configuredBuildIdentity,
   hashPendingToken,
   putPending,
+  renewDeviceIfDue,
   type Env,
 } from "./kv";
 import { consumeVerifyRateLimit } from "./verify-rate-limiter";
@@ -203,6 +204,8 @@ async function deliverViaGate(request: Request, env: Env): Promise<Response> {
 
   const device = await authenticateDevice(env, rawToken);
   if (!device) return json({ error: "invalid or revoked token" }, 401);
+  // A device in use must not expire a year after it was issued.
+  await renewDeviceIfDue(env, device);
 
   if (keyKind === "auto") {
     const readiness = await fetchPublicReadiness(env);

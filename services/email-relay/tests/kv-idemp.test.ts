@@ -52,17 +52,21 @@ function memoryKv() {
   const failDeleteAfterPrefixes = new Set<string>();
   const staleAfterDeletePrefixes = new Set<string>();
   const staleReads = new Map<string, string>();
+  const putAttempts: string[] = [];
+  const putOptions = new Map<string, { expirationTtl?: number } | undefined>();
   return {
     async get(key: string) {
       if (failGet.has(key)) throw new Error("injected KV read marker");
       return map.get(key) ?? staleReads.get(key) ?? null;
     },
-    async put(key: string, value: string) {
+    async put(key: string, value: string, options?: { expirationTtl?: number }) {
+      putAttempts.push(key);
       await beforePut?.(key);
       if (Array.from(failPutPrefixes).some((prefix) => key.startsWith(prefix))) {
         throw new Error("injected KV put failure");
       }
       map.set(key, value);
+      putOptions.set(key, options);
       if (
         Array.from(failPutAfterPrefixes).some((prefix) => key.startsWith(prefix))
       ) {
@@ -105,6 +109,8 @@ function memoryKv() {
       };
     },
     _map: map,
+    _putAttempts: putAttempts,
+    _putOptions: putOptions,
     _failGet: failGet,
     _failPutPrefixes: failPutPrefixes,
     _failPutAfterPrefixes: failPutAfterPrefixes,
@@ -409,6 +415,9 @@ async function putBoundDeviceFixture(
     protocolGeneration: PROTOCOL_GENERATION,
     buildIdentity: BUILD_IDENTITY,
     readyGeneration: READY_GENERATION,
+    // Just renewed in real time: these tests run on the real clock, and a
+    // fixture that looked half a year old would be rewritten as it is used.
+    renewedAt: new Date().toISOString(),
     ...overrides,
   }));
 }
@@ -3731,5 +3740,194 @@ describe("authentication", () => {
     const hash = await hashDeviceToken("device-token", "secret");
     expect(hash).toMatch(/^[0-9a-f]{64}$/);
     expect(hash).not.toContain("device-token");
+  });
+});
+
+describe("device token lifetime", () => {
+  const DAY = 24 * 60 * 60 * 1000;
+  const NOW = new Date("2027-03-01T00:00:00.000Z");
+  const ONE_YEAR_SECONDS = 365 * 24 * 60 * 60;
+  const daysAgo = (days: number) => new Date(NOW.getTime() - days * DAY).toISOString();
+
+  /** A cut-over relay and a device written `createdDays` ago (and renewed `renewedDays` ago). */
+  async function deviceAged(createdDays: number, renewedDays?: number) {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(NOW);
+    const kv = memoryKv();
+    const env = envWith(kv);
+    await completeCutover(env);
+    await putBoundDeviceFixture(kv, env, "device-token", "recipient@example.com", {
+      createdAt: daysAgo(createdDays),
+      renewedAt: renewedDays === undefined ? undefined : daysAgo(renewedDays),
+    });
+    const key = `device-v2:${await hashDeviceToken("device-token", env.TOKEN_SECRET)}`;
+    const before = kv._map.get(key)!;
+    kv._putAttempts.length = 0;
+    return { kv, env, key, before };
+  }
+
+  it("writes the one-year expiry when a device is first issued, without a renewal mark", async () => {
+    const kv = memoryKv();
+    const env = envWith(kv, { binding: false });
+    await putDevice(env, "new-token", "recipient@example.com", {
+      protocolGeneration: PROTOCOL_GENERATION,
+      buildIdentity: BUILD_IDENTITY,
+      readyGeneration: READY_GENERATION,
+    });
+    const key = `device-v2:${await hashDeviceToken("new-token", env.TOKEN_SECRET)}`;
+    expect(kv._putOptions.get(key)).toEqual({ expirationTtl: ONE_YEAR_SECONDS });
+    expect(JSON.parse(kv._map.get(key)!)).not.toHaveProperty("renewedAt");
+  });
+
+  it.each([
+    ["an automatic delivery", AUTO_KEY_A],
+    ["a test delivery", TEST_KEY_A],
+  ])("gives a device that has used half its lifetime a fresh expiry on %s", async (_label, key) => {
+    const { kv, env, key: deviceKey, before } = await deviceAged(200);
+    vi.stubGlobal("fetch", providerSuccess());
+
+    const response = await worker.fetch(deliveryRequest({ key }), env);
+
+    expect(response.status).toBe(200);
+    expect(kv._putAttempts).toEqual([deviceKey]);
+    expect(kv._putOptions.get(deviceKey)).toEqual({ expirationTtl: ONE_YEAR_SECONDS });
+    // Everything the cutover and the issuance claim compare is carried over.
+    expect(JSON.parse(kv._map.get(deviceKey)!)).toEqual({
+      ...JSON.parse(before),
+      renewedAt: NOW.toISOString(),
+    });
+  });
+
+  it.each([
+    ["issued 100 days ago", 100, undefined],
+    ["issued 400 days ago and renewed 10 days ago", 400, 10],
+    ["renewed just under half a lifetime ago", 700, 180],
+  ])("leaves a device alone that was %s", async (_label, created, renewed) => {
+    const { kv, env, key, before } = await deviceAged(created, renewed);
+    vi.stubGlobal("fetch", providerSuccess());
+
+    const response = await worker.fetch(deliveryRequest(), env);
+
+    expect(response.status).toBe(200);
+    expect(kv._putAttempts).not.toContain(key);
+    expect(kv._map.get(key)).toBe(before);
+  });
+
+  it("renews again once the last renewal is half a lifetime old", async () => {
+    const { kv, env, key } = await deviceAged(700, 190);
+    vi.stubGlobal("fetch", providerSuccess());
+
+    expect((await worker.fetch(deliveryRequest(), env)).status).toBe(200);
+
+    expect(JSON.parse(kv._map.get(key)!).renewedAt).toBe(NOW.toISOString());
+  });
+
+  it("does not write the same device twice for two requests in a row", async () => {
+    const { kv, env, key } = await deviceAged(300);
+    vi.stubGlobal("fetch", providerSuccess());
+
+    await worker.fetch(deliveryRequest({ key: TEST_KEY_A }), env);
+    await worker.fetch(deliveryRequest({ key: TEST_KEY_B }), env);
+
+    expect(kv._putAttempts.filter((name) => name === key)).toHaveLength(1);
+  });
+
+  it("delivers even when the renewal write fails, and leaves the record as it was", async () => {
+    const { kv, env, key, before } = await deviceAged(300);
+    kv._failPutPrefixes.add("device-v2:");
+    const provider = providerSuccess();
+    vi.stubGlobal("fetch", provider);
+
+    const response = await worker.fetch(deliveryRequest(), env);
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ ok: true });
+    expect(provider).toHaveBeenCalledTimes(1);
+    expect(kv._map.get(key)).toBe(before);
+  });
+
+  it("renews a pre-v2 record at its own key and never creates a v2 one", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(NOW);
+    const kv = memoryKv();
+    const env = envWith(kv);
+    await completeCutover(env);
+    const identity = await hashDeviceToken("legacy-token", env.TOKEN_SECRET);
+    kv._map.set(`device:${identity}`, JSON.stringify({
+      email: "recipient@example.com",
+      createdAt: daysAgo(250),
+    }));
+    kv._putAttempts.length = 0;
+    vi.stubGlobal("fetch", providerSuccess());
+
+    const response = await worker.fetch(
+      deliveryRequest({ token: "legacy-token", key: TEST_KEY_A }),
+      env,
+    );
+
+    expect(response.status).toBe(200);
+    expect(kv._putAttempts).toEqual([`device:${identity}`]);
+    expect(kv._putOptions.get(`device:${identity}`)).toEqual({ expirationTtl: ONE_YEAR_SECONDS });
+    expect(JSON.parse(kv._map.get(`device:${identity}`)!)).toEqual({
+      email: "recipient@example.com",
+      createdAt: daysAgo(250),
+      renewedAt: NOW.toISOString(),
+    });
+    expect(kv._map.has(`device-v2:${identity}`)).toBe(false);
+  });
+
+  it("writes nothing for a token it does not know", async () => {
+    const { kv, env } = await deviceAged(300);
+    const provider = providerSuccess();
+    vi.stubGlobal("fetch", provider);
+
+    const response = await worker.fetch(deliveryRequest({ token: "someone-else" }), env);
+
+    expect(response.status).toBe(401);
+    expect(kv._putAttempts).toEqual([]);
+    expect(provider).not.toHaveBeenCalled();
+  });
+
+  it("ignores a damaged renewal mark and renews on the next request", async () => {
+    const { kv, env, key } = await deviceAged(10);
+    kv._map.set(key, JSON.stringify({
+      ...JSON.parse(kv._map.get(key)!),
+      createdAt: daysAgo(300),
+      renewedAt: "not a date",
+    }));
+    vi.stubGlobal("fetch", providerSuccess());
+
+    expect((await worker.fetch(deliveryRequest(), env)).status).toBe(200);
+
+    expect(JSON.parse(kv._map.get(key)!).renewedAt).toBe(NOW.toISOString());
+  });
+
+  it("keeps a renewed device valid for the verification link that issued it", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(NOW);
+    const kv = memoryKv();
+    const env = envWith(kv);
+    await completeCutover(env);
+    await putPending(env, "renewal-pending-token", "recipient@example.com");
+    const link = () => worker.fetch(
+      new Request("https://relay.test/v1/verify?token=renewal-pending-token"),
+      env,
+    );
+    const first = await link();
+    const token = disclosedDeviceToken(await first.text())!;
+    expect(token).toMatch(/^[0-9a-f]{64}$/);
+
+    // Half a year later the device is used and renewed ...
+    vi.setSystemTime(new Date(NOW.getTime() + 200 * DAY));
+    vi.stubGlobal("fetch", providerSuccess());
+    expect((await worker.fetch(deliveryRequest({ token }), env)).status).toBe(200);
+    const identity = await hashDeviceToken(token, env.TOKEN_SECRET);
+    expect(JSON.parse(kv._map.get(`device-v2:${identity}`)!).renewedAt)
+      .toBe(new Date(NOW.getTime() + 200 * DAY).toISOString());
+
+    // ... and the issuance claim still recognises it, so a replayed link gives the same token.
+    const replay = await link();
+    expect(replay.status).toBe(200);
+    expect(disclosedDeviceToken(await replay.text())).toBe(token);
   });
 });
