@@ -165,7 +165,7 @@ export function validateTopicLimits(topics: readonly Topic[]): string[] {
   const reasons: string[] = [];
   topics.forEach((topic, i) => {
     const subject = `Topic ${i + 1} ${quotedTopicName(typeof topic.name === "string" ? topic.name : "")}`;
-    const tagLength = typeof topic.tag === "string" ? topic.tag.trim().length : 0;
+    const tagLength = typeof topic.tag === "string" ? topic.tag.length : 0;
     if (tagLength > TOPIC_TAG_MAX_LENGTH) {
       reasons.push(`${subject} tag is ${tagLength} characters long; the limit is ${TOPIC_TAG_MAX_LENGTH}, shorten the topic name`);
     }
@@ -196,8 +196,8 @@ export function validateTopicsForReport(topics: readonly Topic[]): string[] {
   const nameOwners = new Map<string, number>();
   topics.forEach((topic, i) => {
     const label = `Topic ${i + 1}`;
-    const name = typeof topic.name === "string" ? topic.name.trim() : "";
-    if (!name) reasons.push(`${label} name is empty`);
+    const name = typeof topic.name === "string" ? topic.name : "";
+    if (!name.trim()) reasons.push(`${label} name is empty`);
     const tag = typeof topic.tag === "string" ? topic.tag.trim() : "";
     if (!tag) {
       reasons.push(`${label} tag is empty`);
@@ -206,11 +206,12 @@ export function validateTopicsForReport(topics: readonly Topic[]): string[] {
     } else {
       tags.add(tag);
     }
-    // The report gives every topic a heading of its own name.
-    const owner = name ? nameOwners.get(name) : undefined;
+    // The report gives every topic a heading of its own name, and the daily
+    // preflight compares names exactly, so this does too.
+    const owner = name.trim() ? nameOwners.get(name) : undefined;
     if (owner !== undefined) {
       reasons.push(`Topics ${owner + 1} and ${i + 1} are both named ${quotedTopicName(name)}; give each topic its own name`);
-    } else if (name) {
+    } else if (name.trim()) {
       nameOwners.set(name, i);
     }
   });

@@ -312,6 +312,17 @@ describe("validateFilterConfig topic constraints of the daily report", () => {
     expect(withTopics([topic("Photo-z", "a"), topic("photo-z", "b")]).ok).toBe(true);
   });
 
+  it("compares names the way the report does: exactly, so a stray space is not a duplicate", () => {
+    expect(withTopics([topic("Photo-z", "a"), topic("Photo-z ", "b")]).ok).toBe(true);
+  });
+
+  it("measures a tag as it is stored, spaces included", () => {
+    const padded = topic("Padded", "t".repeat(119));
+    padded.tag = `${padded.tag}  `;
+
+    expect(withTopics([padded]).reasons).toEqual(['Topic 1 "Padded" tag is 121 characters long; the limit is 120, shorten the topic name']);
+  });
+
   it("names the topic and the direction whose text is too long for the report", () => {
     const r = withTopics([
       topic("Short", "short"),
