@@ -15,7 +15,11 @@ import type { Logger } from "../logger";
 import { NoopProgressReporter, type ProgressReporter } from "../progress";
 import type { RunHistoryTrigger } from "../run-history";
 import type { RunLock } from "../run-lock";
-import { isFinalTransientAttempt, type StateStore } from "../state-store";
+import {
+  isFinalTransientAttempt,
+  STALE_RUNNING_RECOVERY_MS,
+  type StateStore,
+} from "../state-store";
 import { clearRepeatingTimer, setRepeatingTimer } from "../../utils/timers";
 import { lookbackDateStrings, todayDateString } from "./date-selector";
 import { LOOKBACK_DAYS } from "./constants";
@@ -560,7 +564,7 @@ export class SchedulerDriver {
     const store = this.store();
     this.activeWork += 1;
     try {
-      return await this.deps.lock.withLock(date, async () => {
+      return await this.deps.lock.withLock(date, async ({ crossProcess }) => {
         const pendingCompletion = this.pendingCompletions.get(date);
         if (pendingCompletion) {
           return this.runPendingCompletionFinalization(date, () =>
@@ -584,6 +588,7 @@ export class SchedulerDriver {
 
         try {
           await store.loadAuthoritative();
+          await this.recoverOrphanedRunning(date, now, crossProcess, store);
         } catch (error) {
           return this.storeFailureResult(date, trigger, now, error);
         }
@@ -744,6 +749,33 @@ export class SchedulerDriver {
       });
     } finally {
       this.activeWork -= 1;
+    }
+  }
+
+  /**
+   * `running` is only written while holding the run lock, so a date still
+   * marked running once we hold it was left by a run that died. The
+   * Vault-wide lock proves that outright; a host without one can only assume
+   * it for records as old as a crashed run would leave. Callers already
+   * handled this scheduler's own pending results, so none of them is mistaken
+   * for a leftover.
+   */
+  private async recoverOrphanedRunning(
+    date: string,
+    now: Date,
+    crossProcess: boolean,
+    store: StateStore,
+  ): Promise<void> {
+    if (store.get(date).status !== "running") return;
+    const recovered = await store.recoverRunningDate(
+      date,
+      now.getTime(),
+      crossProcess ? 0 : STALE_RUNNING_RECOVERY_MS,
+    );
+    if (recovered) {
+      this.safeEffect(() =>
+        this.deps.logger.warn(`scheduler: ${date} was left running by an earlier run; retrying`),
+      );
     }
   }
 

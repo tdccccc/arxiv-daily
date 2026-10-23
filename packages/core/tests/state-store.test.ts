@@ -1,5 +1,6 @@
 import { describe, it, expect, vi } from "vitest";
 import {
+  CorruptRunStateError,
   createStorageStateStore,
   deriveStorageStateStorePaths,
   StateStore,
@@ -155,6 +156,116 @@ describe("StateStore", () => {
 
     expect(store.get("2026-06-13").status).toBe("failed_permanent");
     expect(store.get("2026-06-13").error).toMatch(/^retries exhausted after 10 attempts: /);
+  });
+
+  it("skipIfOpen skips a date that has no outcome yet and keeps its attempt history", async () => {
+    const { store, save } = makeStore({
+      waiting: { status: "pending", lastAttempt: 1, attempts: 2, outcome: "awaiting_announcement", error: "not announced" },
+      flaky: { status: "failed_transient", lastAttempt: 1, attempts: 3, failureAttempts: 3, error: "offline" },
+    });
+    await store.load();
+
+    await expect(store.skipIfOpen("waiting", "opted out")).resolves.toBe(true);
+    await expect(store.skipIfOpen("flaky", "opted out")).resolves.toBe(true);
+    await expect(store.skipIfOpen("fresh", "opted out")).resolves.toBe(true);
+
+    expect(store.get("waiting")).toMatchObject({ status: "skipped", attempts: 2, error: "opted out", outcome: undefined });
+    expect(store.get("flaky")).toMatchObject({ status: "skipped", failureAttempts: 3, error: "opted out" });
+    expect(store.get("fresh")).toMatchObject({ status: "skipped", error: "opted out" });
+    expect(save).toHaveBeenCalledTimes(3);
+  });
+
+  it.each(["completed", "failed_permanent", "skipped", "running"] as const)(
+    "skipIfOpen leaves a %s date untouched",
+    async (status) => {
+      const { store, save } = makeStore({
+        d: { status, lastAttempt: 1, attempts: 1, papersWritten: 4, error: "kept" },
+      });
+      await store.load();
+
+      await expect(store.skipIfOpen("d", "opted out")).resolves.toBe(false);
+
+      expect(store.get("d")).toMatchObject({ status, papersWritten: 4, error: "kept" });
+      expect(save).not.toHaveBeenCalled();
+    },
+  );
+
+  it("skipIfOpen decides on the durable state, not on a stale in-memory view", async () => {
+    const { store, data } = makeStore();
+    await store.load();
+    expect(store.get("d").status).toBe("pending");
+    data.runState.d = { status: "completed", lastAttempt: 2, attempts: 1, papersWritten: 7 };
+
+    await expect(store.skipIfOpen("d", "opted out")).resolves.toBe(false);
+
+    expect(data.runState.d).toMatchObject({ status: "completed", papersWritten: 7 });
+    expect(store.get("d").status).toBe("completed");
+  });
+
+  it("recovers one running date at any age when the caller proved no run is alive", async () => {
+    const { store, save } = makeStore({
+      "2026-06-13": { status: "running", lastAttempt: 5_000, attempts: 3, failureAttempts: 2, outcome: "papers_written" },
+      "2026-06-14": { status: "running", lastAttempt: 5_000, attempts: 1 },
+    });
+    await store.load();
+
+    await expect(store.recoverRunningDate("2026-06-13", 6_000, 0)).resolves.toBe(true);
+
+    expect(store.get("2026-06-13")).toMatchObject({
+      status: "failed_transient",
+      attempts: 3,
+      failureAttempts: 3,
+      lastAttempt: 5_000,
+      outcome: undefined,
+    });
+    expect(store.get("2026-06-13").error).toMatch(/^recovered stale running state/);
+    expect(store.get("2026-06-14").status).toBe("running");
+    expect(save).toHaveBeenCalledTimes(1);
+  });
+
+  it("recovers a lock-proven leftover even when its timestamp is ahead of the caller's clock", async () => {
+    const { store } = makeStore({ d: { status: "running", lastAttempt: 9_000, attempts: 1 } });
+    await store.load();
+
+    await expect(store.recoverRunningDate("d", 1_000, 0)).resolves.toBe(true);
+    expect(store.get("d").status).toBe("failed_transient");
+  });
+
+  it("only recovers a running date that is old enough when the caller cannot prove no run is alive", async () => {
+    const { store, save } = makeStore({ d: { status: "running", lastAttempt: 1_000, attempts: 1 } });
+    await store.load();
+
+    await expect(store.recoverRunningDate("d", 1_000 + 3_599_999, 3_600_000)).resolves.toBe(false);
+    expect(store.get("d").status).toBe("running");
+    expect(save).not.toHaveBeenCalled();
+
+    await expect(store.recoverRunningDate("d", 1_000 + 3_600_000, 3_600_000)).resolves.toBe(true);
+    expect(store.get("d").status).toBe("failed_transient");
+  });
+
+  it("ignores dates that are not running when recovering a single date", async () => {
+    const { store, save } = makeStore({
+      done: { status: "completed", lastAttempt: 1, attempts: 1, papersWritten: 2 },
+      failed: { status: "failed_transient", lastAttempt: 1, attempts: 1, error: "x" },
+    });
+    await store.load();
+
+    for (const date of ["done", "failed", "unknown"]) {
+      await expect(store.recoverRunningDate(date, 10_000, 0)).resolves.toBe(false);
+    }
+    expect(store.get("done").status).toBe("completed");
+    expect(store.get("failed").error).toBe("x");
+    expect(save).not.toHaveBeenCalled();
+  });
+
+  it("recovers a running date permanently once its retries are exhausted", async () => {
+    const { store } = makeStore({ d: { status: "running", lastAttempt: 1, attempts: 10, failureAttempts: 9 } });
+    await store.load();
+
+    await store.recoverRunningDate("d", 2, 0);
+
+    expect(store.get("d").status).toBe("failed_permanent");
+    expect(store.get("d").error).toMatch(/^retries exhausted after 10 attempts: recovered stale running state/);
   });
 
   it("isDone returns true for completed and failed_permanent", async () => {
@@ -403,6 +514,11 @@ describe("StateStore", () => {
       initial: { d: { status: "running", lastAttempt: 1, attempts: 1 } },
       mutate: (store) => store.recoverStaleRunning(100, 10),
     },
+    {
+      name: "recoverRunningDate",
+      initial: { d: { status: "running", lastAttempt: 1, attempts: 1 } },
+      mutate: (store) => store.recoverRunningDate("d", 100, 0),
+    },
   ];
 
   it.each(failedMutationCases)(
@@ -599,7 +715,7 @@ describe("StateStore", () => {
       warn: vi.fn(),
     });
 
-    await expect(store.clearAll()).rejects.toThrow("invalid run-state root");
+    await expect(store.setRunning("new")).rejects.toThrow("invalid run-state root");
 
     expect(JSON.parse(files["arxiv-daily/.index/run-state.json"])).toEqual({
       schemaVersion: 1,
@@ -642,7 +758,7 @@ describe("StateStore", () => {
       warn: vi.fn(),
     });
 
-    await expect(store.clearAll()).rejects.toThrow("invalid run-state entry");
+    await expect(store.setRunning("new")).rejects.toThrow("invalid run-state entry");
 
     const saved = JSON.parse(files["arxiv-daily/.index/run-state.json"]);
     expect(saved.runState.invalid.attempts).toBe("one");
@@ -994,5 +1110,160 @@ describe("StateStore", () => {
     await expect(store.load()).resolves.toBeUndefined();
 
     expect(store.snapshot()).toEqual({});
+  });
+
+  describe("a damaged run-state file", () => {
+    const PRIMARY = "arxiv-daily/.index/run-state.json";
+    const CONFLICT = "<<<<<<< HEAD\n{}\n=======\n{}\n>>>>>>> other\n";
+    const quarantined = (files: Record<string, string>, prefix = PRIMARY) =>
+      Object.keys(files).filter((name) => name.startsWith(`${prefix}.corrupt-`));
+
+    it("names the file and the way out instead of a bare JSON error", async () => {
+      const { files, storage } = makeStorage({ [PRIMARY]: CONFLICT });
+      const store = createStorageStateStore(storage, DEFAULT_SETTINGS.output, { warn: vi.fn() });
+
+      const failure = await store.setRunning("2026-06-13").catch((error: unknown) => error);
+
+      expect(failure).toBeInstanceOf(CorruptRunStateError);
+      expect((failure as CorruptRunStateError).path).toBe(PRIMARY);
+      expect((failure as Error).message).toContain(PRIMARY);
+      expect((failure as Error).message).toContain("Clear arXiv Daily run state");
+      expect((failure as Error).message).toContain("not valid JSON");
+      expect(files[PRIMARY]).toBe(CONFLICT);
+    });
+
+    it("is cleared by clearAll, which keeps the damaged file and starts a new history", async () => {
+      const { files, storage } = makeStorage({ [PRIMARY]: CONFLICT });
+      const store = createStorageStateStore(storage, DEFAULT_SETTINGS.output, { warn: vi.fn() });
+
+      await expect(store.clearAll()).resolves.toBeUndefined();
+
+      expect(JSON.parse(files[PRIMARY]).runState).toEqual({});
+      const kept = quarantined(files);
+      expect(kept).toHaveLength(1);
+      expect(files[kept[0]!]).toBe(CONFLICT);
+      await expect(store.setRunning("2026-06-13")).resolves.toBeUndefined();
+      expect(JSON.parse(files[PRIMARY]).runState["2026-06-13"].status).toBe("running");
+    });
+
+    it("does not bring back the backup's history when it is cleared", async () => {
+      const { files, storage } = makeStorage({
+        [PRIMARY]: CONFLICT,
+        [`${PRIMARY}.bak`]: JSON.stringify({
+          runState: { old: { status: "completed", lastAttempt: 1, attempts: 1, papersWritten: 2 } },
+        }),
+      });
+      const store = createStorageStateStore(storage, DEFAULT_SETTINGS.output, { warn: vi.fn() });
+
+      await store.clearAll();
+
+      const reloaded = createStorageStateStore(storage, DEFAULT_SETTINGS.output, { warn: vi.fn() });
+      await reloaded.load();
+      expect(reloaded.snapshot()).toEqual({});
+      expect(quarantined(files)).toHaveLength(1);
+    });
+
+    it("moves an unusable backup aside when it is all that is left", async () => {
+      const { files, storage } = makeStorage({ [`${PRIMARY}.bak`]: "{not-json" });
+      const store = createStorageStateStore(storage, DEFAULT_SETTINGS.output, { warn: vi.fn() });
+
+      await expect(store.setRunning("d")).rejects.toThrow(`${PRIMARY}.bak`);
+      await store.clearAll();
+
+      expect(files[`${PRIMARY}.bak`]).toBeUndefined();
+      expect(quarantined(files, `${PRIMARY}.bak`)).toHaveLength(1);
+      expect(JSON.parse(files[PRIMARY]).runState).toEqual({});
+    });
+
+    it("never overwrites an earlier quarantined copy", async () => {
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date("2026-10-21T08:00:00.000Z"));
+      try {
+        const earlier = `${PRIMARY}.corrupt-20261021T080000000Z`;
+        const { files, storage } = makeStorage({ [PRIMARY]: CONFLICT, [earlier]: "first" });
+        const store = createStorageStateStore(storage, DEFAULT_SETTINGS.output, { warn: vi.fn() });
+
+        await store.clearAll();
+
+        expect(files[earlier]).toBe("first");
+        expect(files[`${earlier}-1`]).toBe(CONFLICT);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("still refuses to clear a run state written by a newer schema", async () => {
+      const newer = JSON.stringify({ schemaVersion: 2, runState: { future: { status: "completed", lastAttempt: 1, attempts: 1 } } });
+      const { files, storage } = makeStorage({ [PRIMARY]: newer });
+      const store = createStorageStateStore(storage, DEFAULT_SETTINGS.output, { warn: vi.fn() });
+
+      await expect(store.clearAll()).rejects.toThrow("unsupported run-state schema version: 2");
+
+      expect(files[PRIMARY]).toBe(newer);
+      expect(quarantined(files)).toEqual([]);
+    });
+
+    it("is not discarded by replaceAll, which only serves the legacy migration", async () => {
+      const { files, storage } = makeStorage({ [PRIMARY]: CONFLICT });
+      const store = createStorageStateStore(storage, DEFAULT_SETTINGS.output, { warn: vi.fn() });
+
+      await expect(store.replaceAll({ d: { status: "completed", lastAttempt: 1, attempts: 1 } }))
+        .rejects.toBeInstanceOf(CorruptRunStateError);
+
+      expect(files[PRIMARY]).toBe(CONFLICT);
+      expect(quarantined(files)).toEqual([]);
+    });
+
+    it("is reported to the host by a lenient load, which otherwise shows an empty history", async () => {
+      const { storage } = makeStorage({ [PRIMARY]: CONFLICT });
+      const store = createStorageStateStore(storage, DEFAULT_SETTINGS.output, { warn: vi.fn() });
+
+      await store.load();
+
+      expect(store.snapshot()).toEqual({});
+      expect(store.damage()).toEqual({ path: PRIMARY, reason: expect.stringContaining("not valid JSON") });
+      await store.clearAll();
+      expect(store.damage()).toBeUndefined();
+    });
+
+    it("is reported even when a valid backup keeps the history visible", async () => {
+      const { storage } = makeStorage({
+        [PRIMARY]: "{not-json",
+        [`${PRIMARY}.bak`]: JSON.stringify({ runState: { kept: { status: "completed", lastAttempt: 1, attempts: 1 } } }),
+      });
+      const store = createStorageStateStore(storage, DEFAULT_SETTINGS.output, { warn: vi.fn() });
+
+      await store.load();
+
+      expect(store.get("kept").status).toBe("completed");
+      expect(store.damage()?.path).toBe(PRIMARY);
+    });
+
+    it("is reported when entries that a lenient load skips make writes fail", async () => {
+      const { storage } = makeStorage({
+        [PRIMARY]: JSON.stringify({ runState: { bad: { status: "running", lastAttempt: 1, attempts: "one" } } }),
+      });
+      const store = createStorageStateStore(storage, DEFAULT_SETTINGS.output, { warn: vi.fn() });
+
+      await store.load();
+
+      expect(store.damage()).toEqual({ path: PRIMARY, reason: expect.stringContaining("invalid run-state entry") });
+    });
+
+    it("is not reported for a healthy file or an unreadable one", async () => {
+      const healthy = makeStorage({ [PRIMARY]: JSON.stringify({ schemaVersion: 1, runState: {} }) });
+      const store = createStorageStateStore(healthy.storage, DEFAULT_SETTINGS.output, { warn: vi.fn() });
+      await store.load();
+      expect(store.damage()).toBeUndefined();
+
+      const unreadable = makeStorage({ [PRIMARY]: "{}" });
+      const denied = {
+        ...unreadable.storage,
+        async readText(): Promise<string> { throw new Error("permission denied"); },
+      } satisfies StorageAdapter;
+      const blocked = createStorageStateStore(denied, DEFAULT_SETTINGS.output, { warn: vi.fn() });
+      await blocked.load();
+      expect(blocked.damage()).toBeUndefined();
+    });
   });
 });

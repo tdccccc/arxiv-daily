@@ -201,6 +201,7 @@ extensions/vscode-arxiv-daily → 独立 CommonJS 扩展（不在 npm workspaces
 - 流水线返回 `completed` 后，driver 先把原始 completed result 与 digest 保留为进程内 pending completion。`run-state.json` 的 completed candidate 被确认后才显示完成、写 completed history 并调用 `onDailyCompleted`；提交未确认时返回 `failed_transient`，后续调度或手动入口只重试该状态提交，不重跑流水线；
 - 瞬态失败在 `setFailed` 时若 `attempts >= MAX_TRANSIENT_ATTEMPTS`（**10**）则升级为 `failed_permanent`；
 - 超过 `STALE_RUNNING_RECOVERY_MS`（1 小时）的 `running` 在启动/恢复时标为 **`failed_transient`**（错误文案：`recovered stale running state after startup`），由正常调度继续重试；`attempts` 已达 `MAX_TRANSIENT_ATTEMPTS` 时标为 `failed_permanent`；
+- `running` 只在持有运行锁期间写入，所以 `tryRun` 在持锁并重读权威状态后即可回收残留：`RunLock.withLock` 告诉回调是否真正持有跨进程的 Vault 锁（`crossProcess`），是则任何 `running` 都是已死进程留下的，立即标为 `failed_transient`（错误文案 `recovered stale running state: the previous run did not finish`，计入重试上限，保留崩溃那次尝试的 `lastAttempt`，手动运行/强制重跑/重试失败立即执行，定时 tick 按瞬态失败退避）；宿主没有跨进程锁（如移动端）时保持一小时规则，但对每次 tick 访问到的日期都按此规则回收，不再只在启动时；本进程自己待提交的完成/取消记录先于这一步处理，不会被当作残留；
 - run history、进度/日志、取消清理和 `onDailyCompleted` 是 completed hard commit 之后的 best-effort effect，任一失败不撤销已确认的 run-state。pending completion 不持久化为 outbox；进程退出后不保证原 digest、history 或完成回调重放。
 
 **插件 vs CLI 调度：**
@@ -227,8 +228,9 @@ cron install 在读取或修改 crontab 前先校验时间窗和可执行路径�
 2. 发送前严格读取 `delivery-state.json`：missing 可开始；corrupt/unreadable 直接失败。宿主还必须同时提供目录枚举、系统级 exclusive create 和 descriptor-backed namespace guard，否则返回 `delivery_storage_unsupported`。
 3. `delivery-state.json.claims/` 保存不可变 generation 的 claim、decision、result sidecar。逻辑 claim stem 和 sidecar 只保存哈希 recipient identity；同一日期/收件人的并发调用通过 exclusive create 收敛到单一 generation。
 4. provider 调用前先持久化 `provider_attempt_started`，再同步复核仍由同一 descriptor 锚定的目录承载 claim；该复核与 `HttpClient.request` 之间没有异步间隔。只有可证明 provider 尚未调用的取消或恢复才能释放 generation。
-5. self Resend 对 408/409/5xx 和宿主明确标记为可重试的 transport failure 做有界重试，所有物理尝试复用同一个 provider key。HTTP 400/401/403/404/422/429 是明确拒绝；其他 HTTP、transport failure 和无有效 acceptance marker 的 2xx 均按结果不明处理。
+5. self Resend 对 408/409/5xx 和宿主明确标记为可重试的 transport failure 做有界重试，所有物理尝试复用同一个 provider key。HTTP 400/401/403/404/422/429 是明确拒绝；其他 HTTP、transport failure 和无有效 acceptance marker 的 2xx 均按结果不明处理。唯一的例外是可证明请求从未发出：宿主把传输错误标为 `HttpTransportError.requestNotSent`（Node 宿主仅限连接阶段——DNS/连接建立失败、证书校验失败，不含 EPROTO、重置、超时；self 模式要求每一次物理尝试都如此，任何一次拿到 HTTP 响应或可能已发出就按结果不明），或 hosted 中继返回 503 且响应体恰为 `{error, ambiguous:false}`（中继只在接触任何 provider 之前这样拒绝，其他状态码与形状一律不信）。此时释放 generation（`cancelled_before_provider_attempt` result，稳定 provider key 仍作兜底），返回 `failed / provider_not_invoked`，之后对同一日期的投递可重新 claim；Obsidian 宿主的 HTTP 客户端无法证明这一点，仍按结果不明处理。插件对 failed/ambiguous 的自动邮件按日期弹一次通知，CLI 的日志里有对应的 warn 行。
 6. provider 接受后写 `delivered` result；若最终主状态重建失败，返回 `delivered_unrecorded`，已存在的 attempt/result sidecar 仍继续阻断自动重发。provider 调用后的 ambiguous、明确拒绝或结果落盘不确定同样保留阻断；系统不自动重试这些 generation。
+7. sidecar 无法读取时按 stem 隔离，一个坏文件不再让所有日期的自动邮件失败：每个 stem 只读取最新 generation，读取不到内容的文件记为损坏而不是抛错，主状态重建跳过这样的 stem（保留其原有记录）并在日志里给出文件名。空文件或无法解析的 claim（`createTextExclusive` 先建后写，崩溃会留下这样的 claim），在没有 decision/result 时按“未写完的 claim”处理：不看年龄，下一次对同一日期/收件人的投递直接用 decision 文件仲裁（`recovered_before_provider_attempt`）并进入下一代——owner 在调用 provider 前必须重读并校验自己的 claim、且先成功独占创建 `provider_attempt_started`，所以这样的 generation 不可能已调用过 provider，原 owner 此后也发不出。decision 不可读（无法判断是否已开始调用，也可能是另一个进程正在写）、没有 decision 的 result 不可读、或 claim 是未知 schema 时一律失败即关闭，返回 `failed / delivery_claim_unreadable`（只阻断该日期，日志写出完整路径，只有确认该日邮件未发出时才应手动删除该文件）；decision 为 `provider_attempt_started` 而 result 不可读仍按 `provider_attempt_started` 阻断，decision 为 recovered 则仍视为已释放。
 
 `delivery-state.json` 保持 schema v1，使旧 reader 仍能读取；claim、attempt、ambiguous 等阻断态投影为 v1 `status: "delivered"`，并用 `deliveryPhase` 提供新客户端精确信息。为兼容旧 reader，主文件保留明文 recipient。CLI 与 Plugin product 共用受限的 Node-API v8 私有存储组件：POSIX 使用目录描述符相对操作和 `0600`；Windows 持有遍历目录的句柄、通过同步身份检查拒绝命名空间替换和 reparse point，并在文件创建时设置当前用户的 protected DACL，而不是把 chmod 当作 ACL。既有宽权限主文件及可恢复备份在使用前收紧权限，私有替换与恢复还使用同一机器本地锁，避免清理另一个写入者的临时文件。
 
@@ -335,7 +337,7 @@ core 的 `ScopedLibrarySource` 只暴露 `inventory` 与 `readBinary`，没有�
 
 ### 操作与取消
 
-`OperationRegistry` 跟踪 `daily-run`、`detail-summary`、`pdf-download`、`personal-library-scan`、`personal-library-direction-generation`、`personal-library-fulltext-index`；增量方向更新与全量生成共用 `personal-library-direction-generation` kind（同一授权门与撤销取消范围）。`RunCancellationService` 与 scheduler 协作。插件卸载 `cancelAll`；CLI 安装信号处理器取消活动操作。
+`OperationRegistry` 跟踪 `daily-run`、`detail-summary`、`pdf-download`、`personal-library-scan`、`personal-library-direction-generation`、`personal-library-fulltext-index`；增量方向更新与全量生成共用 `personal-library-direction-generation` kind（同一授权门与撤销取消范围）。`RunCancellationService` 与 scheduler 协作。插件卸载 `cancelAll`；CLI 安装信号处理器取消活动操作。工作台启动的生成子进程由工作台通过 IPC 消息 `arxiv-daily/cancel` 取消（只发一次，不再转发第二个 SIGINT：终端 Ctrl+C 已经向整个前台进程组发过信号，而第二个信号会让子进程在写回取消状态前强退）；子进程在入口处就挂好该消息的监听，启动期间收到的取消不会丢，连按两次终端 Ctrl+C 仍是强制退出。
 插件另以 `paper-index` / `paper-note` output lease 保护跨输出目录切换；`RunCancellationService` 与 scheduler 协作。设置输出 transition 与 operation registry 双向互斥。插件卸载 `cancelAll`；CLI 安装信号处理器取消活动操作。
 ### Paper Index 持久化与 History Sync
 
@@ -349,7 +351,7 @@ Dashboard 历史同步（`packages/core/src/dashboard/history-sync.ts`）先扫�
 
 ### 原子写与状态一致性
 
-`StateStore` 的普通启动读取可从损坏 primary 回退 `.bak`，但显式未知 schema，以及 schema 1/无 schema 记录中类型非法的 `error` 或 `papersWritten` 会 fail closed。mutation 使用按 run-state 路径共享的进程内队列，并通过 candidate 保存与权威 primary 精确回读确认提交；backup 不参与 mutation 的 authoritative confirmation。
+`StateStore` 的普通启动读取可从损坏 primary 回退 `.bak`，但显式未知 schema，以及 schema 1/无 schema 记录中类型非法的 `error` 或 `papersWritten` 会 fail closed。mutation 使用按 run-state 路径共享的进程内队列，并通过 candidate 保存与权威 primary 精确回读确认提交；backup 不参与 mutation 的 authoritative confirmation。primary（无 primary 时的 backup）无法解析或结构非法时，mutation 抛出带路径与处理指引的 `CorruptRunStateError`（运行因此以可读原因失败，而不是裸 JSON 错误）；`clearAll()`（插件命令 “Clear arXiv Daily run state”）是唯一出口：它把损坏文件改名为 `run-state.json.corrupt-<时间戳>`（不删除、不覆盖已有副本）后写入空状态，而未知 schema 与非法可选字段仍拒绝清除；`replaceAll()` 只服务旧版迁移，不做这种隔离。宽松读取仍回退 `.bak` 或空状态，但 `StateStore.damage()` 会告诉宿主“写入被损坏文件挡住”（插件启动时提示，`arxiv-daily status` 的 `runStateDamaged` 字段）。
 
 插件输出路径重载会先构造并加载候选 `StateStore` / `RunHistoryStore`，再由 scheduler 的 active/pending guard 接受 store 替换，最后同步发布 plugin 引用；guard 拒绝时各消费者继续使用旧 store。该输出配置协调和 pending completion 仍是单进程语义；日运行通过 `RunLock.withLock` 额外获取 Vault-wide `daily-run` 共享锁，不同日期也互斥。两端启动时的 Markdown 临时文件清理使用同一锁：忙时跳过，锁服务失败时不执行删除。共享锁按 canonical Vault root 与资源名隔离，默认记录位于机器本地 `~/.arxiv-daily/host-locks`，不进入 Vault 数据导出；用 OS PID 存活检查恢复崩溃持有者，不因墙钟超时抢占仍存活或状态不明的持有者。共享锁与宿主组合测试在六平台原生矩阵内运行；真实桌面宿主由隔离 Obsidian 验收入口驱动。
 

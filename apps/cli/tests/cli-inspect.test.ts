@@ -1,5 +1,5 @@
 import { afterEach, expect, it, vi } from "vitest";
-import { mkdtemp, mkdir, readdir, rm } from "node:fs/promises";
+import { mkdtemp, mkdir, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DEFAULT_SETTINGS, PaperIndexStore, createStorageStateStore } from "@arxiv-daily/core";
@@ -49,6 +49,22 @@ it("reports existing product configuration without exposing credentials or requi
   expect(data.llm.keyConfigured).toBe(true);
   expect(result.stdout).not.toMatch(/secret-that|user:password|private-endpoint-token|apiKey|api_key/);
   expect(await readdir(vaultRoot)).toEqual([]);
+});
+
+it("reports a damaged run-state.json instead of presenting an empty history as the real one", async () => {
+  const { config, vaultRoot } = await setup();
+  expect(JSON.parse((await invoke(config, ["status"])).stdout).runStateDamaged).toBeNull();
+
+  const indexDir = join(vaultRoot, config.settings.output.dailyDir, "..", ".index");
+  await mkdir(indexDir, { recursive: true });
+  await writeFile(join(indexDir, "run-state.json"), "<<<<<<< HEAD\n{}\n=======\n{}\n>>>>>>> other\n");
+
+  const status = await invoke(config, ["status"]);
+
+  expect(status.code).toBe(0);
+  const data = JSON.parse(status.stdout);
+  expect(data.recentRuns).toEqual([]);
+  expect(data.runStateDamaged).toEqual({ path: expect.stringMatching(/run-state\.json$/), reason: expect.stringContaining("not valid JSON") });
 });
 
 it("reports stored run results and searches the real Paper Index", async () => {

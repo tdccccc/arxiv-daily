@@ -314,6 +314,21 @@ function isHeaderlessRateLimit(error: unknown): error is ArxivHttpError {
 
 const sharedRequestCoordinator = new ArxivRequestCoordinator();
 
+/**
+ * Run one arXiv request under the spacing and per-host cooldowns that every
+ * ArxivFetcher request shares (the shared coordinator unless one is given). A
+ * failed answer must be thrown as an `ArxivHttpError` for a 429 to start the
+ * host's cooldown.
+ */
+export function coordinateArxivRequest<T>(
+  attempt: () => Promise<T>,
+  url: string,
+  signal?: AbortSignal,
+  coordinator: ArxivRequestCoordinator = sharedRequestCoordinator,
+): Promise<T> {
+  return coordinator.coordinate(attempt, MIN_ARXIV_REQUEST_DELAY_MS, signal, url);
+}
+
 interface MetadataFlight {
   promise: Promise<AtomPaperMeta | null>;
   resolve: (paper: AtomPaperMeta | null) => void;

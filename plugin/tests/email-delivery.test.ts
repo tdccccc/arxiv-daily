@@ -1,7 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
 import ArxivDailyPlugin from "../main.ts";
-import { AUTOMATIC_EMAIL_UNSUPPORTED_MESSAGE, DEFAULT_SETTINGS, Logger, type HttpRequest, type StorageAdapter } from "@arxiv-daily/core";
+import { Notice } from "obsidian";
+import { AUTOMATIC_EMAIL_UNSUPPORTED_MESSAGE, DEFAULT_SETTINGS, HttpTransportError, Logger, sampleDailyDigest, type HttpRequest, type StorageAdapter } from "@arxiv-daily/core";
 import {
+  createAutomaticEmailOutcomeNotifier,
   createUnsupportedAutomaticEmailNotifier,
   testEmailResultMessage,
 } from "../src/services/email-delivery";
@@ -48,6 +50,80 @@ describe("createUnsupportedAutomaticEmailNotifier", () => {
   });
 });
 
+describe("createAutomaticEmailOutcomeNotifier", () => {
+  it("tells the user once per day when an email was not sent or may not have arrived", () => {
+    const notify = vi.fn();
+    const onResult = createAutomaticEmailOutcomeNotifier(notify);
+
+    onResult("2026-10-20", { kind: "failed", reason: "provider_not_invoked", attempts: 0 });
+    onResult("2026-10-20", { kind: "failed", reason: "provider_not_invoked", attempts: 0 });
+    expect(notify).toHaveBeenCalledTimes(1);
+    expect(notify.mock.calls[0]![0]).toContain("2026-10-20");
+    expect(notify.mock.calls[0]![0]).toContain("could not be reached");
+
+    onResult("2026-10-21", { kind: "ambiguous", reason: "provider_outcome_ambiguous", attempts: 1 });
+    expect(notify).toHaveBeenCalledTimes(2);
+    expect(notify.mock.calls[1]![0]).toContain("may or may not have been delivered");
+
+    onResult("2026-10-22", { kind: "failed", reason: "delivery_claim_unreadable", attempts: 0 });
+    expect(notify.mock.calls[2]![0]).toContain("unreadable");
+    onResult("2026-10-23", { kind: "failed", reason: "provider_definitive_rejection", attempts: 1 });
+    expect(notify.mock.calls[3]![0]).toContain("provider_definitive_rejection");
+  });
+
+  it("stays quiet for outcomes that need no action from the user", () => {
+    const notify = vi.fn();
+    const onResult = createAutomaticEmailOutcomeNotifier(notify);
+
+    onResult("2026-10-20", { kind: "delivered", attempts: 1 });
+    onResult("2026-10-20", { kind: "skipped", reason: "already_delivered" });
+    onResult("2026-10-20", { kind: "disabled", reason: "email_delivery_disabled" });
+    onResult("2026-10-20", { kind: "failed", reason: "delivery_storage_unsupported", attempts: 0 });
+    onResult("2026-10-20", { kind: "failed", reason: "cancelled_before_provider_attempt", attempts: 0 });
+
+    expect(notify).not.toHaveBeenCalled();
+  });
+});
+
+describe("plugin automatic email after a completed run", () => {
+  function claimStorage(): StorageAdapter {
+    const files = new Map<string, string>();
+    return {
+      normalizePath: path => path,
+      readText: async path => { if (!files.has(path)) throw new Error(`missing ${path}`); return files.get(path)!; },
+      writeText: async (path, text) => { files.set(path, text); },
+      writeTextAtomic: async (path, text) => { files.set(path, text); },
+      createTextExclusive: async (path, text) => { if (files.has(path)) return false; files.set(path, text); return true; },
+      guardClaimNamespace: async () => ({ assertCurrent() {}, async release() {} }),
+      exists: async path => files.has(path), mkdir: async () => {}, remove: async path => { files.delete(path); },
+      rename: async (from, to) => { files.set(to, files.get(from)!); files.delete(from); },
+      list: async dir => [...files.keys()].filter(path => path.startsWith(`${dir}/`)).map(path => ({ path, type: "file" as const })),
+    };
+  }
+
+  it("shows a notice when the mail service could not be reached, then stays quiet once it has been delivered", async () => {
+    const settings = structuredClone(DEFAULT_SETTINGS);
+    settings.email = { ...settings.email, enabled: true, mode: "self", to: "reader@example.test", apiKey: "re_private" };
+    const request = vi.fn()
+      .mockRejectedValueOnce(new HttpTransportError("network", "getaddrinfo ENOTFOUND", { requestNotSent: true }))
+      .mockResolvedValue({ status: 200, headers: {}, bodyText: JSON.stringify({ id: "sent" }) });
+    const plugin = Object.assign(new ArxivDailyPlugin(), {
+      settings, host: { storage: claimStorage(), http: { request } }, logger: new Logger("error"),
+    });
+    const result = (date: string) => ({ kind: "completed" as const, papersWritten: 1, digest: sampleDailyDigest({ date }) });
+    Notice.calls = [];
+
+    await plugin.deliverCompletedDigest("2026-10-20", result("2026-10-20"));
+    expect(Notice.calls.map(call => call.message)).toEqual([
+      expect.stringMatching(/^arXiv Daily: The digest email for 2026-10-20 was not sent because the mail service could not be reached/),
+    ]);
+
+    Notice.calls = [];
+    await plugin.deliverCompletedDigest("2026-10-20", result("2026-10-20"));
+    expect(Notice.calls).toEqual([]);
+    expect(request).toHaveBeenCalledTimes(2);
+  });
+});
 
 describe("plugin settings email operations", () => {
   function fixture() {

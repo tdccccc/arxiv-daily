@@ -253,6 +253,64 @@ describe("reconcilePersonalLibraryCatalog", () => {
   });
 });
 
+describe("entries whose names the catalog cannot hold", () => {
+  // Legal on macOS and Linux, never stored: a path with a backslash, or one that
+  // starts like a drive ("A:b"), fails the catalog's strict path decoding.
+  const unsafeFiles = ["old\\2301.00002.pdf", "notes\\todo.docx", "A:b 2301.00003.pdf", "dir\\sub/2301.00004.pdf"];
+
+  it("skips them, counts them, and still scans the rest of the library", async () => {
+    const metadataResolver = resolver([metadata("2610.00001")]);
+    const result = await reconcile({
+      entries: [
+        file("papers/2610.00001.pdf"),
+        ...unsafeFiles.map((path) => file(path)),
+        { path: "bad\\folder", type: "ignored", ignoredReason: "unsafe-name" },
+        file("notes/draft.md"),
+      ],
+      truncated: false,
+    }, [], emptyCatalog(), metadataResolver);
+
+    expect(Object.keys(result.catalog.files).sort()).toEqual(["notes/draft.md", "papers/2610.00001.pdf"]);
+    expect(result.skippedPaths).toEqual([...unsafeFiles, "bad\\folder"]);
+    expect(result.catalog.files["papers/2610.00001.pdf"]).toMatchObject({ status: "ready" });
+    expect(result.catalog.lastScan).toEqual({
+      ready: 1, unresolved: 0, unrelated: 1, failed: 0, papers: 1, truncated: false, skipped: 5,
+    });
+    // The id in a skipped file's name is never looked up.
+    expect(metadataResolver.resolve).toHaveBeenCalledWith(["2610.00001"], undefined);
+    expect(decodePersonalLibraryCatalog(result.catalog)).toEqual(result.catalog);
+  });
+
+  it("reports no skipped count when nothing was skipped", async () => {
+    const result = await reconcile({ entries: [file("papers/2610.00001.pdf")], truncated: false }, [metadata("2610.00001")]);
+    expect(result.catalog.lastScan).not.toHaveProperty("skipped");
+    expect(result.skippedPaths).toEqual([]);
+  });
+
+  it("does not identify a skipped file from its content either", async () => {
+    const identifyFile = { version: 1, identify: vi.fn(async (_path: string) => null) };
+    await reconcilePersonalLibraryCatalog({
+      current: emptyCatalog(),
+      inventory: { entries: [file("old\\paper.pdf"), file("kept.pdf")], truncated: false },
+      eligibleExtensions: [".pdf"],
+      resolver: resolver([]),
+      identifyFile,
+      now,
+    });
+    expect(identifyFile.identify.mock.calls.map(([path]) => path)).toEqual(["kept.pdf"]);
+  });
+
+  it("keeps scanning the same way on later scans", async () => {
+    const inventory = { entries: [file("papers/2610.00001.pdf"), file("old\\2301.00002.pdf")], truncated: false };
+    const first = await reconcile(inventory, [metadata("2610.00001")]);
+    const second = await reconcile(inventory, [], first.catalog);
+    expect(second.reusedFileCount).toBe(1);
+    expect(second.catalog.lastScan).toEqual(first.catalog.lastScan);
+    expect(second.catalog.files).toEqual(first.catalog.files);
+    expect(decodePersonalLibraryCatalog(second.catalog)).toEqual(second.catalog);
+  });
+});
+
 describe("content-based file identification (strategy v2)", () => {
   it("identifies unresolved files through the injected identifier", async () => {
     const identifyFile = {
@@ -288,6 +346,164 @@ describe("content-based file identification (strategy v2)", () => {
     });
     const record = Object.values(result.catalog.files)[0]!;
     expect(record.status).toBe("unresolved");
+  });
+
+  it("does not remember an identification that failed, so the next scan identifies the file again", async () => {
+    const path = "paper-without-an-id.pdf";
+    const failing = { version: 4, identify: vi.fn(async () => { throw new Error("arXiv unreachable"); }) };
+    const first = await reconcilePersonalLibraryCatalog({
+      current: emptyCatalog(),
+      inventory: { entries: [file(path)], truncated: false },
+      eligibleExtensions: [".pdf"],
+      resolver: resolver([]),
+      identifyFile: failing,
+      now,
+    });
+    expect(first.catalog.files[path]).toMatchObject({ status: "unresolved" });
+    expect(first.catalog.files[path]).not.toHaveProperty("contentIdentificationVersion");
+    expect(decodePersonalLibraryCatalog(first.catalog)).toEqual(first.catalog);
+
+    const recovered = { version: 4, identify: vi.fn(async () => "2001.04385") };
+    const second = await reconcilePersonalLibraryCatalog({
+      current: first.catalog,
+      inventory: { entries: [file(path)], truncated: false },
+      eligibleExtensions: [".pdf"],
+      resolver: resolver([metadata("2001.04385")]),
+      identifyFile: recovered,
+      now,
+    });
+    expect(recovered.identify).toHaveBeenCalledTimes(1);
+    expect(second.reusedFileCount).toBe(0);
+    expect(second.catalog.files[path]).toMatchObject({
+      status: "ready",
+      arxivId: "2001.04385",
+      contentIdentificationVersion: 4,
+    });
+  });
+
+  it("keeps an unchanged file's earlier identity when the rules advanced and it cannot be judged again", async () => {
+    const path = "paper-without-an-id.pdf";
+    const first = await reconcilePersonalLibraryCatalog({
+      current: emptyCatalog(),
+      inventory: { entries: [file(path)], truncated: false },
+      eligibleExtensions: [".pdf"],
+      resolver: resolver([metadata("2001.04385")]),
+      identifyFile: { version: 3, identify: vi.fn(async () => "2001.04385") },
+      now,
+    });
+    expect(first.catalog.files[path]).toMatchObject({ status: "ready", contentIdentificationVersion: 3 });
+
+    // Offline after an upgrade: the file is not judged again, so nothing about it changes.
+    const offline = { version: 4, identify: vi.fn(async () => { throw new Error("arXiv unreachable"); }) };
+    const second = await reconcilePersonalLibraryCatalog({
+      current: first.catalog,
+      inventory: { entries: [file(path)], truncated: false },
+      eligibleExtensions: [".pdf"],
+      resolver: resolver([]),
+      identifyFile: offline,
+      now,
+    });
+    expect(offline.identify).toHaveBeenCalledTimes(1);
+    expect(second.catalog.files[path]).toEqual(first.catalog.files[path]);
+    expect(second.catalog.papers).toEqual(first.catalog.papers);
+    expect(second.catalog.lastScan).toMatchObject({ ready: 1, unresolved: 0, papers: 1 });
+
+    // It keeps its old rule version, so the next scan with a working lookup judges it again.
+    const online = { version: 4, identify: vi.fn(async () => null) };
+    const third = await reconcilePersonalLibraryCatalog({
+      current: second.catalog,
+      inventory: { entries: [file(path)], truncated: false },
+      eligibleExtensions: [".pdf"],
+      resolver: resolver([]),
+      identifyFile: online,
+      now,
+    });
+    expect(online.identify).toHaveBeenCalledTimes(1);
+    expect(third.catalog.files[path]).toMatchObject({ status: "unresolved", contentIdentificationVersion: 4 });
+  });
+
+  it("does not keep an earlier identity for a file that changed", async () => {
+    const path = "paper-without-an-id.pdf";
+    const first = await reconcilePersonalLibraryCatalog({
+      current: emptyCatalog(),
+      inventory: { entries: [file(path)], truncated: false },
+      eligibleExtensions: [".pdf"],
+      resolver: resolver([metadata("2001.04385")]),
+      identifyFile: { version: 3, identify: vi.fn(async () => "2001.04385") },
+      now,
+    });
+    const second = await reconcilePersonalLibraryCatalog({
+      current: first.catalog,
+      inventory: { entries: [file(path, 101)], truncated: false },
+      eligibleExtensions: [".pdf"],
+      resolver: resolver([]),
+      identifyFile: { version: 4, identify: vi.fn(async () => { throw new Error("arXiv unreachable"); }) },
+      now,
+    });
+    expect(second.catalog.files[path]).toMatchObject({ status: "unresolved" });
+    expect(second.catalog.files[path]).not.toHaveProperty("contentIdentificationVersion");
+    expect(second.catalog.papers).toEqual({});
+  });
+
+  it("remembers a judgement that the content names no paper, and does not ask again", async () => {
+    const path = "not-on-arxiv.pdf";
+    const judging = { version: 4, identify: vi.fn(async () => null) };
+    const first = await reconcilePersonalLibraryCatalog({
+      current: emptyCatalog(),
+      inventory: { entries: [file(path)], truncated: false },
+      eligibleExtensions: [".pdf"],
+      resolver: resolver([]),
+      identifyFile: judging,
+      now,
+    });
+    expect(first.catalog.files[path]).toMatchObject({ status: "unresolved", contentIdentificationVersion: 4 });
+
+    const second = await reconcilePersonalLibraryCatalog({
+      current: first.catalog,
+      inventory: { entries: [file(path)], truncated: false },
+      eligibleExtensions: [".pdf"],
+      resolver: resolver([]),
+      identifyFile: judging,
+      now,
+    });
+    expect(judging.identify).toHaveBeenCalledTimes(1);
+    expect(second.reusedFileCount).toBe(1);
+    expect(second.catalog.files[path]).toEqual(first.catalog.files[path]);
+  });
+
+  it("settles each file on its own: one failed identification does not unsettle the others", async () => {
+    const identifyFile = { version: 4, identify: vi.fn(async (path: string) => {
+      if (path === "flaky.pdf") throw new Error("arXiv unreachable");
+      return null;
+    }) };
+    const result = await reconcilePersonalLibraryCatalog({
+      current: emptyCatalog(),
+      inventory: { entries: [file("flaky.pdf"), file("steady.pdf")], truncated: false },
+      eligibleExtensions: [".pdf"],
+      resolver: resolver([]),
+      identifyFile,
+      now,
+    });
+    expect(result.catalog.files["flaky.pdf"]).not.toHaveProperty("contentIdentificationVersion");
+    expect(result.catalog.files["steady.pdf"]).toMatchObject({ contentIdentificationVersion: 4 });
+    expect(result.catalog.lastScan).toMatchObject({ unresolved: 2, failed: 0 });
+  });
+
+  it("lets cancellation during an identification cancel the scan instead of recording it", async () => {
+    const controller = new AbortController();
+    const identifyFile = { version: 4, identify: vi.fn(async () => {
+      controller.abort("stop");
+      throw new Error("aborted");
+    }) };
+    await expect(reconcilePersonalLibraryCatalog({
+      current: emptyCatalog(),
+      inventory: { entries: [file("only.pdf")], truncated: false },
+      eligibleExtensions: [".pdf"],
+      resolver: resolver([]),
+      identifyFile,
+      now,
+      signal: controller.signal,
+    })).rejects.toSatisfy(isCancellationError);
   });
 
   it("treats identifier values unsupported by the catalog as unresolved", async () => {

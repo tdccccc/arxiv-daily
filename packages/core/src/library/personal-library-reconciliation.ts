@@ -1,9 +1,11 @@
 import type { LibraryInventory, LibrarySourceEntry } from "./scoped-library-source";
 import {
   createEmptyPersonalLibraryCatalog,
+  isLogicalRelativePath,
   type PersonalLibraryCatalog,
   type PersonalLibraryFileRecord,
   type PersonalLibraryPaperRecord,
+  type PersonalLibraryScanSummary,
 } from "./personal-library-catalog";
 import { paperKeyFromArxivId } from "../services/paper-key";
 import { modernArxivResources } from "../utils/arxiv";
@@ -39,6 +41,13 @@ export interface PersonalLibraryMetadataResolver {
 export interface PersonalLibraryFileIdentifier {
   /** Bump when content-evidence rules change so unchanged files are re-evaluated. */
   readonly version: number;
+  /**
+   * `null` is a judgement: the content names no arXiv paper. It is remembered
+   * under `version` and not asked again while the file is unchanged. A throw
+   * means the file could not be judged this time (arXiv unreachable, rate
+   * limited): nothing new is remembered, so the next scan asks again. The file
+   * stays unresolved, or as an earlier scan identified it if it is unchanged.
+   */
   identify(
     logicalPath: string,
     signal?: AbortSignal,
@@ -62,6 +71,8 @@ export interface ReconcilePersonalLibraryCatalogResult {
   catalog: PersonalLibraryCatalog;
   resolvedArxivIds: string[];
   reusedFileCount: number;
+  /** Entries left out for a name the catalog cannot hold, in listing order. */
+  skippedPaths: string[];
 }
 
 interface IdentifiedFile {
@@ -110,7 +121,8 @@ export interface PersonalLibraryFolderChange {
 /**
  * Whether a scan would find anything new in the folder, from a local listing
  * alone (no file reads, no network). It applies the same rules as
- * `reconcilePersonalLibraryCatalog`: only eligible regular files matter, a file
+ * `reconcilePersonalLibraryCatalog`: only eligible regular files matter (not
+ * those a scan skips for a name the catalog cannot hold), a file
  * is unchanged when its observation fingerprint (path, size, modification time
  * under the catalog's identification strategy) matches the stored record, and a
  * truncated listing cannot show removals. A renamed or moved file is a removal
@@ -130,7 +142,7 @@ export function detectPersonalLibraryFolderChange(input: {
   const modified: string[] = [];
   const listed = new Set<string>();
   for (const entry of input.inventory.entries) {
-    if (entry.type !== "file" || !eligibleExtensions.has(extensionOf(entry.path))) continue;
+    if (entry.type !== "file" || hasUnusableName(entry) || !eligibleExtensions.has(extensionOf(entry.path))) continue;
     listed.add(entry.path);
     const previous = Object.hasOwn(input.catalog.files, entry.path)
       ? input.catalog.files[entry.path]
@@ -171,9 +183,14 @@ export async function reconcilePersonalLibraryCatalog(
   >;
   const identified: IdentifiedFile[] = [];
   let reusedFileCount = 0;
+  const skippedPaths: string[] = [];
 
   for (const entry of input.inventory.entries) {
     throwIfCancelled(input.signal);
+    if (hasUnusableName(entry)) {
+      skippedPaths.push(entry.path);
+      continue;
+    }
     if (entry.type !== "file") continue;
     const eligible = eligibleExtensions.has(extensionOf(entry.path));
     const filenameArxivId = eligible ? identifyModernArxivIdFromFilename(entry.path) : null;
@@ -208,6 +225,7 @@ export async function reconcilePersonalLibraryCatalog(
     }
 
     let arxivId = filenameArxivId;
+    let judged = true;
     if (!arxivId && input.identifyFile) {
       try {
         const identified = await input.identifyFile.identify(
@@ -218,17 +236,27 @@ export async function reconcilePersonalLibraryCatalog(
         arxivId = identified ? modernArxivResources(identified)?.id ?? null : null;
       } catch {
         // Content identification is best-effort: any failure or unsupported ID
-        // keeps the file unresolved instead of failing or blocking the scan.
+        // keeps the file unresolved instead of failing or blocking the scan. A
+        // failure is not a judgement, though: it is left without the rule
+        // version so that the next scan identifies the file again.
+        throwIfCancelled(input.signal);
         arxivId = null;
+        judged = false;
       }
     }
     if (!arxivId) {
+      if (!judged && previous?.status === "ready" && previous.observationFingerprint === observationFingerprint) {
+        // Not judged again, so nothing changes: the file keeps what an earlier
+        // scan concluded, under its old rule version, and is asked again next scan.
+        defineRecordEntry(files, entry.path, clone(previous));
+        continue;
+      }
       defineRecordEntry(files, entry.path, {
         path: entry.path,
         status: "unresolved",
         observationFingerprint,
         reason: "unrecognized-filename",
-        ...(contentIdentificationVersion === undefined ? {} : { contentIdentificationVersion }),
+        ...(contentIdentificationVersion === undefined || !judged ? {} : { contentIdentificationVersion }),
         updatedAt: nowIso,
       });
       continue;
@@ -321,11 +349,12 @@ export async function reconcilePersonalLibraryCatalog(
 
   next.files = sortRecord(files);
   next.papers = sortRecord(papers);
-  next.lastScan = summarize(next, input.inventory.truncated);
+  next.lastScan = summarize(next, input.inventory.truncated, skippedPaths.length);
   return {
     catalog: next,
     resolvedArxivIds: idsToResolve,
     reusedFileCount,
+    skippedPaths,
   };
 }
 
@@ -385,7 +414,8 @@ function isResolvedMetadataFor(
 function summarize(
   catalog: Pick<PersonalLibraryCatalog, "files" | "papers">,
   truncated: boolean,
-) {
+  skipped: number,
+): PersonalLibraryScanSummary {
   const summary = {
     ready: 0,
     unresolved: 0,
@@ -395,7 +425,19 @@ function summarize(
     truncated,
   };
   for (const record of Object.values(catalog.files)) summary[record.status] += 1;
-  return summary;
+  return skipped > 0 ? { ...summary, skipped } : summary;
+}
+
+/**
+ * An entry the catalog cannot hold: the source flagged its name as unusable, or
+ * it is a file whose path fails the catalog's own path rules. One such record
+ * would make the whole catalog undecodable and fail the scan, so a scan leaves
+ * these out (and counts them) instead of recording them. They are never
+ * "added" or "modified" either: the folder check must not see them as news.
+ */
+function hasUnusableName(entry: LibrarySourceEntry): boolean {
+  return (entry.type === "ignored" && entry.ignoredReason === "unsafe-name")
+    || (entry.type === "file" && !isLogicalRelativePath(entry.path));
 }
 
 function recordContentIdentificationVersion(

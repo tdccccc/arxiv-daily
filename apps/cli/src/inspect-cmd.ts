@@ -34,6 +34,8 @@ export async function inspectProduct(config: CliRuntimeConfig) {
     scheduleIntent: config.scheduleIntent,
     paperCount: Object.keys(inspection.inbox.papers).length,
     indexRecoveredFromBackup: inspection.recoveredFromBackup,
+    /** Set when run-state.json cannot be parsed: runs fail and `recentRuns` is not the real history. */
+    runStateDamaged: state.damage() ?? null,
     recentRuns: Object.entries(state.snapshot()).sort(([a], [b]) => b.localeCompare(a)).slice(0, 20)
       .map(([date, entry]) => ({ date, ...entry })),
   };

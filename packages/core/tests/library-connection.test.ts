@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   authorizeLibraryConnection,
+  buildLibraryInventoryPreview,
   createLibraryConnection,
   libraryAuthorizationDisclosure,
   libraryConnectionStatus,
@@ -16,6 +17,27 @@ describe("library connection endpoint disclosure", () => {
     expect(disclosure.endpoint).toBe(
       "https://example.com/v1?token=%5Bredacted%5D&after=%5Bredacted%5D",
     );
+  });
+});
+
+describe("library inventory preview", () => {
+  it("lists entries with names the library cannot use as ignored, with a reason that names the problem", () => {
+    const preview = buildLibraryInventoryPreview({
+      entries: [
+        { path: "papers/2610.00001.pdf", type: "file", size: 3 },
+        { path: "old\\2301.00002.pdf", type: "ignored", ignoredReason: "unsafe-name" },
+        { path: "linked", type: "ignored", ignoredReason: "symbolic-link" },
+        { path: "socket", type: "ignored", ignoredReason: "unsupported-entry" },
+      ],
+      truncated: false,
+    }, [".pdf"]);
+
+    expect(preview.eligible).toEqual([{ path: "papers/2610.00001.pdf", size: 3 }]);
+    expect(preview.ignored).toEqual([
+      { path: "old\\2301.00002.pdf", reason: expect.stringMatching(/backslash/i) },
+      { path: "linked", reason: "Symbolic link" },
+      { path: "socket", reason: "Unsupported filesystem entry" },
+    ]);
   });
 });
 

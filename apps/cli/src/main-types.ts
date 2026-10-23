@@ -29,3 +29,15 @@ export function isCliRunEvent(value: unknown): value is CliRunEvent {
     && (event.papersWritten === undefined || Number.isSafeInteger(event.papersWritten) && event.papersWritten >= 0)
     && (event.titleOnlyCandidates === undefined || isTitleOnlyCandidates(event.titleOnlyCandidates));
 }
+
+/**
+ * Sent by the workbench over a run's IPC channel to cancel it. A signal cannot
+ * do this job: a terminal Ctrl+C already reaches the whole foreground group, a
+ * second SIGINT makes the run exit before it can record the cancellation, and
+ * Windows has no SIGINT to deliver.
+ */
+export const CLI_CANCEL_MESSAGE = "arxiv-daily/cancel";
+
+export function isCliCancelMessage(value: unknown): boolean {
+  return typeof value === "object" && value !== null && (value as { type?: unknown }).type === CLI_CANCEL_MESSAGE;
+}

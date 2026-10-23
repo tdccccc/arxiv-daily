@@ -1,5 +1,6 @@
 import type { HttpClient } from "../core/adapters";
-import { extractArxivIdsFromText } from "./pdf-text-utils";
+import { ArxivHttpError, coordinateArxivRequest, type ArxivRequestCoordinator } from "../pipeline/arxiv-fetcher";
+import { modernArxivResources } from "../utils/arxiv";
 
 /**
  * arXiv title search (identification v2, L2).
@@ -7,8 +8,14 @@ import { extractArxivIdsFromText } from "./pdf-text-utils";
  * Resolves a paper title to a canonical arXiv ID via the public arXiv Atom
  * API search endpoint. Acceptance is strict: the best match must clear a
  * normalized word-overlap threshold, and a second distinct candidate above
- * the same threshold means ambiguity — no ID is returned. The query sends
- * only the title text (public paper metadata) to arxiv.org.
+ * the same threshold means ambiguity — no ID is returned. The ID is the one in
+ * the entry's own `<id>`; text elsewhere in the entry (summary, comment,
+ * journal reference) cites other papers and is never read for IDs. The query
+ * sends only the title text (public paper metadata) to arxiv.org.
+ *
+ * The request shares the spacing and the 429 cooldown of every other arXiv API
+ * request. A search that could not be made or read throws; `arxivId: null` always
+ * means arXiv was asked and nothing matched.
  */
 export interface ArxivTitleSearchResult {
   arxivId: string | null;
@@ -26,18 +33,28 @@ export async function searchArxivTitle(
   http: HttpClient,
   title: string,
   signal?: AbortSignal,
+  /** The request coordinator to pace and cool down with; tests pass one with a fake clock. */
+  coordinator?: ArxivRequestCoordinator,
 ): Promise<ArxivTitleSearchResult> {
   const query = title.trim().replace(/\s+/g, " ").replace(/["\\]/g, "");
   if (query.length < 4) return { arxivId: null };
-  const response = await http.request({
-    url: `${SEARCH_URL}?search_query=ti:"${encodeURIComponent(query)}"&max_results=${MAX_RESULTS}`,
-    method: "GET",
-    headers: { Accept: "application/atom+xml" },
-    timeoutMs: SEARCH_TIMEOUT_MS,
-    signal,
-  });
-  if (response.status < 200 || response.status >= 300) {
-    throw new Error(`arxiv title search failed with HTTP ${response.status}`);
+  const url = `${SEARCH_URL}?search_query=ti:"${encodeURIComponent(query)}"&max_results=${MAX_RESULTS}`;
+  const response = await coordinateArxivRequest(async () => {
+    const answer = await http.request({
+      url,
+      method: "GET",
+      headers: { Accept: "application/atom+xml" },
+      timeoutMs: SEARCH_TIMEOUT_MS,
+      signal,
+    });
+    if (answer.status < 200 || answer.status >= 300) {
+      throw new ArxivHttpError(answer.status, url, answer.headers);
+    }
+    return answer;
+  }, url, signal, coordinator);
+  // A 200 that is not an Atom feed (a proxy or maintenance page) is no answer, not "no match".
+  if (!/<feed[\s>]/.test(response.bodyText)) {
+    throw new Error("arxiv title search returned something other than an Atom feed");
   }
   return matchBestTitle(query, response.bodyText);
 }
@@ -75,21 +92,28 @@ function parseAtomEntries(xml: string): AtomEntry[] {
     if (entryEnd < 0) break;
     const body = xml.slice(entryStart + "<entry>".length, entryEnd);
     cursor = entryEnd + "</entry>".length;
-    const id = extractArxivIdsFromText(body)[0]?.canonicalId;
-    const title = extractAtomTitle(body);
+    const idText = extractAtomElement(body, "id");
+    const id = idText === undefined ? undefined : modernArxivResources(decodeXml(idText))?.id;
+    const title = extractAtomElement(body, "title");
     if (id && title) entries.push({ id, title: decodeXml(title).replace(/\s+/g, " ").trim() });
   }
   return entries;
 }
 
-function extractAtomTitle(body: string): string | undefined {
+/** Text of the first `<name …>…</name>` element in `body`, if any. */
+function extractAtomElement(body: string, name: string): string | undefined {
   let cursor = 0;
   while (cursor < body.length) {
-    const open = body.indexOf("<title", cursor);
+    const open = body.indexOf(`<${name}`, cursor);
     if (open < 0) return undefined;
+    if (!/[\s>]/.test(body.charAt(open + name.length + 1))) {
+      // Another element whose name merely starts with `name`.
+      cursor = open + 1;
+      continue;
+    }
     const openEnd = body.indexOf(">", open);
     if (openEnd < 0) return undefined;
-    const close = body.indexOf("</title>", openEnd + 1);
+    const close = body.indexOf(`</${name}>`, openEnd + 1);
     if (close < 0) return undefined;
     return body.slice(openEnd + 1, close);
   }

@@ -47,6 +47,18 @@ async function scanned(inventory: LibraryInventory, values: PersonalLibraryResol
 const complete = (...entries: LibrarySourceEntry[]): LibraryInventory => ({ entries, truncated: false });
 
 describe("detectPersonalLibraryFolderChange", () => {
+  it("does not report the entries a scan skips as changes", async () => {
+    const skipped = [file("old\\2301.00002.pdf"), file("A:b 2301.00003.pdf"), file("dir\\sub/x.pdf")];
+    const inventory = complete(file("2608.00001.pdf"), ...skipped, { path: "bad\\folder", type: "ignored", ignoredReason: "unsafe-name" });
+    const catalog = await scanned(inventory, [metadata("2608.00001")]);
+    expect(detectPersonalLibraryFolderChange({ catalog, inventory, eligibleExtensions: [".pdf"] }))
+      .toEqual({ changed: false, neverScanned: false, added: [], removed: [], modified: [] });
+
+    const grown = complete(file("2608.00001.pdf"), ...skipped, file("another\\one.pdf"));
+    expect(detectPersonalLibraryFolderChange({ catalog, inventory: grown, eligibleExtensions: [".pdf"] }).changed)
+      .toBe(false);
+  });
+
   it("treats a catalog that was never scanned as changed, whatever the folder holds", () => {
     const catalog = createEmptyPersonalLibraryCatalog(scopeFingerprint, identificationFingerprint, now);
     expect(detectPersonalLibraryFolderChange({ catalog, inventory: complete(), eligibleExtensions: [".pdf"] }))

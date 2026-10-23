@@ -3,6 +3,7 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import {
   isCancellationError,
+  isLogicalRelativePath,
   LibrarySourceError,
   throwIfCancelled,
   type LibraryInventory,
@@ -87,6 +88,13 @@ class NodeScopedLibrarySource implements OpenedScopedLibrarySource {
           const relativePath = relativeDir
             ? `${relativeDir}/${dirEntry.name}`
             : dirEntry.name;
+          if (!isLogicalRelativePath(relativePath)) {
+            // Legal on this platform, but a name neither readBinary nor the
+            // catalog can carry (a backslash, a drive-like prefix). List it
+            // instead of letting it fail every scan; a folder is not entered.
+            entries.push({ path: relativePath, type: "ignored", ignoredReason: "unsafe-name" });
+            continue;
+          }
 
           const absoluteEntry = path.join(absoluteDir, dirEntry.name);
           const entryInfo = await inspectInventoryEntry(absoluteEntry, dirEntry);
@@ -312,20 +320,10 @@ async function canonicalizeRoot(selectedRoot: string): Promise<string> {
 }
 
 function validateLogicalPath(logicalPath: string): string[] {
-  if (
-    !logicalPath
-    || logicalPath.includes("\\")
-    || logicalPath.includes("\0")
-    || logicalPath.startsWith("/")
-    || /^[A-Za-z]:/.test(logicalPath)
-  ) {
+  if (!isLogicalRelativePath(logicalPath)) {
     throw new LibrarySourceError("unsafe-path", "The library path is not a safe relative path");
   }
-  const segments = logicalPath.split("/");
-  if (segments.some((segment) => !segment || segment === "." || segment === "..")) {
-    throw new LibrarySourceError("unsafe-path", "The library path is not a safe relative path");
-  }
-  return segments;
+  return logicalPath.split("/");
 }
 
 async function assertCanonicalDirectory(

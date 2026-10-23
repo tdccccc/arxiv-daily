@@ -13,7 +13,7 @@ import {
   modernArxivResources,
 } from "@arxiv-daily/core";
 import type { HostAdapters } from "@arxiv-daily/core";
-import type { CliIo, WritableTextStream } from "./main-types";
+import { isCliCancelMessage, type CliIo, type WritableTextStream } from "./main-types";
 import { runInit } from "./init";
 import { emailStatus, emailTest, emailVerifyStart } from "./email-cmd";
 import {
@@ -74,6 +74,8 @@ export interface RunCliOptions {
   update?: typeof runUpdate;
   ui?: typeof runWorkbench;
   isTTY?: boolean;
+  /** Attached by the process entry point so a workbench cancel sent during startup is not lost. */
+  workbenchCancel?: WorkbenchCancel;
 }
 
 type CliCommand =
@@ -238,8 +240,12 @@ export async function runCli(opts: RunCliOptions = {}): Promise<number> {
       if (!config.settings.schedule.enabled) return 0;
     }
     const runtime = await buildRuntime(config);
-    const removeSignalHandlers = installSignalHandlers(runtime.operations, io);
+    const removeSignalHandlers = installSignalHandlers(runtime.operations, io, process, opts.workbenchCancel);
     try {
+      if (opts.workbenchCancel?.requested) {
+        writeLine(io.stderr, "arxiv-daily: cancelled before the run started");
+        return 130;
+      }
       if (parsed.name === "email") {
         if (!runtime.host) {
           writeLine(io.stderr, "email commands require host adapters");
@@ -524,30 +530,72 @@ function writeLine(stream: WritableTextStream, line: string): void {
   stream.write(`${line}\n`);
 }
 
-function installSignalHandlers(
+type SignalHost = Pick<NodeJS.Process, "on" | "off" | "exit">;
+
+/**
+ * The workbench cancels a run it spawned with an IPC message, not a second
+ * signal (see CLI_CANCEL_MESSAGE). The process entry point attaches this before
+ * its first await, so a cancel that arrives while the runtime is still being
+ * built is remembered instead of dropped.
+ */
+export class WorkbenchCancel {
+  requested = false;
+  private subscriber: (() => void) | undefined;
+  private readonly onMessage = (message: unknown) => {
+    if (!isCliCancelMessage(message)) return;
+    this.requested = true;
+    this.subscriber?.();
+  };
+
+  constructor(private readonly host: Pick<NodeJS.Process, "on" | "off" | "connected"> = process) {
+    // Only a process the workbench spawned has a channel. Its listener keeps
+    // the process alive, so stop() must run once the command has finished.
+    if (host.connected) host.on("message", this.onMessage);
+  }
+
+  subscribe(subscriber: (() => void) | undefined): void {
+    this.subscriber = subscriber;
+  }
+
+  stop(): void {
+    this.host.off("message", this.onMessage);
+  }
+}
+
+export function installSignalHandlers(
   operations: OperationRegistry | undefined,
   io: CliIo,
+  host: SignalHost = process,
+  workbenchCancel?: WorkbenchCancel,
 ): () => void {
-  if (!operations || typeof process === "undefined" || !process.on) return () => {};
+  if (!operations || !host.on) return () => {};
+  const cancel = (reason: string, source: string) => {
+    const active = operations.snapshot();
+    operations.cancelAll(reason);
+    writeLine(
+      io.stderr,
+      `arxiv-daily: ${source}; cancelling ${active.length} active task${active.length === 1 ? "" : "s"} and waiting`,
+    );
+  };
   let signalCount = 0;
   const handler = (signal: NodeJS.Signals) => {
     signalCount += 1;
     if (signalCount === 1) {
-      const active = operations.snapshot();
-      operations.cancelAll(`cancelled by ${signal}`);
-      writeLine(
-        io.stderr,
-        `arxiv-daily: ${signal} received; cancelling ${active.length} active task${active.length === 1 ? "" : "s"} and waiting`,
-      );
+      cancel(`cancelled by ${signal}`, `${signal} received`);
       return;
     }
-    process.exit(128 + (signal === "SIGINT" ? 2 : 15));
+    host.exit(128 + (signal === "SIGINT" ? 2 : 15));
   };
-  process.on("SIGINT", handler);
-  process.on("SIGTERM", handler);
+  host.on("SIGINT", handler);
+  host.on("SIGTERM", handler);
+  // A workbench cancel does not count toward the forced exit above, so a
+  // terminal Ctrl+C (which signals this process as well) still lets the
+  // cancellation be written back.
+  workbenchCancel?.subscribe(() => cancel("cancelled by user", "cancel requested by the workbench"));
   return () => {
-    process.off("SIGINT", handler);
-    process.off("SIGTERM", handler);
+    host.off("SIGINT", handler);
+    host.off("SIGTERM", handler);
+    workbenchCancel?.subscribe(undefined);
   };
 }
 
@@ -559,7 +607,8 @@ async function defaultBuildRuntime(
 }
 
 if (typeof require !== "undefined" && require.main === module) {
-  void runCli({ io: {
+  const workbenchCancel = new WorkbenchCancel();
+  void runCli({ workbenchCancel, io: {
     stdout: process.stdout,
     stderr: process.stderr,
     onRunResult: event => {
@@ -572,5 +621,6 @@ if (typeof require !== "undefined" && require.main === module) {
     .catch((err) => {
       console.error(err);
       process.exit(1);
-    });
+    })
+    .finally(() => workbenchCancel.stop());
 }
