@@ -676,6 +676,6 @@ describe("model-switch rebuilds with the real file store", () => {
       expect(await kb.loadPaper(key, previous)).toMatchObject({ modelId: "remote-model", dimension: 8 });
     }
     memory.setAtomicImplementation(null);
-    expect(await run("local-model", 4)).toMatchObject({ indexed: 2, failed: 0 });
+    expect(await run("local-model", 4)).toMatchObject({ indexed: failure === "cancel" ? 1 : 0, reused: failure === "cancel" ? 1 : 2, failed: 0 });
   });
 });

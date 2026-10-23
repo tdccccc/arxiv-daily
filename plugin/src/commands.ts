@@ -522,6 +522,19 @@ export function registerCommands(plugin: ArxivDailyPlugin): void {
   });
 
   plugin.addCommand({
+    id: "maintain-personal-library-search-index",
+    name: "Clean up old personal library search indexes…",
+    callback: () => runDetached((async () => {
+      const choice = await chooseModal(plugin.app, "Clean up old search indexes",
+        "Close all other Obsidian windows, CLI commands and workbench clients using this vault, and keep them closed until cleanup finishes. Current and backup indexes are kept. Old-model paper files are retained.",
+        [{ label: "Cancel", value: "cancel" }, { label: "Other clients are closed — clean up", value: "maintain", cta: true }]);
+      if (choice !== "maintain") return;
+      const report = await plugin.maintainPersonalLibraryFullTextGenerations();
+      notice(`arXiv Daily: removed ${report.removedGenerationIds.length} old search indexes. Old-model paper files were retained.`, 10_000);
+    })(), "clean up old personal library search indexes"),
+  });
+
+  plugin.addCommand({
     id: "search-personal-library-fulltext",
     name: "Search personal library titles and abstracts…",
     callback: () =>

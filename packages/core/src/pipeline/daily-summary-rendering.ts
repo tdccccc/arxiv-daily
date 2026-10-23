@@ -7,6 +7,7 @@ import type {
   StructuredPaperSummary,
 } from "./daily-summary-assembler";
 import { neutralizeRawHtml } from "./raw-html";
+import { protectLatexMath } from "./latex-cleanup";
 import {
   escapeDiscoveryProvenancePlainText,
   renderDiscoveryProvenanceMarker,
@@ -52,7 +53,14 @@ export const DAILY_SUMMARY_FIELD_LABELS: Record<
  */
 export function normalizeMarkdownLine(value: string): string {
   const compacted = value.replace(/\s+/gu, " ").trim();
-  return mapOutsideCodeSpans(compacted, neutralizeRawHtml);
+  return mapOutsideCodeSpans(compacted, segment => {
+    const math = protectLatexMath(neutralizeRawHtml(segment), true);
+    // Only dollar delimiters are shared math boundaries in Markdown hosts.
+    // Bare TeX environments and backslash delimiters can still contain embeds.
+    const inert = math.text.replace(/\[\[/g, "\\[\\[")
+      .replace(/!\[/g, "!\\[").replace(/%%/g, "\\%\\%");
+    return math.restore(inert);
+  });
 }
 
 function mapOutsideCodeSpans(

@@ -104,6 +104,7 @@ const USAGE = `Usage:
   arxiv-daily library confirm --candidate ID --proposal-revision N
   arxiv-daily library search --query TEXT [--mode hybrid|lexical|dense] [--limit N]
   arxiv-daily library review --input REQUEST.json
+  arxiv-daily library maintain --other-clients-closed
   arxiv-daily update [--check] [--yes]
   arxiv-daily run --today
   arxiv-daily run --date YYYY-MM-DD

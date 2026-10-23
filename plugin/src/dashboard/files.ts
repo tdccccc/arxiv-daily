@@ -1,3 +1,4 @@
+import { portablePathCollisionKey } from "@arxiv-daily/core";
 import type { DashboardMarkdownFile } from "@arxiv-daily/core";
 
 /** Vault path helpers shared by dashboard modules (moved out of view.ts). */
@@ -10,10 +11,10 @@ export function filterDashboardMarkdownFiles<T extends DashboardMarkdownFile>(
   dailyDir: string,
   papersDir: string,
 ): T[] {
-  const normalizedDailyDir = normalizeVaultPath(dailyDir);
-  const normalizedPapersDir = normalizeVaultPath(papersDir);
+  const normalizedDailyDir = pathKey(dailyDir);
+  const normalizedPapersDir = pathKey(papersDir);
   return files.filter((file) => {
-    const path = normalizeVaultPath(file.path);
+    const path = pathKey(file.path);
     return (
       path.startsWith(`${normalizedDailyDir}/`) ||
       path.startsWith(`${normalizedPapersDir}/`)
@@ -26,14 +27,14 @@ export function dashboardHistoryPathSet(
   dailyDir: string,
   papersDir: string,
 ): Set<string> {
-  const normalizedDailyDir = normalizeVaultPath(dailyDir);
-  const normalizedPapersDir = normalizeVaultPath(papersDir);
+  const normalizedDailyDir = pathKey(dailyDir);
+  const normalizedPapersDir = pathKey(papersDir);
   return new Set(
     files
       .map((file) => normalizeVaultPath(file.path))
       .filter(
         (path) =>
-          path.startsWith(`${normalizedDailyDir}/`) ||
+          pathKey(path).startsWith(`${normalizedDailyDir}/`) ||
           isDirectChildMarkdown(path, normalizedPapersDir),
       ),
   );
@@ -53,7 +54,8 @@ export function shouldSkipDashboardHistorySync(
 }
 
 function isDirectChildMarkdown(path: string, dir: string): boolean {
-  const prefix = `${dir}/`;
+  path = pathKey(path);
+  const prefix = `${pathKey(dir)}/`;
   if (!path.startsWith(prefix) || !/\.md$/i.test(path)) return false;
   return !path.slice(prefix.length).includes("/");
 }
@@ -70,10 +72,14 @@ export function markdownPathFromLeaf(leaf: unknown): string | null {
 }
 
 export function dailyDateFromPath(path: string, dailyDir: string): string | null {
-  const normalized = normalizeVaultPath(path);
-  const prefix = `${dailyDir}/`;
+  const normalized = pathKey(path);
+  const prefix = `${pathKey(dailyDir)}/`;
   if (!normalized.startsWith(prefix)) return null;
   const rest = normalized.slice(prefix.length);
   const match = /^(\d{4}-\d{2}-\d{2})\.md$/i.exec(rest);
   return match?.[1] ?? null;
+}
+
+function pathKey(path: string): string {
+  return portablePathCollisionKey(normalizeVaultPath(path));
 }

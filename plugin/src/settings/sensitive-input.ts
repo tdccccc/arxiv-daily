@@ -58,14 +58,17 @@ export function renderSensitiveInput(
   let latestSave: { value: string; promise: Promise<void> } | undefined;
   const save = (): Promise<void> => {
     const next = (options.normalize ?? ((value: string) => value.trim()))(input.value);
-    if (next === savedValue) return Promise.resolve();
+    // A pending edit can still change the durable value. Returning to the
+    // current saved value must queue behind it, not silently cancel the edit.
+    if (!latestSave && next === savedValue) return Promise.resolve();
     if (latestSave?.value === next) return latestSave.promise;
     const revision = tab.beginControlChange(input);
     const operation = saveQueue.then(async () => {
       try {
         await options.save(next);
+        // Keep rollback state current even when a newer draft owns the UI.
+        savedValue = next;
         if (tab.isCurrentControlChange(input, revision)) {
-          savedValue = next;
           input.value = next;
           options.onCommitted?.();
         }
@@ -82,6 +85,7 @@ export function renderSensitiveInput(
     saveQueue = tracked.catch(() => undefined);
     return tracked;
   };
+  input.addEventListener("input", () => tab.beginControlChange(input));
   input.addEventListener("blur", () => tab.runAction(`save ${options.ariaLabel}`, save));
   input.addEventListener("keydown", (event) => {
     if (event.key !== "Enter") return;

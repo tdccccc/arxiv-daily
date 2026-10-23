@@ -15,6 +15,7 @@ import type {
   DailyReportDiscoveryProvenanceParseResult,
 } from "../pipeline/discovery-provenance-marker";
 import { classifyPaperNote } from "./paper-note-classifier";
+import { portablePathCollisionKey } from "../settings/validation";
 import { modernArxivResources } from "../utils/arxiv";
 
 export interface DashboardMarkdownFile {
@@ -92,6 +93,18 @@ export async function syncDashboardHistory(
   const baseline = await deps.store.load();
   const markdownFiles = deps.markdownFiles ?? deps.vault.getMarkdownFiles();
   const dailyReportPaths = collectDailyReportPaths(deps, markdownFiles);
+  const dailyDirectoryUnavailable = dailyReportPaths.size === 0 && Object.values(baseline.papers)
+    .some(entry => entry.dailyReports.some(path => dailyDateFromPath(normalizeVaultPath(path), normalizeVaultPath(deps.output.dailyDir))));
+  if (dailyDirectoryUnavailable) deps.logger?.warn("dashboard: daily directory is unavailable; keeping existing report references");
+  const actualPaths = new Map<string, string>();
+  const ambiguousPathKeys = new Set<string>();
+  for (const file of markdownFiles) {
+    const key = pathKey(file.path), actual = normalizeVaultPath(file.path);
+    if (actualPaths.has(key) && actualPaths.get(key) !== actual) ambiguousPathKeys.add(key);
+    else actualPaths.set(key, actual);
+  }
+  for (const key of ambiguousPathKeys) actualPaths.delete(key);
+  if (ambiguousPathKeys.size) deps.logger?.warn("dashboard: ambiguous portable paths; keeping original references and skipping their cleanup");
   const paperScan = await collectPaperCandidates(deps, markdownFiles, baseline);
   const dailyCollection = await collectDailyCandidates(
     deps,
@@ -114,9 +127,10 @@ export async function syncDashboardHistory(
       destructiveSnapshot,
       paperScan,
       deps.output,
+      ambiguousPathKeys,
     );
 
-    const pruned = pruneStaleDailyReports(
+    const pruned = dailyDirectoryUnavailable ? { changed: 0, removed: 0 } : pruneStaleDailyReports(
       index,
       baseline,
       destructiveSnapshot,
@@ -124,8 +138,11 @@ export async function syncDashboardHistory(
       dailyCollection.paperIdsByReport,
       dailyCollection.parsedReports,
       deps.output,
+      ambiguousPathKeys,
     );
+    const spellingChanged = restoreActualPaths(index, actualPaths);
     const changed =
+      spellingChanged ||
       inputs.length > 0 ||
       summariesChanged > 0 ||
       stale.clearIds.length > 0 ||
@@ -216,7 +233,7 @@ async function collectPaperCandidates(
   const baselineIdByPath = new Map(
     Object.values(baseline.papers)
       .map((entry) => [
-        normalizeVaultPath(entry.paperPath ?? ""),
+        pathKey(entry.paperPath ?? ""),
         entry.arxivId,
       ] as const)
       .filter(([path]) => isDirectChildMarkdown(path, papersDir)),
@@ -235,8 +252,8 @@ async function collectPaperCandidates(
       );
       const arxivId = pathArxivId || frontmatterArxivIds[0];
       if (!arxivId) {
-        observationsByPath.set(path, { path, kind: "unidentified" });
-        const baselineId = baselineIdByPath.get(path);
+        observationsByPath.set(pathKey(path), { path, kind: "unidentified" });
+        const baselineId = baselineIdByPath.get(pathKey(path));
         if (baselineId) ambiguousIds.add(baselineId);
         continue;
       }
@@ -252,7 +269,7 @@ async function collectPaperCandidates(
       const classification = identityConflict
         ? { kind: "conflict" as const, reason: "identity_mismatch" as const }
         : classifyPaperNote(markdown, arxivId);
-      observationsByPath.set(path, {
+      observationsByPath.set(pathKey(path), {
         path,
         arxivId,
         kind: classification.kind,
@@ -270,7 +287,7 @@ async function collectPaperCandidates(
         ])) {
           ambiguousIds.add(observedId);
         }
-        const baselineId = baselineIdByPath.get(path);
+        const baselineId = baselineIdByPath.get(pathKey(path));
         if (baselineId) ambiguousIds.add(baselineId);
         continue;
       }
@@ -292,8 +309,8 @@ async function collectPaperCandidates(
       });
       candidatesById.set(arxivId, candidates);
     } catch (e) {
-      observationsByPath.set(path, { path, kind: "unreadable", arxivId: pathArxivId || undefined });
-      const protectedId = pathArxivId || baselineIdByPath.get(path);
+      observationsByPath.set(pathKey(path), { path, kind: "unreadable", arxivId: pathArxivId || undefined });
+      const protectedId = pathArxivId || baselineIdByPath.get(pathKey(path));
       if (protectedId) ambiguousIds.add(protectedId);
       deps.logger?.warn(`dashboard: failed to inspect paper file ${path}`, e);
     }
@@ -326,7 +343,7 @@ function collectDailyReportPaths(
   for (const file of markdownFiles) {
     const path = normalizeVaultPath(file.path);
     if (!dailyDateFromPath(path, dailyDir)) continue;
-    out.add(path);
+    out.add(pathKey(path));
   }
   return out;
 }
@@ -548,10 +565,10 @@ function canMergeScannedDetail(
 ): boolean {
   if (!candidatePaperPath || ambiguous) return false;
   if (!current) return !baseline;
-  const candidatePath = normalizeVaultPath(candidatePaperPath);
-  const currentPath = normalizeVaultPath(current.paperPath ?? "");
+  const candidatePath = pathKey(candidatePaperPath);
+  const currentPath = pathKey(current.paperPath ?? "");
   if (!baseline) return !currentPath || currentPath === candidatePath;
-  const baselinePath = normalizeVaultPath(baseline.paperPath ?? "");
+  const baselinePath = pathKey(baseline.paperPath ?? "");
   if (
     baseline.detail !== current.detail ||
     baselinePath !== currentPath
@@ -597,6 +614,7 @@ function pruneStaleDetails(
   destructiveSnapshot: PaperInbox,
   paperScan: PaperCandidateCollection,
   output: OutputSettings,
+  ambiguousPathKeys: ReadonlySet<string>,
 ): { clearIds: string[]; removeIds: string[] } {
   const papersDir = normalizeVaultPath(output.papersDir);
   const clearIds: string[] = [];
@@ -604,14 +622,14 @@ function pruneStaleDetails(
 
   for (const baselineEntry of Object.values(baseline.papers)) {
     const baselinePath = normalizeVaultPath(baselineEntry.paperPath ?? "");
-    if (!baselinePath || !isDirectChildMarkdown(baselinePath, papersDir)) continue;
+    if (!baselinePath || !isDirectChildMarkdown(baselinePath, papersDir) || ambiguousPathKeys.has(pathKey(baselinePath))) continue;
     const scanStartEntry = destructiveSnapshot.papers[baselineEntry.paperKey];
     if (!scanStartEntry || !sameDestructiveFields(baselineEntry, scanStartEntry)) {
       continue;
     }
     if (paperScan.ambiguousIds.has(baselineEntry.arxivId)) continue;
 
-    const observation = paperScan.observationsByPath.get(baselinePath);
+    const observation = paperScan.observationsByPath.get(pathKey(baselinePath));
     const confirmedStale =
       observation === undefined ||
       (observation.kind === "replaceable" &&
@@ -648,10 +666,13 @@ function pruneStaleDailyReports(
   paperIdsByReport: Map<string, Set<string>>,
   parsedReports: Set<string>,
   output: OutputSettings,
+  ambiguousPathKeys: ReadonlySet<string>,
 ): { changed: number; removed: number } {
   const dailyDir = normalizeVaultPath(output.dailyDir);
   let changed = 0;
   let removed = 0;
+  const parsedKeys = new Set([...parsedReports].map(pathKey));
+  const idsByKey = new Map([...paperIdsByReport].map(([path, ids]) => [pathKey(path), ids]));
 
   for (const baselineEntry of Object.values(baseline.papers)) {
     const managedReports = baselineEntry.dailyReports
@@ -665,10 +686,10 @@ function pruneStaleDailyReports(
 
     const staleReports = new Set(
       managedReports.filter((path) => {
-        const reportMissing = !existingDailyReports.has(path);
+        if (ambiguousPathKeys.has(pathKey(path))) return false;
+        const reportMissing = !existingDailyReports.has(pathKey(path));
         const paperMissingFromParsedReport =
-          parsedReports.has(path) &&
-          !paperIdsByReport.get(path)?.has(baselineEntry.arxivId);
+          parsedKeys.has(pathKey(path)) && !idsByKey.get(pathKey(path))?.has(baselineEntry.arxivId);
         return reportMissing || paperMissingFromParsedReport;
       }),
     );
@@ -681,8 +702,9 @@ function pruneStaleDailyReports(
         .map((path) => dailyDateFromPath(path, dailyDir))
         .filter((date): date is string => Boolean(date)),
     );
+    const staleKeys = new Set([...staleReports].map(pathKey));
     const dailyReports = entry.dailyReports.filter(
-      (path) => !staleReports.has(normalizeVaultPath(path)),
+      (path) => !staleKeys.has(pathKey(path)),
     );
     let removedManagedReference = false;
     if (!sameStrings(entry.dailyReports, dailyReports)) {
@@ -945,13 +967,15 @@ function basenameWithoutExtension(path: string): string {
 }
 
 function isDirectChildMarkdown(path: string, dir: string): boolean {
-  const prefix = `${dir}/`;
+  path = pathKey(path);
+  const prefix = `${pathKey(dir)}/`;
   if (!path.startsWith(prefix) || !/\.md$/i.test(path)) return false;
   return !path.slice(prefix.length).includes("/");
 }
 
 function dailyDateFromPath(path: string, dailyDir: string): string | null {
-  const prefix = `${dailyDir}/`;
+  path = pathKey(path);
+  const prefix = `${pathKey(dailyDir)}/`;
   if (!path.startsWith(prefix)) return null;
   const rest = path.slice(prefix.length);
   return /^(\d{4}-\d{2}-\d{2})\.md$/i.exec(rest)?.[1] ?? null;
@@ -999,4 +1023,29 @@ function normalizeVaultPath(path: string): string {
   while (start < end && normalized[start] === "/") start += 1;
   while (end > start && normalized[end - 1] === "/") end -= 1;
   return normalized.slice(start, end);
+}
+
+function pathKey(path: string): string {
+  return portablePathCollisionKey(normalizeVaultPath(path));
+}
+
+function restoreActualPaths(inbox: PaperInbox, actualPaths: ReadonlyMap<string, string>): boolean {
+  let changed = false;
+  for (const entry of Object.values(inbox.papers)) {
+    const reports = [...new Set(entry.dailyReports.map(path => actualPaths.get(pathKey(path)) ?? path))];
+    if (!sameStrings(entry.dailyReports, reports)) { entry.dailyReports = reports; changed = true; }
+    if (entry.paperPath) {
+      const actual = actualPaths.get(pathKey(entry.paperPath));
+      if (actual && actual !== entry.paperPath) { entry.paperPath = actual; changed = true; }
+    }
+    for (const report of Object.keys(entry.discoveryProvenanceByReport)) {
+      const actual = actualPaths.get(pathKey(report));
+      if (actual && actual !== report) {
+        entry.discoveryProvenanceByReport[actual] ??= entry.discoveryProvenanceByReport[report]!;
+        delete entry.discoveryProvenanceByReport[report];
+        changed = true;
+      }
+    }
+  }
+  return changed;
 }
