@@ -109,7 +109,15 @@ export type EmailDeliveryReason =
   | "delivery_state_update_failed"
   | "cancelled_before_provider_attempt"
   | "provider_not_invoked"
-  | "provider_definitive_rejection";
+  | "provider_definitive_rejection"
+  // Which kind of definitive rejection it was. Returned and logged only: the
+  // claim files keep recording `provider_definitive_rejection`.
+  | "hosted_token_rejected"
+  | "hosted_recipient_mismatch"
+  | "provider_quota_exceeded"
+  | "provider_request_rejected"
+  | "resend_api_key_rejected"
+  | "resend_access_denied";
 
 export type DeliverEmailResult =
   | { kind: "delivered"; attempts: number }

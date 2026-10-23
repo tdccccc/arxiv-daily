@@ -1,9 +1,10 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import { parse, stringify } from "smol-toml";
+import { parse } from "smol-toml";
 import { sha256Hex, type LibraryTopicSettingsPort, type ProposalAcceptanceReceipt } from "@arxiv-daily/core";
 import { NodeFileLock, NodeStorageAdapter } from "@arxiv-daily/node-runtime";
 import { CliConfigError, loadCliConfig, type CliRuntimeConfig } from "./config";
+import { patchConfigToml } from "./config-write";
 
 /** Settings and acceptance receipts share the config transaction and commit point. */
 export function createCliTopicSettings(config: CliRuntimeConfig): LibraryTopicSettingsPort & { assertCurrent(): Promise<void> } {
@@ -40,7 +41,7 @@ export function createCliTopicSettings(config: CliRuntimeConfig): LibraryTopicSe
         const raw = await fs.readFile(target, "utf8"); check(raw);
         const next = await compute(await decode(raw));
         const document = parse(raw);
-        const content = stringify({ ...document,
+        const content = patchConfigToml(raw, { ...document,
           arxiv: { ...(document.arxiv as Record<string, unknown>), topics: next.topics },
           library_proposal_acceptances: next.acceptances,
         });

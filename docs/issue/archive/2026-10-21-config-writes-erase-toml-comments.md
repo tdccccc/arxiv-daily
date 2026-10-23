@@ -1,7 +1,7 @@
 # 工作台设置自动保存、`library connect`、接受方向都会重写整个 `config.toml`，`init` 生成的说明和用户自己的注释全部丢失
 
 > 发现日期：2026-10-21 · 来源：main `d999037` 深度代码审查 · 编号 CLI-04
-> 范围：CLI 配置文件写入（工作台设置、`library connect/authorize/revoke`、库方向接受） · 严重程度：低 · 状态：未修复 · 置信度：已复现
+> 范围：CLI 配置文件写入（工作台设置、`library connect/authorize/revoke`、库方向接受） · 严重程度：低 · 状态：已修复（分支 `fix/2026-10-21-batch3`，提交 782e951） · 置信度：已复现
 
 ## 问题
 
@@ -41,3 +41,11 @@ ADR 0003 把 `config.toml` 定位为"用户可以直接编辑的唯一配置文�
 - `library connect` / 接受方向之后，原有注释保留，新增的 `[library]`、`library_proposal_acceptances` 追加在文件末尾。
 - 手写 `vault_root = "~/x"` 保存无关字段后保持 `~/x`。
 - 并发写入（锁和 revision 检查）行为不变。
+
+## 修复情况
+
+工作台设置自动保存、`library connect|authorize|revoke` 和接受文献库方向现在共用 `patchConfigToml`（`apps/cli/src/config-write.ts`，基于 `@decimalturn/toml-patch` 3.3.0，MIT，已锁定版本，许可证写入 `THIRD_PARTY_NOTICES.md`），只改动确实变化的键：`init` 写的说明、用户自己的注释、键的顺序和排版都保留；新增的 `[library]`、`[workbench_schedule]`、`library_proposal_acceptances` 追加在文件末尾（沿用文件原有的换行风格）；手写的 `vault_root = "~/notes"` 只在用户真的改了这个目录时才被换成绝对路径。写完后用 smol-toml 读回并与预期文档比对，编辑器处理不了的改动（例如重排主题顺序）或抛出错误时，退回原来的整篇重写：这时注释会丢，但值不会丢也不会变形。锁、revision 检查和原子写入没有改动。代价：第一次在已有主题下保存方向时，新增的 `directions` 以内联表写入（`directions = [{id = …}]`），不是 `[[arxiv.topics.directions]]` 块，读到的内容相同。
+
+测试：`apps/cli/tests/cli-config-write.test.ts`，用真实的 `init` 模板：保存无关设置只改一行；同时改多项设置后注释和表的顺序不变；`~/notes` 保持原样，真的改了才换成绝对路径；`library connect` 把 `[library]` 追加在原文之后；接受方向后注释保留、回执追加在末尾；不能原位修改时整篇写出且值相同；CRLF 文件的换行；转义字符和非 ASCII。
+
+收尾复核：依赖精确锁定为 2026-09-27 发布的 3.3.0（截至 2026-10-23 超过两周），不使用刚发布的 3.3.1。配置测试覆盖转义字符、中文、多行字符串、CRLF、嵌套主题重排和解析后逐值比对；无法原位编辑时仍以完整序列化保全配置值。

@@ -2,8 +2,11 @@ import { t } from "./i18n";
 import { DEFAULT_SETTINGS, validateFilterConfig } from '@arxiv-daily/core';
 import type { WorkbenchSettings } from '../settings';
 import { h } from "./dom";
+/** What the first report is doing, in words, once its button has been pressed. */
+export interface FirstReportProgress { busy: boolean; lines: string[] }
+
 /** Obsidian's five setup steps, projected from the same persisted settings. */
-export function settingsSetupGuide(snapshot: WorkbenchSettings, firstReportComplete = false): HTMLElement | null {
+export function settingsSetupGuide(snapshot: WorkbenchSettings, firstReportComplete = false, firstReport: FirstReportProgress | null = null): HTMLElement | null {
   const v = snapshot.values;
   const llmReady = Boolean(v.apiKeyConfigured && v.baseUrl && v.model);
   const categoriesReady = v.categories.length > 0;
@@ -19,7 +22,7 @@ export function settingsSetupGuide(snapshot: WorkbenchSettings, firstReportCompl
     { done: llmReady, name: 'Connect AI', text: 'Add an API key, API base URL, and model under LLM.', action: button('llm', 'Connect AI') },
     { done: categoriesReady, name: 'Choose paper sources', text: 'Select at least one arXiv category under arXiv categories.', action: button('arxiv', 'Choose sources') },
     { done: topicsReady, name: 'Describe your research interests', text: 'Add at least one complete research topic under Research topics.', action: button('topics', 'Describe interests') },
-    { done: firstReportComplete, name: 'Generate your first report', text: validation.ok ? 'Your configuration is ready. Generate a report to finish setup.' : 'Complete the earlier configuration steps before generating a report.', action: validation.ok ? button('generate', 'Generate first report') : null },
+    { done: firstReportComplete, name: 'Generate your first report', text: validation.ok ? 'Your configuration is ready. Generate a report to finish setup.' : 'Complete the earlier configuration steps before generating a report.', action: validation.ok ? (firstReport?.busy ? h("button", { type: "button", "data-setup-action": "generate", disabled: true }, t('Generating…')) : button('generate', 'Generate first report')) : null, progress: firstReport?.lines },
     { done: enabled, name: 'Turn on daily reports', text: validation.ok ? 'Reports then run by themselves on weekdays, inside the run window below.' : 'Available once the configuration above is complete.', action: validation.ok ? button('enable', 'Turn on daily reports') : null },
   ];
   const count = steps.filter(s => s.done).length;
@@ -27,7 +30,7 @@ export function settingsSetupGuide(snapshot: WorkbenchSettings, firstReportCompl
     h("h2", null, t('Getting started')),
     h("p", null, t('{0} of 5 complete', count)),
     h("progress", { max: 5, value: count, "aria-label": t('Setup progress') }),
-    h("ol", null, ...steps.map(s => h("li", { "data-complete": String(s.done) }, h("strong", null, t(s.name)), h("p", null, t(s.text)), s.action))),
+    h("ol", null, ...steps.map(s => h("li", { "data-complete": String(s.done) }, h("strong", null, t(s.name)), h("p", null, t(s.text)), s.action, ...(s.progress?.length ? [h("div", { class: "settings-setup-status", role: "status" }, ...s.progress.map(line => h("p", null, line)))] : [])))),
     validation.reasons.length ? h("details", null, h("summary", null, t('Configuration details')), h("p", null, validation.reasons.join('; '))) : null,
     button('dashboard', 'Open dashboard'),
   );

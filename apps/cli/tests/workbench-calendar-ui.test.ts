@@ -267,3 +267,41 @@ it.each([["zh", "等待公告发布", "当日无更新", "重新检查公告"], 
   day(root, "2026-10-03").click();
   expect(root.querySelector('.calendar-summary [data-action="generate-date"]')?.textContent).toContain(recheck);
 });
+
+it.each([
+  ["zh", "2026-10-03 的论文还没公告，最近一次公告是 2026-10-01。", "改为生成 2026-10-01 的日报"],
+  ["en", "The papers for 2026-10-03 are not announced yet. The latest announcement was 2026-10-01.", "Generate the report for 2026-10-01 instead"],
+])("offers the newest announced day on a day awaiting its announcement, in the card and the day heading (%s)", async (language, sentence, action) => {
+  const run = { id: "instead", label: "2026-10-01 日报", date: "2026-10-01", status: "running", output: "", exitCode: null, startedAt: "2026-10-03T00:00:00Z", finishedAt: null };
+  const { root, fetcher } = setup((url, init) => {
+    if (url.pathname.endsWith("api/preferences")) return json({ appearance: { language, theme: "light" } });
+    if (url.pathname.endsWith("api/runs") && init?.method === "POST") return json({ run }, 202);
+    if (url.pathname.endsWith("api/calendar")) {
+      const value = calendar();
+      Object.assign(value.cells.find(cell => cell?.date === "2026-10-03")!, { state: "awaiting-announcement", papers: null, canGenerate: true, actionLabel: "重新检查公告", latestAnnounced: "2026-10-01" });
+      return json(value);
+    }
+  });
+  await ready(root);
+  expect(day(root, "2026-10-02").getAttribute("aria-label")).toBeTruthy();
+  day(root, "2026-10-03").click();
+  await vi.waitFor(() => expect(root.querySelector(".calendar-summary .announcement-offer")?.textContent).toContain(sentence));
+  expect(root.querySelector(".calendar-summary .announcement-offer button")?.textContent).toBe(action);
+  expect(root.querySelector(".calendar-summary [data-action=\"generate-date\"]")?.getAttribute("data-date")).toBe("2026-10-03");
+  root.querySelector<HTMLButtonElement>(".calendar-summary .announcement-offer button")!.click();
+  await vi.waitFor(() => expect(posted(fetcher)).toHaveLength(1));
+  expect(JSON.parse(String(posted(fetcher)[0]![1]!.body))).toEqual({ kind: "daily", date: "2026-10-01" });
+});
+
+it("offers nothing extra on an awaiting day when the newest announced day is unknown", async () => {
+  const { root } = setup(url => {
+    if (!url.pathname.endsWith("api/calendar")) return;
+    const value = calendar();
+    Object.assign(value.cells.find(cell => cell?.date === "2026-10-03")!, { state: "awaiting-announcement", papers: null, canGenerate: true, actionLabel: "重新检查公告" });
+    return json(value);
+  });
+  await ready(root);
+  day(root, "2026-10-03").click();
+  await vi.waitFor(() => expect(root.querySelector('.calendar-summary [data-action="generate-date"]')).toBeTruthy());
+  expect(root.querySelector(".announcement-offer")).toBeNull();
+});

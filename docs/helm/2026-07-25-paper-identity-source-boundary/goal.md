@@ -75,7 +75,7 @@ per non-goals.
 - B1 Resend; B2 To/From settings + API key secret; B3 in-run 2–3 retries then failed, retry on later completed if not delivered; B4 idempotency; B5 auto + test send; B6 zero-day lead + per-topic empties.
 - Contracts: `email-content-format.md`, `email-delivery.md`, **`email-dual-mode.md`**.
 - Resend API key: settings `email.apiKey`; CLI env `ARXIV_DAILY_RESEND_API_KEY` (also `ARXIV_DAILY_EMAIL_*` for enable/to/from).
-- Option A: `PipelineResult.completed.digest?: DailyDigest` built in `runForDateInner`; repair-only skips email.
+- Option A: `PipelineResult.completed.digest?: DailyDigest` built in `runForDateInner`; repair-only skips email. (Superseded 2026-10-23, PIPE-08: a repair now also carries a digest rebuilt from the committed report; see `email-delivery.md` B3.)
 
 ### Resolved (email dual-mode — 2026-07-27)
 

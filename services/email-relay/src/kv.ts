@@ -41,6 +41,8 @@ export interface DeviceRecord {
   protocolGeneration?: number;
   buildIdentity?: string;
   readyGeneration?: number;
+  /** When the record last got a fresh expiry; absent until its first renewal. */
+  renewedAt?: string;
 }
 
 export interface AuthenticatedDevice {
@@ -54,6 +56,7 @@ export interface AuthenticatedDevice {
   protocolGeneration?: number;
   buildIdentity?: string;
   readyGeneration?: number;
+  renewedAt?: string;
 }
 
 export interface PendingVerify {
@@ -68,6 +71,9 @@ const DEVICE_V2_PREFIX = "device-v2:";
 export const DELIVERY_V3_CUTOVER_AUDIT_KEY = "cutover:delivery-v3-audit";
 export const DELIVERY_V2_KV_VISIBILITY_MS = 60 * 1000;
 export const DELIVERY_V2_LEGACY_PENDING_TTL_MS = 120 * 1000;
+/** Time from issuance or renewal to expiry; regularly used devices renew before then. */
+const DEVICE_TTL_SECONDS = 60 * 60 * 24 * 365;
+const DEVICE_RENEW_AFTER_MS = (DEVICE_TTL_SECONDS * 1000) / 2;
 const IDEMP_PREFIX = "idemp:";
 const HASHED_LEGACY_AUTO_KEY = /^arxiv-daily:auto:[0-9a-f]{64}$/;
 const PLAIN_LEGACY_AUTO_KEY = /^(\d{4}-\d{2}-\d{2})\|([^|\s]+@[^|\s]+)$/;
@@ -191,10 +197,58 @@ export async function putDevice(
     deliveryGeneration: 2,
     ...binding,
   };
-  // Approximately one year; expiry revokes inactive devices.
+  // Expiry revokes devices nobody uses for a year; renewDeviceIfDue extends the rest.
   await env.STORE.put(deviceV2Key(hash), JSON.stringify(value), {
-    expirationTtl: 60 * 60 * 24 * 365,
+    expirationTtl: DEVICE_TTL_SECONDS,
   });
+}
+
+/**
+ * Gives a device that is in use a fresh expiry. The record is rewritten only
+ * once half its lifetime has passed since it was written or last renewed, so an
+ * active device costs about two KV writes a year. Expiry is measured from
+ * issuance or the last renewal, not from every use. Best effort: a failed write leaves the record as it was
+ * and must not change the outcome of the request that triggered it. Returns
+ * whether the record was rewritten.
+ */
+export async function renewDeviceIfDue(
+  env: Env,
+  device: AuthenticatedDevice,
+  now: Date = new Date(),
+): Promise<boolean> {
+  const lastWritten = Date.parse(device.renewedAt ?? device.createdAt);
+  if (!(now.getTime() - lastWritten >= DEVICE_RENEW_AFTER_MS)) return false;
+  // Everything but renewedAt is carried over unchanged: createdAt and the
+  // binding fields are compared against the issuance claim and the cutover.
+  const record: DeviceRecord = {
+    email: device.email,
+    createdAt: device.createdAt,
+    ...(device.deliveryGeneration !== undefined
+      ? { deliveryGeneration: device.deliveryGeneration }
+      : {}),
+    ...(device.protocolGeneration !== undefined
+      ? { protocolGeneration: device.protocolGeneration }
+      : {}),
+    ...(device.buildIdentity !== undefined
+      ? { buildIdentity: device.buildIdentity }
+      : {}),
+    ...(device.readyGeneration !== undefined
+      ? { readyGeneration: device.readyGeneration }
+      : {}),
+    renewedAt: now.toISOString(),
+  };
+  // A pre-v2 record keeps its own key; it is the only place its token is read.
+  const key = device.deliveryGeneration === 2
+    ? deviceV2Key(device.identity)
+    : deviceKey(device.identity);
+  try {
+    await env.STORE.put(key, JSON.stringify(record), {
+      expirationTtl: DEVICE_TTL_SECONDS,
+    });
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 export async function authenticateDevice(
@@ -221,6 +275,7 @@ export async function authenticateDevice(
     protocolGeneration: device.protocolGeneration,
     buildIdentity: device.buildIdentity,
     readyGeneration: device.readyGeneration,
+    renewedAt: device.renewedAt,
   };
 }
 
@@ -381,6 +436,8 @@ function parseDevice(raw: string, expectV2: boolean): DeviceRecord | null {
       ...(value.readyGeneration !== undefined
         ? { readyGeneration: value.readyGeneration }
         : {}),
+      // Only this Worker writes it; a damaged value just makes the next request renew.
+      ...(validTimestamp(value.renewedAt) ? { renewedAt: value.renewedAt } : {}),
     };
   } catch {
     return null;

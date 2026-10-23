@@ -1,7 +1,7 @@
 # DSH 被强制结束或崩溃后，插件启动的文献工作台进程不会退出，会一直在后台运行
 
 > 发现日期：2026-10-21 · 来源：main `d999037` 深度代码审查 · 编号 DSH-01
-> 范围：`extensions/dsh-arxiv-daily` 工作台子进程的生命周期（DSH Web 与 DSH Desktop，Linux/macOS/Windows） · 严重程度：低 · 状态：未修复 · 置信度：已复现
+> 范围：`extensions/dsh-arxiv-daily` 工作台子进程的生命周期（DSH Web 与 DSH Desktop，Linux/macOS/Windows） · 严重程度：低 · 状态：已修复（分支 `fix/2026-10-21-batch3`，提交 8e3925e） · 置信度：已复现
 
 ## 问题
 
@@ -38,3 +38,11 @@
 - 进程测试：启动 `WorkbenchProcess` 后强杀宿主（子进程里启动一个小宿主脚本，再对它发送 SIGKILL），断言工作台子进程在限定时间内退出。
 - 正常卸载路径不回归：`dispose()` 仍然 SIGTERM 进程组，`stopTimeoutMs` 后升级到 SIGKILL。
 - `arxiv-daily ui` 的单元测试：stdin 关闭触发与 SIGTERM 相同的关闭流程，已有的 `run` 子任务被取消。
+
+## 修复情况
+
+插件启动的文献工作台现在会随 DSH 一起退出，即使 DSH 被强制结束、崩溃或被系统杀掉。`arxiv-daily ui` 新增参数 `--exit-on-stdin-close`（写在 USAGE 里，供嵌入它的宿主使用）：stdin 结束或关闭时，工作台走与 SIGTERM 相同的关闭流程（取消进行中的 run 子任务、关闭服务）。插件用 `stdio: ['pipe', …]` 启动子进程，保持 stdin 管道打开、从不写入；宿主一死，内核就关闭这根管道，Linux、macOS、Windows 行为一致，也不受宿主怎么死的影响。不带这个参数时不监听 stdin，所以手动在终端里启动的工作台不会因为 Ctrl+D 或 stdin 关闭而退出。正常卸载时 `dispose()` 仍先对进程组发 SIGTERM、`stopTimeoutMs` 后升级到 SIGKILL。DSH 包版本和发布标签没有改动，README 已说明工作台随 DSH 一起停止。
+
+测试：`extensions/dsh-arxiv-daily/tests/process.test.mjs` 新增端到端用例，用真实打包的 CLI 通过 `WorkbenchProcess` 启动工作台，对宿主进程发 SIGKILL，等待工作台进程退出且地址不再可访问（修复前该用例失败，工作台一直存活；用例结束时会清理残留进程），原有用例补充了参数和 stdin 管道的断言；`apps/cli/tests/workbench-lifetime.test.ts`（stdin 结束触发关闭并移除监听；不带参数时不监听）和 `cli-workbench.test.ts`（参数解析，含配置缺失的启动路径）。
+
+收尾验证：重新构建随插件打包的 CLI 后，完整 DSH 测试在隔离网络中 21/21 通过，无跳过；用旧版启动方式作反向对照，新测试在“宿主被强杀后工作台应退出”处失败，确认能够捕捉原问题。正常宿主存活、卸载关闭、进程异常退出后的重启也均通过。

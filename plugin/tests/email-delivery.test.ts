@@ -32,6 +32,31 @@ describe("testEmailResultMessage", () => {
       true,
     )).toThrow("failed: resend_http_error");
   });
+
+  it.each([
+    ["hosted_token_rejected", /verification code was rejected.*Send a new verification email/],
+    ["hosted_recipient_mismatch", /not the address this verification code was issued for/],
+    ["provider_quota_exceeded", /sending limit was reached/],
+    ["provider_request_rejected", /rejected the request as invalid/],
+    ["resend_api_key_rejected", /Resend rejected the API key/],
+    ["resend_access_denied", /From domain is verified.*onboarding@resend\.dev/],
+  ] as const)("tells the user what to do about %s and still names the code", (reason, advice) => {
+    let message = "";
+    try {
+      testEmailResultMessage({ kind: "failed", reason, attempts: 1 }, true);
+    } catch (error) {
+      message = (error as Error).message;
+    }
+    expect(message).toMatch(advice);
+    expect(message).toContain(`(failed: ${reason})`);
+  });
+
+  it("keeps the bare code for a rejection with no known fix", () => {
+    expect(() => testEmailResultMessage(
+      { kind: "failed", reason: "provider_definitive_rejection", attempts: 1 },
+      true,
+    )).toThrow(/^failed: provider_definitive_rejection$/);
+  });
 });
 
 describe("createUnsupportedAutomaticEmailNotifier", () => {
@@ -69,6 +94,31 @@ describe("createAutomaticEmailOutcomeNotifier", () => {
     expect(notify.mock.calls[2]![0]).toContain("unreadable");
     onResult("2026-10-23", { kind: "failed", reason: "provider_definitive_rejection", attempts: 1 });
     expect(notify.mock.calls[3]![0]).toContain("provider_definitive_rejection");
+  });
+
+  it("says what to do when the verification code was rejected", () => {
+    const notify = vi.fn();
+    const onResult = createAutomaticEmailOutcomeNotifier(notify);
+
+    onResult("2026-10-24", { kind: "failed", reason: "hosted_token_rejected", attempts: 1 });
+    expect(notify).toHaveBeenCalledTimes(1);
+    expect(notify.mock.calls[0]![0]).toContain("The digest email for 2026-10-24 was not sent.");
+    expect(notify.mock.calls[0]![0]).toContain("Send a new verification email");
+    expect(notify.mock.calls[0]![0]).not.toContain("developer console");
+  });
+
+  it.each([
+    ["hosted_recipient_mismatch", "not the address"],
+    ["provider_quota_exceeded", "sending limit"],
+    ["provider_request_rejected", "request as invalid"],
+    ["resend_api_key_rejected", "Resend rejected the API key"],
+    ["resend_access_denied", "From domain is verified"],
+  ] as const)("explains automatic delivery failure %s", (reason, advice) => {
+    const notify = vi.fn();
+    const onResult = createAutomaticEmailOutcomeNotifier(notify);
+    onResult("2026-10-24", { kind: "failed", reason, attempts: 1 });
+    expect(notify).toHaveBeenCalledTimes(1);
+    expect(notify.mock.calls[0]![0]).toContain(advice);
   });
 
   it("stays quiet for outcomes that need no action from the user", () => {

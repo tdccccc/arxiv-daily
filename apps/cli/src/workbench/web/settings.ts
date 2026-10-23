@@ -3,7 +3,8 @@ import type { UiAppearancePreferences } from "@arxiv-daily/core";
 import { h, type DomAttrs } from "./dom";
 import { modelCombobox, mountModelCombobox } from "./model-combobox";
 import { mountSettingsNavigation } from "./settings-navigation";
-import { settingsSetupGuide } from "./settings-setup";
+import { settingsSetupGuide, type FirstReportProgress } from "./settings-setup";
+import { runStateLabel } from "./run-status";
 import type { CliLibraryConnectionInspection } from "../../library-connection-cmd";
 import type { WorkbenchSettings as SettingsSnapshot } from "../settings";
 import { deriveTopicDescription, normalizeTopic, topicTagFromName, DIRECTION_TEXT_MAX_LENGTH, isCompletedDiscovery, ARXIV_CATEGORIES, getBusinessSettingsSections, getBusinessSetting, getTopicSettingField, runWindowTimeOptions, isBusinessSettingVisible, TIMEZONE_OPTIONS, type BusinessSetting, type BusinessSettingId, type BusinessSettingsContext, DEFAULT_SETTINGS, DEFAULT_UI_APPEARANCE, libraryRowPresentation, type Topic } from "@arxiv-daily/core";
@@ -75,7 +76,7 @@ function topicRow(raw: Topic, open = false): HTMLElement {
  );
 }
 function times(value: string): Record<string,string> { return Object.fromEntries(runWindowTimeOptions(value).map(option=>[option.value,option.label])); }
-export function settingsForm(snapshot: SettingsSnapshot, firstReportComplete = false, appearance: UiAppearancePreferences = DEFAULT_UI_APPEARANCE): HTMLFormElement {
+export function settingsForm(snapshot: SettingsSnapshot, firstReportComplete = false, appearance: UiAppearancePreferences = DEFAULT_UI_APPEARANCE, firstReport: FirstReportProgress | null = null): HTMLFormElement {
  const d=DEFAULT_SETTINGS, v=Object.assign({ maxDailyPapers:d.output.maxDailyPapers, reasoningEffort: d.llm.thinkingMode ? d.llm.reasoningEffort : 'none', detailProfile: d.detailSelection.profile, linkStyle:d.output.linkStyle, schedule:d.schedule, embedding:{...d.embedding,apiKeyConfigured:false}, pdfParserSidecar:d.pdfParserSidecar, email:{...d.email,apiKeyConfigured:false,hostedTokenConfigured:false}, logLevel:d.advanced.logLevel }, snapshot.values);
  const context: Partial<BusinessSettingsContext> = {emailMode:v.email.mode,embeddingMode:v.embedding.mode,sidecarEnabled:v.pdfParserSidecar.enabled,detailProfile:v.detailProfile,scheduleEnabled:v.schedule.enabled,reasoningEffort:v.reasoningEffort};
  const emailHosted = isBusinessSettingVisible('hostedToken',context);
@@ -139,7 +140,7 @@ export function settingsForm(snapshot: SettingsSnapshot, firstReportComplete = f
    h("p", null, t('模型 API 与 DSH / Claude Code 对话模型独立。密钥留空保留现有值。')),
    h("code", null, snapshot.configPath),
   ),
-  h("div", { class: "settings-setup-host" }, settingsSetupGuide(snapshot,firstReportComplete)),
+  h("div", { class: "settings-setup-host" }, settingsSetupGuide(snapshot,firstReportComplete,firstReport)),
   ...business,
   group('Help & feedback',[
    row('Report a bug', h("a", { href: "https://github.com/tdccccc/arxiv-daily/issues/new?body=-%20arXiv%20Daily%3A%20Workbench", target: "_blank", rel: "noopener noreferrer" }, t('Open'))),
@@ -165,6 +166,9 @@ export function bindSettings(form: HTMLFormElement, snapshot: SettingsSnapshot, 
  let busy=false, revision=snapshot.revision, libraryCancelling=false, libraryRevisionPending=false;
  let currentSnapshot=snapshot;
  let lastCompletedRun: string | undefined;
+ // The run started by the setup guide's "Generate first report", so that step can say what became of it.
+ let firstReport: { run: import('../server').WorkbenchRun; fellBackFrom?: string } | undefined;
+ let firstReportStarting=false;
  let library: (CliLibraryConnectionInspection & { run?: import('../server').WorkbenchRun }) | undefined;
  const get=(name:string) => (form.elements.namedItem(name) as HTMLInputElement)?.value.trim() ?? '';
  const checked=(name:string) => (form.elements.namedItem(name) as HTMLInputElement).checked;
@@ -220,10 +224,24 @@ export function bindSettings(form: HTMLFormElement, snapshot: SettingsSnapshot, 
   );
  }
  async function refreshLibrary() { library=await request<typeof library>('api/settings/library'); if(form.isConnected){renderLibrary();if(library?.run?.status==='running'){lockLibraryInputs(true);onRun?.(library.run);}} }
+ function firstReportProgress():FirstReportProgress|null {
+  if(firstReportStarting)return {busy:true,lines:[]};
+  if(!firstReport)return null;
+  const {run,fellBackFrom}=firstReport, day=run.date??'', lines:string[]=[];
+  if(fellBackFrom)lines.push(t("Today's papers are not announced yet, so the first report uses the latest announced day, {0}.",day));
+  if(run.status==='running')lines.push(t('Generating the report for {0}…',day));
+  else {
+   lines.push(`${day} · ${runStateLabel(run)}`);
+   if(run.status==='pending')lines.push(t('Check again later, or pick an announced day in the calendar.'));
+   else if(run.outcome==='no_updates')lines.push(t('No new papers were announced that day. Pick another day in the calendar.'));
+   else if(run.status==='failed'){const detail=run.output.trimEnd().split('\n').pop()?.trim().slice(0,200);if(detail)lines.push(detail);}
+  }
+  return {busy:run.status==='running',lines};
+ }
  function refreshVisibleSetupGuide() {
   const host=find('.settings-setup-host');
   if(!host.querySelector('.settings-setup'))return;
-  const content=settingsSetupGuide(currentSnapshot,firstReportComplete);
+  const content=settingsSetupGuide(currentSnapshot,firstReportComplete,firstReportProgress());
   if(!content || !host.firstElementChild || !content.isEqualNode(host.firstElementChild))host.replaceChildren(...(content?[content]:[]));
  }
  let disposed=false, rootEditing=false, closing=false, rootBlocksClose=false, rootBlocksCloseDirty=false, discarding=false;
@@ -259,7 +277,7 @@ export function bindSettings(form: HTMLFormElement, snapshot: SettingsSnapshot, 
   const actionContent=find('.settings-action-host');
   const hadGuide=Boolean(find('.settings-setup-host').querySelector('.settings-setup'));
   const renderSnapshot:SettingsSnapshot={...currentSnapshot,values:{...currentSnapshot.values,...current,summaryLanguage:current.summaryLanguage as 'zh'|'en',reasoningEffort:current.reasoningEffort,detailProfile:current.detailProfile as SettingsSnapshot['values']['detailProfile'],linkStyle:current.linkStyle as SettingsSnapshot['values']['linkStyle'],logLevel:current.logLevel as SettingsSnapshot['values']['logLevel'],embedding:{...currentSnapshot.values.embedding,...current.embedding,mode:current.embedding.mode as 'local'|'remote'},email:{...currentSnapshot.values.email,...current.email,mode:current.email.mode as 'self'|'hosted'}}};
-  const rendered=settingsForm(renderSnapshot,firstReportComplete,selectedAppearance);
+  const rendered=settingsForm(renderSnapshot,firstReportComplete,selectedAppearance,firstReportProgress());
   form.replaceChildren(...Array.from(rendered.children));
   find('.settings-topic-list').replaceWith(topics);find('.settings-action-host').replaceWith(actionContent);
   for(const node of Array.from(topics.querySelectorAll('button')))node.textContent=t(node.textContent??'');
@@ -379,7 +397,7 @@ export function bindSettings(form: HTMLFormElement, snapshot: SettingsSnapshot, 
 
   const originalLabel=actionButton?.textContent ?? '';
   if(actionButton?.dataset.settings==='models')find('.settings-model-status').textContent=t('Fetching models…');
-  if(actionButton){actionButton.disabled=true;if(actionButton.dataset.settings==='models')actionButton.textContent=t('Fetching…');else if(actionButton.dataset.settings?.startsWith('email-'))actionButton.textContent=t('Sending…');}
+  if(actionButton){actionButton.disabled=true;if(actionButton.dataset.settings==='models')actionButton.textContent=t('Fetching…');else if(actionButton.dataset.settings?.startsWith('email-'))actionButton.textContent=t('Sending…');else if(actionButton.dataset.setupAction==='generate')actionButton.textContent=t('Generating…');}
   try{await operation();}catch(error){if(form.isConnected){if(actionButton?.dataset.settings==='models')find('.settings-model-status').textContent=error instanceof Error?error.message:t('Could not load models.');find('[role="alert"]').hidden=false;find('[role="alert"]').textContent=error instanceof Error?error.message:t('操作失败，请重试。');}}
   finally{busy=false;if(actionButton){actionButton.disabled=false;actionButton.textContent=originalLabel;}}
  }
@@ -404,6 +422,7 @@ export function bindSettings(form: HTMLFormElement, snapshot: SettingsSnapshot, 
  }
  form.addEventListener('workbench-run',event=>{
   const run=(event as CustomEvent<import('../server').WorkbenchRun|null>).detail;
+  if(firstReport&&run?.id===firstReport.run.id){firstReport={...firstReport,run};refreshVisibleSetupGuide();}
   if(run?.status==='completed' && run.id!==lastCompletedRun){lastCompletedRun=run.id;void request<{recentRuns?:Array<{status:string;outcome?:string}>}>('api/status').then(status=>{firstReportComplete=status.recentRuns?.some(isCompletedDiscovery)??firstReportComplete;if(form.isConnected)refreshVisibleSetupGuide();}).catch(()=>{});}
   if(library?.run && run?.id===library.run.id){
    library.run=run;if(run.status!=='running')libraryCancelling=false;renderLibrary();
@@ -433,6 +452,7 @@ export function bindSettings(form: HTMLFormElement, snapshot: SettingsSnapshot, 
  form.addEventListener('click',event=>{
   const setup=event.target instanceof HTMLElement?event.target.closest<HTMLButtonElement>('[data-setup-action]'):null;
   if(setup){
+   if(setup.disabled)return;
    const name=setup.dataset.setupAction;
    if(name==='llm'||name==='arxiv'||name==='topics'){
     const heading=Array.from(form.querySelectorAll<HTMLElement>('[data-settings-heading]')).find(h=>h.dataset.settingsKey===({llm:'LLM',arxiv:'arXiv categories',topics:'Research topics'})[name]);
@@ -441,8 +461,19 @@ export function bindSettings(form: HTMLFormElement, snapshot: SettingsSnapshot, 
    void task(async()=>{
     if(name==='dashboard'){await close();return;}
     if(name==='enable'){find<HTMLInputElement>('[name="schedule.enabled"]').checked=true;conditions();}
-    await saveDraft(true);
-    if(name==='generate'){const result=await request<{run:import('../server').WorkbenchRun}>('api/runs',{kind:'daily'});onRun?.(result.run);}
+    // Saving redraws the guide; it must keep showing that the report is on its way.
+    firstReportStarting=name==='generate';
+    try{
+     await saveDraft(true);
+     if(name==='generate'){
+      // The newest announced day: today's listing does not exist at weekends or before the announcement.
+      const result=await request<{run:import('../server').WorkbenchRun;fellBackFrom?:string}>('api/runs',{kind:'daily',latest:true});
+      firstReport={run:result.run,...(result.fellBackFrom?{fellBackFrom:result.fellBackFrom}:{})};
+      onRun?.(result.run);
+     }
+    }finally{firstReportStarting=false;if(name==='generate')refreshVisibleSetupGuide();}
+    // The step sits low in the scrolling dialog: bring what became of the click into view.
+    if(name==='generate')form.querySelector('.settings-setup-status')?.scrollIntoView?.({block:'nearest',behavior:window.matchMedia?.('(prefers-reduced-motion: reduce)').matches?'instant':'smooth'});
    },setup);return;
   }
   const target=event.target instanceof HTMLElement?event.target.closest<HTMLButtonElement>('[data-settings]'):null;if(!target)return;

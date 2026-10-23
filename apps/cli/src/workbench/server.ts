@@ -18,6 +18,7 @@ import { inspectCalendar } from "./calendar";
 import { validateFrameOrigin } from "./embedding";
 import { WorkbenchPapers } from "./papers";
 import { readWorkbenchSettings, saveWorkbenchSettings } from "./settings";
+import { diagnosticJson } from "../diagnostic-json";
 import { WorkbenchSchedule } from "./schedule";
 import { readPreferences, savePreferences } from "./preferences";
 
@@ -33,6 +34,8 @@ export interface WorkbenchOptions {
   now?: () => Date;
   beforeWrite?: () => Promise<void>;
   frameOrigin?: string;
+  /** The newest day arXiv has announced that is not after `onOrBefore`; null when that cannot be told. */
+  latestAnnouncedDay?: (onOrBefore: string, signal: AbortSignal) => Promise<string | null>;
 }
 
 export interface WorkbenchRun {
@@ -46,6 +49,8 @@ export interface WorkbenchRun {
   exitCode: number | null;
   startedAt: string;
   finishedAt: string | null;
+  /** Set when a daily run ended waiting for its day's announcement: the newest day announced before it. */
+  latestAnnounced?: string;
 }
 
 /** Ephemeral reading server. Durable state stays owned by the existing product. */
@@ -60,7 +65,8 @@ export async function startWorkbench(options: WorkbenchOptions) {
   let papers = config && documents ? new WorkbenchPapers(config, documents) : undefined;
   const prefix = `/${randomBytes(24).toString("hex")}/`;
   const secrets: string[] = [];
-  const rememberSecrets = (value: CliRuntimeConfig) => { secrets.push(...[value.settings.llm.apiKey, value.settings.embedding.apiKey, value.settings.email.apiKey, value.settings.email.hostedToken].filter((key): key is string => Boolean(key))); };
+  // Rotated keys stay registered: output captured under the old key may still hold it.
+  const rememberSecrets = (value: CliRuntimeConfig) => { for (const key of [value.settings.llm.apiKey, value.settings.embedding.apiKey, value.settings.email.apiKey, value.settings.email.hostedToken]) if (key && !secrets.includes(key)) secrets.push(key); };
   if (config) rememberSecrets(config);
   let libraryPreview: { runId: string; preview: LibraryDirectionPreview | null } | null = null;
   let saving = false;
@@ -69,9 +75,16 @@ export async function startWorkbench(options: WorkbenchOptions) {
   let run: WorkbenchRun | null = null;
   let controller: AbortController | null = null;
   let running: Promise<void> | null = null;
+  const lifetime = new AbortController();
+  // Which day is announced only guides the user: it never keeps a run from starting or finishing.
+  const announcedDay = async (onOrBefore: string, signal: AbortSignal): Promise<string | null> => {
+    try { return await options.latestAnnouncedDay?.(onOrBefore, signal) ?? null; } catch { return null; }
+  };
+  // A key can only turn up in text about a failure or a run. Documents, papers and settings are the user's
+  // own content and are served as stored: rewriting them also rewrites what the settings form saves back.
   const json = (res: ServerResponse, code: number, value: unknown) => {
     res.writeHead(code, { "Content-Type": "application/json; charset=utf-8" });
-    res.end(redact(JSON.stringify(value)));
+    res.end(diagnosticJson(value, secrets));
   };
 
   const autoSchedule = new WorkbenchSchedule(() => saving || run?.status === "running" || !options.run, () => {
@@ -87,6 +100,7 @@ export async function startWorkbench(options: WorkbenchOptions) {
     autoSchedule.update(next.workbenchSchedule);
   }
   function beginRun(label: string, date: string | null, execute: (io: CliIo, signal: AbortSignal) => Promise<number>) {
+    if (lifetime.signal.aborted) throw new WorkbenchError(503, "工作台正在关闭，请重新打开后再试。");
     if (saving || run?.status === "running") throw new WorkbenchError(409, "已有操作正在运行，请等待完成。");
     controller = new AbortController();
     const signal = controller.signal;
@@ -96,7 +110,8 @@ export async function startWorkbench(options: WorkbenchOptions) {
     let resultEvent: CliRunEvent | undefined;
     running = Promise.resolve().then(() => execute({ stdout: { write }, stderr: { write }, onRunResult: (event) => {
       if (date === event.date) resultEvent = event;
-    } }, signal)).then(code => {
+    } }, signal)).then(async code => {
+      if (!signal.aborted && code === 0 && date && resultEvent?.outcome === "awaiting_announcement") current.latestAnnounced = await announcedDay(date, signal) ?? undefined;
       current.exitCode = code;
       current.status = signal.aborted ? "cancelled" : code === 0 ? "completed" : "failed";
       if (!signal.aborted && code === 0 && resultEvent) {
@@ -316,12 +331,20 @@ export async function startWorkbench(options: WorkbenchOptions) {
     if (method === "GET" && route === "api/runs/current") return json(res, 200, { run });
     if (method === "POST" && route === "api/runs") {
       const body = await readJson(req);
-      const task = parseTask(body, formatDate(todayInTz(now(), config.settings.arxiv.timezone)));
+      const today = formatDate(todayInTz(now(), config.settings.arxiv.timezone));
+      let task = parseTask(body, today);
       if (run?.status === "running") throw new WorkbenchError(409, "已有任务正在运行，请等待完成或先取消。");
       if (saving) throw new WorkbenchError(409, "正在保存设置，请稍后重试。");
       if (!options.run) throw new WorkbenchError(503, "当前工作台未提供生成操作。");
+      // The first report must work on any day: weekends and the hours before the announcement have no
+      // listing for today, so it asks for the newest announced day (today when it is already out).
+      let fellBackFrom: string | undefined;
+      if (body.kind === "daily" && body.date === undefined && body.latest === true) {
+        const latest = await announcedDay(today, lifetime.signal);
+        if (latest && latest < today) { task = { args: ["run", "--date", latest], label: `${latest} 日报`, date: latest }; fellBackFrom = today; }
+      }
       const current = beginRun(task.label, task.date, (io, signal) => options.run!(task.args, io, signal));
-      return json(res, 202, { run: current });
+      return json(res, 202, { run: current, ...(fellBackFrom ? { fellBackFrom } : {}) });
     }
     if (method === "POST" && route === "api/runs/cancel") {
       const body = await readJson(req);
@@ -355,6 +378,7 @@ export async function startWorkbench(options: WorkbenchOptions) {
     url: `${origin}${prefix}`,
     close: async () => {
       autoSchedule.close();
+      lifetime.abort();
       controller?.abort();
       await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
       await running;

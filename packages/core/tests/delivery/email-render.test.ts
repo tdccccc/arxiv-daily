@@ -93,10 +93,60 @@ describe("email render", () => {
     expect(html).toContain("Photo-z");
     expect(html).toContain("Clusters");
     expect(html).toContain("今日无相关论文更新。");
-    expect(html).toContain("arxiv-daily/daily/2026-07-25.md");
     expect(text).toContain("今日无相关论文");
     expect(text).toContain("## Photo-z");
     expect(text).toContain("今日无相关论文更新。");
+  });
+
+  it("points to the daily report only when the day produced one", () => {
+    const zero: DailyDigest = {
+      date: "2026-07-27",
+      summaryLanguage: "en",
+      categories: "astro-ph",
+      dailyPath: "arxiv-daily/daily/2026-07-27.md",
+      paperCount: 0,
+      topics: [],
+    };
+    for (const digest of [zero, { ...zero, summaryLanguage: "zh" as const }]) {
+      const html = renderEmailHtml(digest);
+      const text = renderEmailText(digest);
+      expect(html).not.toContain("2026-07-27.md");
+      expect(text).not.toContain("2026-07-27.md");
+      expect(html).not.toMatch(/Full Markdown daily report|完整 Markdown 日报路径/);
+      expect(text).not.toMatch(/Full Markdown daily report|完整 Markdown 日报路径/);
+      // The signature still closes the mail.
+      expect(text.trimEnd().endsWith("arXiv Daily")).toBe(true);
+    }
+
+    const written = { ...zero, paperCount: 1 };
+    expect(renderEmailText(written)).toContain(
+      "Full Markdown daily report: arxiv-daily/daily/2026-07-27.md",
+    );
+    expect(renderEmailHtml(written)).toContain(
+      "Full Markdown daily report: arxiv-daily/daily/2026-07-27.md",
+    );
+    expect(renderEmailText({ ...written, summaryLanguage: "zh" })).toContain(
+      "完整 Markdown 日报路径：arxiv-daily/daily/2026-07-27.md",
+    );
+  });
+
+  it("agrees with the subject on singular and plural paper counts in the header", () => {
+    const digest: DailyDigest = {
+      date: "2026-07-27",
+      summaryLanguage: "en",
+      categories: "astro-ph",
+      dailyPath: "arxiv-daily/daily/2026-07-27.md",
+      paperCount: 1,
+      topics: [],
+    };
+    const header = (n: number, summaryLanguage: DailyDigest["summaryLanguage"]) =>
+      renderEmailText({ ...digest, paperCount: n, summaryLanguage }).split("\n")[1];
+    expect(header(1, "en")).toBe("Date: 2026-07-27 · 1 paper · Categories: astro-ph");
+    expect(header(0, "en")).toBe("Date: 2026-07-27 · 0 papers · Categories: astro-ph");
+    expect(header(2, "en")).toBe("Date: 2026-07-27 · 2 papers · Categories: astro-ph");
+    expect(header(1, "zh")).toBe("日期：2026-07-27 · 1 篇 · 分类：astro-ph");
+    expect(renderEmailHtml(digest)).toContain("1 paper · Categories");
+    expect(renderEmailSubject(digest)).toBe("arXiv Daily 2026-07-27 · 1 paper");
   });
 
   it("renders five fields, abs+pdf links, omits source sections, and softens math", () => {
@@ -145,6 +195,99 @@ describe("email render", () => {
     ).toMatch(/H_0≃ 70 km s\^-1 Mpc\^-1/);
     expect(emailProse("$\\Delta\\chi^2$")).toMatch(/Δχ\^2/);
     expect(emailProse("$\\alpha\\approx 0.3$")).toMatch(/α≈\s*0\.3/);
+  });
+
+  it.each([
+    // Symbols the table did not know used to lose their backslash and keep the name.
+    ["$M_\\star > 10^{10}\\,M_\\odot$", "M_⋆ > 10^10 M_⊙"],
+    ["$50^\\circ$", "50°"],
+    ["$50^{\\circ}$", "50°"],
+    ["$f \\circ g$", "f ∘ g"],
+    ["$T_\\oplus$", "T_⊕"],
+    ["$F \\ge 3\\sigma$", "F ≥ 3σ"],
+    ["$F \\le 1$", "F ≤ 1"],
+    ["$\\Omega_m \\ne 0.3$", "Ω_m ≠ 0.3"],
+    ["$x \\ll 1$ and $y \\gg 1$", "x ≪ 1 and y ≫ 1"],
+    ["$\\forall i \\exists j$", "∀ i ∃ j"],
+    ["$\\langle x \\rangle$", "⟨x⟩"],
+    ["$f\\colon X \\to Y$ and $A \\setminus B$", "f: X → Y and A ∖ B"],
+    ["$\\mathbb{R}^d$ and $\\mathbb{N}$", "ℝ^d and ℕ"],
+    // Typesetting-only commands vanish and leave their argument.
+    ["$\\dot{M} \\ll 1$", "M ≪ 1"],
+    ["$\\mathcal{O}(n \\log n)$", "O(n log n)"],
+    ["$\\hat{\\theta}$, $\\bar{x}$, $\\vec{v}$, $\\tilde{y}$", "θ, x, v, y"],
+    ["$\\vec v$ and $\\hat x$", "v and x"],
+    ["$\\sqrt{d}$", "√(d)"],
+    ["$\\sqrt[3]{x}$", "3√(x)"],
+    ["$\\sqrt{\\frac{a}{b}}$", "√((a)/(b))"],
+    ["$\\left( \\frac{a}{b} \\right)^2$", "((a)/(b))^2"],
+    ["$\\left. x \\right|_0$", "x |_0"],
+    ["$\\displaystyle \\sum_i x_i$", "∑_i x_i"],
+    ["$\\sin\\theta + \\ln x$", "sinθ + ln x"],
+    // What cannot be rendered stays recognisably TeX instead of becoming a word.
+    ["$\\foo{x}$", "\\foo{x}"],
+    ["$\\foo{a{b}c}_i$", "\\foo{a{b}c}_i"],
+    ["$\\foo x + \\bar{y}$", "\\foo x + y"],
+    [
+      "$A=\\begin{pmatrix} 1 & 2 \\\\ 3 & 4 \\end{pmatrix}$",
+      "A=\\begin{pmatrix} 1 & 2 \\\\ 3 & 4 \\end{pmatrix}",
+    ],
+    ["\\begin{pmatrix} 1 & 2 \\\\ 3 & 4 \\end{pmatrix}", "\\begin{pmatrix} 1 & 2 \\\\ 3 & 4 \\end{pmatrix}"],
+    ["see C:\\Users\\arxiv", "see C:\\Users\\arxiv"],
+  ])("emailProse renders %j as %j", (input, expected) => {
+    expect(emailProse(input)).toBe(expected);
+  });
+
+  it("emailProse never glues a TeX command name onto its argument", () => {
+    // Deterministic pseudo-random snippets built only from TeX tokens: a command
+    // name fused with the next letter or digit is exactly the fake word the
+    // reader should never see.
+    let seed = 20261021;
+    const next = (n: number) => {
+      seed = (seed * 1103515245 + 12345) & 0x7fffffff;
+      return seed % n;
+    };
+    const commands = [
+      "mathcal", "mathbb", "mathfrak", "boldsymbol", "bm", "sqrt", "hat", "bar", "vec",
+      "tilde", "widetilde", "dot", "ddot", "overline", "underline", "mathrm", "text",
+    ];
+    const atoms = ["x", "y", "v", "n", "d", "M", "O", "\\theta", "\\odot", "2"];
+    const fused = /(mathcal|mathbb|mathfrak|boldsymbol|sqrt|widetilde|overline|underline|mathrm|left|right|tilde|ddot)[A-Za-z0-9(]|\b(?:hat|bar|vec|dot|bm)[A-Za-z0-9(]/;
+    for (let i = 0; i < 300; i += 1) {
+      const parts: string[] = [];
+      for (let j = 0; j < 1 + next(4); j += 1) {
+        const atom = atoms[next(atoms.length)]!;
+        parts.push(
+          next(3) === 0
+            ? atom
+            : `\\${commands[next(commands.length)]!}{${atom}}`,
+          next(2) === 0 ? "^2" : "_i",
+        );
+        if (next(4) === 0) parts.push("\\left(", atom, "\\right)");
+      }
+      const snippet = parts.join(" ");
+      const out = emailProse(`$${snippet}$`);
+      expect(out, snippet).not.toMatch(fused);
+      expect(out, snippet).not.toContain("\\mathcal");
+    }
+  });
+
+  it("emailProse keeps handling common math after the symbol table grew", () => {
+    // A command name still reads as a word when it is a function, and the
+    // longer \leq / \leftarrow forms are not shadowed by \le / \left.
+    expect(emailProse("$a \\leq b \\leftarrow c \\geq d \\neq e$")).toBe("a ≤ b ← c ≥ d ≠ e");
+    expect(emailProse("$\\gg$ and $\\ggg$")).toContain("≫");
+  });
+
+  it("emailProse stays fast on repeated unterminated \\begin, \\sqrt[ and \\foo{ openers", () => {
+    const begin = ("\\begin{pmatrix}" + "a".repeat(20_000)).repeat(50);
+    const root = ("\\sqrt[" + "a".repeat(20_000)).repeat(50);
+    const unknown = ("\\foo{" + "a".repeat(20_000)).repeat(50);
+    const start = performance.now();
+    expect(emailProse(begin).length).toBeGreaterThan(0);
+    expect(emailProse(root).length).toBeGreaterThan(0);
+    expect(emailProse(unknown).length).toBeGreaterThan(0);
+    expect(performance.now() - start).toBeLessThan(500);
   });
 
   it("emailProse simplifies display/block math delimiters ($$, \\[ \\], \\( \\))", () => {

@@ -81,6 +81,85 @@ export function extractFallbackAbstracts(markdown: string): Record<string, strin
   return abstracts;
 }
 
+/** One paper of a committed daily report, as written (Markdown-normalized text). */
+export interface DailyReportPaper {
+  /** The `##` heading the paper sits under; null before the first one. */
+  section: string | null;
+  id: string;
+  title: string;
+  authors: string;
+  /** The five summary fields of a structured paper; absent for a fallback block. */
+  summary?: PaperSummary;
+  /** A paper whose summary was replaced by its original abstract. */
+  fallback: boolean;
+  fallbackAbstract?: string;
+}
+
+// The writer appends " → [[id]]" or " → [id](path)" to the heading of a paper that has a detail note.
+const DETAIL_LINK_TAIL_RE =
+  /^[\t ]+(?:\[\[[^\]\r\n]+\]\]|\[[^\]\r\n]+\]\([^)\r\n]*\))[\t ]*$/;
+
+function stripDetailLink(heading: string): string {
+  // Only the last arrow can start the link, so no unanchored scan over spaces is needed.
+  const arrow = heading.lastIndexOf("→");
+  return arrow >= 0 && DETAIL_LINK_TAIL_RE.test(heading.slice(arrow + 1))
+    ? heading.slice(0, arrow)
+    : heading;
+}
+
+/**
+ * Read the papers of a committed daily report in report order, each with the
+ * `##` section it sits under. Blocks without a recognizable paper ID are left
+ * out, so the result is only what the identity and field parsers can vouch for.
+ */
+export function parseDailyReportPapers(markdown: string): DailyReportPaper[] {
+  const papers: DailyReportPaper[] = [];
+  let section: string | null = null;
+  let heading: string | undefined;
+  let body: string[] = [];
+  const flush = () => {
+    if (heading === undefined) return;
+    const block = [`### ${heading}`, ...body].join("\n");
+    heading = undefined;
+    const fallbackId = extractFallbackId(block);
+    const id = fallbackId ?? extractArxivId(block);
+    if (!id) return;
+    const paper: DailyReportPaper = {
+      section,
+      id,
+      title: compact(stripDetailLink(block.split("\n", 1)[0]!.slice(4))),
+      authors: extractAnyBulletField(block, ["作者", "Authors"]),
+      fallback: fallbackId !== null,
+    };
+    if (fallbackId) {
+      paper.fallbackAbstract = extractFallbackAbstracts(block)[id] ?? "";
+    } else {
+      const summary = extractPaperSummaries(block)[id];
+      if (summary) paper.summary = summary;
+    }
+    papers.push(paper);
+  };
+  for (const line of stripGenerationMetrics(markdown).split(/\r?\n/)) {
+    // Match only the bounded heading prefix. Consuming whitespace followed by
+    // `.*` can repeatedly rescan long tab runs when a Unicode separator follows.
+    const headingPrefix = /^(#{1,3})[\t ]/.exec(line);
+    if (headingPrefix?.[1] === "###") {
+      flush();
+      heading = line.slice(headingPrefix[0].length).trimStart();
+      body = [];
+      continue;
+    }
+    if (headingPrefix) {
+      flush();
+      if (headingPrefix[1] === "##") section = compact(line.slice(headingPrefix[0].length));
+      continue;
+    }
+    if (heading !== undefined) body.push(line);
+  }
+  flush();
+  return papers;
+}
+
 function paperBlocks(markdown: string): string[] {
   return stripGenerationMetrics(markdown).split(/^###\s+/m).slice(1)
     .map((block) => block.split(/^#{1,2}[\t ]+/m, 1)[0]!);

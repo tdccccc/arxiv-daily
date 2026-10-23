@@ -2,21 +2,43 @@ import { spawn } from "node:child_process";
 import * as path from "node:path";
 import type { CliRuntimeConfig } from "./config";
 import { scheduleFireSlots } from "./config";
+import { resolveCliConfigPath } from "./config-path";
 import type { CliIo } from "./main-types";
 
 export const CRON_MARKER = "# arxiv-daily-managed";
 
-/** What cron needs to start the CLI: cron's PATH is minimal, so node is named explicitly. */
+/**
+ * What cron needs to start the CLI: cron's PATH is minimal, so node is named explicitly, and its
+ * environment is nearly empty, so a custom XDG_CONFIG_HOME travels on the command line.
+ */
 export interface CronRuntime {
   nodePath: string;
   logPath: string;
+  /** XDG_CONFIG_HOME to set for the job; absent when the config is where cron's default looks. */
+  configHome?: string;
 }
 
 export function defaultCronRuntime(config: CliRuntimeConfig): CronRuntime {
+  const configHome = cronConfigHome(config.configPath);
   return {
     nodePath: process.execPath,
     logPath: path.join(path.dirname(config.configPath), "schedule.log"),
+    ...(configHome ? { configHome } : {}),
   };
+}
+
+/**
+ * The config path comes from $XDG_CONFIG_HOME (see config-path.ts), which a user usually exports from a
+ * shell profile that cron never reads. Name it for the job unless the default location would find the
+ * same file anyway. Native Windows has no cron, and a path outside the XDG layout cannot be named.
+ */
+function cronConfigHome(configPath: string): string | undefined {
+  if (process.platform === "win32") return undefined;
+  const absolute = path.resolve(configPath);
+  if (absolute === resolveCliConfigPath({})) return undefined;
+  const directory = path.dirname(absolute);
+  if (path.basename(absolute) !== "config.toml" || path.basename(directory) !== "arxiv-daily") return undefined;
+  return path.dirname(directory);
 }
 
 export function buildCronLines(
@@ -29,7 +51,8 @@ export function buildCronLines(
   }
   // `node script`, not the script's shebang: `#!/usr/bin/env node` fails when node
   // is not on cron's PATH (nvm, fnm, volta, Homebrew on Apple Silicon).
-  const executable = `${cronExecutable(runtime.nodePath)} ${cronExecutable(binaryPath)}`;
+  const environment = runtime.configHome ? `XDG_CONFIG_HOME=${cronExecutable(runtime.configHome)} ` : "";
+  const executable = `${environment}${cronExecutable(runtime.nodePath)} ${cronExecutable(binaryPath)}`;
   const log = cronExecutable(runtime.logPath);
   const slots = scheduleFireSlots(config.scheduleIntent);
   const dow = config.scheduleIntent.weekdaysOnly ? "1-5" : "*";
@@ -138,6 +161,9 @@ export async function scheduleInstall(
     writeLine(io.stdout, `installed ${managed.length} cron line(s)`);
     for (const line of managed) writeLine(io.stdout, line);
     writeLine(io.stdout, `Output of scheduled runs is appended to ${runtime.logPath}`);
+    if (runtime.configHome) {
+      writeLine(io.stdout, `The schedule reads ${config.configPath} (XDG_CONFIG_HOME is set in each cron line); if you move the config, run: arxiv-daily schedule install`);
+    }
     writeLine(
       io.stdout,
       `The schedule runs ${runtime.nodePath}; after upgrading or switching Node, run: arxiv-daily schedule install`,

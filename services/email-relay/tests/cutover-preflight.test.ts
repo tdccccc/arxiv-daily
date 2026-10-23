@@ -182,6 +182,24 @@ describe("createPreflight", () => {
     expect(ready?.detail).toContain("locked");
   });
 
+  it("shows why /ready is locked when the relay says so, without echoing anything else", async () => {
+    const { deps, state } = fakeDeps();
+    state.ready = {
+      status: 503,
+      text: JSON.stringify({ automatic: "locked", reason: "build_identity_missing", note: "email-relay-v2-secret-looking" }),
+    };
+    const { ok, results } = await createPreflight(deps as never)();
+    expect(ok).toBe(true);
+    const ready = results.find((r) => r.name === "remoteReady");
+    expect(ready?.status).toBe("pass");
+    expect(ready?.detail).toContain("reason build_identity_missing");
+    expect(JSON.stringify(results)).not.toContain("secret-looking");
+
+    state.ready = { status: 503, text: JSON.stringify({ automatic: "locked", reason: "x".repeat(500) }) };
+    const odd = (await createPreflight(deps as never)()).results.find((r) => r.name === "remoteReady");
+    expect(odd?.detail).not.toContain("xxxx");
+  });
+
   it("fails when remote endpoints are unreachable", async () => {
     const { deps, state } = fakeDeps();
     state.health = { status: 0, text: "" };

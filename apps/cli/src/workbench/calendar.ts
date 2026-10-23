@@ -14,6 +14,8 @@ export interface WorkbenchCalendarDay {
   message: string;
   canGenerate: boolean;
   actionLabel: string | null;
+  /** The newest day announced before this one, while this day's announcement is awaited and that is known. */
+  latestAnnounced?: string;
 }
 
 export interface WorkbenchCalendar {
@@ -85,7 +87,10 @@ function resolveDay(date: string, today: string, report: DocumentEntry | undefin
   const persistedOutcome = state?.status === "pending" || state?.status === "completed" || state?.status === "skipped" ? state.outcome : undefined;
   const outcome = state ? persistedOutcome
     : ownedRun?.date === date && (ownedRun.status === "pending" || ownedRun.status === "completed") ? ownedRun.outcome : undefined;
-  if (outcome === "awaiting_announcement") return { ...base, papers: null, state: "awaiting-announcement", canGenerate: true, actionLabel: "重新检查公告", message: "该日期的公告尚未发布，可以稍后重新检查。" };
+  if (outcome === "awaiting_announcement") {
+    const latestAnnounced = ownedRun?.date === date ? ownedRun.latestAnnounced : undefined;
+    return { ...base, papers: null, state: "awaiting-announcement", canGenerate: true, actionLabel: "重新检查公告", message: "该日期的公告尚未发布，可以稍后重新检查。", ...(latestAnnounced ? { latestAnnounced } : {}) };
+  }
   if (outcome === "no_updates") return { ...base, papers: 0, state: "no-updates", message: "已确认该日期所选分类没有新论文。" };
   if (outcome === "no_matches") return { ...base, papers: 0, state: "no-matches", message: "已完成筛选，没有匹配论文，因此没有生成日报文件。" };
   if (state?.status === "completed") {

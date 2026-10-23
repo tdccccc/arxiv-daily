@@ -50,7 +50,7 @@ arxiv-daily ui           # 打开本地阅读工作台
 | Linux/macOS | `$XDG_CONFIG_HOME/arxiv-daily/config.toml`（默认 `~/.config/arxiv-daily/config.toml`） |
 | Windows | `%APPDATA%\arxiv-daily\config.toml` |
 
-`init` 的默认 vault 路径是 `~/arxiv-daily`。没有配置用的环境变量，也没有 `--config`/`--vault-root` 参数。配置文件以明文保存 API key，建议加权限限制：
+`init` 的默认 vault 路径是 `~/arxiv-daily`。没有配置用的环境变量，也没有 `--config`/`--vault-root` 参数。你可以直接手改这个文件；工作台设置或 `library connect` 修改它时，只会改写它们改动的值，注释和排版都会保留。配置文件以明文保存 API key，建议加权限限制：
 
 ```bash
 chmod 600 ~/.config/arxiv-daily/config.toml
@@ -107,7 +107,7 @@ arxiv-daily ui --no-open         # 只打印地址，不自动打开浏览器
 arxiv-daily schedule install
 ```
 
-`schedule install`/`uninstall` 会在 Linux/macOS/WSL 上写入受管理的 crontab 条目。条目使用执行 `install` 时的 Node 可执行文件运行 `<node> <脚本> run --today`，输出追加到配置文件旁的 `schedule.log`；升级或切换 Node 后请重新运行 `schedule install`。原生 Windows 的任务计划程序不支持；请使用 WSL，或改用 Obsidian 插件/工作台自带的定时功能。
+`schedule install`/`uninstall` 会在 Linux/macOS/WSL 上写入受管理的 crontab 条目。条目使用执行 `install` 时的 Node 可执行文件运行 `<node> <脚本> run --today`，输出追加到配置文件旁的 `schedule.log`；升级或切换 Node 后请重新运行 `schedule install`。cron 不会读取 shell 启动文件，所以配置位于自定义 `XDG_CONFIG_HOME` 下时，条目会自带这个变量（移动配置后请重新运行 `schedule install`）。原生 Windows 的任务计划程序不支持；请使用 WSL，或改用 Obsidian 插件/工作台自带的定时功能。
 
 ## 可选的个人文献库
 

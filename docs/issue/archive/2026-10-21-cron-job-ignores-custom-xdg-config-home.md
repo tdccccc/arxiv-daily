@@ -1,7 +1,7 @@
 # 设置了自定义 `XDG_CONFIG_HOME` 的用户：`schedule install` 装好的 cron 任务每天都找不到配置，日报永远不会生成
 
 > 发现日期：2026-10-21 · 来源：main `d999037` 深度代码审查 · 编号 CLI-03
-> 范围：CLI `schedule install` / `schedule show`（Linux / macOS cron） · 严重程度：中 · 状态：未修复 · 置信度：已复现
+> 范围：CLI `schedule install` / `schedule show`（Linux / macOS cron） · 严重程度：中 · 状态：已修复（分支 `fix/2026-10-21-batch3`，提交 e766d93） · 置信度：已复现
 
 ## 问题
 
@@ -49,3 +49,9 @@ Windows 不受影响（`schedule install` 本来就不支持）。
 - `config.configPath` 位于自定义目录时，`buildCronLines` 的每一行都带 `XDG_CONFIG_HOME=<目录>` 前缀（路径含空格、`%`、非 ASCII 时转义正确）。
 - 配置在默认位置时，输出与现在逐字相同。
 - 用 `env -i` 模拟 cron 环境执行生成的命令，能读到同一份配置。
+
+## 修复情况
+
+`schedule install` 和 `schedule show` 生成的 cron 行，在配置文件不在默认位置（`~/.config/arxiv-daily`）时，会在命令前加 `XDG_CONFIG_HOME=<目录>`：取配置文件所在 `arxiv-daily` 目录的上一级，用与 node、脚本、日志路径相同的转义（空格、`%`、引号、非 ASCII 都安全），相对路径会写成绝对路径。这样 cron 用精简环境启动的 `/bin/sh` 也读到同一份配置，不再悄悄找不到配置或改用默认位置里的旧配置。配置在默认位置、路径不符合 XDG 布局、或原生 Windows 时，输出与以前逐字相同。安装成功后多一行说明这个任务读取哪份配置，移动配置后需要重新运行 `schedule install`。README 和技术报告已补充。
+
+测试：`apps/cli/tests/cli-schedule.test.ts`：自定义目录时每一行（含多个触发时间）都带前缀；默认位置和非 XDG 路径的输出不变；相对路径转为绝对路径；安装输出写出配置路径；并用 `env -i /bin/sh -c` 按 cron 的方式执行生成的命令，路径含空格、`%`、`$`、引号、反斜杠、反引号、分号、非 ASCII 时子进程拿到的 `XDG_CONFIG_HOME` 与读到配置的那个一致，默认位置时子进程环境里没有这个变量。

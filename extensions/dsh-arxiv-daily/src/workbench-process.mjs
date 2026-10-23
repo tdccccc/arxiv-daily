@@ -16,11 +16,14 @@ export class WorkbenchProcess {
       if (this.current.frameOrigin !== frameOrigin) throw failure('origin-changed', '工作台已从另一个 DSH 地址打开，请使用原地址或重新启用插件。');
       return this.current.ready;
     }
-    const args = [this.cliPath, 'ui', '--no-open', ...(frameOrigin ? ['--frame-origin', frameOrigin] : [])];
+    // The workbench stops itself when stdin closes. Nothing is ever written to it: the open pipe is the tie to
+    // this process, so a host that is killed or crashes (no dispose, no SIGTERM) still takes its workbench down.
+    const args = [this.cliPath, 'ui', '--no-open', '--exit-on-stdin-close', ...(frameOrigin ? ['--frame-origin', frameOrigin] : [])];
     const env = { ...this.env, ...(process.versions.electron ? { ELECTRON_RUN_AS_NODE: '1' } : {}) };
     let child;
-    try { child = this.spawn(this.executable, args, { env, shell: false, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true, detached: process.platform !== 'win32' }); }
+    try { child = this.spawn(this.executable, args, { env, shell: false, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true, detached: process.platform !== 'win32' }); }
     catch { throw failure('start-failed', '无法启动文献工作台，请检查插件安装和 Node 运行环境。'); }
+    child.stdin?.on('error', () => {});
     const state = { child, frameOrigin, ready: null, exited: null, reject: null, timer: null, settled: false, output: '', diagnostic: '' };
     this.current = state;
     state.ready = new Promise((resolve, reject) => {

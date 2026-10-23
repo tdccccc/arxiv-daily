@@ -52,6 +52,18 @@ it("translates known day messages without altering raw provider diagnostics", ()
   expect(root.querySelector("p")?.textContent).toBe(diagnostic);
 });
 
+it("offers the newest announced day in the day heading of a day awaiting its announcement", () => {
+  const waiting = { ...day, date: "2026-10-21", state: "awaiting-announcement", reportPath: null, canGenerate: true, actionLabel: "重新检查公告", latestAnnounced: "2026-10-09" } as typeof day;
+  for (const [language, sentence, action] of [["zh", "2026-10-21 的论文还没公告，最近一次公告是 2026-10-09。", "改为生成 2026-10-09 的日报"], ["en", "The papers for 2026-10-21 are not announced yet. The latest announcement was 2026-10-09.", "Generate the report for 2026-10-09 instead"]] as const) {
+    setUiLanguage(language); const root = host(); root.innerHTML = dayHeading(waiting);
+    expect(root.querySelector(".announcement-offer p")?.textContent).toBe(sentence);
+    expect(root.querySelector(".announcement-offer button")?.textContent).toBe(action);
+    expect(root.querySelector<HTMLElement>(".announcement-offer button")?.dataset.date).toBe("2026-10-09");
+  }
+  const unknown = host(); setUiLanguage("en"); unknown.innerHTML = dayHeading({ ...waiting, latestAnnounced: undefined });
+  expect(unknown.querySelector(".announcement-offer")).toBeNull();
+});
+
 it("translates sidebar controls and only submits layout preferences", async () => {
   setUiLanguage("en"); const root = host();
   root.innerHTML = '<header class="header-actions"></header><div class="workspace"><aside class="library-pane"></aside></div>';
