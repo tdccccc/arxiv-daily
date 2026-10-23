@@ -1,7 +1,7 @@
 # 工作台设置自动保存、`library connect`、接受方向都会重写整个 `config.toml`，`init` 生成的说明和用户自己的注释全部丢失
 
 > 发现日期：2026-10-21 · 来源：main `d999037` 深度代码审查 · 编号 CLI-04
-> 范围：CLI 配置文件写入（工作台设置、`library connect/authorize/revoke`、库方向接受） · 严重程度：低 · 状态：已修复（分支 `fix/2026-10-21-batch3`，提交 b219dff） · 置信度：已复现
+> 范围：CLI 配置文件写入（工作台设置、`library connect/authorize/revoke`、库方向接受） · 严重程度：低 · 状态：已修复（分支 `fix/2026-10-21-batch3`，提交 782e951） · 置信度：已复现
 
 ## 问题
 
