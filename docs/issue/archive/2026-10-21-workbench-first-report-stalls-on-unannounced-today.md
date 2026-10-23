@@ -49,3 +49,5 @@ Obsidian 插件在同一步专门处理了这个情况：“第一份日报要�
 首次日报不再固定生成“今天”。设置里的“生成第一份日报”请求 `api/runs` 时带 `latest: true`，工作台服务端用 core 的 `RecentDatesCache`（与 Obsidian 首次日报同一个数据源）读取 arXiv 的 /recent 列表：今天已公告就生成今天，否则生成最近一次公告日，并让这一步写明“今天的论文还没公告，第一份日报改用最近一次公告日 …”；读不到列表（离线或 10 秒内没有结果）时仍用今天，既不阻塞也不会让运行失败。任何日报运行以“等待公告”结束时，服务端会在标记结束之前查出最近一次公告日，任务面板、日历里该日期的卡片和阅读区标题用中文写出“{日期} 的论文还没公告，最近一次公告是 {日期}”，并给出一键“改为生成 {日期} 的日报”；原始英文日志仍在“查看运行详情”里。查不到最近公告日、或等待状态来自更早的运行时，界面与以前相同（只有“重新检查公告”）。代价：点击后服务端要先读一次 arXiv 的列表，通常几秒，最长 10 秒。
 
 测试：`apps/cli/tests/workbench-server.test.ts`（带 `latest` 的请求按最近公告日运行并返回 `fellBackFrom`；今天已公告、查不到、查询出错时仍运行今天；不带 `latest` 的请求不查询；运行以等待公告结束时附上最近公告日，且在状态变为结束之前；查询失败不影响运行结束）；`apps/cli/tests/workbench-announced-day.test.ts`（用桩 arXiv 列表测真实的查询实现）；`apps/cli/tests/workbench-settings-setup.test.ts`（请求体与说明文字）；`apps/cli/tests/workbench-ui.test.ts`、`workbench-calendar-ui.test.ts`、`workbench-calendar.test.ts`、`workbench-reading-language.test.ts`（任务面板、日历卡片、阅读区标题的中英文提示与按钮，点击后发起该日期的运行）。
+
+收尾修复（7ead6e6）：如果关闭工作台时“查询最新公告日期”尚未结束，查询返回后不再启动新的日报任务；请求会得到明确的关闭提示。真实 HTTP 回归在修复前返回 202 并启动任务，修复后返回 503 且不执行任务，工作台服务测试 25/25 通过。
