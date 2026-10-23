@@ -1,5 +1,6 @@
 import { Inflate } from "pako";
 import { classifySection } from "./section-extractor";
+import { latexEnvironmentBody, plainLatex, plainLatexProse, protectLatexMath, removeLatexEnvironments } from "./latex-cleanup";
 
 export interface SourceExtractOpts {
   sectionCharLimit: number;
@@ -41,6 +42,8 @@ export const SOURCE_EXTRACTION_LIMITS = {
   /** Total raw characters visited while expanding \input / \include. */
   maxExpandedChars: 8 * 1024 * 1024,
   maxIncludeExpansions: 2_000,
+  /** Bound synchronous prose cleanup independently of archive and include budgets. */
+  maxCleanupChars: 1024 * 1024,
 } as const;
 
 /** The package exceeds an extraction budget; callers treat the source as unavailable. */
@@ -80,6 +83,9 @@ export function extractLatexSource(
     0,
     { chars: 0, expansions: 0 },
   );
+  if (expanded.length > SOURCE_EXTRACTION_LIMITS.maxCleanupChars) {
+    throw new SourceBudgetExceededError("cleanup size");
+  }
   const markdown = latexToMarkdown(expanded);
   const sections = parseMarkdownSections(markdown);
   const abstract = extractAbstract(expanded);
@@ -256,7 +262,7 @@ function expandLatexInputs(
   seen.add(currentPath);
   const dir = parentDir(currentPath);
   const expanded = text.replace(
-    /\\(?:input|include)\s*\{([^}]+)\}/g,
+    /\\(?:input|include)\s{0,128}\{([^{}]{1,1024})\}/g,
     (_match, raw) => {
       const target = resolveInputPath(dir, String(raw), files);
       if (!target) return "";
@@ -303,9 +309,9 @@ function resolveInputPath(
 }
 
 function latexToMarkdown(input: string): string {
-  let text = stripLatexComments(input);
-  const body = /\\begin\{document\}([\s\S]*?)\\end\{document\}/.exec(text);
-  if (body?.[1]) text = body[1];
+  const stripped = stripLatexComments(input);
+  const math = protectLatexMath(latexEnvironmentBody(stripped, "document") ?? stripped);
+  let text = math.text;
 
   text = text.replace(/\\begin\{abstract\}/g, "\n## Abstract\n");
   text = text.replace(/\\end\{abstract\}/g, "\n");
@@ -331,23 +337,23 @@ function latexToMarkdown(input: string): string {
     "lstlisting",
   ]);
   text = text.replace(/\\appendix\b[\s\S]*$/i, "");
-  text = text.replace(/\\bibliography\s*\{[^}]*\}[\s\S]*$/i, "");
+  text = text.replace(/\\bibliography\s{0,128}\{[^{}]{0,1024}\}[\s\S]*$/i, "");
   text = text.replace(/\\begin\{thebibliography\}[\s\S]*$/i, "");
   text = text.replace(
     /\\(?:section|subsection|subsubsection)\*?\s*\{([^{}]+)\}/g,
-    (_match, title) => `\n## ${plainLatex(String(title))}\n`,
+    (_match, title) => `\n## ${plainLatexProse(String(title))}\n`,
   );
   text = text.replace(/\\paragraph\*?\s*\{([^{}]+)\}/g, (_match, title) => {
-    return `\n${plainLatex(String(title))}. `;
+    return `\n${plainLatexProse(String(title))}. `;
   });
-  text = plainLatex(text);
+  text = plainLatexProse(text);
   text = text
     .split("\n")
     .map((line) => line.replace(/[ \t]+/g, " ").trim())
     .join("\n")
     .replace(/\n{3,}/g, "\n\n")
     .trim();
-  return text;
+  return math.restore(text);
 }
 
 function stripLatexComments(input: string): string {
@@ -369,51 +375,9 @@ function stripLatexComments(input: string): string {
     .join("\n");
 }
 
-function removeLatexEnvironments(text: string, envs: string[]): string {
-  let out = text;
-  for (const env of envs) {
-    const escaped = env.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-    out = out.replace(
-      new RegExp(`\\\\begin\\{${escaped}\\}[\\s\\S]*?\\\\end\\{${escaped}\\}`, "gi"),
-      "\n",
-    );
-  }
-  return out;
-}
-
-function plainLatex(input: string): string {
-  let text = input;
-  text = text.replace(/\\href\s*\{[^{}]*\}\s*\{([^{}]*)\}/g, "$1");
-  text = text.replace(/\\url\s*\{([^{}]*)\}/g, "$1");
-  text = text.replace(/\\(?:cite|citep|citet|citealp|ref|autoref|eqref)\*?(?:\[[^\]]*\])?\s*\{[^{}]*\}/g, "");
-  text = text.replace(/\\(?:label|pageref)\s*\{[^{}]*\}/g, "");
-  text = text.replace(/\\(?:newcommand|renewcommand|providecommand|def)\b[^\n]*/g, "");
-  text = text.replace(/\\(?:maketitle|tableofcontents)\b/g, "");
-
-  for (let i = 0; i < 6; i++) {
-    const next = text.replace(
-      /\\[A-Za-z]+\*?(?:\[[^\]]*\])?\s*\{([^{}]*)\}/g,
-      "$1",
-    );
-    if (next === text) break;
-    text = next;
-  }
-
-  text = text.replace(/\\[A-Za-z]+\*?(?:\[[^\]]*\])?/g, "");
-  text = text.replace(/\\[`'"^~=.|&%$#_{}]/g, "");
-  text = text.replace(/[{}]/g, "");
-  text = text.replace(/~+/g, " ");
-  text = text.replace(/[ \t]{2,}/g, " ");
-  return text;
-}
-
 function extractAbstract(input: string): string | null {
-  const match = /\\begin\{abstract\}([\s\S]*?)\\end\{abstract\}/i.exec(
-    stripLatexComments(input),
-  );
-  const text = match?.[1]
-    ? plainLatex(match[1]).replace(/\s+/g, " ").trim()
-    : "";
+  const body = latexEnvironmentBody(stripLatexComments(input), "abstract");
+  const text = body ? plainLatex(body).replace(/\s+/g, " ").trim() : "";
   return text.length > 40 ? text : null;
 }
 
@@ -429,10 +393,10 @@ function parseMarkdownSections(markdown: string): Section[] {
   };
 
   for (const line of markdown.split("\n")) {
-    const heading = /^##\s+(.+?)\s*$/.exec(line);
+    const heading = /^##[\t ]+/.exec(line);
     if (heading) {
       flush();
-      currentTitle = heading[1]?.trim() ?? "";
+      currentTitle = line.slice(heading[0].length).trim();
       currentBody = [];
       continue;
     }

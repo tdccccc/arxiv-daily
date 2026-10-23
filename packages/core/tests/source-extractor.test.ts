@@ -146,6 +146,48 @@ ${limitation}
     expect(full).toContain("## Limitations");
     expect(full).not.toContain("## Introduction");
   });
+  it.each([
+    String.raw`$H_0 = 67.4 \pm 0.5$`,
+    String.raw`$\Omega_m \leq 0.3$`,
+    String.raw`$\frac{1}{3}$`,
+    String.raw`\(\alpha = 0.31^{+0.04}_{-0.05}\)`,
+    String.raw`\[4.2\sigma \approx \sqrt{2}\]`,
+    String.raw`$$z \sim 0.5$$`,
+    String.raw`\begin{equation}x = \frac{1}{3}\end{equation}`,
+    String.raw`\begin{align}a &\leq b \\ c &= d\end{align}`,
+  ])("keeps scientific meaning in source formula %s", formula => {
+    const prose = `We report precise measurements and uncertainty estimates from a controlled scientific experiment: ${formula}.`;
+    const source = String.raw`\documentclass{article}\begin{document}\begin{abstract}${prose}\end{abstract}\section{Results}${prose}\end{document}`;
+    const result = extractLatexSource(texBuffer(source), opts);
+    expect(result.abstractConclusion).toContain(formula);
+    expect(result.fullSections).toContain(formula);
+  });
+
+  it("keeps escaped percent and dollar signs while cleaning references and formatting", () => {
+    const source = String.raw`\documentclass{article}\begin{document}\section{Results}
+The \textbf{confidence} is 95\% and the measured cost is \$5. We tested \emph{several datasets} with strong evidence. See \citep[section 2]{private-citation-key} and Fig.~\ref{private-figure-key}.
+\begin{figure}not useful figure body\end{figure}
+\end{document}`;
+    const result = extractLatexSource(texBuffer(source), opts).fullSections!;
+    expect(result).toContain("confidence is 95% and the measured cost is $5");
+    expect(result).toContain("several datasets");
+    expect(result).not.toMatch(/private-citation|private-figure|not useful figure|textbf|emph/);
+  });
+
+  it.each([String.raw`\begin{figure}`, String.raw`\cite[`, String.raw`\input{`, String.raw`\begin{abstract}`])(
+    "bounds cleanup of repeated unclosed %s", token => {
+      const source = String.raw`\documentclass{article}\begin{document}\section{Results}` + token.repeat(24_000) + String.raw`\end{document}`;
+      const started = performance.now();
+      extractLatexSource(texBuffer(source), opts);
+      expect(performance.now() - started).toBeLessThan(1500);
+    },
+  );
+
+  it("rejects more than one MiB of expanded source before synchronous cleanup", () => {
+    const source = String.raw`\documentclass{article}\section{Results}` + "x".repeat(1024 * 1024);
+    expect(() => extractLatexSource(texBuffer(source), opts)).toThrow(SourceBudgetExceededError);
+  });
+
   describe("extraction budgets", () => {
     it("rejects a gzip bomb without materialising the inflated data", () => {
       const bomb = gzipSync(Buffer.alloc(SOURCE_EXTRACTION_LIMITS.maxInflatedBytes + 1024 * 1024));
