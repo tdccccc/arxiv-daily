@@ -67,8 +67,8 @@ it("serves documents, papers, settings and status as stored when the model key i
   for (const response of [documents, document, papers, settings, status]) expect(response.text).not.toContain("[REDACTED]");
 });
 
-it("keeps research directions intact when an unrelated setting is saved and the model key is an ordinary word", async () => {
-  const { configPath, request } = await setup("local");
+it.each(["local", "e"])("keeps research directions intact when an unrelated setting is saved with key %s", async (key) => {
+  const { configPath, request } = await setup(key);
   const snapshot = await request<Awaited<ReturnType<typeof readWorkbenchSettings>>>("api/settings");
   document.body.innerHTML = settingsForm(snapshot).outerHTML;
   const form = document.querySelector("form")!;
@@ -84,12 +84,11 @@ it("keeps research directions intact when an unrelated setting is saved and the 
   } finally { binding.dispose(); document.body.innerHTML = ""; }
 });
 
-it("still scrubs a real key from persisted run errors and from run output", async () => {
-  const key = "secret-model-key";
+it.each(["secret-model-key", "x9Z2q8!"])("scrubs real key %s from persisted run errors and run output", async (key) => {
   const { config, send } = await setup(key, async (_args, io) => {
     // Written in two chunks: only the finished output holds the whole key.
-    io.stdout.write("provider echoed secret-");
-    io.stdout.write("model-key and stopped\n");
+    io.stdout.write(`provider echoed ${key.slice(0, 4)}`);
+    io.stdout.write(`${key.slice(4)} and stopped\n`);
     return 0;
   });
   const state = createStorageStateStore(new NodeStorageAdapter(config.vaultRoot), config.settings.output);

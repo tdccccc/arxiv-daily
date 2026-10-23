@@ -65,6 +65,8 @@ text = "photometric redshift estimation in the [REDACTED] universe"
 
 ## 修复情况
 
-密钥是 `local`、`none`、`test`、`ollama` 这类占位词时，正文不再被改写。`redactText` 只在密钥不短于 8 个字符、且不是 `lm-studio`、`not-needed` 这类已知占位值时才做全文替换；更短的值仍会在 `api_key=…`、`Bearer …`、JSON 里的 `"api_key"` 这些赋值形态里被替换。工作台的 JSON 响应也不再整体替换：只对 `error`、`message`（日历里的运行错误）和 `output`（运行输出）三个字段脱敏，文档、论文、状态、设置原样返回，所以设置表单读到的方向文本不会带 `[REDACTED]`，自动保存也不会再把它写进 `config.toml`；`embedding.mode` 之类的枚举值同样恢复。`arxiv-daily status` / `papers` 和日志对占位密钥原样输出，工作台记住的密钥列表也不再在每次保存设置时重复追加。代价：短于 8 个字符的真实密钥，在服务商把它回显到赋值形态之外时不再被遮住；已经被旧版本写坏的方向文本（含 `[REDACTED]`）不会自动恢复，需要手动改回；`Bearer …`、`token: …` 这类赋值形态的规则仍对 CLI 输出生效（与密钥长度无关，不在本次范围内）。
+密钥是 `local`、`none`、`test`、`ollama` 这类占位词时，正文不再被改写。`redactText` 只豁免明确列出的本地服务占位词（`local`、`none`、`test`、`ollama`、`EMPTY`、`dummy`、`lm-studio`、`not-needed`，忽略大小写）；其他非空真实密钥无论长度都会打码。占位词在 `api_key=…`、`Bearer …`、JSON 里的 `"api_key"` 等敏感赋值形态中仍会被打码。多个密钥使用单次替换，且保留已有 `[REDACTED]` 标记，避免短密钥再次改写脱敏结果。工作台的 JSON 响应也不再整体替换：只对 `error`、`message`（日历里的运行错误）和 `output`（运行输出）三个字段脱敏，文档、论文、状态、设置原样返回，所以设置表单读到的方向文本不会带 `[REDACTED]`，自动保存也不会再把它写进 `config.toml`；`embedding.mode` 之类的枚举值同样恢复。`arxiv-daily status` / `papers` / `library` 的结构化输出也只处理诊断字段，真实短密钥不会破坏 JSON 语法、字段名和文献正文；日志对占位密钥原样输出，工作台记住的密钥列表也不再在每次保存设置时重复追加。取舍：占位词不会在普通正文中被替换；已经被旧版本写坏的方向文本（含 `[REDACTED]`）不会自动恢复，需要手动改回；`Bearer …`、`token: …` 这类赋值形态的规则仍对 CLI 输出生效（与密钥长度无关，不在本次范围内）。
 
-测试：`packages/core/tests/redaction.test.ts`（占位词不改写、赋值形态仍替换、8 个字符的边界、占位词与真实密钥并存）；`apps/cli/tests/cli-inspect.test.ts`（`status` / `papers` 原样输出）；`apps/cli/tests/workbench-redaction.test.ts`（`api/documents`、`api/document`、`api/papers`、`api/settings`、`api/status` 原样返回；设置表单改一个无关设置并保存后 `config.toml` 里的方向文本不变；真实密钥仍从持久化的运行错误、日历消息和分块写入的运行输出里被遮住）。
+测试：`packages/core/tests/redaction.test.ts`（占位词不改写、赋值形态仍替换、1–8 个字符真实密钥、正则特殊字符、多个密钥与重复脱敏、占位词与真实密钥并存）；`apps/cli/tests/cli-inspect.test.ts`（`status` / `papers` 原样输出）；`apps/cli/tests/workbench-redaction.test.ts`（`api/documents`、`api/document`、`api/papers`、`api/settings`、`api/status` 原样返回；设置表单改一个无关设置并保存后 `config.toml` 里的方向文本不变；真实密钥仍从持久化的运行错误、日历消息和分块写入的运行输出里被遮住）。
+
+收尾补验：短真实密钥在持久化错误、日历消息和分块运行输出中仍被打码；单字符密钥与研究方向文字重叠时，设置表单保存仍保留原文且不写入 `[REDACTED]`。新增核心测试在修复前 10 项失败，修复后通过。

@@ -4,12 +4,9 @@ const BEARER_RE = /\bBearer\s+[^\s,;]+/gi;
 const KEY_VALUE_RE = /\b(api[-_]?key|access[-_]?token|token|secret|password)(\s*[=:]\s*)([^\s,;&]+)/gi;
 const JSON_SECRET_RE = /(["'](?:api[-_]?key|access[-_]?token|token|secret|password)["']\s*:\s*["'])([^"']*)(["'])/gi;
 const COMMON_API_KEY_RE = /\b(?:sk|rk|pk|api)[-_][A-Za-z0-9_-]{8,}\b/g;
-// A local model server needs a non-empty key but ignores its value, so people enter a word such as
-// `local`, `none` or `ollama`. Replacing such a value wherever it occurs rewrites ordinary text, so a
-// value is only replaced everywhere once it is long enough to be a key and is not a documented
-// stand-in. A shorter one is still redacted where it is assigned (`api_key=…`, `Bearer …`).
-const MIN_SECRET_LENGTH = 8;
-const PLACEHOLDER_SECRETS = new Set(["lm-studio", "not-needed"]);
+// Known local-server stand-ins are ordinary words, not secrets. Every other nonempty
+// configured value is sensitive regardless of length; only diagnostic channels should use this helper.
+const PLACEHOLDER_SECRETS = new Set(["local", "none", "test", "ollama", "empty", "dummy", "lm-studio", "not-needed"]);
 
 export interface RedactionOptions {
   secrets?: readonly string[];
@@ -17,8 +14,12 @@ export interface RedactionOptions {
 
 export function redactText(value: unknown, options: RedactionOptions = {}): string {
   let text = stringify(value);
-  for (const secret of normalizedSecrets(options.secrets)) {
-    text = text.split(secret).join(REDACTED);
+  const secrets = normalizedSecrets(options.secrets);
+  if (secrets.length > 0) {
+    // A single pass cannot replace a character inside its own replacement. Recognize
+    // existing markers first as well, since errors may pass through several log layers.
+    const alternatives = [REDACTED, ...secrets].map(secret => secret.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
+    text = text.replace(new RegExp(alternatives.join("|"), "g"), REDACTED);
   }
   return text
     .replace(BEARER_RE, `Bearer ${REDACTED}`)
@@ -70,7 +71,7 @@ function normalizedSecrets(secrets: readonly string[] | undefined): string[] {
 }
 
 function isKeyLike(value: string): boolean {
-  return value.length >= MIN_SECRET_LENGTH && !PLACEHOLDER_SECRETS.has(value.toLowerCase());
+  return value.length > 0 && !PLACEHOLDER_SECRETS.has(value.toLowerCase());
 }
 
 function stringify(value: unknown): string {

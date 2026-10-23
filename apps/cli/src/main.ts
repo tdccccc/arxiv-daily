@@ -25,6 +25,7 @@ import { dataExport, dataImport } from "./data-cmd";
 import { runUpdate } from "./update-cmd";
 import { getCliVersion } from "./version";
 import { inspectPapers, inspectProduct } from "./inspect-cmd";
+import { diagnosticJson } from "./diagnostic-json";
 import { runCliLibrary } from "./library-cmd";
 import { runWorkbench } from "./workbench/launch";
 import { validateFrameOrigin } from "./workbench/embedding";
@@ -180,17 +181,17 @@ export async function runCli(opts: RunCliOptions = {}): Promise<number> {
     ].filter((value): value is string => Boolean(value));
 
     if (parsed.name === "status") {
-      writeLine(io.stdout, JSON.stringify(await inspectProduct(config)));
+      writeLine(rawIo.stdout, diagnosticJson(await inspectProduct(config), secrets));
       return 0;
     }
     if (parsed.name === "ui") {
       return await (opts.ui ?? runWorkbench)(config, io, { port: parsed.port, open: parsed.open, env, ...(parsed.frameOrigin ? { frameOrigin: parsed.frameOrigin } : {}), ...(parsed.exitOnStdinClose ? { exitOnStdinClose: true } : {}) });
     }
     if (parsed.name === "papers") {
-      writeLine(io.stdout, JSON.stringify(await inspectPapers(config, parsed.query, parsed.offset, parsed.limit)));
+      writeLine(rawIo.stdout, diagnosticJson(await inspectPapers(config, parsed.query, parsed.offset, parsed.limit), secrets));
       return 0;
     }
-    if (parsed.name === "library") return await runCliLibrary(config, parsed.args, io);
+    if (parsed.name === "library") return await runCliLibrary(config, parsed.args, { ...io, stdout: rawIo.stdout });
 
     if (parsed.name === "schedule") {
       if (parsed.sub === "show") {

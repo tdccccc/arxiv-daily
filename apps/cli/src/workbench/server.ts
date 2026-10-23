@@ -18,11 +18,9 @@ import { inspectCalendar } from "./calendar";
 import { validateFrameOrigin } from "./embedding";
 import { WorkbenchPapers } from "./papers";
 import { readWorkbenchSettings, saveWorkbenchSettings } from "./settings";
+import { diagnosticJson } from "../diagnostic-json";
 import { WorkbenchSchedule } from "./schedule";
 import { readPreferences, savePreferences } from "./preferences";
-
-/** Response fields that hold error text, persisted run errors (the calendar's message) or run output. */
-const DIAGNOSTIC_FIELDS = new Set(["error", "message", "output"]);
 
 export interface WorkbenchAsset { type: string; body: string; encoding?: "base64" }
 export interface WorkbenchOptions {
@@ -84,10 +82,9 @@ export async function startWorkbench(options: WorkbenchOptions) {
   };
   // A key can only turn up in text about a failure or a run. Documents, papers and settings are the user's
   // own content and are served as stored: rewriting them also rewrites what the settings form saves back.
-  const scrub = (key: string, value: unknown) => typeof value === "string" && DIAGNOSTIC_FIELDS.has(key) ? redact(value) : value;
   const json = (res: ServerResponse, code: number, value: unknown) => {
     res.writeHead(code, { "Content-Type": "application/json; charset=utf-8" });
-    res.end(JSON.stringify(value, scrub));
+    res.end(diagnosticJson(value, secrets));
   };
 
   const autoSchedule = new WorkbenchSchedule(() => saving || run?.status === "running" || !options.run, () => {

@@ -40,14 +40,35 @@ describe("secret redaction", () => {
       .toBe('{"api_key":"[REDACTED]","note":"a local run"}');
   });
 
-  it("redacts a key anywhere once it is long enough to be one", () => {
+  it("redacts a real key anywhere regardless of its length", () => {
     expect(redactText("echoed abcd1234 here", { secrets: ["abcd1234"] })).toBe("echoed [REDACTED] here");
-    expect(redactText("echoed abcd123 here", { secrets: ["abcd123"] })).toBe("echoed abcd123 here");
+    expect(redactText("echoed abcd123 here", { secrets: ["abcd123"] })).toBe("echoed [REDACTED] here");
+  });
+
+  it.each(["7", "X9", "x9Z", "x9Z2", "x9Z2q", "x9Z2q8", "x9Z2q8!"])(
+    "redacts the short real key %s outside credential assignments",
+    (key) => expect(redactText(`echoed ${key} here`, { secrets: [key] })).toBe("echoed [REDACTED] here"),
+  );
+
+  it("does not redact inside an earlier replacement or a pre-existing marker", () => {
+    const options = { secrets: ["long-secret", "A", "D"] };
+    const safe = redactText("long-secret A D [REDACTED]", options);
+    expect(safe).toBe("[REDACTED] [REDACTED] [REDACTED] [REDACTED]");
+    expect(redactText(safe, options)).toBe(safe);
+  });
+
+  it("treats regular expression metacharacters in a short key literally", () => {
+    expect(redactText("echoed x.*$ here", { secrets: ["x.*$"] })).toBe("echoed [REDACTED] here");
   });
 
   it("skips a placeholder without dropping the real key listed beside it", () => {
     expect(redactText("local xk29-real-key-77 local", { secrets: ["local", "xk29-real-key-77"] }))
       .toBe("local [REDACTED] local");
+  });
+
+  it("does not leave the tail of a configured key that also matches a generic key prefix", () => {
+    const key = "sk-example-key.suffix";
+    expect(redactText(`echoed ${key} here`, { secrets: [key] })).toBe("echoed [REDACTED] here");
   });
 
   it("returns a sanitized Error while retaining status", () => {
