@@ -505,7 +505,11 @@ function buildSyncInputs(
     if (fallbackAbstract) {
       resolvedAbstracts.set(candidate.arxivId, fallbackAbstract);
     }
-    if (!needsSync(existing, candidate, detail, dailyReport, paperPath, fallbackAbstract)) {
+    // A note's topic is read back through the configured topics, which turns an
+    // arXiv category the index kept as `cs.AI` into `cs-ai`: the same topic
+    // under a second spelling. Keep the spelling the index already has.
+    const topic = indexedTopicSpelling(existing, candidate.topic);
+    if (!needsSync(existing, { ...candidate, topic }, detail, dailyReport, paperPath, fallbackAbstract)) {
       continue;
     }
     inputs.push({
@@ -513,8 +517,8 @@ function buildSyncInputs(
       title: candidate.title,
       authors: candidate.authors,
       date: candidate.date,
-      arxivCategory: candidate.topic,
-      primaryTopic: candidate.topic,
+      arxivCategory: topic,
+      primaryTopic: topic,
       detail,
       ...(fallbackAbstract ? { abstract: fallbackAbstract } : {}),
       ...(dailyReport ? { dailyReport } : {}),
@@ -522,6 +526,18 @@ function buildSyncInputs(
     });
   }
   return inputs;
+}
+
+function indexedTopicSpelling(
+  existing: PaperInbox["papers"][string] | undefined,
+  topic: string,
+): string {
+  const key = topicKey(topic);
+  if (!existing || !key) return topic;
+  return (
+    [existing.primaryTopic, ...existing.topics].find((item) => topicKey(item) === key) ??
+    topic
+  );
 }
 
 function canMergeScannedDetail(

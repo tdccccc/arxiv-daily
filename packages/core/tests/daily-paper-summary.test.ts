@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it, vi } from "vitest";
-import { LlmOutputTruncatedError, LlmTransientExhaustedError } from "../src/llm/client";
+import { LlmContentBlockedError, LlmOutputTruncatedError, LlmTransientExhaustedError } from "../src/llm/client";
 import {
   classifyJsonParseFailure,
   DAILY_PAPER_SUMMARY_VALIDATION_ERROR_CODE,
@@ -555,6 +555,29 @@ describe("summarizeDailyPaperWithValidationRetry", () => {
     expect(llm.call).toHaveBeenCalledTimes(1);
   });
 
+  it("falls back without repeating a request the provider's content filter refused", async () => {
+    const llm = { call: vi.fn().mockRejectedValue(new LlmContentBlockedError("Content Exists Risk", 400)) };
+
+    await expect(
+      summarizeDailyPaperWithValidationRetry(paper, { llm: llm as any }),
+    ).resolves.toEqual({
+      kind: "fallback",
+      reasonCode: "content-blocked",
+      attempts: 1,
+      originalAbstract: "Trusted abstract from metadata.",
+    });
+    expect(llm.call).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not take a plain 400 for a content refusal", async () => {
+    const error = Object.assign(new Error("messages: text content blocks must be non-empty"), { status: 400 });
+    const llm = { call: vi.fn().mockRejectedValue(error) };
+
+    await expect(
+      summarizeDailyPaperWithValidationRetry(paper, { llm: llm as any }),
+    ).rejects.toBe(error);
+  });
+
   it("propagates arbitrary non-LLM errors instead of misclassifying fallback", async () => {
     const error = new Error("deterministic runtime bug");
     const llm = { call: vi.fn().mockRejectedValue(error) };
@@ -1061,5 +1084,108 @@ describe("classifyJsonParseFailure", () => {
     expect(classifyJsonParseFailure(message)).toEqual(
       position === undefined ? { category } : { category, position },
     );
+  });
+});
+
+describe("a paper whose content could not be fetched", () => {
+  const FAILED = "[获取失败] arXiv ID: 2607.12345";
+  const unfetched: DailyPaperSummaryInput = {
+    ...paper,
+    abstractConclusion: FAILED,
+    fullSections: null,
+  };
+
+  it("summarizes from the abstract already in hand instead of the placeholder", async () => {
+    const { llm, calls } = captureLlm();
+
+    const result = await summarizeDailyPaperWithValidationRetry(unfetched, { llm: llm as any });
+
+    expect(result.kind).toBe("structured");
+    expect(calls).toHaveLength(1);
+    const prompt = calls[0]!.messages[1].content as string;
+    expect(prompt).toContain("Trusted abstract from metadata.");
+    expect(prompt).toContain("## Abstract");
+    expect(prompt).toContain("Source sections: Abstract");
+    expect(prompt).not.toContain("获取失败");
+  });
+
+  it("reports the abstract as the source of that summary", () => {
+    expect(derivePaperSourceSections(unfetched)).toBe("Abstract");
+  });
+
+  it.each([
+    ["the abs page had no abstract block", "## Abstract\nN/A"],
+    ["nothing was extracted at all", ""],
+  ])("treats %s as missing content too", async (_name, abstractConclusion) => {
+    const { llm, calls } = captureLlm();
+
+    await summarizeDailyPaperWithValidationRetry(
+      { ...paper, abstractConclusion, fullSections: null },
+      { llm: llm as any },
+    );
+
+    const prompt = calls[0]!.messages[1].content as string;
+    expect(prompt).toContain("Trusted abstract from metadata.");
+    expect(prompt).not.toContain("N/A");
+  });
+
+  it("adds the listed abstract to the full-text excerpts when only the abstract part failed", async () => {
+    const { llm, calls } = captureLlm();
+
+    await summarizeDailyPaperWithValidationRetry(
+      { ...unfetched, fullSections: "## Results\nThe method improves the baseline by 12%." },
+      { llm: llm as any },
+    );
+
+    const prompt = calls[0]!.messages[1].content as string;
+    expect(prompt).toContain("Trusted abstract from metadata.");
+    expect(prompt).toContain("The method improves the baseline by 12%.");
+    expect(prompt).not.toContain("获取失败");
+    expect(prompt).toContain("Source sections: Abstract, Results");
+  });
+
+  it("summarizes from full text alone when there is no abstract at all", async () => {
+    const { llm, calls } = captureLlm();
+
+    const result = await summarizeDailyPaperWithValidationRetry(
+      { ...unfetched, abstract: undefined, fullSections: "## Results\nThe method improves the baseline by 12%." },
+      { llm: llm as any },
+    );
+
+    expect(result.kind).toBe("structured");
+    expect(calls[0]!.messages[1].content).toContain("Source sections: Results");
+  });
+
+  it.each([
+    ["the placeholder", FAILED],
+    ["an empty extraction", ""],
+    ["an empty abstract section", "## Abstract\nN/A"],
+  ])("falls back without asking the model when there is no abstract either (%s)", async (_name, abstractConclusion) => {
+    const { llm } = captureLlm();
+
+    const result = await summarizeDailyPaperWithValidationRetry(
+      { ...paper, abstract: " ", abstractConclusion, fullSections: null },
+      { llm: llm as any },
+    );
+
+    expect(llm.call).not.toHaveBeenCalled();
+    expect(result).toEqual({
+      kind: "fallback",
+      reasonCode: "content-unavailable",
+      attempts: 1,
+      originalAbstract: "",
+    });
+  });
+
+  it("labels a paper with nothing to summarize as a fetch failure", () => {
+    for (const abstractConclusion of [FAILED, "", "## Abstract\nN/A"]) {
+      expect(derivePaperSourceSections({ abstractConclusion, fullSections: null })).toBe("获取失败");
+    }
+  });
+
+  it("does not offer a placeholder or N/A as the original abstract", () => {
+    expect(resolveTrustedOriginalAbstract({ abstractConclusion: FAILED })).toBe("");
+    expect(resolveTrustedOriginalAbstract({ abstractConclusion: "## Abstract\nN/A" })).toBe("");
+    expect(resolveTrustedOriginalAbstract({ abstract: "Listed.", abstractConclusion: FAILED })).toBe("Listed.");
   });
 });

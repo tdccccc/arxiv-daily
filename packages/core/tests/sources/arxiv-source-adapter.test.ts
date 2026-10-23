@@ -11,11 +11,15 @@ import {
 import type { SourcePaperMeta } from "../../src/sources";
 import { Logger } from "../../src/services/logger";
 import { markupParser } from "../markup-parser";
+import { listingIds, recentListingWorld, type WorldDay } from "../recent-listing-world";
 import { parseRecent } from "../../src/pipeline/arxiv-parser";
 import {
+  ArxivFetcher,
   ArxivHttpError,
+  ArxivRequestCoordinator,
   ArxivRetryDeferredError,
 } from "../../src/pipeline/arxiv-fetcher";
+import type { HttpClient } from "../../src/core/adapters";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const recentHtml = readFileSync(
@@ -88,6 +92,44 @@ describe("mapLegacyPaperContent / legacyContentFromNormalized", () => {
     );
     expect(normalized.quality).toBe("unavailable");
     expect(normalized.fullTextFailure).toBe("no content");
+  });
+});
+
+describe("content that could not be fetched", () => {
+  const FAILED = "[获取失败] arXiv ID: 2606.12345";
+
+  it("stays a bare placeholder instead of becoming an Abstract section", () => {
+    const normalized = mapLegacyPaperContent(
+      { abstractConclusion: FAILED, fullSections: null, fullTextFailure: "html down; abs down" },
+      "",
+      "2606.12345",
+    );
+
+    expect(normalized.quality).toBe("unavailable");
+    const legacy = legacyContentFromNormalized(normalized);
+    expect(legacy.abstractConclusion).toBe(FAILED);
+    expect(legacy.abstractConclusion).not.toContain("## Abstract");
+    expect(legacy.fullTextFailure).toBe("html down; abs down");
+  });
+
+  it("does not turn the failure reasons into paper text", () => {
+    const legacy = legacyContentFromNormalized(mapLegacyPaperContent(
+      { abstractConclusion: "", fullSections: null, fullTextFailure: "rendered HTML unavailable (HTTP 503)" },
+      "",
+      "2606.12345",
+    ));
+
+    expect(legacy.abstractConclusion).toBe("");
+    expect(legacy.fullTextFailure).toBe("rendered HTML unavailable (HTTP 503)");
+  });
+
+  it("still wraps a real abstract and uses full text when the abstract is missing", () => {
+    expect(legacyContentFromNormalized(mapLegacyPaperContent(
+      { abstractConclusion: "Plain abstract.", fullSections: null }, "", "2606.12345",
+    )).abstractConclusion).toBe("## Abstract\nPlain abstract.");
+    expect(legacyContentFromNormalized(mapLegacyPaperContent(
+      { abstractConclusion: "", fullSections: "## Intro\nBody." }, "", "2606.12345",
+    )).abstractConclusion).toBe("## Intro\nBody.");
   });
 });
 
@@ -593,5 +635,297 @@ describe("ArxivSourceAdapter", () => {
     });
     expect(content.quality).toBe("unavailable");
     expect(content.fullTextFailure).toMatch(/invalid arXiv id/);
+  });
+});
+
+describe("ArxivSourceAdapter with a listing longer than one page", () => {
+  const D1 = "2026-05-11";
+  const D2 = "2026-05-08";
+  const D3 = "2026-05-07";
+  const D4 = "2026-05-06";
+  const OLDER = "2026-05-05";
+  // arXiv serves 2000 entries per page: page 1 holds D1 and 900 of D2's 1300.
+  const days: WorldDay[] = [
+    { date: D1, ids: listingIds("2605", 10000, 1100) },
+    { date: D2, ids: listingIds("2605", 20000, 1300) },
+    { date: D3, ids: listingIds("2605", 30000, 900) },
+    { date: D4, ids: listingIds("2605", 40000, 300) },
+  ];
+
+  function adapterOver(
+    fetchRecent: (category: string, signal?: AbortSignal, options?: { skip?: number; show?: number }) => Promise<string>,
+    categories = ["cs.LG"],
+  ) {
+    const logger = new Logger("error");
+    const warn = vi.spyOn(logger, "warn");
+    const adapter = new ArxivSourceAdapter({
+      fetcher: { fetchRecent: vi.fn(fetchRecent), fetchMetadataByIds: vi.fn(async () => new Map()) } as any,
+      paperFetcher: { fetch: vi.fn(), fetchListingAbstract: vi.fn(async () => ({ abstract: "listed", fromNetwork: false })) } as any,
+      markupParser,
+      logger,
+      defaultCategories: categories,
+    });
+    return { adapter, warn };
+  }
+
+  it("takes a day that lies beyond the first page from the offset arXiv gives for it", async () => {
+    const world = recentListingWorld(days);
+    const { adapter } = adapterOver(world.fetchRecent);
+
+    const result = await adapter.listForDate(D4);
+
+    expect(result.kind).toBe("ok");
+    if (result.kind !== "ok") return;
+    expect(result.papers.map((paper) => paper.externalId)).toEqual(days[3]!.ids);
+    expect(world.requests).toEqual([{ skip: 0, show: 2000 }, { skip: 3300, show: 300 }]);
+  });
+
+  it("completes a day that the first page cuts off", async () => {
+    const world = recentListingWorld(days);
+    const { adapter } = adapterOver(world.fetchRecent);
+
+    const result = await adapter.listForDate(D2);
+
+    expect(result.kind).toBe("ok");
+    if (result.kind !== "ok") return;
+    expect(result.papers).toHaveLength(1300);
+    expect(new Set(result.papers.map((paper) => paper.externalId))).toEqual(new Set(days[1]!.ids));
+    expect(world.requests).toEqual([{ skip: 0, show: 2000 }, { skip: 1100, show: 1300 }]);
+  });
+
+  it("asks for nothing more when the first page holds the day whole", async () => {
+    const world = recentListingWorld(days);
+    const { adapter } = adapterOver(world.fetchRecent);
+
+    const result = await adapter.listForDate(D1);
+
+    expect(result.kind).toBe("ok");
+    if (result.kind === "ok") expect(result.papers).toHaveLength(1100);
+    expect(world.requests).toEqual([{ skip: 0, show: 2000 }]);
+  });
+
+  it("calls a date permanently gone only when no page can list it", async () => {
+    const world = recentListingWorld(days);
+    const { adapter } = adapterOver(world.fetchRecent);
+
+    const result = await adapter.listForDate(OLDER);
+
+    expect(result).toMatchObject({ kind: "error", failureKind: "failed_permanent" });
+    expect(world.requests).toEqual([{ skip: 0, show: 2000 }]);
+  });
+
+  it("still waits for an announcement newer than every listed day", async () => {
+    const world = recentListingWorld(days);
+    const { adapter } = adapterOver(world.fetchRecent);
+
+    await expect(adapter.listForDate("2026-05-12")).resolves.toMatchObject({
+      kind: "pending",
+      outcome: "awaiting_announcement",
+    });
+    expect(world.requests).toHaveLength(1);
+  });
+
+  it("reads the rest of a day longer than one page from the page after it", async () => {
+    const big: WorldDay[] = [
+      { date: D1, ids: listingIds("2605", 10000, 2300) },
+      { date: D2, ids: listingIds("2605", 20000, 100) },
+    ];
+    const world = recentListingWorld(big);
+    const { adapter } = adapterOver(world.fetchRecent);
+
+    const result = await adapter.listForDate(D1);
+
+    expect(result.kind).toBe("ok");
+    if (result.kind === "ok") expect(result.papers.map((paper) => paper.externalId)).toEqual(big[0]!.ids);
+    expect(world.requests).toEqual([{ skip: 0, show: 2000 }, { skip: 2000, show: 300 }]);
+  });
+
+  it("starts a longer-than-a-page day at its own offset when it is not the first day", async () => {
+    const big: WorldDay[] = [
+      { date: D1, ids: listingIds("2605", 10000, 500) },
+      { date: D2, ids: listingIds("2605", 20000, 2100) },
+    ];
+    const world = recentListingWorld(big);
+    const { adapter } = adapterOver(world.fetchRecent);
+
+    const result = await adapter.listForDate(D2);
+
+    expect(result.kind).toBe("ok");
+    if (result.kind === "ok") expect(result.papers.map((paper) => paper.externalId)).toEqual(big[1]!.ids);
+    expect(world.requests).toEqual([
+      { skip: 0, show: 2000 }, { skip: 500, show: 2000 }, { skip: 2500, show: 100 },
+    ]);
+  });
+
+  it("fails transiently, never with a part of the day, when arXiv keeps serving the same page", async () => {
+    const world = recentListingWorld(days);
+    const { adapter, warn } = adapterOver(async (category, signal, options) => {
+      await world.fetchRecent(category, signal, options);
+      return world.page(0, 2000);
+    });
+
+    const result = await adapter.listForDate(D2);
+
+    expect(result).toMatchObject({ kind: "error", failureKind: "failed_transient" });
+    if (result.kind === "error") expect(result.reason).toMatch(/cs\.LG.*2026-05-08.*900 of 1300/);
+    expect(world.requests.length).toBeLessThanOrEqual(6);
+    expect(warn).toHaveBeenCalled();
+  });
+
+  it("fails transiently when a day is cut off and the page has no link to the rest", async () => {
+    const world = recentListingWorld(days);
+    const asked: unknown[] = [];
+    const { adapter } = adapterOver(async (_category, _signal, options) => {
+      asked.push(options);
+      return world.page(0, 2000).replace(/<li>[\s\S]*?<\/li>/g, "");
+    });
+
+    const result = await adapter.listForDate(D2);
+
+    expect(result).toMatchObject({ kind: "error", failureKind: "failed_transient" });
+    if (result.kind === "error") expect(result.reason).toMatch(/cs\.LG.*2026-05-08.*900 of 1300/);
+    expect(asked).toEqual([undefined]);
+  });
+
+  it("does not call a missing date permanent while the page may simply stop before it", async () => {
+    const world = recentListingWorld(days);
+    const { adapter } = adapterOver(async () => world.page(0, 2000).replace(/<li>[\s\S]*?<\/li>/g, ""));
+
+    // Without day links nothing proves the date is gone: the first page ends at entry 2000 of 3600.
+    const result = await adapter.listForDate(D4);
+
+    expect(result).toMatchObject({ kind: "error", failureKind: "failed_transient" });
+    if (result.kind === "error") expect(result.reason).toContain("longer than one page");
+  });
+
+  it("keeps calling a date permanent when a short page without day links ends before it", async () => {
+    const short = recentListingWorld([{ date: D3, ids: listingIds("2605", 30000, 5) }]);
+    const { adapter } = adapterOver(async () => short.page(0, 2000).replace(/<li>[\s\S]*?<\/li>/g, ""));
+
+    await expect(adapter.listForDate(D4)).resolves.toMatchObject({ kind: "error", failureKind: "failed_permanent" });
+  });
+
+  it.each([
+    ["an HTTP error", () => new ArxivHttpError(503, "https://arxiv.org/list/cs.LG/recent?skip=3300&show=300"), "failed_transient"],
+    ["a refusal", () => new ArxivHttpError(404, "https://arxiv.org/list/cs.LG/recent?skip=3300&show=300"), "failed_permanent"],
+  ])("classifies %s on a later page like one on the first", async (_name, makeError, kind) => {
+    const world = recentListingWorld(days);
+    const { adapter } = adapterOver(async (category, signal, options) => {
+      if (options?.skip) throw makeError();
+      return world.fetchRecent(category, signal, options);
+    });
+
+    const result = await adapter.listForDate(D4);
+
+    expect(result).toMatchObject({ kind: "error", failureKind: kind });
+    if (result.kind === "error") expect(result.reason).toContain("cs.LG");
+  });
+
+  it("lets a cancellation on a later page through", async () => {
+    const world = recentListingWorld(days);
+    const controller = new AbortController();
+    const { adapter } = adapterOver(async (category, signal, options) => {
+      if (options?.skip) controller.abort(new Error("stop"));
+      return world.fetchRecent(category, signal, options);
+    });
+
+    await expect(adapter.listForDate(D4, { signal: controller.signal })).rejects.toThrow();
+  });
+
+  it("reads a later page through the real fetcher, at the right URL and under the shared spacing", async () => {
+    const world = recentListingWorld(days);
+    let monotonic = 0;
+    const waits: number[] = [];
+    const coordinator = new ArxivRequestCoordinator({
+      monotonicNow: () => monotonic,
+      wallNow: () => 0,
+      sleep: async (ms) => { waits.push(ms); monotonic += ms; },
+    });
+    const urls: string[] = [];
+    const http: HttpClient = {
+      request: vi.fn(async (req) => {
+        urls.push(req.url);
+        const query = new URL(req.url).searchParams;
+        return { status: 200, headers: {}, bodyText: world.page(Number(query.get("skip")), Number(query.get("show"))) };
+      }),
+    };
+    const fetcher = new ArxivFetcher({
+      categories: ["cs.LG"], markupParser, http, logger: new Logger("error"),
+      requestDelayMs: 0, requestCoordinator: coordinator,
+    });
+    fetcher.fetchMetadataByIds = vi.fn(async () => new Map());
+    const adapter = new ArxivSourceAdapter({
+      fetcher,
+      paperFetcher: { fetch: vi.fn(), fetchListingAbstract: vi.fn(async () => ({ abstract: "listed", fromNetwork: false })) } as any,
+      markupParser,
+      logger: new Logger("error"),
+      defaultCategories: ["cs.LG"],
+    });
+
+    const result = await adapter.listForDate(D4);
+
+    expect(result.kind).toBe("ok");
+    if (result.kind === "ok") expect(result.papers.map((paper) => paper.externalId)).toEqual(days[3]!.ids);
+    expect(urls).toEqual([
+      "https://arxiv.org/list/cs.LG/recent?skip=0&show=2000",
+      "https://arxiv.org/list/cs.LG/recent?skip=3300&show=300",
+    ]);
+    expect(waits).toEqual([3000]);
+  });
+
+  it("starts the host's cooldown when a later page is throttled, so no further page is asked for", async () => {
+    const world = recentListingWorld(days);
+    let monotonic = 0;
+    const coordinator = new ArxivRequestCoordinator({
+      monotonicNow: () => monotonic,
+      wallNow: () => 0,
+      sleep: async (ms) => { monotonic += ms; },
+    });
+    const urls: string[] = [];
+    const http: HttpClient = {
+      request: vi.fn(async (req) => {
+        urls.push(req.url);
+        const query = new URL(req.url).searchParams;
+        if (query.get("skip") !== "0") return { status: 429, headers: { "Retry-After": "7200" }, bodyText: "slow down" };
+        return { status: 200, headers: {}, bodyText: world.page(0, 2000) };
+      }),
+    };
+    const fetcher = new ArxivFetcher({
+      categories: ["cs.LG"], markupParser, http, logger: new Logger("error"),
+      requestDelayMs: 0, requestCoordinator: coordinator,
+    });
+    const adapter = new ArxivSourceAdapter({
+      fetcher,
+      paperFetcher: { fetch: vi.fn() } as any,
+      markupParser,
+      logger: new Logger("error"),
+      defaultCategories: ["cs.LG"],
+    });
+
+    const result = await adapter.listForDate(D4);
+    expect(result).toMatchObject({ kind: "error", failureKind: "failed_transient" });
+    // A second attempt inside the cooldown does not reach arxiv.org at all.
+    const again = await adapter.listForDate(D4);
+    expect(again).toMatchObject({ kind: "error", failureKind: "failed_transient" });
+    expect(urls.filter((url) => url.includes("skip=3300"))).toHaveLength(1);
+  });
+
+  it("handles each category on its own", async () => {
+    const small = recentListingWorld([{ date: D4, ids: listingIds("2606", 50000, 20) }], "astro-ph");
+    const large = recentListingWorld(days);
+    const { adapter } = adapterOver(
+      async (category, signal, options) => (category === "astro-ph" ? small : large).fetchRecent(category, signal, options),
+      ["astro-ph", "cs.LG"],
+    );
+
+    const result = await adapter.listForDate(D4);
+
+    expect(result.kind).toBe("ok");
+    if (result.kind === "ok") {
+      expect(result.channels).toEqual(["astro-ph", "cs.LG"]);
+      expect(result.papers).toHaveLength(320);
+    }
+    expect(small.requests).toEqual([{ skip: 0, show: 2000 }]);
+    expect(large.requests).toEqual([{ skip: 0, show: 2000 }, { skip: 3300, show: 300 }]);
   });
 });

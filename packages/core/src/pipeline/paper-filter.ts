@@ -1,4 +1,4 @@
-import type { LlmClient } from "../llm/client";
+import { isLlmContentBlockedError, type LlmClient } from "../llm/client";
 import type { Logger } from "../services/logger";
 import {
   buildCheckpointGenerationIdentity,
@@ -267,7 +267,7 @@ async function classifyBatch(
   batchCount: number,
   deps: PaperFilterDeps,
 ): Promise<BatchClassification> {
-  const { llm, logger, arxivSettings } = deps;
+  const { logger, arxivSettings } = deps;
   const label = batchCount > 1 ? ` batch=${index + 1}/${batchCount}` : "";
   let prepared: PreparedDailyFilterCheckpoint | undefined;
   try {
@@ -316,21 +316,21 @@ async function classifyBatch(
     `paper-filter: sending ${batch.length} papers to LLM for classification${label}`,
   );
 
-  let raw: string;
-  try {
-    raw = await llm.call(request.messages, {
-      ...request.options,
-      signal: deps.signal,
-      onMetrics: deps.onMetrics,
-    });
-  } catch (e) {
-    if (isCancellationError(e)) throw e;
-    logger.error("paper-filter: LLM call failed", e);
-    throw e;
+  const refused: RefusedPapers = { papers: [] };
+  const records = await classifyRefusingProvider(batch, request, deps, refused);
+  if (refused.papers.length === batch.length) {
+    // Nothing was classified: the refusal is not about individual papers, and
+    // an empty answer would pass for a day without matches.
+    logger.error("paper-filter: LLM call failed", refused.first);
+    throw refused.first;
   }
-  throwIfCancelled(deps.signal);
-
-  const records = decodePaperFilterResponse(raw, request);
+  if (refused.papers.length > 0) {
+    logger.warn(
+      `paper-filter: the model provider refused ${refused.papers.length} paper(s), set aside unclassified: ${
+        refused.papers.map(({ id }) => id).join(", ")
+      }${label}`,
+    );
+  }
   try {
     await deps.checkpointStore?.save(
       deps.reportDate,
@@ -353,6 +353,70 @@ async function classifyBatch(
     );
   }
   return { request, prepared, records };
+}
+
+/** Single papers the provider's content-safety filter refused while a batch was being narrowed down. */
+interface RefusedPapers {
+  papers: PaperMeta[];
+  /** The refusal of the whole batch; rethrown when no usable answer comes out of the search. */
+  first?: Error;
+}
+
+/**
+ * Most single papers one batch may have refused. More than that means the
+ * refusal is not about those papers (a flagged topic text, say), so the search
+ * stops and the original error stands.
+ */
+const FILTER_MAX_REFUSED_PAPERS = 8;
+
+/**
+ * The model's validated records for `papers`. When the provider's content-safety
+ * filter refuses the request, the papers are halved until the refused ones stand
+ * alone; those go into `refused` and are left out of the result like papers the
+ * model left out, and the rest are classified as usual.
+ */
+async function classifyRefusingProvider(
+  papers: PaperMeta[],
+  request: PaperFilterRequest,
+  deps: PaperFilterDeps,
+  refused: RefusedPapers,
+): Promise<FilterRecord[]> {
+  let raw: string;
+  try {
+    raw = await deps.llm.call(request.messages, {
+      ...request.options,
+      signal: deps.signal,
+      onMetrics: deps.onMetrics,
+    });
+  } catch (e) {
+    if (isCancellationError(e)) throw e;
+    if (!isLlmContentBlockedError(e)) {
+      deps.logger.error("paper-filter: LLM call failed", e);
+      throw e;
+    }
+    refused.first ??= e;
+    if (papers.length === 1) {
+      refused.papers.push(papers[0]!);
+      if (refused.papers.length > FILTER_MAX_REFUSED_PAPERS) {
+        deps.logger.error("paper-filter: LLM call failed", refused.first);
+        throw refused.first;
+      }
+      return [];
+    }
+    deps.logger.warn(
+      `paper-filter: the model provider refused a request of ${papers.length} papers; narrowing down the cause`,
+    );
+    const middle = Math.ceil(papers.length / 2);
+    const records: FilterRecord[] = [];
+    for (const half of [papers.slice(0, middle), papers.slice(middle)]) {
+      records.push(...await classifyRefusingProvider(
+        half, buildPaperFilterRequest(half, deps.arxivSettings), deps, refused,
+      ));
+    }
+    return records;
+  }
+  throwIfCancelled(deps.signal);
+  return decodePaperFilterResponse(raw, request);
 }
 
 function reportClassification(

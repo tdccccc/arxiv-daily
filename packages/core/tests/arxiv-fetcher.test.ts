@@ -103,6 +103,52 @@ describe("ArxivFetcher", () => {
     ]);
   });
 
+  it("asks for a later part of the listing by offset and size", async () => {
+    const requests: HttpRequest[] = [];
+    const http: HttpClient = {
+      request: vi.fn(async (req) => {
+        requests.push(req);
+        return { status: 200, headers: {}, bodyText: "<html>recent</html>" };
+      }),
+    };
+    const controller = new AbortController();
+
+    await makeFetcher(http).fetchRecent("cs.LG", controller.signal, { skip: 2800, show: 900 });
+
+    expect(requests.map((req) => req.url)).toEqual(["https://arxiv.org/list/cs.LG/recent?skip=2800&show=900"]);
+    expect(requests[0]!.signal).toBe(controller.signal);
+  });
+
+  it.each([
+    [{ skip: -1 }], [{ skip: 1.5 }], [{ skip: Number.NaN }], [{ show: 0 }], [{ show: 2001 }], [{ show: 1.5 }],
+  ])("refuses an offset or size arXiv cannot serve (%j)", async (options) => {
+    const http: HttpClient = { request: vi.fn() };
+
+    await expect(makeFetcher(http).fetchRecent("cs.LG", undefined, options)).rejects.toBeInstanceOf(RangeError);
+    expect(http.request).not.toHaveBeenCalled();
+  });
+
+  it("keeps every listing page under the shared request spacing", async () => {
+    let monotonic = 0;
+    const waits: number[] = [];
+    const coordinator = new ArxivRequestCoordinator({
+      monotonicNow: () => monotonic,
+      wallNow: () => 0,
+      sleep: async (ms) => { waits.push(ms); monotonic += ms; },
+    });
+    const http: HttpClient = { request: vi.fn(async () => ({ status: 200, headers: {}, bodyText: "ok" })) };
+    const fetcher = new ArxivFetcher({
+      categories: ["cs.LG"], markupParser, http, logger: new Logger("error"),
+      requestDelayMs: 0, requestCoordinator: coordinator,
+    });
+
+    await fetcher.fetchRecent("cs.LG");
+    await fetcher.fetchRecent("cs.LG", undefined, { skip: 2000 });
+    await fetcher.fetchRecent("cs.LG", undefined, { skip: 4000 });
+
+    expect(waits).toEqual([3000, 3000]);
+  });
+
   it("passes abort signals to recent and metadata HTTP requests", async () => {
     const requests: HttpRequest[] = [];
     const controller = new AbortController();

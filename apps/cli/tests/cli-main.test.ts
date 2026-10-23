@@ -8,7 +8,7 @@ import * as emailCommands from "../src/email-cmd";
 import { buildNodeHostAdapters } from "@arxiv-daily/node-runtime";
 import type { CliRuntimeConfig } from "../src/config";
 import { DEFAULT_CLI_SCHEDULE } from "../src/config";
-import { DEFAULT_SETTINGS, OperationRegistry } from "@arxiv-daily/core";
+import { DEFAULT_SETTINGS, OperationRegistry, type Topic } from "@arxiv-daily/core";
 
 interface CompanionCliContract {
   schemaVersion: number;
@@ -300,6 +300,26 @@ describe("CLI main", () => {
     expect(io.stderr.join("")).toContain(
       "run 2026-06-13: failed_transient (scheduler completion commit failed)",
     );
+  });
+
+  it.each([
+    ["a direction longer than the report can carry", (topic: Topic) => ({ ...topic, directions: [{ id: "d1", text: "x".repeat(1200), origin: "manual" as const }] }), 'Topic 1 "Topic" direction 1 is 1200 characters long; the limit is 1000, shorten it'],
+    ["a tag longer than the report can carry", (topic: Topic) => ({ ...topic, tag: "t".repeat(130) }), 'Topic 1 "Topic" tag is 130 characters long; the limit is 120, shorten the topic name'],
+    ["two topics with one name", (topic: Topic) => topic, 'Topics 1 and 2 are both named "Topic"; give each topic its own name'],
+  ])("refuses a saved config with %s before building any runtime", async (_name, change, reason) => {
+    const config = testConfig();
+    const first = change(config.settings.arxiv.topics[0]!);
+    config.settings.arxiv.topics = _name === "two topics with one name"
+      ? [first, { ...first, id: "t2", tag: "topic-2" }]
+      : [first];
+    const io = captureIo();
+    const buildRuntime = vi.fn(() => fakeRuntime());
+
+    const code = await runCli({ argv: ["run", "--today"], io: io.io, loadConfig: vi.fn(async () => config), buildRuntime });
+
+    expect(code).toBe(2);
+    expect(io.stderr.join("")).toContain(`Invalid config:\n${reason}`);
+    expect(buildRuntime).not.toHaveBeenCalled();
   });
 
   it("rejects run-pending", async () => {

@@ -1,4 +1,5 @@
 import { markupParser } from "../markup-parser";
+import { listingIds, recentListingWorld } from "../recent-listing-world";
 import { describe, expect, it, vi } from "vitest";
 import { RecentDatesCache } from "../../src/services/recent-dates";
 import { DEFAULT_SETTINGS } from "../../src/settings/defaults";
@@ -42,6 +43,26 @@ function settingsWithCategories(categories: string[]): PluginSettings {
 }
 
 describe("RecentDatesCache", () => {
+  it("knows the days the first page of a long listing stops before, from the day links", async () => {
+    const world = recentListingWorld([
+      { date: "2026-05-11", ids: listingIds("2605", 10000, 1500) },
+      { date: "2026-05-08", ids: listingIds("2605", 20000, 1500) },
+      { date: "2026-05-07", ids: listingIds("2605", 30000, 900) },
+    ]);
+    const cache = new RecentDatesCache({
+      getSettings: () => settingsWithCategories(["cs.LG"]),
+      buildFetcher: () => ({ fetchRecent: world.fetchRecent }) as any,
+      markupParser,
+      logger: { debug: vi.fn(), warn: vi.fn() },
+    });
+
+    await cache.refresh();
+
+    expect([...cache.snapshot().dates].sort()).toEqual(["2026-05-07", "2026-05-08", "2026-05-11"]);
+    expect(cache.hasDate("2026-05-07")).toBe(true);
+    expect(world.requests).toEqual([{ skip: 0, show: 2000 }]);
+  });
+
   it("treats a date as present when any configured category has it", async () => {
     const fetcher = {
       fetchRecent: vi.fn(async (category: string) =>

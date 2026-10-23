@@ -281,7 +281,10 @@ export class ManualFetchService {
           arxivCategory: category,
           arxivCategories: categories,
           abstract,
-          primaryTopic: category,
+          // The category only stands in for a paper that has no research topic
+          // yet; one the daily runs already filed keeps its topic.
+          primaryTopic:
+            existingIndexEntry?.primaryTopic || existingIndexEntry?.topics?.[0] || category,
           detail: true,
         }, path, "saved");
         logger.info(

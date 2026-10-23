@@ -2,6 +2,7 @@ import type { PaperSummary } from "../services/paper-index";
 import type { SummaryLanguage } from "../settings/types";
 import { noCategoryPapersText } from "../settings/summary-language";
 import type {
+  DailyPaperFallbackReasonCode,
   DailySummaryAssemblyPaper,
   StructuredPaperSummary,
 } from "./daily-summary-assembler";
@@ -270,18 +271,32 @@ export function renderEmptyTopics(
   ];
 }
 
+/** Why a summary is missing, when the reader can act on it; the other reasons keep the plain notice. */
+const FALLBACK_REASON_CLAUSES: Partial<Record<DailyPaperFallbackReasonCode, Record<SummaryLanguage, string>>> = {
+  "content-blocked": {
+    zh: "模型服务商拒绝为这篇论文生成摘要",
+    en: "The model provider refused to summarize this paper",
+  },
+  "content-unavailable": {
+    zh: "无法获取这篇论文的内容",
+    en: "The paper's content could not be retrieved",
+  },
+};
+
 export function renderFallbackBlock(
   paper: DailySummaryAssemblyPaper,
   originalAbstract: string,
   language: SummaryLanguage,
   leadingMarkers: string[] = [],
   reportDate?: string,
+  reasonCode?: DailyPaperFallbackReasonCode,
 ): string {
   const lines = renderPaperHeader(paper, language, leadingMarkers, reportDate);
   const arxivUrl = trustedArxivUrl(paper.id);
+  const clause = reasonCode ? FALLBACK_REASON_CLAUSES[reasonCode]?.[language] : undefined;
   const warning = language === "en"
-    ? `> **Summary unavailable.** Read the [original paper on arXiv](${arxivUrl}) directly.`
-    : `> **自动摘要不可用。** 请直接阅读 [arXiv 原文](${arxivUrl})。`;
+    ? `> **Summary unavailable.** ${clause ? `${clause}; read` : "Read"} the [original paper on arXiv](${arxivUrl}) directly.`
+    : `> **自动摘要不可用。** ${clause ? `${clause}，` : ""}请直接阅读 [arXiv 原文](${arxivUrl})。`;
   const abstractLabel = language === "en" ? "Original abstract" : "原始摘要";
   const unavailable = language === "en" ? "Unavailable." : "不可用。";
   const abstract = normalizeMarkdownLine(originalAbstract);

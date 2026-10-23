@@ -3,6 +3,7 @@ import {
   assembleDailySummary,
   assembleEmergencyDailySummary,
   DailySummaryAssemblyRuntimeError,
+  type DailyPaperFallbackReasonCode,
   type DailyPaperSlot,
   type DailySummaryAssemblyInput,
   type DailySummaryAssemblyPaper,
@@ -68,7 +69,7 @@ function structuredSlot(paperValue: DailySummaryAssemblyPaper): DailyPaperSlot {
 function fallbackSlot(
   paperValue: DailySummaryAssemblyPaper,
   originalAbstract: string,
-  reasonCode: "validation-exhausted" | "transport-exhausted" = "validation-exhausted",
+  reasonCode: DailyPaperFallbackReasonCode = "validation-exhausted",
   attempts = 3,
 ): DailyPaperSlot {
   return {
@@ -284,6 +285,61 @@ describe("assembleDailySummary", () => {
       "2607.00002",
       "2607.00003",
     ]);
+  });
+
+  it("says in both languages that the provider refused a content-blocked paper", () => {
+    for (const [summaryLanguage, expected, generic] of [
+      ["zh", "> **自动摘要不可用。** 模型服务商拒绝为这篇论文生成摘要，请直接阅读 [arXiv 原文](https://arxiv.org/abs/2607.00001)。", "> **自动摘要不可用。** 请直接阅读"],
+      ["en", "> **Summary unavailable.** The model provider refused to summarize this paper; read the [original paper on arXiv](https://arxiv.org/abs/2607.00001) directly.", "> **Summary unavailable.** Read the"],
+    ] as const) {
+      const assemblyInput = input({ summaryLanguage });
+      assemblyInput.slots[0] = fallbackSlot(
+        assemblyInput.slots[0]!.paper, "Refused abstract.", "content-blocked", 1,
+      );
+      const markdown = assembleDailySummary(assemblyInput);
+
+      expect(markdown).toContain(expected);
+      expect(markdown).not.toContain(generic);
+      // Same parser-visible shape as every other fallback block.
+      expect(markdown).toContain("<!-- arxiv-daily-fallback:2607.00001 -->");
+      expect(extractFallbackPaperIds(markdown)).toEqual(["2607.00001"]);
+    }
+  });
+
+  it("says in both languages that a paper's content could not be retrieved", () => {
+    for (const [summaryLanguage, expected] of [
+      ["zh", "> **自动摘要不可用。** 无法获取这篇论文的内容，请直接阅读 [arXiv 原文](https://arxiv.org/abs/2607.00001)。"],
+      ["en", "> **Summary unavailable.** The paper's content could not be retrieved; read the [original paper on arXiv](https://arxiv.org/abs/2607.00001) directly."],
+    ] as const) {
+      const assemblyInput = input({ summaryLanguage });
+      assemblyInput.slots[0] = fallbackSlot(
+        assemblyInput.slots[0]!.paper, "", "content-unavailable", 1,
+      );
+      const markdown = assembleDailySummary(assemblyInput);
+
+      expect(markdown).toContain(expected);
+      expect(markdown).toContain("<!-- arxiv-daily-fallback:2607.00001 -->");
+      expect(markdown).toContain("<!-- arxiv-daily-fallback-abstract-absent:2607.00001 -->");
+      expect(extractFallbackPaperIds(markdown)).toEqual(["2607.00001"]);
+    }
+  });
+
+  it("keeps the generic unavailable text for the other fallback reasons", () => {
+    for (const reasonCode of ["validation-exhausted", "transport-exhausted"] as const) {
+      const assemblyInput = input();
+      assemblyInput.slots[0] = fallbackSlot(assemblyInput.slots[0]!.paper, "Abstract.", reasonCode, 1);
+      const markdown = assembleDailySummary(assemblyInput);
+      expect(markdown).toContain("> **自动摘要不可用。** 请直接阅读 [arXiv 原文]");
+      expect(markdown).not.toContain("拒绝为这篇论文");
+    }
+  });
+
+  it("rejects an unknown fallback reason at preflight", () => {
+    const assemblyInput = input();
+    assemblyInput.slots[0] = fallbackSlot(
+      assemblyInput.slots[0]!.paper, "Abstract.", "provider-said-no" as DailyPaperFallbackReasonCode, 1,
+    );
+    expect(() => assembleDailySummary(assemblyInput)).toThrow("invalid fallback reasonCode");
   });
 
   it("sanitizes hostile abstracts and renders localized unavailable text", () => {

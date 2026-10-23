@@ -583,7 +583,10 @@ export function decodeDailyPaperResult(
       return null;
     }
     if (
-      (value.reasonCode !== "validation-exhausted" && value.reasonCode !== "transport-exhausted") ||
+      (value.reasonCode !== "validation-exhausted" &&
+        value.reasonCode !== "transport-exhausted" &&
+        value.reasonCode !== "content-blocked" &&
+        value.reasonCode !== "content-unavailable") ||
       typeof value.attempts !== "number" ||
       !Number.isSafeInteger(value.attempts) ||
       value.attempts < 1 ||
