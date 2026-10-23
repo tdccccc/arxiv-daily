@@ -100,6 +100,7 @@ export async function startWorkbench(options: WorkbenchOptions) {
     autoSchedule.update(next.workbenchSchedule);
   }
   function beginRun(label: string, date: string | null, execute: (io: CliIo, signal: AbortSignal) => Promise<number>) {
+    if (lifetime.signal.aborted) throw new WorkbenchError(503, "工作台正在关闭，请重新打开后再试。");
     if (saving || run?.status === "running") throw new WorkbenchError(409, "已有操作正在运行，请等待完成。");
     controller = new AbortController();
     const signal = controller.signal;

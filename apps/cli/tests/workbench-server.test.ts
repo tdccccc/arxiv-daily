@@ -338,3 +338,24 @@ it("still ends a run waiting for the announcement when the announced days cannot
   await vi.waitFor(async () => expect((await (await get("api/runs/current")).json()).run).toMatchObject({ status: "pending", outcome: "awaiting_announcement" }));
   expect((await (await get("api/runs/current")).json()).run.latestAnnounced).toBeUndefined();
 });
+
+it("does not start a first report after shutdown interrupts its announcement lookup", async () => {
+  let release!: () => void;
+  const latestAnnouncedDay = vi.fn((_day: string, signal: AbortSignal) => new Promise<string | null>(resolve => {
+    release = () => resolve("2026-10-09");
+    signal.addEventListener("abort", release, { once: true });
+  }));
+  const run = vi.fn(async () => 0);
+  const app = await setup(run, { ...NOW, latestAnnouncedDay });
+  // This test closes explicitly; keep the fixture directory cleanup registered.
+  cleanup.pop();
+  const pending = postRun(app.get, { kind: "daily", latest: true });
+  await vi.waitFor(() => expect(latestAnnouncedDay).toHaveBeenCalledOnce());
+  const closing = app.close();
+  try {
+    const response = await pending;
+    await response.json();
+    expect(response.status).toBe(503);
+    expect(run).not.toHaveBeenCalled();
+  } finally { release(); await closing; }
+});
