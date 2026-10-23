@@ -2,8 +2,8 @@
 
 goal_ref: ../goal.md
 created: 2026-10-24T00:42:23+08:00
-updated: 2026-10-24T01:55:43+08:00
-revision: 3
+updated: 2026-10-24T02:13:50+08:00
+revision: 4
 
 ## Outcome
 
@@ -75,7 +75,7 @@ worktree a / b分别处理工具9条和核心产品6条；协调者在integratio
 - change: 54条索引全部有验收证据并归档；第四批通过检查、CI和审查后合并。
 - first signal: n/a
 - checks: gates.sh b4-final relay vscode acceptance及DSH；全部索引链接，CI/threads/main/mergeable；清理已合并worktree。
-- [ ] accepted on observed evidence
+- [x] accepted on observed evidence
 
 ## Phase verification
 
@@ -100,3 +100,5 @@ worktree a / b分别处理工具9条和核心产品6条；协调者在integratio
 - 使用真实产品运行时加载器、公开缓存权重和人工PDF夹具，在隔离网络Node22.22.2/20.19.0上分别通过384维、有限数、归一化和PDF正文验证；详见b4-runtime-smoke/result-*.json。
 - KaTeX0.17→0.19真实工作台同文档视觉对照通过，Node22/20均正确呈现3公式/MathML及字体、代码、货币文字，无请求/页面错误；截图保留在/tmp/arxiv-fix-2026-10-21/b4-math-{before,after,node20}/。
 - 原54条writeup已全部归档、索引及链接校验通过；额外4项继续未修复。PR及CI/合并尚待完成。
+
+- PR #109 最终6eb6666的16项CI全部success，review threads为空；main仍为e8b4838且已包含，mergeStateStatus=CLEAN。确认合并f5c5852；第四批远端分支及全部12个本地修复分支已删除。主checkout和另一会话worktree保持原状态。
