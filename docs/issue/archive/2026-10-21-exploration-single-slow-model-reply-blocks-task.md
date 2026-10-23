@@ -1,7 +1,7 @@
 # 探索里模型只要有一次回复超过 45 秒，该任务就被判为阻塞，整次发版运行退出码变成 2，且超时时间无法从命令行调整
 
 > 发现日期：2026-10-21 · 来源：main `d999037` 深度代码审查 · 编号 SCR-08
-> 范围：`scripts/acceptance/exploration.mjs`（`runExplorationLoop`）、`scripts/acceptance/run.mjs`（命令行选项） · 严重程度：低 · 状态：未修复 · 置信度：代码推断
+> 范围：`scripts/acceptance/exploration.mjs`（`runExplorationLoop`）、`scripts/acceptance/run.mjs`（命令行选项） · 严重程度：低 · 状态：已修复（分支 `fix/2026-10-21-batch4`，提交 5a4797b） · 置信度：代码推断
 
 ## 问题
 
@@ -30,3 +30,9 @@
 
 - `scripts/tests/acceptance-runner.test.mjs`：`parseArgs` 接受并校验 `--model-call-timeout-ms`，并传给探索运行器。
 - `scripts/tests/acceptance-exploration.test.mjs`：模型第一次回复超过期限、第二次正常时，任务继续并最终可以通过；连续两次超时才阻塞；重试计入步数和 API 调用预算。
+
+## 修复情况
+
+可用 `--model-call-timeout-ms N` 为慢模型调整单次等待时间，默认45000毫秒、最多300000毫秒，帮助和探索说明已同步。一次回复超时后取消该请求，并在重新观察界面后最多重试一次；连续两次超时仍明确阻塞。重试消耗同一份任务及全局步数、API和时间预算，预算耗尽不会继续请求，用户取消和认证错误不重试。超时记录仍保留在逐步证据中。
+
+验证：3个新增恢复/参数用例先失败；修复后探索及runner完整108项通过，覆盖第一次超时后通过、连续超时、真实本机HTTP请求取消、各预算耗尽、父级取消及认证错误；全部模型均为stub或本机HTTP夹具。

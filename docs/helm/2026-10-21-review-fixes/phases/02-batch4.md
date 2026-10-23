@@ -2,8 +2,8 @@
 
 goal_ref: ../goal.md
 created: 2026-10-24T00:42:23+08:00
-updated: 2026-10-24T00:42:23+08:00
-revision: 1
+updated: 2026-10-24T01:08:30+08:00
+revision: 2
 
 ## Outcome
 
@@ -17,7 +17,7 @@ revision: 1
 
 ## Approach
 
-worktree a / b分别处理工具11条和核心产品6条；协调者在integration处理OBS-06并验收集成。每条独立提交、归档并记录进度；不得再派代理。
+worktree a / b分别处理工具9条和核心产品6条；协调者在integration处理OBS-06、SCR-07、SCR-08并验收集成。每条独立提交、归档并记录进度；不得再派代理。
 
 ## Chunks
 
@@ -85,3 +85,10 @@ worktree a / b分别处理工具11条和核心产品6条；协调者在integrati
 ## Abort / reshape triggers
 
 - 复用或清理破坏旧索引、设置事务失效、夹具可访问真实数据/服务时，停止对应集成，先补失败证据并修正。
+
+## Observed evidence
+
+- OBS-06 c607bb0：16个真实DOM回归先失败，完整设置278项、插件类型和lint通过；归档accc7d5。
+- SCR-07 d2fa7fd：4个退役脚本移除，历史说明不再提供可运行入口；引用和diff检查通过，无需运行时测试；归档c06f0c9。
+- SCR-08 5a4797b：3个新增回归先失败，探索/runner完整108项通过。
+- 协调复核PIPE-09发现裸TeX环境仍可生成img，已把实际渲染器复现交回产品代理修正，尚未验收。
