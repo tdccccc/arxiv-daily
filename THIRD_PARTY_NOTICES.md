@@ -249,7 +249,7 @@ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 The Node CLI bundle also includes the following library, which lets the CLI change a setting in `config.toml` without losing the comments and layout around it. Its notice is embedded in the CLI and available from the local workbench.
 
-### @decimalturn/toml-patch 3.3.1
+### @decimalturn/toml-patch 3.3.0
 
 Source: https://github.com/DecimalTurn/toml-patch
 
