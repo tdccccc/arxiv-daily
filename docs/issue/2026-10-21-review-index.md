@@ -3,7 +3,7 @@
 > 审查对象：main `d999037`（2026-10-21）· 不含 VS Code 扩展与 Claude Code mod
 > 方式：7 个分区代码审查 + 4 轮模型驱动的模拟使用探索（gpt-6.1-sol，reasoning effort high）与逐条复核
 > 更正：OBS-08 修复时对照 Obsidian 源码发现实际后果是设置被静默覆盖，严重程度由低调为中，以下计数已按新分级。
-> 结果：54 条（高 2、中 34、低 18），其中产品问题 43 条、测试/发版工具问题 11 条；49 条已复现，5 条为代码推断；已修复 36 条、部分修复 0 条、未修复 18 条
+> 结果：54 条（高 2、中 34、低 18），其中产品问题 43 条、测试/发版工具问题 11 条；49 条已复现，5 条为代码推断；已修复 54 条、部分修复 0 条、未修复 0 条
 
 每条问题一个文件，结构与 `archive/` 相同：问题 / 原因 / 可能的解决方案 / 修复后应补的测试。修复后按惯例移入 `archive/`，并在文件末尾补"修复情况"。
 
@@ -23,8 +23,8 @@
 | PIPE-01 | 已修复 | 已复现 | 模型回复被拦截、被服务端打断或中途断流时，残缺文本被当成完整回答，残缺笔记永久落盘 | [llm-interrupted-stream-accepted-as-complete](archive/2026-10-21-llm-interrupted-stream-accepted-as-complete.md) |
 | PIPE-02 | 已修复 | 已复现 | arXiv 列表只取第一页（最多 2000 条），大分类较早的日期被判永久失败或静默缺论文 | [recent-listing-capped-at-2000-entries](archive/2026-10-21-recent-listing-capped-at-2000-entries.md) |
 | PIPE-03 | 已修复 | 已复现 | 正文和摘要页都取不到时，用"[获取失败]"占位符生成摘要，并当成正常结果写进日报 | [content-fetch-failure-summarized-from-placeholder](archive/2026-10-21-content-fetch-failure-summarized-from-placeholder.md) |
-| PIPE-04 | 未修复 | 已复现 | LaTeX 源码回退删掉公式命令（`\frac{1}{3}` 变成 `13`、`\pm`/`\leq` 消失） | [source-fallback-strips-math-commands](2026-10-21-source-fallback-strips-math-commands.md) |
-| PIPE-05 | 未修复 | 已复现 | 源码清洗正则是二次复杂度，构造的论文源码可让插件或 CLI 卡死数分钟 | [source-extractor-quadratic-regex-freeze](2026-10-21-source-extractor-quadratic-regex-freeze.md) |
+| PIPE-04 | 已修复 | 已复现 | LaTeX 源码回退删掉公式命令（`\frac{1}{3}` 变成 `13`、`\pm`/`\leq` 消失） | [source-fallback-strips-math-commands](archive/2026-10-21-source-fallback-strips-math-commands.md) |
+| PIPE-05 | 已修复 | 已复现 | 源码清洗正则是二次复杂度，构造的论文源码可让插件或 CLI 卡死数分钟 | [source-extractor-quadratic-regex-freeze](archive/2026-10-21-source-extractor-quadratic-regex-freeze.md) |
 | PIPE-06 | 已修复 | 已复现 | 设置页允许保存日报预检会拒绝的值（重名主题、超长方向），日报整天反复失败直到永久失败 | [settings-accept-values-the-daily-preflight-rejects](archive/2026-10-21-settings-accept-values-the-daily-preflight-rejects.md) |
 | PIPE-07 | 已修复 | 已复现 | 服务商内容安全拦截只要命中一篇论文，当天日报就永久失败 | [provider-content-block-fails-whole-day-permanently](archive/2026-10-21-provider-content-block-fails-whole-day-permanently.md) |
 | EXP-01 | 已修复 | 已复现 | 给已入库论文生成详细总结后，研究主题被换成 arXiv 分类，主题筛选与列表对不上 | [manual-detail-summary-overwrites-paper-topic](archive/2026-10-21-manual-detail-summary-overwrites-paper-topic.md) |
@@ -52,36 +52,36 @@
 
 | 编号 | 状态 | 置信度 | 问题 | 文件 |
 |---|---|---|---|---|
-| SCR-01 | 未修复 | 已复现 | 文档里的发版探索命令不构建 Obsidian 插件，会悄悄探索一份过期插件 | [exploration-obsidian-host-skips-plugin-build](2026-10-21-exploration-obsidian-host-skips-plugin-build.md) |
-| SCR-02 | 未修复 | 已复现 | Obsidian 探索任务 `library-edit-candidate` 永远阻塞（插件返回格式已变，探索驱动没跟上） | [exploration-edit-candidate-task-reads-stale-plugin-api](2026-10-21-exploration-edit-candidate-task-reads-stale-plugin-api.md) |
-| SCR-05 | 未修复 | 代码推断 | Windows 上的验收/探索夹具不隔离 `%APPDATA%`，会读写用户真实的 CLI 配置 | [acceptance-fixture-isolation-ignores-windows-appdata](2026-10-21-acceptance-fixture-isolation-ignores-windows-appdata.md) |
-| SCR-06 | 未修复 | 代码推断 | 随 CLI 安装到用户机器的 PDF/向量运行时锁文件，没有依赖更新提醒，也不在漏洞审计里 | [shipped-runtime-lockfiles-not-audited-or-updated](2026-10-21-shipped-runtime-lockfiles-not-audited-or-updated.md) |
-| SCR-09 | 未修复 | 已复现 | Obsidian 探索里点一次"Download PDF"，当前任务和整次运行都被判失败 | [exploration-download-pdf-click-fails-whole-run](2026-10-21-exploration-download-pdf-click-fails-whole-run.md) |
-| EXP-04 | 未修复 | 已复现 | Obsidian 探索看不到插件之外的变化（打开笔记、PDF），"Open PDF"也没被列为受限控件 | [exploration-obsidian-observer-blind-outside-plugin-surface](2026-10-21-exploration-obsidian-observer-blind-outside-plugin-surface.md) |
-| EXP-05 | 未修复 | 已复现 | "只用键盘"的探索角色看不到焦点，在 Obsidian 里被带出插件后无路可回 | [exploration-keyboard-only-persona-cannot-see-focus](2026-10-21-exploration-keyboard-only-persona-cannot-see-focus.md) |
+| SCR-01 | 已修复 | 已复现 | 文档里的发版探索命令不构建 Obsidian 插件，会悄悄探索一份过期插件 | [exploration-obsidian-host-skips-plugin-build](archive/2026-10-21-exploration-obsidian-host-skips-plugin-build.md) |
+| SCR-02 | 已修复 | 已复现 | Obsidian 探索任务 `library-edit-candidate` 永远阻塞（插件返回格式已变，探索驱动没跟上） | [exploration-edit-candidate-task-reads-stale-plugin-api](archive/2026-10-21-exploration-edit-candidate-task-reads-stale-plugin-api.md) |
+| SCR-05 | 已修复 | 代码推断 | Windows 上的验收/探索夹具不隔离 `%APPDATA%`，会读写用户真实的 CLI 配置 | [acceptance-fixture-isolation-ignores-windows-appdata](archive/2026-10-21-acceptance-fixture-isolation-ignores-windows-appdata.md) |
+| SCR-06 | 已修复 | 代码推断 | 随 CLI 安装到用户机器的 PDF/向量运行时锁文件，没有依赖更新提醒，也不在漏洞审计里 | [shipped-runtime-lockfiles-not-audited-or-updated](archive/2026-10-21-shipped-runtime-lockfiles-not-audited-or-updated.md) |
+| SCR-09 | 已修复 | 已复现 | Obsidian 探索里点一次"Download PDF"，当前任务和整次运行都被判失败 | [exploration-download-pdf-click-fails-whole-run](archive/2026-10-21-exploration-download-pdf-click-fails-whole-run.md) |
+| EXP-04 | 已修复 | 已复现 | Obsidian 探索看不到插件之外的变化（打开笔记、PDF），"Open PDF"也没被列为受限控件 | [exploration-obsidian-observer-blind-outside-plugin-surface](archive/2026-10-21-exploration-obsidian-observer-blind-outside-plugin-surface.md) |
+| EXP-05 | 已修复 | 已复现 | "只用键盘"的探索角色看不到焦点，在 Obsidian 里被带出插件后无路可回 | [exploration-keyboard-only-persona-cannot-see-focus](archive/2026-10-21-exploration-keyboard-only-persona-cannot-see-focus.md) |
 
 ## 低
 
 | 编号 | 状态 | 置信度 | 问题 | 文件 |
 |---|---|---|---|---|
 | PIPE-08 | 已修复 | 已复现 | 日报写出后索引步骤失败，重试走修复分支，当天邮件永不发送 | [repair-path-never-delivers-email](archive/2026-10-21-repair-path-never-delivers-email.md) |
-| PIPE-09 | 未修复 | 已复现 | 标题和摘要里的 Markdown 远程图片、嵌入原样写进日报，打开日报就向外部网址发请求 | [report-keeps-remote-images-and-embeds-from-titles](2026-10-21-report-keeps-remote-images-and-embeds-from-titles.md) |
-| STATE-03 | 未修复 | 已复现 | 设置的日报文件夹大小写与磁盘不一致时，面板同步删除未标记论文的索引条目 | [dashboard-sync-wipes-index-when-folder-case-differs](2026-10-21-dashboard-sync-wipes-index-when-folder-case-differs.md) |
-| LIB-06 | 未修复 | 已复现 | 索引中途取消、崩溃或最后一步失败，已嵌入的论文全部作废，下次从头来 | [index-cancel-discards-all-progress](2026-10-21-index-cancel-discards-all-progress.md) |
-| LIB-07 | 未修复 | 已复现 | 每次重建索引都在 Vault 里留下一整份新搜索索引，旧的从不清理 | [old-search-index-generations-never-deleted](2026-10-21-old-search-index-generations-never-deleted.md) |
+| PIPE-09 | 已修复 | 已复现 | 标题和摘要里的 Markdown 远程图片、嵌入原样写进日报，打开日报就向外部网址发请求 | [report-keeps-remote-images-and-embeds-from-titles](archive/2026-10-21-report-keeps-remote-images-and-embeds-from-titles.md) |
+| STATE-03 | 已修复 | 已复现 | 设置的日报文件夹大小写与磁盘不一致时，面板同步删除未标记论文的索引条目 | [dashboard-sync-wipes-index-when-folder-case-differs](archive/2026-10-21-dashboard-sync-wipes-index-when-folder-case-differs.md) |
+| LIB-06 | 已修复 | 已复现 | 索引中途取消、崩溃或最后一步失败，已嵌入的论文全部作废，下次从头来 | [index-cancel-discards-all-progress](archive/2026-10-21-index-cancel-discards-all-progress.md) |
+| LIB-07 | 已修复 | 已复现 | 每次重建索引都在 Vault 里留下一整份新搜索索引，旧的从不清理 | [old-search-index-generations-never-deleted](archive/2026-10-21-old-search-index-generations-never-deleted.md) |
 | CLI-04 | 已修复 | 已复现 | 工作台自动保存、`library connect`、接受方向都重写整个 `config.toml`，注释全部丢失 | [config-writes-erase-toml-comments](archive/2026-10-21-config-writes-erase-toml-comments.md) |
 | OBS-03 | 已修复 | 已复现 | 状态栏的 disabled/idle 文字不跟调度器开关走 | [status-bar-disabled-idle-text-wrong](archive/2026-10-21-status-bar-disabled-idle-text-wrong.md) |
-| OBS-06 | 未修复 | 已复现 | 改"Embedding dimension"绕过设置事务：不重检索引、失败不回滚、非法值静默丢弃 | [embedding-dimension-edit-bypasses-settings-transaction](2026-10-21-embedding-dimension-edit-bypasses-settings-transaction.md) |
+| OBS-06 | 已修复 | 已复现 | 改"Embedding dimension"绕过设置事务：不重检索引、失败不回滚、非法值静默丢弃 | [embedding-dimension-edit-bypasses-settings-transaction](archive/2026-10-21-embedding-dimension-edit-bypasses-settings-transaction.md) |
 | OBS-07 | 已修复 | 代码推断 | 插件 README 和新手教程描述已不存在的功能 | [plugin-readme-describes-removed-features](archive/2026-10-21-plugin-readme-describes-removed-features.md) |
 | MAIL-05 | 已修复 | 已复现 | 各种自动邮件失败原因都只显示同一句 `provider_definitive_rejection` | [email-failures-collapse-into-one-opaque-reason](archive/2026-10-21-email-failures-collapse-into-one-opaque-reason.md) |
 | MAIL-06 | 已修复 | 已复现 | 中继 README 的 `/v1/deliver` 协议说明和 secret 清单已过时 | [relay-readme-describes-old-protocol](archive/2026-10-21-relay-readme-describes-old-protocol.md) |
 | MAIL-07 | 已修复 | 已复现 | 邮件摘要里常见 LaTeX 记号被拼成乱码（`M_\odot` 变成 `M_odot`） | [email-latex-simplifier-garbles-common-symbols](archive/2026-10-21-email-latex-simplifier-garbles-common-symbols.md) |
 | MAIL-08 | 已修复 | 已复现 | 无相关论文那天的邮件页脚指向不存在的日报，英文写成"1 papers" | [email-zero-day-footer-points-to-missing-report](archive/2026-10-21-email-zero-day-footer-points-to-missing-report.md) |
 | DSH-01 | 已修复 | 已复现 | DSH 被强制结束后，它启动的工作台进程（含自动调度）继续在后台运行 | [dsh-workbench-outlives-crashed-host](archive/2026-10-21-dsh-workbench-outlives-crashed-host.md) |
-| SCR-03 | 未修复 | 已复现 | 分层边界检查对相对路径的跨层导入一律放行 | [boundary-check-allows-relative-cross-layer-imports](2026-10-21-boundary-check-allows-relative-cross-layer-imports.md) |
-| SCR-04 | 未修复 | 已复现 | 探索的"禁止调度开关"拦不住首次使用清单里的"Turn on daily reports"按钮 | [exploration-setup-guide-turn-on-daily-reports-not-fenced](2026-10-21-exploration-setup-guide-turn-on-daily-reports-not-fenced.md) |
-| SCR-07 | 未修复 | 已复现 | `scripts/personalization` 的四个诊断脚本已无法按注释运行 | [personalization-scripts-cannot-run-as-documented](2026-10-21-personalization-scripts-cannot-run-as-documented.md) |
-| SCR-08 | 未修复 | 代码推断 | 探索中模型单次回复超过 45 秒即判任务阻塞，超时无法从命令行调整 | [exploration-single-slow-model-reply-blocks-task](2026-10-21-exploration-single-slow-model-reply-blocks-task.md) |
+| SCR-03 | 已修复 | 已复现 | 分层边界检查对相对路径的跨层导入一律放行 | [boundary-check-allows-relative-cross-layer-imports](archive/2026-10-21-boundary-check-allows-relative-cross-layer-imports.md) |
+| SCR-04 | 已修复 | 已复现 | 探索的"禁止调度开关"拦不住首次使用清单里的"Turn on daily reports"按钮 | [exploration-setup-guide-turn-on-daily-reports-not-fenced](archive/2026-10-21-exploration-setup-guide-turn-on-daily-reports-not-fenced.md) |
+| SCR-07 | 已修复 | 已复现 | `scripts/personalization` 的四个诊断脚本已无法按注释运行 | [personalization-scripts-cannot-run-as-documented](archive/2026-10-21-personalization-scripts-cannot-run-as-documented.md) |
+| SCR-08 | 已修复 | 代码推断 | 探索中模型单次回复超过 45 秒即判任务阻塞，超时无法从命令行调整 | [exploration-single-slow-model-reply-blocks-task](archive/2026-10-21-exploration-single-slow-model-reply-blocks-task.md) |
 
 ## 相互关联
 
