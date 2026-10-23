@@ -51,6 +51,33 @@ export function isPluginProductionFile(display) {
     && !/\.d\.ts$/.test(display);
 }
 
+// These are deliberate non-product integrations or bundled runtime manifests, not general layer escapes.
+const FILE_IMPORT_ALLOWLIST = new Map([
+  // Build configuration and integration tests intentionally exercise other layers.
+  ["packages/core/tests/real-corpus-migration.test.ts", new Set(["packages/node-runtime/src/index"])],
+  ["packages/node-runtime/vitest.config.mts", new Set(["scripts/native-assets.mjs"])],
+  ["apps/cli/esbuild.config.mjs", new Set(["scripts/release-utils.mjs", "scripts/native-assets.mjs"])],
+  ["plugin/esbuild.config.mjs", new Set(["scripts/release-utils.mjs", "scripts/native-assets.mjs"])],
+  ["plugin/vitest.config.mts", new Set(["scripts/native-assets.mjs"])],
+  ["plugin/tests/obsidian-adapters.test.ts", new Set(["packages/core/src/settings/topics", "packages/node-runtime/src/native-private-storage"])],
+  ["packages/node-runtime/src/library-runtime.ts", new Set([
+    "tools/node-library-runtime/pdf/package.json", "tools/node-library-runtime/pdf/package-lock.json",
+    "tools/node-library-runtime/embedding/package.json", "tools/node-library-runtime/embedding/package-lock.json",
+  ])],
+  ["packages/node-runtime/native/test-setup.mjs", new Set(["scripts/native-build.mjs"])],
+  ["apps/cli/tests/workbench-business-settings.test.ts", new Set(["plugin/src/settings/change-service"])],
+  ["apps/cli/tests/workbench-settings-ui.test.ts", new Set(["plugin/src/settings/definitions"])],
+]);
+
+function fileImportCrossesLayer(display, specifier, layer) {
+  const portable = specifier.replaceAll("\\", "/");
+  // Absolute imports have no relocatable workspace contract, even if this machine can resolve them.
+  if (path.posix.isAbsolute(portable) || path.win32.isAbsolute(specifier)) return true;
+  const target = path.posix.normalize(path.posix.join(path.posix.dirname(display), portable));
+  if (target === layer.dir || target.startsWith(`${layer.dir}/`)) return false;
+  return !FILE_IMPORT_ALLOWLIST.get(display)?.has(target);
+}
+
 export async function checkBoundaries(root = defaultRoot) {
 const errors = [];
 
@@ -68,7 +95,10 @@ for (const layer of layers) {
       errors.push(`${display}: core uses forbidden Node global`);
     }
     for (const specifier of moduleSpecifiers(source)) {
-      if (specifier.startsWith(".") || specifier.startsWith("/")) continue;
+      if (specifier.startsWith(".") || specifier.startsWith("/") || path.win32.isAbsolute(specifier)) {
+        if (fileImportCrossesLayer(display, specifier, layer)) errors.push(`${display}: file import crosses workspace boundary: ${specifier}`);
+        continue;
+      }
       const owner = packageOwner(specifier);
       if (owner.startsWith("@arxiv-daily/")) {
         if (!layer.workspace.has(owner)) errors.push(`${display}: forbidden dependency ${specifier}`);

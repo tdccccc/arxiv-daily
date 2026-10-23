@@ -87,3 +87,23 @@ test("isPluginProductionFile classifies plugin paths", () => {
   for (const file of ["plugin/main.ts", "plugin/src/a/b.ts", "plugin/node-fs-exclusive.ts"]) assert.equal(isPluginProductionFile(file), true, file);
   for (const file of ["plugin/tests/a.ts", "plugin/esbuild.config.mjs", "plugin/vitest.config.mts", "apps/cli/src/a.ts", "plugin/types.d.ts"]) assert.equal(isPluginProductionFile(file), false, file);
 });
+
+for (const [file, target] of [
+  ["packages/core/src/bad.ts", "../../node-runtime/src/http-client"],
+  ["plugin/src/bad.ts", "../../packages/node-runtime/src/http-client"],
+  ["packages/core/src/bad.ts", "../../../apps/cli/src/config"],
+  ["packages/node-runtime/src/bad.ts", "../../../apps/cli/src/config"],
+  ["packages/core/src/bad.ts", "..\\..\\node-runtime\\src\\http-client"],
+  ["plugin/src/bad.ts", "/tmp/outside.ts"],
+]) test(`rejects cross-boundary file import ${file} -> ${target}`, async () => {
+  const errors = await errorsFor({ [file]: `import x from ${JSON.stringify(target)};` });
+  assert.ok(errors.some(error => /file import crosses/.test(error)), JSON.stringify(errors));
+});
+
+test("same-layer relative imports and exact runtime manifest imports remain allowed", async () => {
+  assert.deepEqual(await errorsFor({
+    "packages/core/src/a.ts": 'import x from "../other";',
+    "packages/node-runtime/src/library-runtime.ts": 'import pdf from "../../../tools/node-library-runtime/pdf/package-lock.json";',
+  }), []);
+  assert.ok((await errorsFor({ "packages/node-runtime/src/other.ts": 'import pdf from "../../../tools/node-library-runtime/pdf/package-lock.json";' })).length > 0);
+});
