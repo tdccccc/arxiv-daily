@@ -144,7 +144,11 @@ function browserObservation(id) {
     });
   }
   const root = document.querySelector(".workbench");
-  return { id, title: document.title, text: surface.innerText.slice(0, 16000), controls,
+  const active = document.activeElement;
+  const focused = controls.find(control => control.ref === active?.getAttribute("data-acceptance-ref"));
+  const focus = !active || active === document.body ? null : focused ? { ref: focused.ref, tag: focused.tag, name: focused.name }
+    : !(modal || root)?.contains(active) ? { outside: true } : { tag: active.tagName.toLowerCase(), name: active.getAttribute("aria-label") || "" };
+  return { id, title: document.title, text: surface.innerText.slice(0, 16000), controls, focus,
     layout: { rootMounted: Boolean(root), view: root?.getAttribute("data-view") || "", dialogOpen: Boolean(modal),
       sidebarCollapsed: root?.classList.contains("sidebar-collapsed") === true, viewport: { width: innerWidth, height: innerHeight } } };
 }

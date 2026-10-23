@@ -307,6 +307,11 @@ export function obsidianObservation(id, testMode) {
     }
   }
 
+  const active = document.activeElement;
+  const focused = controls.find(control => control.ref === active?.getAttribute("data-acceptance-ref"));
+  const focus = !active || active === document.body ? null : focused ? { ref: focused.ref, tag: focused.tag, name: focused.name }
+    : !surface?.contains(active) ? { outside: true } : { tag: active.tagName.toLowerCase(), name: active.getAttribute("aria-label") || "" };
+
   // Obsidian's `.notice` is a generic class (no plugin marker); surfaced as
   // text-only context per the chunk-1 contract, never as a control.
   const notices = Array.from(document.querySelectorAll(".notice")).map(node => (node.textContent || "").trim()).filter(Boolean).slice(0, 20);
@@ -328,7 +333,7 @@ export function obsidianObservation(id, testMode) {
   return {
     id, title: document.title,
     text: (noControls ? [baseText, recoveryText].filter(Boolean).join("\n\n") : baseText).slice(0, 16000),
-    controls,
+    controls, focus,
     // Chunk 3: which browser-shaped actions this host currently allows, so the model does not have
     // to guess at back/reload support that differs by host and by whether a modal or the plugin's
     // own menu is open. `reload` is never listed — Obsidian has no per-page reload, and resetting
@@ -1074,6 +1079,12 @@ export async function createObsidianExplorationDriver({ session, fixture, artifa
     await helper.reloadPlugin();
     resetSignal?.throwIfAborted();
     await helper.openDashboard();
+    await helper.evaluate(`(() => {
+      const others = [];
+      app.workspace?.iterateRootLeaves(leaf => { if (leaf.view.getViewType() !== "arxiv-daily-dashboard") others.push(leaf); });
+      for (const leaf of others) leaf.detach();
+      document.defaultView.__arxivExplorationOpenedUrls.length = 0;
+    })()`);
     const durationMs = Date.now() - start;
     if (durationMs > 30000) throw new Error(`Obsidian reset took ${durationMs}ms, exceeding the 30s per-task phase-abort budget`);
     return { durationMs };

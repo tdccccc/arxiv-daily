@@ -1406,3 +1406,16 @@ test('external open guard intercepts both windows and reports attempted URLs', a
 test('PDF external buttons share the guarded arXiv policy', () => {
   assert.equal(classifyControlRestriction({ name: 'Open PDF' }), classifyControlRestriction({ name: 'Open arXiv' }));
 });
+
+test('obsidian focus follows control refs and marks out-of-scope focus', () => {
+  const { window, observe } = buildWindow(dashboardFixture);
+  const buttons = window.document.querySelectorAll('button');
+  buttons[0].focus();
+  let snapshot = observe('s1');
+  assert.deepEqual(snapshot.focus, { ref: 's1-3', tag: 'button', name: 'Star' });
+  buttons[1].focus();
+  snapshot = observe('s2');
+  assert.deepEqual(snapshot.focus, { ref: 's2-4', tag: 'button', name: 'Open arXiv' });
+  window.document.querySelector('.nav-file-title').focus();
+  assert.deepEqual(observe().focus, { outside: true });
+});

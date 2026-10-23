@@ -417,7 +417,7 @@ test("--list (describeAcceptanceSuites) lists both hosts' goal task ids and pers
 // throws when the measured duration exceeds the 30s phase-abort budget.
 // ---------------------------------------------------------------------------
 
-function buildFakeObsidianSession({ modalOpen = false, settingsMarker = false, diagnosticsEntries = [], extraHtml = "", authorizeLibraryProcessing, indexPersonalLibraryFullText, libraryIndexSnapshot } = {}) {
+function buildFakeObsidianSession({ modalOpen = false, settingsMarker = false, diagnosticsEntries = [], extraHtml = "", authorizeLibraryProcessing, indexPersonalLibraryFullText, libraryIndexSnapshot, workspace } = {}) {
   const window = new Window();
   window.document.body.innerHTML = `
     ${modalOpen ? '<div class="modal-container"><div class="modal arxiv-daily-modal"><button type="button">Close</button></div></div>' : ""}
@@ -449,6 +449,7 @@ function buildFakeObsidianSession({ modalOpen = false, settingsMarker = false, d
     getComputedStyle: (...args) => window.getComputedStyle(...args),
     innerWidth: 1200, innerHeight: 800,
     app: {
+      workspace,
       setting: { isOpen: modalOpen, activeTab: undefined, open() { calls.push("settings.open"); this.isOpen = true; }, close() { calls.push("settings.close"); this.isOpen = false; }, openTabById() { calls.push("settings.openTabById"); } },
       // disablePlugin/enablePlugin mock a full plugin reload the way the fixed suite's own
       // reloadPlugin() (obsidian-ui.mjs) drives it — the real fix for the settings-desync bug found on
@@ -2418,5 +2419,25 @@ test("real exploration driver preserves the plugin generation outcome contract",
     const session = { client: { send: async () => ({}) }, evaluate: async () => JSON.stringify(result), diagnostics: { entries: () => [] } };
     const driver = await createObsidianExplorationDriver({ session, fixture, artifactDir });
     assert.deepEqual(await driver.generatePersonalLibraryDirections(), result);
+  });
+});
+
+test('keyboard persona permits home only for recovery with a finding', () => {
+  for (const lib of [obsidianTaskLibrary, workbenchTaskLibrary]) {
+    const brief = lib.personaTasks().find(p => p.id === 'keyboard-only').goal;
+    assert.match(brief, /home/);
+    assert.match(brief, /恢复.*finding/);
+  }
+});
+test('reset closes all other workspace tabs and clears external-open evidence', async () => {
+  await withTempFixture(async ({ fixture, artifactDir }) => {
+    const leaves = ['arxiv-daily-dashboard', 'markdown', 'pdf', 'empty'].map(type => ({ view: { getViewType: () => type }, detach() { leaves.splice(leaves.indexOf(this), 1); } }));
+    const workspace = { iterateRootLeaves: visit => [...leaves].forEach(visit) };
+    const { window, session } = buildFakeObsidianSession({ workspace });
+    const driver = await createObsidianExplorationDriver({ session, fixture, artifactDir });
+    window.open('https://arxiv.org/pdf/2610.10001');
+    await driver.reset();
+    assert.deepEqual(leaves.map(leaf => leaf.view.getViewType()), ['arxiv-daily-dashboard']);
+    assert.deepEqual([...window.__arxivExplorationOpenedUrls], []);
   });
 });
