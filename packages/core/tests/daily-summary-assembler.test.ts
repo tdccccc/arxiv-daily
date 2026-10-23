@@ -483,6 +483,9 @@ describe("assembleDailySummary", () => {
     String.raw`\begin{equation}![](https://tracker.invalid/pixel)\end{equation}`,
     String.raw`\(![](https://tracker.invalid/pixel)\)`,
     String.raw`\[![](https://tracker.invalid/pixel)\]`,
+    "$ ![](https://tracker.invalid/pixel)$",
+    "$![](https://tracker.invalid/pixel) $",
+    "$![](https://tracker.invalid/pixel)$2",
   ])("neutralizes images inside unsupported Markdown math delimiters: %s", text => {
     expect(normalizeMarkdownLine(text)).not.toContain("![");
   });

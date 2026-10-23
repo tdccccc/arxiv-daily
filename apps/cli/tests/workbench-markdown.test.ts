@@ -1,7 +1,25 @@
+import { assembleDailySummary, DEFAULT_SETTINGS } from "@arxiv-daily/core";
 import { describe, expect, it } from "vitest";
 import { describeMarkdown, renderInlineMarkdown, renderMarkdown } from "../src/workbench/markdown";
 
 describe("workbench Markdown reading", () => {
+  it.each([
+    String.raw`\begin{equation}![](https://tracker.invalid/pixel)\end{equation}`,
+    String.raw`\(![](https://tracker.invalid/pixel)\)`,
+    String.raw`\[![](https://tracker.invalid/pixel)\]`,
+    "$ ![](https://tracker.invalid/pixel)$",
+    "$![](https://tracker.invalid/pixel) $",
+    "$![](https://tracker.invalid/pixel)$2",
+  ])("renders assembled untrusted math-like prose without image elements: %s", hostile => {
+    const report = assembleDailySummary({
+      dateStr: "2026-10-24", arxivSettings: { ...DEFAULT_SETTINGS.arxiv,
+        topics: [{ id: "methods", name: "Methods", tag: "methods", description: "", detail: false }] },
+      slots: [{ paper: { id: "2610.12345", title: hostile, authors: "Author", category: "methods", sourceSections: "Abstract", isDetail: false },
+        result: { kind: "fallback", reasonCode: "validation-exhausted", attempts: 1, originalAbstract: hostile } }],
+    });
+    expect(renderMarkdown(report).html).not.toMatch(/<img\b/);
+  });
+
   it("reads writer frontmatter without displaying it and preserves ordinary article formatting", () => {
     const result = renderMarkdown('---\ntitle: "A \\"quoted\\" title"\nauthors: "Ada, Bob"\narxiv_id: "2609.12345"\npublished: "[[arxiv-daily/daily/2026-10-01|2026-10-01]]"\ntags: [arxiv, paper]\n---\n\n# Article\n\n**Evidence** and `code`.\n\n| Method | Score |\n| --- | --- |\n| Ours | 42 |\n\n```js\nconst x = "<script>";\n```');
     expect(result.metadata).toMatchObject({ title: 'A "quoted" title', authors: "Ada, Bob", arxiv_id: "2609.12345", published: "[[arxiv-daily/daily/2026-10-01|2026-10-01]]" });

@@ -56,6 +56,14 @@ export function protectLatexMath(input: string, dollarDelimitersOnly = false): {
       continue;
     }
     const after = end + closer.length;
+    // Markdown single-dollar math excludes currency-like/whitespace bounds.
+    // Match the shared reader contract before exempting contents from cleanup.
+    if (dollarDelimitersOnly && opener === "$"
+      && (end === i + 1 || /\s/.test(text[i + 1]!)
+        || /\s/.test(text[end - 1]!) || /\d/.test(text[after] ?? ""))) {
+      i += opener.length;
+      continue;
+    }
     out += text.slice(copied, i) + `\uE000${formulas.length}\uE001`;
     formulas.push(text.slice(i, after));
     copied = i = after;
