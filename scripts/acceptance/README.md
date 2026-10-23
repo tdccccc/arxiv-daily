@@ -223,3 +223,5 @@ npm run test:acceptance:tools
 `.github/workflows/ui-acceptance.yml` 在 PR、main 推送和手动触发时运行固定工作台验收，安装对应版本的 Playwright Chromium，并上传报告、截图和 trace。失败会保留为失败，证据上传步骤会始终尝试执行。
 
 公共 CI 不调用用户的模型 API，也不安装 Obsidian；Obsidian 和真实模型探索通过前述本机命令执行。此分支中的 CI 配置已经过本地契约检查，推送后才会在远程运行。
+
+构建按所选套件及 `--host` 执行，Obsidian 探索会构建插件。报告 `metadata.buildArtifacts` 记录构建产物 SHA-256 和修改时间；`--skip-build` 仍记录指纹，产物早于源码时写入 `buildWarnings` 并警告，请重新构建后再采纳发版证据。

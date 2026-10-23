@@ -3,7 +3,7 @@ import { test } from "node:test";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { parseArgs, runAcceptance, npmBuildCommand } from "../acceptance/run.mjs";
+import { parseArgs, runAcceptance, npmBuildCommand, workspacesToBuild } from "../acceptance/run.mjs";
 
 function passed(suite) { return { suite, status: "passed", scenarios: [{ id: `${suite}.task`, title: "User task", status: "passed", assertions: [{ label: "Observed expected state", passed: true }] }] }; }
 async function dependencies(t, overrides = {}) {
@@ -169,4 +169,28 @@ test("build failures link their logs from the saved report", async t => {
 test("Windows builds invoke npm through Node and never execute a cmd file directly", () => {
   assert.deepEqual(npmBuildCommand("win32", { npm_execpath: "C:/npm/npm-cli.js" }), { command: process.execPath, prefix: ["C:/npm/npm-cli.js"] });
   assert.throws(() => npmBuildCommand("win32", {}), /through npm/);
+});
+
+test("exploration build receives the selected host including mixed suites", async t => {
+  for (const argv of [["--suite", "exploration", "--host", "obsidian"], ["--suite", "workbench", "--explore", "--host", "obsidian"]]) {
+    let received;
+    const f = await dependencies(t, { build: async (_suites, options) => { received = options.host; } });
+    await runAcceptance({ ...parseArgs(argv), output: f.output }, f.deps);
+    assert.equal(received, "obsidian");
+  }
+});
+
+test("skip-build still records fingerprints of the exact existing artifacts", async t => {
+  const f = await dependencies(t);
+  const report = await runAcceptance({ ...parseArgs(["--suite", "workbench", "--skip-build"]), output: f.output }, f.deps);
+  assert.ok(Array.isArray(report.metadata.buildArtifacts));
+  assert.ok(report.metadata.buildArtifacts.some(item => item.path.endsWith("arxiv-daily-cli.cjs")));
+  assert.ok(!f.events.some(event => event.startsWith("build:")));
+});
+
+test("build selection follows both fixed suites and exploration host", () => {
+  assert.deepEqual(workspacesToBuild(["exploration"], "obsidian"), ["obsidian-arxiv-daily"]);
+  assert.deepEqual(workspacesToBuild(["workbench", "exploration"], "obsidian"), ["apps/cli", "obsidian-arxiv-daily"]);
+  assert.deepEqual(workspacesToBuild(["exploration"], "workbench"), ["apps/cli"]);
+  assert.deepEqual(workspacesToBuild(["obsidian"], "workbench"), ["obsidian-arxiv-daily"]);
 });

@@ -5,6 +5,8 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { createFixtureEnvironment } from "./fixtures.mjs";
 import { buildReport, writeReport, redact } from "./report.mjs";
 
+import { collectBuildEvidence } from "../build-evidence.mjs";
+
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 const SUITES = ["workbench", "obsidian", "exploration"];
 const HELP = `Usage: npm run test:acceptance -- [options]
@@ -119,10 +121,15 @@ export function npmBuildCommand(platform = process.platform, env = process.env) 
   return { command: "npm", prefix: [] };
 }
 
-async function buildProducts(suites, { artifactDir, signal, onProgress }) {
+export function workspacesToBuild(suites, host = "workbench") {
   const workspaces = [];
-  if (suites.some(suite => suite === "workbench" || suite === "exploration")) workspaces.push("apps/cli");
-  if (suites.includes("obsidian")) workspaces.push("obsidian-arxiv-daily");
+  if (suites.includes("workbench") || (suites.includes("exploration") && host === "workbench")) workspaces.push("apps/cli");
+  if (suites.includes("obsidian") || (suites.includes("exploration") && host === "obsidian")) workspaces.push("obsidian-arxiv-daily");
+  return workspaces;
+}
+
+async function buildProducts(suites, { artifactDir, signal, onProgress, host }) {
+  const workspaces = workspacesToBuild(suites, host);
   for (const workspace of workspaces) {
     if (signal?.aborted) throw signal.reason ?? new Error("Acceptance cancelled before build");
     onProgress(`Build ${workspace}`);
@@ -200,12 +207,14 @@ export async function runAcceptance(options, dependencies = {}) {
   await persist();
   if (options.signal?.aborted) return persist();
   if (options.build !== false) {
-    try { await build(selected, { artifactDir, signal: options.signal, onProgress }); }
+    try { await build(selected, { artifactDir, signal: options.signal, onProgress, host: options.host }); }
     catch (error) {
       if (!options.signal?.aborted) for (const suite of selected) results.push(failedSuite(suite, error));
       return persist();
     }
   }
+  Object.assign(metadata, await collectBuildEvidence(repoRoot, workspacesToBuild(selected, options.host)));
+  for (const warning of metadata.buildWarnings) onProgress(`WARNING: ${warning}`);
   for (const suite of selected) {
     if (options.signal?.aborted) break;
     let fixture, result;
