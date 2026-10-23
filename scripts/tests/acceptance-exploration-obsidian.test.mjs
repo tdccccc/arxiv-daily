@@ -437,7 +437,7 @@ test("test mode treats zero-geometry elements as visible but still honours displ
 test("observation and control shape matches the workbench driver's contract", () => {
   const { observe } = buildWindow(dashboardFixture);
   const snapshot = observe("shape");
-  assert.deepEqual(Object.keys(snapshot).sort(), ["capabilities", "controls", "id", "layout", "text", "title"].sort());
+  assert.deepEqual(Object.keys(snapshot).sort(), ["capabilities", "controls", "focus", "id", "layout", "text", "title"].sort());
   assert.deepEqual(snapshot.capabilities, ["click", "fill", "select", "scroll", "wait", "press", "home"]);
   for (const control of snapshot.controls) {
     for (const key of ["ref", "tag", "type", "role", "name", "field", "disabled", "readOnly", "dataAction", "paperKey", "purpose", "rect", "inViewport"]) {
@@ -1401,6 +1401,12 @@ test('external open guard intercepts both windows and reports attempted URLs', a
     const snapshot = await driver.observe();
     assert.deepEqual(snapshot.layout.openedUrls, ['https://arxiv.org/abs/2610.10001', 'https://arxiv.org/pdf/2610.10001']);
     assert.match(snapshot.text, /blocked/i);
+    for (let i = 0; i < 25; i++) window.open(`${i}:${'x'.repeat(1500)}`);
+    const bounded = await driver.observe();
+    assert.equal(bounded.layout.openedUrls.length, 20);
+    assert.ok(bounded.layout.openedUrls.every(url => url.length === 1000));
+    assert.ok(bounded.layout.openedUrls[0].startsWith('5:'));
+    assert.equal(forwarded, 0);
   });
 });
 test('PDF external buttons share the guarded arXiv policy', () => {
@@ -1418,4 +1424,12 @@ test('obsidian focus follows control refs and marks out-of-scope focus', () => {
   assert.deepEqual(snapshot.focus, { ref: 's2-4', tag: 'button', name: 'Open arXiv' });
   window.document.querySelector('.nav-file-title').focus();
   assert.deepEqual(observe().focus, { outside: true });
+});
+
+test('active dashboard wins over an earlier inactive dashboard leaf', () => {
+  const { observe } = buildWindow('<div class="workspace-leaf"><div class="arxiv-daily-dashboard">Stale dashboard</div></div><div class="workspace-leaf mod-active"><div class="arxiv-daily-dashboard"><button>Active dashboard action</button></div></div>');
+  const snapshot = observe();
+  assert.equal(snapshot.layout.view, 'dashboard');
+  assert.match(snapshot.text, /Active dashboard action/);
+  assert.doesNotMatch(snapshot.text, /Stale dashboard/);
 });

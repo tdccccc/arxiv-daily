@@ -247,8 +247,8 @@ function resolveSurface() {
     }
   }
   if (!surface) {
-    const dashboard = document.querySelector(".arxiv-daily-dashboard");
-    if (dashboard && (!dashboard.closest(".workspace-leaf") || dashboard.closest(".workspace-leaf").classList.contains("mod-active"))) { surface = dashboard; view = "dashboard"; }
+    const dashboard = Array.from(document.querySelectorAll(".arxiv-daily-dashboard")).find(node => !node.closest(".workspace-leaf") || node.closest(".workspace-leaf").classList.contains("mod-active"));
+    if (dashboard) { surface = dashboard; view = "dashboard"; }
   }
   return { surface, view, modalOpen, menuOpen };
 }
@@ -880,8 +880,8 @@ function installExternalOpenGuard() {
   const host = document.defaultView;
   const urls = host.__arxivExplorationOpenedUrls ||= [];
   const blockedOpen = url => {
-    urls.push(String(url ?? "").slice(0, 2000));
-    if (urls.length > 100) urls.shift();
+    urls.push(String(url ?? "").slice(0, 1000));
+    if (urls.length > 20) urls.shift();
     return null;
   };
   for (const target of new Set([host, host.activeWindow].filter(Boolean))) target.open = blockedOpen;
