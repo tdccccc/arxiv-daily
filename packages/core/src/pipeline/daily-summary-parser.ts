@@ -140,17 +140,18 @@ export function parseDailyReportPapers(markdown: string): DailyReportPaper[] {
     papers.push(paper);
   };
   for (const line of stripGenerationMetrics(markdown).split(/\r?\n/)) {
-    const paperHeading = /^###[\t ]+(.*)$/.exec(line);
-    if (paperHeading) {
+    // Match only the bounded heading prefix. Consuming whitespace followed by
+    // `.*` can repeatedly rescan long tab runs when a Unicode separator follows.
+    const headingPrefix = /^(#{1,3})[\t ]/.exec(line);
+    if (headingPrefix?.[1] === "###") {
       flush();
-      heading = paperHeading[1]!;
+      heading = line.slice(headingPrefix[0].length).trimStart();
       body = [];
       continue;
     }
-    const outerHeading = /^(#{1,2})[\t ]+(.*)$/.exec(line);
-    if (outerHeading) {
+    if (headingPrefix) {
       flush();
-      if (outerHeading[1] === "##") section = compact(outerHeading[2]!);
+      if (headingPrefix[1] === "##") section = compact(line.slice(headingPrefix[0].length));
       continue;
     }
     if (heading !== undefined) body.push(line);

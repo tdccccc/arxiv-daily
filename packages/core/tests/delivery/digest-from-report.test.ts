@@ -248,6 +248,16 @@ describe("digestFromDailyReport", () => {
     expect(only.papers[0]!.fields!.mainResult).toBe("Recorded result.");
   });
 
+  it("reads headings containing Unicode separators without rescanning whitespace", () => {
+    const padding = "\t".repeat(100_000);
+    const markdown = `## ${padding}\u2028Topic\n\n### ${padding}\u2029Paper\n- **arXiv**: [2609.00002](https://arxiv.org/abs/2609.00002)\n`;
+    const startedAt = performance.now();
+    const papers = parseDailyReportPapers(markdown);
+    expect(performance.now() - startedAt).toBeLessThan(500);
+    expect(papers).toHaveLength(1);
+    expect(papers[0]).toMatchObject({ section: "Topic", title: "Paper", id: "2609.00002" });
+  });
+
   it("parses a long, hostile report in linear time", () => {
     const hostileHeading = `### ${" ".repeat(50_000)}→${" ".repeat(50_000)}x\n- **arXiv**: [2609.00002](https://arxiv.org/abs/2609.00002)\n`;
     const markdown = `## Topic\n\n${hostileHeading.repeat(20)}`;
