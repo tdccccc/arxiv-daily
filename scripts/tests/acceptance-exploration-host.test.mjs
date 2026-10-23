@@ -1801,7 +1801,7 @@ function createFakeLibraryTaskDriver(initialDisk, { vaultRoot, indexFile = null,
       generatePersonalLibraryDirectionsCalls.push(true);
       if (!currentProposal) throw new Error("fake driver: no proposal configured for generatePersonalLibraryDirections()");
       currentProposal = structuredClone(currentProposal);
-      return structuredClone(currentProposal);
+      return { outcome: "generated", proposal: structuredClone(currentProposal), scope: "full", fellBackToFull: false };
     },
     async readLibraryDirectionProposal() { return currentProposal ? structuredClone(currentProposal) : null; },
     setProposal(value) { currentProposal = value; },
@@ -2401,4 +2401,22 @@ test("leftover: reset() puts the fixture LLM back to normal, so an unauthorized 
   } finally {
     await server.close();
   }
+});
+
+test("library-edit-candidate reports nothing-new instead of claiming generation produced an empty proposal", async () => {
+  await withRealLibraryRoot(async vaultRoot => {
+    const task = (await obsidianTaskLibrary.goalTasks()).find(t => t.id === "library-edit-candidate");
+    const driver = createFakeLibraryTaskDriver(minimalLibraryDisk(), { vaultRoot });
+    driver.generatePersonalLibraryDirections = async () => ({ outcome: "nothing-new" });
+    await assert.rejects(task.prepare({ driver }), /nothing-new/);
+  });
+});
+
+test("real exploration driver preserves the plugin generation outcome contract", async () => {
+  await withTempFixture(async ({ fixture, artifactDir }) => {
+    const result = { outcome: "generated", proposal: fakeLibraryProposal(), scope: "full", fellBackToFull: false };
+    const session = { client: { send: async () => ({}) }, evaluate: async () => JSON.stringify(result), diagnostics: { entries: () => [] } };
+    const driver = await createObsidianExplorationDriver({ session, fixture, artifactDir });
+    assert.deepEqual(await driver.generatePersonalLibraryDirections(), result);
+  });
 });
