@@ -1928,18 +1928,10 @@ export class ArxivDailySettingTab extends PluginSettingTab {
             })();
           });
         });
-      new Setting(containerEl)
+      const embeddingKeySetting = new Setting(containerEl)
         .setName("Embedding API key")
-        .setDesc("Saved only on this device.")
-        .addText((t) => {
-          t.inputEl.type = "password";
-          t.setPlaceholder("Enter API key")
-            .setValue(s.embedding.apiKey)
-            .onChange(async (v) => {
-              s.embedding.apiKey = v.trim();
-              await this.plugin.saveSettings();
-            });
-        });
+        .setDesc("Saved only on this device.");
+      declarativeRows.renderEmbeddingApiKeyRow(this, embeddingKeySetting);
       new Setting(containerEl)
         .setName("Embedding model")
         .setDesc("Model name sent to the endpoint.")
@@ -1959,20 +1951,10 @@ export class ArxivDailySettingTab extends PluginSettingTab {
             })();
           });
         });
-      new Setting(containerEl)
+      const embeddingDimensionSetting = new Setting(containerEl)
         .setName("Embedding dimension")
-        .setDesc("Vector width of the remote model. Must match the model.")
-        .addText((t) => {
-          t.setPlaceholder("1536")
-            .setValue(String(s.embedding.dimension))
-            .onChange(async (v) => {
-              const parsed = Number(v.trim());
-              if (Number.isInteger(parsed) && parsed > 0) {
-                s.embedding.dimension = parsed;
-                await this.plugin.saveSettings();
-              }
-            });
-        });
+        .setDesc("Vector width of the remote model. Must match the model.");
+      declarativeRows.renderEmbeddingDimensionRow(this, embeddingDimensionSetting);
     }
 
     new Setting(containerEl)

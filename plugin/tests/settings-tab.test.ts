@@ -203,6 +203,55 @@ describe("legacy daily paper limit", () => {
   });
 });
 
+describe("legacy embedding controls", () => {
+  function setup(persist = vi.fn().mockResolvedValue(undefined)) {
+    const result = makeLegacyApiKeyTab(persist);
+    result.settings.embedding.mode = "remote";
+    result.settings.embedding.apiKey = "old-embedding-key";
+    const rows = renderLegacySettings(result.tab);
+    return { ...result, persist, dimension: rows.get("Embedding dimension")!.controlEl.querySelector<HTMLInputElement>("input")!, key: rows.get("Embedding API key")!.controlEl.querySelector<HTMLInputElement>("input")! };
+  }
+
+  it("saves the dimension transactionally and refreshes index readiness", async () => {
+    const { tab, settings, persist, dimension } = setup();
+    dimension.value = "3072";
+    dimension.dispatchEvent(new Event("change"));
+    await vi.waitFor(() => expect(tab.plugin.refreshLibraryIndexTrace).toHaveBeenCalledOnce());
+    expect(settings.embedding.dimension).toBe(3072);
+    expect(persist).toHaveBeenCalledOnce();
+  });
+
+  it("restores the dimension input when persistence rejects", async () => {
+    const { tab, settings, dimension } = setup(vi.fn().mockRejectedValue(new Error("disk full")));
+    const original = settings.embedding.dimension;
+    dimension.value = "3072";
+    dimension.dispatchEvent(new Event("change"));
+    await vi.waitFor(() => expect(tab.plugin.logger.error).toHaveBeenCalled());
+    expect(settings.embedding.dimension).toBe(original);
+    expect(dimension.value).toBe(String(original));
+    expect(tab.plugin.refreshLibraryIndexTrace).not.toHaveBeenCalled();
+  });
+
+  it.each(["0", "-1", "2.5", "abc", ""])("rejects invalid dimension %j visibly", draft => {
+    const { persist, dimension } = setup();
+    dimension.value = draft;
+    dimension.dispatchEvent(new Event("change"));
+    expect(dimension.validationMessage).toContain("positive whole number");
+    expect(persist).not.toHaveBeenCalled();
+  });
+
+  it("commits an embedding key on blur and rolls back a failed save", async () => {
+    const { tab, settings, persist, key } = setup(vi.fn().mockRejectedValue(new Error("disk full")));
+    expect(key.type).toBe("password");
+    key.value = "new-embedding-key";
+    key.dispatchEvent(new Event("blur"));
+    await vi.waitFor(() => expect(tab.plugin.logger.error).toHaveBeenCalled());
+    expect(persist).toHaveBeenCalledOnce();
+    expect(settings.embedding.apiKey).toBe("old-embedding-key");
+    expect(key.value).toBe("old-embedding-key");
+  });
+});
+
 describe("modelFetchNoticeMessage", () => {
   it("reports a successful model fetch in English", () => {
     expect(modelFetchNoticeMessage({ kind: "success", count: 3 })).toBe(
@@ -973,7 +1022,6 @@ describe("settings tab regressions", () => {
     expect(settingsTabSource).toContain('addBusinessOptions(d, "detailProfile", { detailProfile: s.detailSelection.profile })');
     expect(settingsTabSource).toContain('getBusinessSetting(id,context).options');
     expect(settingsTabSource).toContain("detailSelectionPreset(profile)");
-    expect(settingsTabSource).toContain("await this.plugin.saveSettings()");
   });
 
   it("does not expose automatic detail thresholds or numeric controls", () => {
