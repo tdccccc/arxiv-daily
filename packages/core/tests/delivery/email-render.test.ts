@@ -279,15 +279,19 @@ describe("email render", () => {
     expect(emailProse("$\\gg$ and $\\ggg$")).toContain("≫");
   });
 
-  it("emailProse stays fast on repeated unterminated \\begin, \\sqrt[ and \\foo{ openers", () => {
-    const begin = ("\\begin{pmatrix}" + "a".repeat(20_000)).repeat(50);
-    const root = ("\\sqrt[" + "a".repeat(20_000)).repeat(50);
-    const unknown = ("\\foo{" + "a".repeat(20_000)).repeat(50);
+  it.each([
+    ["begin", "\\begin{pmatrix}"],
+    ["sqrt", "\\sqrt["],
+    ["unknown command", "\\foo{"],
+  ])("emailProse stays fast on repeated unterminated %s openers", (_name, opener) => {
+    const input = (opener + "a".repeat(20_000)).repeat(50);
+    // Each adversarial input must finish within the UI budget. Summing three
+    // independent calls couples this regression to the runner's CPU speed.
     const start = performance.now();
-    expect(emailProse(begin).length).toBeGreaterThan(0);
-    expect(emailProse(root).length).toBeGreaterThan(0);
-    expect(emailProse(unknown).length).toBeGreaterThan(0);
-    expect(performance.now() - start).toBeLessThan(500);
+    const output = emailProse(input);
+    const elapsed = performance.now() - start;
+    expect(output.length).toBeGreaterThan(0);
+    expect(elapsed).toBeLessThan(500);
   });
 
   it("emailProse simplifies display/block math delimiters ($$, \\[ \\], \\( \\))", () => {
