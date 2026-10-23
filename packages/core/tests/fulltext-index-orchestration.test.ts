@@ -662,6 +662,20 @@ describe("full-text indexing orchestration", () => {
     expect(await indexPersonalLibraryFullText(args)).toMatchObject({ indexed: 0, reused: 1 });
   });
 
+  it("resumes a newly saved paper over a failed record at the same timestamp", async () => {
+    const key = "arxiv:2403.19236";
+    const catalog = makeCatalog([{ paperKey: key, filePaths: ["lib/a.pdf"], fingerprint: fingerprint("f1") }]);
+    const store = new MemoryStore(), embedding = new FakeEmbedding();
+    const extractor = new FakeExtractor({ "lib/a.pdf": [LONG_ALPHA] });
+    const args = { catalog, store, embedding, extractor, source: new FakeSource(), now: () => new Date(NOW) };
+    extractor.failFor.add("lib/a.pdf");
+    expect(await indexPersonalLibraryFullText(args)).toMatchObject({ failed: 1 });
+    extractor.failFor.clear();
+    await expect(indexPersonalLibraryFullText({ ...args, beforeManifestCommit: () => { throw new Error("disk full"); } })).rejects.toThrow();
+    expect(await indexPersonalLibraryFullText(args)).toMatchObject({ indexed: 0, reused: 1 });
+    expect(embedding.calls).toBe(1);
+  });
+
   it("does not recover a staged fallback when reading its source fails", async () => {
     const key = "arxiv:2403.19236", fp = fingerprint("f1");
     const store = new MemoryStore(), embedding = new FakeEmbedding();
@@ -1288,6 +1302,9 @@ describe("full-text indexing orchestration", () => {
     const embedding = new FakeEmbedding();
     await indexPersonalLibraryFullText({ catalog, source: new FakeSource(), extractor, embedding, store });
     store.manifest.papers[paperKey]!.derivation = undefined;
+    const obsolete = (await store.loadPaper(paperKey))!;
+    obsolete.derivation = undefined;
+    await store.savePaper(obsolete);
     const failure: PdfTextExtractor = {
       provenance: extractor.provenance,
       async extractPdfText() { throw new Error("unreadable PDF"); },

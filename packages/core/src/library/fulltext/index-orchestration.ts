@@ -251,8 +251,7 @@ export async function indexPersonalLibraryFullText(
     if (!repairRequired) {
       try {
         const staged = await store.loadPaper(paperKey, next);
-        if (staged && (!previous || previous.updatedAt !== staged.updatedAt || matchesStoredPaper(previous, staged))
-          && staged.paperKey === paperKey
+        if (staged && staged.paperKey === paperKey
           && staged.modelId === embedding.modelId && staged.dimension === embedding.dimension
           && staged.titleVersion === TITLE_EXTRACTION_VERSION
           && staged.contentHash === unit.contentHash
