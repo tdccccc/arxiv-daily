@@ -127,3 +127,11 @@ test("assertVersionUnderTest refuses a missing reported version", () => {
     assert.throws(() => assertVersionUnderTest({ expected: "0.4.6", reported }), /version/i);
   }
 });
+
+test("deployment records the hash of each byte-for-byte copied artifact", async () => {
+  const fs = fakeFs(goodSource());
+  const result = await deployBuildUnderTest({ vaultPath, pluginId, sourceDir, fs });
+  assert.equal(result.buildArtifacts.length, 3);
+  assert.ok(result.buildArtifacts.every(item => /^[a-f0-9]{64}$/.test(item.sha256)));
+  assert.equal(result.buildArtifacts[0].path, `${sourceDir}/main.js`);
+});

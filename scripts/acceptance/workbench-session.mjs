@@ -3,6 +3,8 @@ import { access, mkdir, writeFile } from "node:fs/promises";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { resolveCliConfigPath } from "../../apps/cli/src/config-path-runtime.mjs";
+
 const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 const delay = ms => new Promise(resolve => { const timer = setTimeout(resolve, ms); timer.unref?.(); });
 
@@ -50,7 +52,7 @@ async function defaultBrowser(options) {
  */
 export async function startWorkbenchSession({
   fixture, artifactDir, executablePath, headless = true, signal, launchBrowser = defaultBrowser,
-  cliPath = join(repositoryRoot, "apps/cli/dist/arxiv-daily-cli.cjs"), startupTimeoutMs = 20000,
+  cliPath = join(repositoryRoot, "apps/cli/dist/arxiv-daily-cli.cjs"), startupTimeoutMs = 20000, platform = process.platform,
 } = {}) {
   signal?.throwIfAborted();
   if (!fixture?.root || !fixture.configHome || fixture.env?.XDG_CONFIG_HOME !== fixture.configHome) {
@@ -59,6 +61,11 @@ export async function startWorkbenchSession({
   const configRelative = relative(fixture.root, fixture.configHome);
   if (!configRelative || configRelative.startsWith("..") || isAbsolute(configRelative)) {
     throw new WorkbenchBlockedError("The fixture configuration must remain inside its temporary root");
+  }
+  const actualConfig = resolveCliConfigPath(fixture.env, platform);
+  if (!fixture.configPath || resolve(actualConfig) !== resolve(fixture.configPath)
+    || relative(fixture.root, actualConfig).startsWith("..") || isAbsolute(relative(fixture.root, actualConfig))) {
+    throw new WorkbenchBlockedError("The actual CLI configuration must match the owned fixture configPath");
   }
   await mkdir(artifactDir, { recursive: true });
   try { await access(cliPath); }

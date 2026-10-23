@@ -82,6 +82,7 @@ try {
         results,
         pluginVersion: session.pluginVersion,
         diagnosticsComplete: session.diagnosticsComplete,
+        buildArtifacts: session.buildArtifacts,
         errors: session.diagnostics.errors(),
       };
     },
@@ -123,6 +124,7 @@ try {
         screenshots: screenshots.written(),
         pluginVersion: session.pluginVersion,
         diagnosticsComplete: session.diagnosticsComplete,
+        buildArtifacts: session.buildArtifacts,
         errors: session.diagnostics.errors(),
       };
     },

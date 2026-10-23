@@ -1,7 +1,7 @@
 # 探索的“只用键盘”角色看不到焦点在哪，在 Obsidian 里还会被带出插件后无路可回
 
 > 发现日期：2026-10-21 · 来源：模型探索（gpt-6.1-sol，high）+ 人工复核 · 编号 EXP-05
-> 范围：`scripts/acceptance/exploration-browser.mjs`、`exploration-obsidian.mjs`（观察）、`exploration-tasks/personas.mjs`（keyboard-only 的角色设定）、Obsidian 探索的任务间重置 · 严重程度：中 · 状态：未修复 · 置信度：已复现
+> 范围：`scripts/acceptance/exploration-browser.mjs`、`exploration-obsidian.mjs`（观察）、`exploration-tasks/personas.mjs`（keyboard-only 的角色设定）、Obsidian 探索的任务间重置 · 严重程度：中 · 状态：已修复（分支 `fix/2026-10-21-batch4`，提交 038a0c5、2410509） · 置信度：已复现
 
 ## 问题
 
@@ -47,3 +47,7 @@ O4 在 Obsidian 里还有一条具体的路径把角色逼进死胡同：
 - `scripts/tests/acceptance-exploration-host.test.mjs`（工作台一侧同理）：Tab 之后观察的 `focus.ref` 变为下一个控件。
 - `scripts/tests/acceptance-exploration-host.test.mjs`：`reset()` 之后工作区里只剩仪表盘标签页。
 - `scripts/tests/acceptance-exploration-labels.test.mjs` 或角色测试：keyboard-only 的角色说明包含 `home` 的使用约定。
+
+## 修复情况
+
+两端观察都显示当前焦点的控件编号、标签和名称，不包含输入值；焦点逸出界面时明确显示 outside。键盘角色允许唯一的 home 恢复例外，并要求记录无法用键盘返回的 finding。Obsidian 每个任务重置关闭其它主工作区标签页，保留侧栏，并清空上个任务外部打开记录。4 项新增失败回归均修复，焦点编号随观察/焦点变化同步更新。

@@ -26,6 +26,8 @@ import {
   renderEmailModeRow,
   renderEmailToRow,
   renderEmbeddingBaseUrlRow,
+  renderEmbeddingDimensionRow,
+  renderEmbeddingApiKeyRow,
   renderEmbeddingModeRow,
   renderHostedTokenRow,
   renderLibraryDirectionsRow,
@@ -238,6 +240,72 @@ describe("declarative daily paper limit", () => {
     await vi.waitFor(() => expect(input.value).toBe("20"));
     expect(saveSettings).toHaveBeenCalledOnce();
     expect(settings.output.maxDailyPapers).toBe(20);
+  });
+});
+
+describe("declarative embedding dimension input", () => {
+  function renderDimension(tab: ArxivDailySettingTab): HTMLInputElement {
+    const setting = new Setting(document.createElement("div"));
+    renderEmbeddingDimensionRow(tab, setting);
+    return setting.controlEl.querySelector<HTMLInputElement>("input")!;
+  }
+
+  it("refreshes index readiness only after the edited dimension is saved", async () => {
+    const { tab, plugin, settings, saveSettings } = makeTab();
+    const saving = deferred();
+    saveSettings.mockImplementationOnce(() => saving.promise);
+    const input = renderDimension(tab);
+    input.value = "3072";
+    input.dispatchEvent(new Event("change"));
+    await vi.waitFor(() => expect(saveSettings).toHaveBeenCalledOnce());
+    expect(plugin.refreshLibraryIndexTrace).not.toHaveBeenCalled();
+    saving.resolve();
+    await vi.waitFor(() => expect(plugin.refreshLibraryIndexTrace).toHaveBeenCalledOnce());
+    expect(settings.embedding.dimension).toBe(3072);
+    expect(input.value).toBe("3072");
+  });
+
+  it("restores the saved dimension and reports a persistence failure", async () => {
+    const { tab, plugin, settings, saveSettings } = makeTab();
+    const original = settings.embedding.dimension;
+    saveSettings.mockRejectedValueOnce(new Error("disk full"));
+    const input = renderDimension(tab);
+    input.value = "3072";
+    input.dispatchEvent(new Event("change"));
+    await vi.waitFor(() => expect(plugin.logger.error).toHaveBeenCalled());
+    expect(settings.embedding.dimension).toBe(original);
+    expect(input.value).toBe(String(original));
+    expect(plugin.refreshLibraryIndexTrace).not.toHaveBeenCalled();
+  });
+
+  it.each(["0", "-1", "2.5", "abc", ""])("explains invalid dimension %j without saving", async draft => {
+    const { tab, settings, saveSettings } = makeTab();
+    const original = settings.embedding.dimension;
+    const input = renderDimension(tab);
+    input.value = draft;
+    input.dispatchEvent(new Event("input"));
+    input.dispatchEvent(new Event("change"));
+    await Promise.resolve();
+    expect(input.validationMessage).toContain("positive whole number");
+    expect(saveSettings).not.toHaveBeenCalled();
+    expect(settings.embedding.dimension).toBe(original);
+  });
+
+  it("keeps a newer unsaved draft when an earlier save fails", async () => {
+    const { tab, plugin, settings, saveSettings } = makeTab();
+    const original = settings.embedding.dimension;
+    const saving = deferred();
+    saveSettings.mockImplementationOnce(() => saving.promise);
+    const input = renderDimension(tab);
+    input.value = "3072";
+    input.dispatchEvent(new Event("change"));
+    await vi.waitFor(() => expect(saveSettings).toHaveBeenCalledOnce());
+    input.value = "4096";
+    input.dispatchEvent(new Event("input"));
+    saving.reject(new Error("disk full"));
+    await vi.waitFor(() => expect(plugin.logger.error).toHaveBeenCalled());
+    expect(input.value).toBe("4096");
+    expect(settings.embedding.dimension).toBe(original);
   });
 });
 
@@ -3694,5 +3762,70 @@ describe("topic editor behavior contracts", () => {
     tab.display();
     expect(settings.arxiv).toEqual(before);
     expect(saveSettings).not.toHaveBeenCalled();
+  });
+});
+
+describe("queued embedding secret drafts", () => {
+  function setup() {
+    const made = makeTab();
+    made.settings.embedding.apiKey = "original-secret";
+    const setting = renderSetting();
+    renderEmbeddingApiKeyRow(made.tab, setting as never);
+    const input = setting.controlEl.querySelector<HTMLInputElement>("input")!;
+    const draft = (value: string, commit = true) => {
+      input.value = value;
+      input.dispatchEvent(new Event("input"));
+      if (commit) input.dispatchEvent(new Event("blur"));
+    };
+    return { ...made, input, draft };
+  }
+
+  it.each(["success", "failure"])("keeps a newer uncommitted secret draft after an older save %s", async outcome => {
+    const { settings, saveSettings, plugin, input, draft } = setup();
+    const first = deferred();
+    saveSettings.mockImplementationOnce(() => first.promise);
+    draft("first-secret");
+    await vi.waitFor(() => expect(saveSettings).toHaveBeenCalledOnce());
+    draft("newer-unsaved-secret", false);
+    if (outcome === "success") {
+      first.resolve();
+      await vi.waitFor(() => expect(settings.embedding.apiKey).toBe("first-secret"));
+    } else {
+      first.reject(new Error("disk full"));
+      await vi.waitFor(() => expect(plugin.logger.error).toHaveBeenCalled());
+      expect(settings.embedding.apiKey).toBe("original-secret");
+    }
+    expect(input.value).toBe("newer-unsaved-secret");
+    expect(saveSettings).toHaveBeenCalledOnce();
+  });
+
+  it("restores the latest durable secret when a later queued save fails", async () => {
+    const { settings, saveSettings, plugin, input, draft } = setup();
+    const first = deferred(), second = deferred();
+    saveSettings.mockImplementationOnce(() => first.promise).mockImplementationOnce(() => second.promise);
+    draft("first-secret");
+    await vi.waitFor(() => expect(saveSettings).toHaveBeenCalledOnce());
+    draft("second-secret");
+    first.resolve();
+    await vi.waitFor(() => expect(saveSettings).toHaveBeenCalledTimes(2));
+    expect(settings.embedding.apiKey).toBe("first-secret");
+    second.reject(new Error("disk full"));
+    await vi.waitFor(() => expect(plugin.logger.error).toHaveBeenCalled());
+    expect(settings.embedding.apiKey).toBe("first-secret");
+    expect(input.value).toBe("first-secret");
+  });
+
+  it("queues a return to the original secret while a different value is saving", async () => {
+    const { settings, saveSettings, input, draft } = setup();
+    const first = deferred();
+    saveSettings.mockImplementationOnce(() => first.promise);
+    draft("first-secret");
+    await vi.waitFor(() => expect(saveSettings).toHaveBeenCalledOnce());
+    draft("original-secret");
+    first.resolve();
+    await vi.waitFor(() => expect(saveSettings).toHaveBeenCalledTimes(2));
+    await vi.waitFor(() => expect(settings.embedding.apiKey).toBe("original-secret"));
+    expect(input.value).toBe("original-secret");
+    expect(saveSettings.mock.calls[1]![0]?.embedding.apiKey).toBe("original-secret");
   });
 });

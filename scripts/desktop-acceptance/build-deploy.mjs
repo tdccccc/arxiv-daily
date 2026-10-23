@@ -1,5 +1,6 @@
 import fsPromises from "node:fs/promises";
 import path from "node:path";
+import { artifactFingerprint } from "../build-evidence.mjs";
 import { RELEASE_ASSETS } from "../release-assets.mjs";
 
 /**
@@ -66,7 +67,8 @@ export async function deployBuildUnderTest({ vaultPath, pluginId, sourceDir, fs 
   for (const [index, target] of targets.entries()) {
     await fs.writeFile(target, sources[index]);
   }
-  return { version, deployed: targets };
+  const buildArtifacts = await Promise.all(ARTIFACTS.map((name, index) => artifactFingerprint(path.join(sourceDir, name), sources[index], fs)));
+  return { version, deployed: targets, buildArtifacts };
 }
 
 /**

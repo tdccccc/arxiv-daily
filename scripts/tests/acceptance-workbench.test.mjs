@@ -3,6 +3,7 @@ import { access, mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promise
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
+import { createFixtureEnvironment } from "../acceptance/fixtures.mjs";
 import { startWorkbenchSession } from "../acceptance/workbench-session.mjs";
 
 async function environment(t, source) {
@@ -14,7 +15,7 @@ async function environment(t, source) {
   const configHome = join(root, "config");
   await mkdir(configHome);
   if (source) await writeFile(cliPath, source);
-  const fixture = { root, configHome, env: { ...process.env, XDG_CONFIG_HOME: configHome, ACCEPTANCE_PID_FILE: join(root, "pid") } };
+  const fixture = { root, configHome, configPath: join(configHome, "arxiv-daily", "config.toml"), env: { ...process.env, XDG_CONFIG_HOME: configHome, APPDATA: configHome, ACCEPTANCE_PID_FILE: join(root, "pid") } };
   return { fixture, artifactDir, cliPath, onCleanup: action => cleanups.push(action) };
 }
 
@@ -218,4 +219,11 @@ test("completed daily outcome is acknowledged by its saved-report UI status", as
     }) },
   };
   assert.deepEqual(await waitForWorkbenchRun(session, { id: run.id }), run);
+});
+
+test("a Windows config resolver outside the fixture blocks before any child is launched", async t => {
+  const fixture = await createFixtureEnvironment();
+  t.after(() => fixture.dispose());
+  fixture.env.APPDATA = "/outside-owned-fixture";
+  await assert.rejects(startWorkbenchSession({ fixture, artifactDir: join(fixture.root, "artifacts"), platform: "win32", cliPath: join(fixture.root, "missing-cli.cjs") }), /actual CLI configuration.*fixture/);
 });

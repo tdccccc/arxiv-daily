@@ -860,15 +860,34 @@ export function renderEmbeddingDimensionRow(
   prepareRow(setting);
   const input = setting.controlEl.createEl("input", {
     type: "number",
-    attr: { placeholder: "1536", min: "1", step: "1" },
+    attr: { "aria-label": "Embedding dimension", placeholder: "1536", min: "1", step: "1" },
   });
   input.value = String(tab.plugin.settings.embedding.dimension);
+  const validate = (): number | null => {
+    const value = Number(input.value.trim());
+    const valid = Number.isInteger(value) && value > 0;
+    input.setCustomValidity(valid ? "" : "Enter a positive whole number.");
+    input.toggleClass("is-invalid", !valid);
+    return valid ? value : null;
+  };
+  input.addEventListener("input", () => {
+    tab.beginControlChange(input);
+    validate();
+  });
   input.addEventListener("change", () => {
+    const revision = tab.beginControlChange(input);
+    const next = validate();
+    if (next === null) { input.reportValidity(); return; }
     tab.runAction("save embedding dimension", async () => {
-      const parsed = Number(input.value.trim());
-      if (Number.isInteger(parsed) && parsed > 0) {
-        tab.plugin.settings.embedding.dimension = parsed;
-        await tab.plugin.saveSettings();
+      try {
+        await tab.changeSettingValue("embedding.dimension", next);
+        if (tab.isCurrentControlChange(input, revision)) input.value = String(next);
+      } catch (error) {
+        if (tab.isCurrentControlChange(input, revision)) {
+          input.value = String(tab.restoreCurrentControlValue(error, "embedding.dimension"));
+          validate();
+        }
+        throw error;
       }
     });
   });

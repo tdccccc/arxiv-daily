@@ -464,11 +464,43 @@ describe("assembleDailySummary", () => {
     }
   });
 
+  it.each([assembleDailySummary, assembleEmergencyDailySummary])("makes untrusted images, embeds and hidden comments inert", assemble => {
+    const hostile = "![](https://tracker.example/pixel) ![[Private Note]] [[Private Note]] %% hidden %%";
+    const value = input({ slots: [
+      { paper: paper("2607.00001", hostile, "methods", { authors: hostile, sourceSections: hostile }), result: { kind: "structured", summary: summary("2607.00001", hostile) } },
+      fallbackSlot(paper("2607.00002", hostile, "results"), hostile),
+    ] });
+    const report = assemble(value);
+    expect(report).not.toContain("![");
+    expect(report).not.toContain("[[Private Note]]");
+    expect(report).not.toContain("%%");
+    expect(report).toContain(String.raw`!\[](https://tracker.example/pixel)`);
+    expect(report).toContain(String.raw`\[\[Private Note]]`);
+    expect(report).toContain(String.raw`\%\% hidden \%\%`);
+  });
+
+  it.each([
+    String.raw`\begin{equation}![](https://tracker.invalid/pixel)\end{equation}`,
+    String.raw`\(![](https://tracker.invalid/pixel)\)`,
+    String.raw`\[![](https://tracker.invalid/pixel)\]`,
+    "$ ![](https://tracker.invalid/pixel)$",
+    "$![](https://tracker.invalid/pixel) $",
+    "$![](https://tracker.invalid/pixel)$2",
+  ])("neutralizes images inside unsupported Markdown math delimiters: %s", text => {
+    expect(normalizeMarkdownLine(text)).not.toContain("![");
+  });
+
+  it("preserves formula and code content and ordinary links while disabling prose embeds", () => {
+    const text = String.raw`[link](https://example.test) [bracket] wow! $\text{![[math]] %%}$ ` + "`![[code]] %%`";
+    expect(normalizeMarkdownLine(text)).toBe(text);
+    expect(normalizeMarkdownLine(String.raw`\\![](https://example.test)`)).not.toContain("![");
+  });
+
   it("normalizes CommonMark autolinks, math, code, and hostile HTML to exact output", () => {
     expect(normalizeMarkdownLine(
       "  [paper](url)  *emphasis*  `code <b>x</b>`  <https://arxiv.org/a> <mailto:user@example.org> <user@example.org> z<0.1/z>3.5 A & B <x =bad> <b class='x'>bold</b> <!-- c --> <!DOCTYPE html> <?pi?> <![CDATA[x]]>  ",
     )).toBe(
-      "[paper](url) *emphasis* `code <b>x</b>` <https://arxiv.org/a> <mailto:user@example.org> <user@example.org> z<0.1/z>3.5 A & B <x =bad> &lt;b class='x'>bold&lt;/b> &lt;!-- c --> &lt;!DOCTYPE html> &lt;?pi?> &lt;![CDATA[x]]>",
+      "[paper](url) *emphasis* `code <b>x</b>` <https://arxiv.org/a> <mailto:user@example.org> <user@example.org> z<0.1/z>3.5 A & B <x =bad> &lt;b class='x'>bold&lt;/b> &lt;!-- c --> &lt;!DOCTYPE html> &lt;?pi?> &lt;!\\[CDATA[x]]>",
     );
   });
 
@@ -530,11 +562,11 @@ describe("assembleDailySummary", () => {
 
     for (const assemble of [assembleDailySummary, assembleEmergencyDailySummary]) {
       const markdown = assemble(assemblyInput);
-      expect(markdown).toContain(`- **Original abstract**: ${inline} &lt;script data-x="1 > 0">alert(1)&lt;/script> &lt;!-- comment --> &lt;!DOCTYPE html> &lt;?target value?> &lt;![CDATA[raw <x>]]>`);
+      expect(markdown).toContain(`- **Original abstract**: ${inline} &lt;script data-x="1 > 0">alert(1)&lt;/script> &lt;!-- comment --> &lt;!DOCTYPE html> &lt;?target value?> &lt;!\\[CDATA[raw <x>]]>`);
       expect(markdown).not.toContain("<script");
       expect(markdown).not.toContain("<!-- comment -->");
       expect(extractFallbackAbstracts(markdown)).toEqual({
-        "2607.00001": `${inline} &lt;script data-x="1 > 0">alert(1)&lt;/script> &lt;!-- comment --> &lt;!DOCTYPE html> &lt;?target value?> &lt;![CDATA[raw <x>]]>`,
+        "2607.00001": `${inline} &lt;script data-x="1 > 0">alert(1)&lt;/script> &lt;!-- comment --> &lt;!DOCTYPE html> &lt;?target value?> &lt;!\\[CDATA[raw <x>]]>`,
       });
     }
   });

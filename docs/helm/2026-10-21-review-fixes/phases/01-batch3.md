@@ -2,8 +2,8 @@
 
 goal_ref: ../goal.md
 created: 2026-10-23T22:19:51+08:00
-updated: 2026-10-23T23:05:43+08:00
-revision: 2
+updated: 2026-10-24T00:42:23+08:00
+revision: 3
 
 ## Outcome
 
@@ -42,7 +42,7 @@ CLI、工作台、DSH、邮件和中继共 13 条修复经复核、全套检查�
 - change: 合并分支、更新问题索引，PR 通过检查并合入 main。
 - first signal: n/a
 - checks: 全套 gates.sh b3-resume relay vscode acceptance、DSH；54 条索引链接；远端 head、CI、threads 和 mergeable。
-- [ ] accepted on observed evidence
+- [x] accepted on observed evidence
 
 ## Phase verification
 
@@ -60,3 +60,5 @@ CLI、工作台、DSH、邮件和中继共 13 条修复经复核、全套检查�
 - DSH 首次隔离运行因 loopback 未启用导致本机连接失败；启用隔离空间 loopback 后完整通过，外网保持隔离。
 - 日志：/tmp/arxiv-fix-2026-10-21/gates-b3-integrated-resume/summary.txt、b3-integrated-dsh.log。
 - 已核对原54条链接，状态36已修复/18未修复。远端main仍为ebeec19。PR/CI及合并待完成。
+
+- 最终head a48d239：PR #108 的17项CI全部success；两条CodeQL线程已解决，分支无open扫描告警；main未变化，mergeStateStatus=CLEAN。PR已合并，提交e8b4838；第三批远端分支已删除。

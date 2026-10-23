@@ -3,7 +3,7 @@ import { test } from "node:test";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { parseArgs, runAcceptance } from "../acceptance/run.mjs";
+import { parseArgs, runAcceptance, npmBuildCommand, workspacesToBuild } from "../acceptance/run.mjs";
 
 function passed(suite) { return { suite, status: "passed", scenarios: [{ id: `${suite}.task`, title: "User task", status: "passed", assertions: [{ label: "Observed expected state", passed: true }] }] }; }
 async function dependencies(t, overrides = {}) {
@@ -164,4 +164,57 @@ test("build failures link their logs from the saved report", async t => {
   const f = await dependencies(t, { build: async () => { throw error; } });
   const report = await runAcceptance({ ...parseArgs(["--suite", "workbench"]), output: f.output }, f.deps);
   assert.deepEqual(report.suites[0].artifacts, ["build-apps-cli.log"]);
+});
+
+
+test("model call timeout is bounded, configurable and forwarded to exploration", async t => {
+  assert.equal(parseArgs([]).modelCallTimeoutMs, 45000);
+  for (const value of ["0", "300001", "1.5", "abc"]) {
+    assert.throws(() => parseArgs(["--model-call-timeout-ms", value]), /model-call-timeout-ms/);
+  }
+  const options = parseArgs(["--suite", "exploration", "--model-call-timeout-ms", "120000", "--skip-build"]);
+  assert.equal(options.modelCallTimeoutMs, 120000);
+  const f = await dependencies(t);
+  let received;
+  f.deps.runners.exploration = async args => { received = args.modelCallTimeoutMs; return passed("exploration"); };
+  await runAcceptance({ ...options, output: f.output }, f.deps);
+  assert.equal(received, 120000);
+});
+
+test("Windows builds invoke npm through Node and never execute a cmd file directly", () => {
+  assert.deepEqual(npmBuildCommand("win32", { npm_execpath: "C:/npm/npm-cli.js" }), { command: process.execPath, prefix: ["C:/npm/npm-cli.js"] });
+  assert.throws(() => npmBuildCommand("win32", {}), /through npm/);
+});
+
+test("exploration build receives the selected host including mixed suites", async t => {
+  for (const argv of [["--suite", "exploration", "--host", "obsidian"], ["--suite", "workbench", "--explore", "--host", "obsidian"]]) {
+    let received;
+    const f = await dependencies(t, { build: async (_suites, options) => { received = options.host; } });
+    await runAcceptance({ ...parseArgs(argv), output: f.output }, f.deps);
+    assert.equal(received, "obsidian");
+  }
+});
+
+test("skip-build still records fingerprints of the exact existing artifacts", async t => {
+  const f = await dependencies(t);
+  const report = await runAcceptance({ ...parseArgs(["--suite", "workbench", "--skip-build"]), output: f.output }, f.deps);
+  assert.ok(Array.isArray(report.metadata.buildArtifacts));
+  assert.ok(report.metadata.buildArtifacts.some(item => item.path.endsWith("arxiv-daily-cli.cjs")));
+  assert.ok(!f.events.some(event => event.startsWith("build:")));
+});
+
+test("build selection follows both fixed suites and exploration host", () => {
+  assert.deepEqual(workspacesToBuild(["exploration"], "obsidian"), ["obsidian-arxiv-daily"]);
+  assert.deepEqual(workspacesToBuild(["workbench", "exploration"], "obsidian"), ["apps/cli", "obsidian-arxiv-daily"]);
+  assert.deepEqual(workspacesToBuild(["exploration"], "workbench"), ["apps/cli"]);
+  assert.deepEqual(workspacesToBuild(["obsidian"], "workbench"), ["obsidian-arxiv-daily"]);
+});
+
+test('fixture contract failures identify the offending URL', async t => {
+  const { deps, output } = await dependencies(t, {
+    createFixture: async () => ({ server: { requests: [{ kind: 'unexpected', method: 'GET', url: 'https://arxiv.org/pdf/9999.99999' }] }, dispose: async () => {} }),
+    runners: { exploration: async () => passed('exploration') },
+  });
+  const report = await runAcceptance({ suites: ['exploration'], output, build: false }, deps);
+  assert.match(JSON.stringify(report), /Unexpected or malformed[^"\n]*https:\/\/arxiv.org\/pdf\/9999.99999/);
 });

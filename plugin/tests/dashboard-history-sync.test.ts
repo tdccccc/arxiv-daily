@@ -12,6 +12,7 @@ import {
   syncDashboardHistory,
   renderDiscoveryProvenanceMarker,
 } from "@arxiv-daily/core";
+import { filterDashboardMarkdownFiles, dashboardHistoryPathSet, dailyDateFromPath } from "../src/dashboard/files";
 import { topicOptions } from "../src/dashboard/actions";
 import { PaperIndexStore } from "@arxiv-daily/core";
 import type { PaperIndexEntry } from "@arxiv-daily/core";
@@ -772,6 +773,52 @@ describe("syncDashboardHistory", () => {
     expect(index.papers["arxiv:2606.09002"]?.title).toBe("Concurrent paper");
   });
 
+  it.each(["ARXIV/Daily", "arxiv/Cafe\u0301"])("matches portable directory spelling: %s", directory => {
+    const actual = `${directory}/2026-06-15.md`;
+    const configured = directory.toLowerCase().normalize("NFC");
+    const files = [{ path: actual }];
+    expect(filterDashboardMarkdownFiles(files, configured, output.papersDir)).toEqual(files);
+    expect(dashboardHistoryPathSet(files, configured, output.papersDir)).toEqual(new Set([actual]));
+    expect(dailyDateFromPath(actual, configured)).toBe("2026-06-15");
+  });
+
+  it("preserves distinct reports when portable paths collide on a case-sensitive vault", async () => {
+    const upper = "ARXIV/Daily/2026-06-15.md", lower = "arxiv/daily/2026-06-15.md";
+    const { files, storage } = makeStorage({ "arxiv/.index/papers.json": indexJson({
+      "2606.10000": { title: "Upper", seenDates: ["2026-06-15"], dailyReports: [upper] },
+      "2606.10001": { title: "Lower", seenDates: ["2026-06-15"], dailyReports: [lower] },
+    }), [upper]: "# Daily\n## Photo-z\n### Upper\n- **arXiv**: [2606.10000](https://arxiv.org/abs/2606.10000)",
+    [lower]: "# Daily\n## Photo-z\n### Lower\n- **arXiv**: [2606.10001](https://arxiv.org/abs/2606.10001)" });
+    const logger = { info: vi.fn(), warn: vi.fn() };
+    const index = await syncDashboardHistory({ vault: makeVault(files), store: new PaperIndexStore(storage, output), output, topics, logger });
+    expect(index.papers["arxiv:2606.10000"]?.dailyReports).toEqual([upper]);
+    expect(index.papers["arxiv:2606.10001"]?.dailyReports).toEqual([lower]);
+    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining("ambiguous portable paths"));
+  });
+
+  it("preserves history when the entire daily directory is unavailable", async () => {
+    const { files, storage } = makeStorage({ "arxiv/.index/papers.json": indexJson({
+      "2606.10000": { title: "Retain", seenDates: ["2026-06-15"], dailyReports: ["arxiv/daily/2026-06-15.md"] },
+      "2606.10001": { title: "Retain too", seenDates: ["2026-06-14"], dailyReports: ["arxiv/daily/2026-06-14.md"] },
+    }) });
+    const logger = { info: vi.fn(), warn: vi.fn() };
+    const index = await syncDashboardHistory({ vault: makeVault(files), store: new PaperIndexStore(storage, output), output, topics, logger });
+    expect(Object.keys(index.papers)).toHaveLength(2);
+    expect(index.papers["arxiv:2606.10000"]?.dailyReports).toEqual(["arxiv/daily/2026-06-15.md"]);
+    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining("daily directory"));
+  });
+
+  it.each(["ARXIV/Daily", "arxiv/Cafe\u0301"])("keeps existing history and resolves actual spelling for %s", async directory => {
+    const selectedOutput = { ...output, dailyDir: directory.toLowerCase().normalize("NFC") };
+    const actual = `${directory}/2026-06-15.md`;
+    const { files, storage } = makeStorage({ "arxiv/.index/papers.json": indexJson({
+      "2606.10000": { title: "Retain", seenDates: ["2026-06-15"], dailyReports: [`${selectedOutput.dailyDir}/2026-06-15.md`] },
+    }), [actual]: "# Daily\n## Photo-z\n### Retain\n- **arXiv**: [2606.10000](https://arxiv.org/abs/2606.10000)" });
+    const index = await syncDashboardHistory({ vault: makeVault(files), store: new PaperIndexStore(storage, selectedOutput), output: selectedOutput, topics });
+    expect(index.papers["arxiv:2606.10000"]?.dailyReports).toEqual([actual]);
+    expect(index.papers["arxiv:2606.10000"]?.seenDates).toEqual(["2026-06-15"]);
+  });
+
   it("prunes deleted daily report references from the paper index", async () => {
     const { files, storage } = makeStorage({
       "arxiv/.index/papers.json": indexJson({
@@ -1110,9 +1157,10 @@ describe("syncDashboardHistory", () => {
     },
   );
 
-  it("still prunes an unchanged stale managed daily reference", async () => {
+  it("still prunes an unchanged stale managed daily reference while another report is visible", async () => {
     const id = "2606.21005";
     const { files, storage } = makeStorage({
+      "arxiv/daily/2026-06-23.md": "# Daily",
       "arxiv/.index/papers.json": indexJson({
         [id]: {
           seenDates: ["2026-06-22"],

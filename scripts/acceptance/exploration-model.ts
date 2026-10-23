@@ -19,7 +19,8 @@ Return exactly ONE JSON object with no Markdown, prose, or code fences. Allowed 
 {"type":"scroll","direction":"down","pixels":600} (up/down, 1 to 1200; optional current ref)
 {"type":"press","key":"Enter"} (keyboard-only navigation; key is one of Enter, Escape, Tab, Shift+Tab, ArrowUp,
 ArrowDown, ArrowLeft, ArrowRight, Space, Home, End, PageUp, PageDown; it goes to whatever is currently focused,
-never carries a ref, and is refused if focus has drifted outside the explorable area)
+never carries a ref, and is refused if focus has drifted outside the explorable area).
+The observation focus field identifies the target for the next Enter/Space; outside means focus left the explorable surface.
 {"type":"finding","summary":"suspected interaction problem","evidence":"visible evidence and reproduction"}
 {"type":"blocked","reason":"why this task cannot continue"}
 {"type":"done","reason":"what was completed"}

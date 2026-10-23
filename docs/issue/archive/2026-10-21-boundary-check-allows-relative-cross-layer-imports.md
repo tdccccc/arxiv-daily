@@ -1,7 +1,7 @@
 # 分层边界检查只认包名，用相对路径跨层导入时一律放行
 
 > 发现日期：2026-10-21 · 来源：main `d999037` 深度代码审查 · 编号 SCR-03
-> 范围：`scripts/check-boundaries.mjs`（`npm run check:boundaries`，CI 的 Root verification 和发版工作流都会跑） · 严重程度：低 · 状态：未修复 · 置信度：已复现
+> 范围：`scripts/check-boundaries.mjs`（`npm run check:boundaries`，CI 的 Root verification 和发版工作流都会跑） · 严重程度：低 · 状态：已修复（分支 `fix/2026-10-21-batch4`，提交 67e27e6） · 置信度：已复现
 
 ## 问题
 
@@ -34,3 +34,7 @@ esbuild 和 tsc 对这些相对路径都能正常解析，所以构建不会拦�
 
 - 在 `scripts/tests/check-boundaries.test.mjs` 增加上表中四种相对路径写法的用例，断言每一种都被报告；同一层内的相对导入、白名单里的 `tools/` 导入不报告。
 - Windows 风格路径（反斜杠）下相对导入的解析同样被检查。
+
+## 修复情况
+
+跨层相对路径、绝对路径和 Windows 反斜杠写法都纳入边界检查；同层导入保持可用，仅对运行时 JSON、构建配置及既有集成测试保留精确例外。7 项失败回归修复后，边界测试 17 项与仓库实际边界检查通过。

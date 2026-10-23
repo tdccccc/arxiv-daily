@@ -1,15 +1,17 @@
 # P6 dogfood run kit (2026-08-04)
 
+> 历史记录，非现行操作指南。2026-10-24 已移除当时的一次性诊断脚本：它们依赖已退役接口，且没有可用运行入口。本文保留当时的验证结论，不再承诺可重跑；当前使用方式见[入门指南](../../getting-started.zh-CN.md)。
+
 Goal: 用真实文献库跑一遍完整个人化链路，对比"手动 topics 单独选"与"手动 topics ∪ 已确认文献库方向"的发现，找出至少一篇**只被文献库方向选中**、研究者认可值得看的论文。
 
 ## 准备（已完成）
 
-- `scripts/personalization/validate-real-library.ts`：真实文献库 headless 验证已通过（526 文件 → 25 ready / 498 unresolved / 3 unrelated / 0 failed，24 篇论文，重扫 100% 复用，52ms）。
-- `scripts/personalization/analyze-dogfood.ts`：产物分析脚本（读 `papers.json` 的 occurrence provenance / novelty，产出 manual-only / library-only / both 对比）。
+- 当时的一次性真实文献库 headless 验证已通过（526 文件 → 25 ready / 498 unresolved / 3 unrelated / 0 failed，24 篇论文，重扫 100% 复用，52ms）。
+- 当时的产物分析读取 occurrence provenance / novelty，产出 manual-only / library-only / both 对比；分析脚本已移除，novelty 功能也已退役。
 - 插件 production build 已从本 worktree 构建：`plugin/main.js`（655kb）、`manifest.json`、`styles.css`。
 - 已复制进 **plugin_test vault**（`/home/tiandc/Documents/code/arxiv-daily/plugin_test`）的插件目录；旧 `main.js` 备份为 `main.js.bak-20260804`。该 vault 已配置好 endpoint / API key / categories / topics（Photo-z、Galaxy Cluster），无需再填。
 
-## 用户在 Obsidian 里的步骤
+## 当时约定的 Obsidian 验证步骤（历史）
 
 1. **打开 plugin_test vault**：Obsidian → 左下角切换 vault 到 `arxiv-daily/plugin_test`（若插件未加载，重启 Obsidian 或重新启用插件）。
 2. **连接文献库**：插件设置 → Personal library → Select directory → 选 `~/Nextcloud/work/Article`。
@@ -17,7 +19,7 @@ Goal: 用真实文献库跑一遍完整个人化链路，对比"手动 topics �
 4. **授权**：按 modal 确认 scope = `~/Nextcloud/work/Article`、depth = metadata-and-abstract、endpoint = 当前配置的 endpoint（lan 上的 baseUrl），点击授权。
 5. **Review directions**：命令面板 → "Review personal library directions"；检查 Proposed 候选，修正名称/描述/cues/代表论文后**确认**（至少确认 1 个方向）。
 6. **跑日报**：Dashboard → Run Today（或 Run Pending）。等运行完成，日报出现。
-7. **把结果告诉我**：运行完成后我来跑分析脚本，给出对比结论；你复核其中 library-only 的论文是否值得看。
+7. **结果复核**：当时由一次性产物分析给出对比，研究者复核 library-only 的论文是否值得看；这不再是可运行的脚本入口。
 
 ## 注意
 

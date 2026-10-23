@@ -1,7 +1,7 @@
 # 探索的“禁止调度开关”拦不住首次使用清单里的“Turn on daily reports”按钮
 
 > 发现日期：2026-10-21 · 来源：main `d999037` 深度代码审查（含 2026-10-21 当天真实模型探索证据） · 编号 SCR-04
-> 范围：`scripts/acceptance/exploration-browser.mjs`、`exploration-obsidian.mjs` 的受限控件策略（workbench 与 Obsidian 两端） · 严重程度：低 · 状态：未修复 · 置信度：已复现
+> 范围：`scripts/acceptance/exploration-browser.mjs`、`exploration-obsidian.mjs` 的受限控件策略（workbench 与 Obsidian 两端） · 严重程度：低 · 状态：已修复（分支 `fix/2026-10-21-batch4`，提交 433bc0f） · 置信度：已复现
 
 ## 问题
 
@@ -32,3 +32,7 @@
 - 把 2026-10-21 当天记录里的两个控件（workbench `开启自动日报`、Obsidian `Turn on daily reports`）作为夹具，断言 `classifyControlRestriction` 返回“调度设置由夹具固定”。
 - `press Enter/Space` 落在这两个按钮上时同样被拦截（现有的 press 策略复用同一分类函数，补一个用例确认）。
 - 上述“所有调度入口文案”的源码对照测试。
+
+## 修复情况
+
+首次使用清单的调度按钮现在与设置页开关采用相同限制，鼠标点击及 Enter/Space 激活都不能开启调度。工作台读取 data-setup-action，两端中文/英文清单文案均受限；新用户角色明确排除这一步。4 项新增回归先失败，6 项调度/键盘测试及完整探索相关回归通过。

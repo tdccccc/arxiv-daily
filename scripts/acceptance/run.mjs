@@ -5,6 +5,8 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { createFixtureEnvironment } from "./fixtures.mjs";
 import { buildReport, writeReport, redact } from "./report.mjs";
 
+import { collectBuildEvidence } from "../build-evidence.mjs";
+
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 const SUITES = ["workbench", "obsidian", "exploration"];
 const HELP = `Usage: npm run test:acceptance -- [options]
@@ -19,6 +21,7 @@ const HELP = `Usage: npm run test:acceptance -- [options]
   --release                      Also run every persona for --host (unless --persona overrides it)
   --max-steps N                  Model decisions, 1-300 (default: 90; 220 with --release)
   --max-api-calls N              Model HTTP requests including retries (default: 2x the effective step budget)
+  --model-call-timeout-ms N      Per model attempt, 1-300000 ms (default: 45000)
   --max-duration-ms N            Exploration time budget (default: 900000; 1200000 with --release)
   --task-max-steps N             Default per-task decision budget (default: 20 task, 15 persona)
   --task-max-api-calls N         Default per-task API-call budget (default: 2x its step budget)
@@ -48,7 +51,7 @@ const RELEASE_DEFAULT_MAX_STEPS = 220;
 const RELEASE_DEFAULT_MAX_DURATION_MS = 1200000;
 
 export function parseArgs(argv) {
-  const options = { suites: ["workbench", "obsidian"], build: true, headless: true, host: "workbench" };
+  const options = { suites: ["workbench", "obsidian"], build: true, headless: true, host: "workbench", modelCallTimeoutMs: 45000 };
   let explicit = false, explore = false, explicitMaxSteps = false, explicitMaxDurationMs = false;
   for (let i = 0; i < argv.length; i++) {
     const [flag, ...rest] = argv[i].split("=");
@@ -98,6 +101,7 @@ export function parseArgs(argv) {
       }
       case "--max-steps": options.maxSteps = number(1, 300); explicitMaxSteps = true; break;
       case "--max-api-calls": options.maxApiCalls = number(1, 1000); break;
+      case "--model-call-timeout-ms": options.modelCallTimeoutMs = number(1, 300000); break;
       case "--max-duration-ms": options.maxDurationMs = number(1, 3600000); explicitMaxDurationMs = true; break;
       case "--task-max-steps": options.taskMaxSteps = number(1, 300); break;
       case "--task-max-api-calls": options.taskMaxApiCalls = number(1, 1000); break;
@@ -113,16 +117,28 @@ export function parseArgs(argv) {
   if (!explicitMaxDurationMs) options.maxDurationMs = options.release ? RELEASE_DEFAULT_MAX_DURATION_MS : 900000;
   return options;
 }
-async function buildProducts(suites, { artifactDir, signal, onProgress }) {
+export function npmBuildCommand(platform = process.platform, env = process.env) {
+  if (env.npm_execpath) return { command: process.execPath, prefix: [env.npm_execpath] };
+  if (platform === "win32") throw new Error("Run acceptance through npm run test:acceptance on Windows");
+  return { command: "npm", prefix: [] };
+}
+
+export function workspacesToBuild(suites, host = "workbench") {
   const workspaces = [];
-  if (suites.some(suite => suite === "workbench" || suite === "exploration")) workspaces.push("apps/cli");
-  if (suites.includes("obsidian")) workspaces.push("obsidian-arxiv-daily");
+  if (suites.includes("workbench") || (suites.includes("exploration") && host === "workbench")) workspaces.push("apps/cli");
+  if (suites.includes("obsidian") || (suites.includes("exploration") && host === "obsidian")) workspaces.push("obsidian-arxiv-daily");
+  return workspaces;
+}
+
+async function buildProducts(suites, { artifactDir, signal, onProgress, host }) {
+  const workspaces = workspacesToBuild(suites, host);
   for (const workspace of workspaces) {
     if (signal?.aborted) throw signal.reason ?? new Error("Acceptance cancelled before build");
     onProgress(`Build ${workspace}`);
     const log = [];
     await new Promise((resolveBuild, rejectBuild) => {
-      const child = spawn(process.platform === "win32" ? "npm.cmd" : "npm", ["run", "build", "--workspace", workspace], {
+      const npm = npmBuildCommand();
+      const child = spawn(npm.command, [...npm.prefix, "run", "build", "--workspace", workspace], {
         cwd: repoRoot, stdio: ["ignore", "pipe", "pipe"], detached: process.platform !== "win32", windowsHide: true,
       });
       let forceTimer;
@@ -193,12 +209,14 @@ export async function runAcceptance(options, dependencies = {}) {
   await persist();
   if (options.signal?.aborted) return persist();
   if (options.build !== false) {
-    try { await build(selected, { artifactDir, signal: options.signal, onProgress }); }
+    try { await build(selected, { artifactDir, signal: options.signal, onProgress, host: options.host }); }
     catch (error) {
       if (!options.signal?.aborted) for (const suite of selected) results.push(failedSuite(suite, error));
       return persist();
     }
   }
+  Object.assign(metadata, await collectBuildEvidence(repoRoot, workspacesToBuild(selected, options.host)));
+  for (const warning of metadata.buildWarnings) onProgress(`WARNING: ${warning}`);
   for (const suite of selected) {
     if (options.signal?.aborted) break;
     let fixture, result;
@@ -210,7 +228,7 @@ export async function runAcceptance(options, dependencies = {}) {
       result = await runners[suite]({
         fixture, artifactDir: directory, signal: options.signal,
         executablePath: options.executablePath, headless: options.headless,
-        ...(suite === "exploration" ? { host: options.host, configPath: options.configPath, maxSteps: options.maxSteps, maxDurationMs: options.maxDurationMs, maxApiCalls: options.maxApiCalls, taskIds: options.taskIds, personaIds: options.personaIds, taskMaxSteps: options.taskMaxSteps, taskMaxApiCalls: options.taskMaxApiCalls, release: options.release } : {}),
+        ...(suite === "exploration" ? { host: options.host, configPath: options.configPath, maxSteps: options.maxSteps, maxDurationMs: options.maxDurationMs, maxApiCalls: options.maxApiCalls, modelCallTimeoutMs: options.modelCallTimeoutMs, taskIds: options.taskIds, personaIds: options.personaIds, taskMaxSteps: options.taskMaxSteps, taskMaxApiCalls: options.taskMaxApiCalls, release: options.release } : {}),
       });
       if (!result || result.suite !== suite) throw new Error(`Runner returned no matching evidence for ${suite}`);
     } catch (error) {
@@ -225,7 +243,7 @@ export async function runAcceptance(options, dependencies = {}) {
           const unexpected = fixture.server.requests.filter(request => ["unexpected", "fixture-error"].includes(request.kind));
           if (unexpected.length) {
             result.status = "failed";
-            result.scenarios.push({ id: `${suite}.fixture-contract`, title: "Every external request matches the controlled protocol", status: "failed", durationMs: 0, error: "Unexpected or malformed external requests reached the fixture; inspect request evidence", assertions: [{ label: "No unexpected fixture requests", passed: false, actual: unexpected.length }], artifacts: [requestsPath] });
+            result.scenarios.push({ id: `${suite}.fixture-contract`, title: "Every external request matches the controlled protocol", status: "failed", durationMs: 0, error: redact(`Unexpected or malformed external requests reached the fixture: ${unexpected.slice(0, 10).map(request => `${request.method} ${request.url}`).join("; ")}; inspect request evidence`), assertions: [{ label: "No unexpected fixture requests", passed: false, actual: unexpected.length }], artifacts: [requestsPath] });
           }
         }
       } catch (error) {

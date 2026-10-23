@@ -1,7 +1,25 @@
+import { assembleDailySummary, DEFAULT_SETTINGS } from "@arxiv-daily/core";
 import { describe, expect, it } from "vitest";
 import { describeMarkdown, renderInlineMarkdown, renderMarkdown } from "../src/workbench/markdown";
 
 describe("workbench Markdown reading", () => {
+  it.each([
+    String.raw`\begin{equation}![](https://tracker.invalid/pixel)\end{equation}`,
+    String.raw`\(![](https://tracker.invalid/pixel)\)`,
+    String.raw`\[![](https://tracker.invalid/pixel)\]`,
+    "$ ![](https://tracker.invalid/pixel)$",
+    "$![](https://tracker.invalid/pixel) $",
+    "$![](https://tracker.invalid/pixel)$2",
+  ])("renders assembled untrusted math-like prose without image elements: %s", hostile => {
+    const report = assembleDailySummary({
+      dateStr: "2026-10-24", arxivSettings: { ...DEFAULT_SETTINGS.arxiv,
+        topics: [{ id: "methods", name: "Methods", tag: "methods", description: "", detail: false }] },
+      slots: [{ paper: { id: "2610.12345", title: hostile, authors: "Author", category: "methods", sourceSections: "Abstract", isDetail: false },
+        result: { kind: "fallback", reasonCode: "validation-exhausted", attempts: 1, originalAbstract: hostile } }],
+    });
+    expect(renderMarkdown(report).html).not.toMatch(/<img\b/);
+  });
+
   it("reads writer frontmatter without displaying it and preserves ordinary article formatting", () => {
     const result = renderMarkdown('---\ntitle: "A \\"quoted\\" title"\nauthors: "Ada, Bob"\narxiv_id: "2609.12345"\npublished: "[[arxiv-daily/daily/2026-10-01|2026-10-01]]"\ntags: [arxiv, paper]\n---\n\n# Article\n\n**Evidence** and `code`.\n\n| Method | Score |\n| --- | --- |\n| Ours | 42 |\n\n```js\nconst x = "<script>";\n```');
     expect(result.metadata).toMatchObject({ title: 'A "quoted" title', authors: "Ada, Bob", arxiv_id: "2609.12345", published: "[[arxiv-daily/daily/2026-10-01|2026-10-01]]" });
@@ -161,4 +179,27 @@ it("separates trailing summary sources and projects saved generation statistics"
  expect(result.generationMetrics).toMatchObject({ inputTokens:100,outputTokens:50,totalTokens:150,elapsedMs:2500,pipelineElapsedMs:4000 });
  expect(result.generationMetrics?.generatedAt).toBeUndefined();
  expect(result.html).toContain('Original text.');
+});
+
+
+it("keeps untrusted math macros inert and bounds recursive expansion", () => {
+  const html = renderMarkdown(String.raw`$\includegraphics{https://evil.test/image}$
+
+$\href{javascript:alert(1)}{click}$
+
+$\htmlStyle{background:url(https://evil.test/image)}{x}$
+
+$\def\loop{\loop}\loop$`).html;
+  expect(html).not.toMatch(/<(?:img|a|iframe)\b/);
+  expect(html).not.toMatch(/style="[^"]*(?:url\(|javascript:)/);
+  expect(html).toContain("katex-error");
+  expect(html.length).toBeLessThan(20000);
+});
+
+it("does not carry macro definitions into another formula or document", () => {
+  const defined = renderMarkdown(String.raw`$\gdef\privateMacro{42}\privateMacro$`).html;
+  expect(defined).not.toContain("katex-error");
+  const next = renderMarkdown(String.raw`$\privateMacro$`).html;
+  expect(next).toContain("privateMacro");
+  expect(next).not.toContain('<span class="mord">4</span>');
 });

@@ -1,7 +1,7 @@
 # Obsidian 探索看不到插件之外发生的事：打开笔记后仍当作在仪表盘，“Open PDF”既无记录也没被限制
 
 > 发现日期：2026-10-21 · 来源：模型探索（gpt-6.1-sol，high）+ 人工复核 · 编号 EXP-04
-> 范围：`scripts/acceptance/exploration-obsidian.mjs`（观察与限制策略）、Obsidian 探索的 first-time-user 角色 · 严重程度：中 · 状态：未修复 · 置信度：已复现（第 3 点“真的拉起了外部程序”为代码推断）
+> 范围：`scripts/acceptance/exploration-obsidian.mjs`（观察与限制策略）、Obsidian 探索的 first-time-user 角色 · 严重程度：中 · 状态：已修复（分支 `fix/2026-10-21-batch4`，提交 8281535、2410509） · 置信度：已复现（第 3 点“真的拉起了外部程序”为代码推断）
 
 ## 问题
 
@@ -44,3 +44,9 @@ Obsidian 探索里，模型只能通过 `obsidianObservation` 看到插件自己
 - `scripts/tests/acceptance-exploration-obsidian.test.mjs`：构造“仪表盘元素还在、但所在标签页已不活动，另有一个可见的 Markdown 视图”的 DOM，断言观察的 `layout.view` 不是 `dashboard` 且包含笔记文字；仪表盘活动时保持现有行为。
 - 同文件：点击触发 `window.open(url)` 后，URL 出现在观察里，且没有调用到原始 `open`。
 - 限制策略测试：`Open arXiv` 与 `Open PDF` 的处理一致（要么都限制，要么都放行并走桩）。
+
+## 修复情况
+
+观察以活动标签页为准：打开 Markdown 笔记后提供真实标题、类型和只读文字摘录，不再显示后台仪表盘；多个仪表盘叶也能选中活动的一个，笔记中的按钮不会变成可操作控件。
+
+window.open 与 activeWindow.open 在探索开始及每次观察/操作前安装记录桩，绝不调用原始外部打开；Open arXiv/Open PDF 统一可验证，本地 PDF 查看仍可使用。记录只保留最近 20 个 URL，每个最多 1000 字符，观察明确说明外部打开已拦截。3 项初始失败回归和多仪表盘失败回归均修复，Obsidian 完整 81 项回归通过。

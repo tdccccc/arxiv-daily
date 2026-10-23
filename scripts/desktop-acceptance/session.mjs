@@ -71,7 +71,7 @@ export async function runDesktopSession({
 
   try {
     return await guard.protect(async () => {
-      const { version } = await deployBuildUnderTest({ vaultPath, pluginId, sourceDir, fs });
+      const { version, buildArtifacts } = await deployBuildUnderTest({ vaultPath, pluginId, sourceDir, fs });
 
       const obsidianConfigDir = path.join(configHome, "obsidian");
       await fs.mkdir(obsidianConfigDir, { recursive: true });
@@ -160,6 +160,7 @@ export async function runDesktopSession({
                 diagnostics,
                 client,
                 pluginVersion,
+                buildArtifacts,
                 trustPromptAccepted,
                 diagnosticsComplete: !loadedBeforeAttach,
               },

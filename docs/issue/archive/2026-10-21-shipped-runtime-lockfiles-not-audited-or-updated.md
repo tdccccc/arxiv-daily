@@ -1,7 +1,7 @@
 # 随 CLI 安装到用户机器上的 PDF/向量运行时依赖，既没有依赖更新提醒也不在 CI 的漏洞审计里
 
 > 发现日期：2026-10-21 · 来源：main `d999037` 深度代码审查 · 编号 SCR-06
-> 范围：`.github/dependabot.yml`、各工作流里的 `npm audit`、`scripts/tests/security-ci.test.mjs`、`tools/node-library-runtime/**`、`extensions/dsh-arxiv-daily` · 严重程度：中 · 状态：未修复 · 置信度：代码推断
+> 范围：`.github/dependabot.yml`、各工作流里的 `npm audit`、`scripts/tests/security-ci.test.mjs`、`tools/node-library-runtime/**`、`extensions/dsh-arxiv-daily` · 严重程度：中 · 状态：已修复（分支 `fix/2026-10-21-batch4`，提交 759918d、8f3e862、b667688、a258e51） · 置信度：代码推断
 
 ## 问题
 
@@ -40,3 +40,15 @@
 
 - 上述动态测试：新增一个带锁文件的目录而没有配置 Dependabot 或审计时，测试失败并指出目录名。
 - 例外表里的每一项必须带理由，空理由被拒绝。
+
+## 修复情况
+
+CI 从 Git 跟踪的全部 package-lock.json 动态生成审计清单，Dependabot 覆盖同一集合的测试不再写死目录。新增 DSH、PDF 和真实 CPU 向量运行时更新提醒；任何锁的漏洞都让 CI 失败，只有注册表临时错误可有限重试。
+
+覆盖扩展后实际发现 VS Code 传递依赖 6 个公告、本地向量运行时 4 个高危公告，分别用兼容传递更新与 Transformers 4.3.1/ONNX 1.30.0/sharp 0.35.5/adm-zip 0.6.1 消除。向量运行时使用新缓存目录，模型权重位置和 384 维 q8 约定不变；浮点舍入和排序不保证逐位一致，既有索引不自动重建。
+
+KaTeX 固定到 2026-10-01 发布的 0.19.0并更新声明。2 项覆盖回归先失败；6 项安全 CI 测试、68 项公式/阅读界面测试、全部 CSS 字体资源构建检查通过；6 份锁文件审计均为 0 漏洞。实际 CPU 推理与真实浏览器公式视觉对照由集成验收单独执行，合并仍以其结果为准。KaTeX 的命令行依赖 commander 要求 Node 22.12，但不进入产品 bundle，Node 20.19 构建和产品运行仍纳入兼容性门禁。
+
+原生验收补充：使用此次锁文件安装真实运行时，并复用任务临时缓存中的公开 multilingual-e5-small q8 权重，在无外网的独立网络空间分别用 Node 22.22.2 和 Node 20.19.0 执行产品实际加载器：PDF夹具正文解析正确，两条固定文本均得到384维有限数且L2范数约1。Node 20发行包已对照官方SHA-256校验。未读取用户文献库或调用真实模型API。
+
+浏览器验收补充：升级前后用同一份含行内公式、分式、矩阵、代码和美元金额的日报进行真实工作台对照；KaTeX0.19在Node22和Node20.19宿主上均显示3个公式/3个MathML结构、正确加载KaTeX字体，无页面或请求错误，截图目视无回归。所有浏览器与CLI均在隔离网络和临时配置中运行。
