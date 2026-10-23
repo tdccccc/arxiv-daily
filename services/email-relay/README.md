@@ -64,6 +64,7 @@ npm run deploy -- --dry-run    # the same checks; prints the command and deploys
 
 - refuses to run unless `services/email-relay` has no uncommitted or untracked files and `HEAD` is a 40-hex commit, because the identity names the commit that is deployed;
 - reads `GET /ready` of the live relay and refuses an identity different from the one a cutover is already bound to (the binding is permanent, so that deploy would lock the relay); it then prints the identity to pass as `--identity`;
+- refuses to guess an identity when `/ready` is unreachable, unreadable or missing. Pass `--identity email-relay-v2-<recorded SHA>` to recover an existing relay; for the first deployment explicitly choose and record the SHA to bind;
 - runs one `wrangler deploy --var BUILD_IDENTITY:email-relay-v2-<sha>` and nothing else. It needs no secret and never calls a verification, delivery or cutover endpoint.
 
 After a deploy:

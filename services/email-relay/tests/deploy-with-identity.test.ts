@@ -212,17 +212,44 @@ describe("deploy with identity", () => {
     ["a relay that reports a locked runtime", { status: 503, text: JSON.stringify({ automatic: "locked", reason: "build_identity_missing" }) }, "build_identity_missing"],
     ["an older relay that only says locked", { status: 503, text: JSON.stringify({ automatic: "locked" }) }, "could not tell"],
     ["an error page", { status: 502, text: "<html>Bad gateway</html>" }, "could not tell"],
-  ] as const)("warns but still deploys over %s", async (_label, ready, expected) => {
+  ] as const)("refuses an implicit identity over %s", async (_label, ready, expected) => {
     const { deploy, deployCalls } = setup({ ready: ready as Fake["ready"] });
 
     const result = await deploy();
 
-    expect(result.ok).toBe(true);
+    expect(result.ok).toBe(false);
     const remote = result.steps.find((step) => step.name === "remoteReady")!;
-    expect(remote.status).toBe("warn");
+    expect(remote.status).toBe("fail");
     expect(remote.detail).toContain(expected);
     expect(remote.detail).toContain("--identity");
+    expect(deployCalls()).toHaveLength(0);
+  });
+
+  it("allows recovery with an explicitly recorded identity when readiness is unavailable", async () => {
+    const { deploy, deployCalls } = setup({ ready: new Error("offline") });
+    const result = await deploy({ identity: OTHER_IDENTITY });
+    expect(result.ok).toBe(true);
+    expect(result.identity).toBe(OTHER_IDENTITY);
     expect(deployCalls()).toHaveLength(1);
+    expect(result.steps.find(step => step.name === "remoteReady")?.status).toBe("warn");
+  });
+
+  it("requires an explicit identity when no readiness URL is configured", async () => {
+    const runCommand = vi.fn((cmd: string, args: string[]) => ok(args[0] === "rev-parse" ? SHA : ""));
+    const httpGet = vi.fn();
+    const deploy = createDeploy({ runCommand, readTextFile: () => "[vars]", httpGet });
+    expect((await deploy()).ok).toBe(false);
+    expect(runCommand.mock.calls.some(([, args]) => args.includes("deploy"))).toBe(false);
+    expect(httpGet).not.toHaveBeenCalled();
+    expect((await deploy({ identity: IDENTITY })).ok).toBe(true);
+  });
+
+  it("does not accept an error response as proof of an unbound relay", async () => {
+    const { deploy, deployCalls } = setup({ ready: {
+      status: 500, text: JSON.stringify({ phase: "locked", automatic: "locked" }),
+    } });
+    expect((await deploy()).ok).toBe(false);
+    expect(deployCalls()).toHaveLength(0);
   });
 
   it("checks everything and prints the command on a dry run without deploying", async () => {

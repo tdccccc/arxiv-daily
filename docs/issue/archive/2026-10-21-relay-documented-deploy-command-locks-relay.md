@@ -64,3 +64,5 @@ Wrangler 的行为是：不加 `--keep-vars` 时，每次 `wrangler deploy` 会�
 偏离写作的一点：没有给 `/v1/deliver` 的 503 响应加原因码，因为已安装的客户端只对恰为 `{error, ambiguous:false}` 的 503 判定“未发送”，多一个成员就会让它们把当天记成结果不明；诊断放在 `/ready`。需要用户自己部署：`npm run deploy` 脚本本身直接可用，`/ready` 的 `reason` 要重新部署中继之后才有。
 
 测试：`services/email-relay/tests/deploy-with-identity.test.ts`（工作区不干净、HEAD 不是 40 位 SHA、与已绑定 identity 不一致时拒绝且没有调用 `wrangler deploy`；匹配时恰好一次且 `--var` 是唯一变量；`--identity`、`--dry-run`、`/ready` 读不到时的警告）、`readme-contract.test.ts`（文档命令里没有裸 `wrangler deploy`，`package.json` 的 `deploy` 指向该脚本）、`kv-idemp.test.ts`（`/ready` 的 `reason`，缺失 BUILD_IDENTITY 时 `/health` 仍为 200，恢复后 `/ready` 回到 200）、`cutover-preflight.test.ts`。其中 `/ready` 的 6 个用例在旧代码下失败。
+
+收尾复核补充：线上 `/ready` 不可达、格式不明或未配置地址时，不再只警告后按新提交身份继续部署，而是拒绝猜测身份。恢复已有中继须显式传入切换时记录的 identity；首次部署也可显式选择并记录 identity。HTTP 错误页即使含有看似未绑定的字段也不能证明中继未绑定。部署测试用假命令和假 HTTP 覆盖这六种拒绝情形以及显式身份恢复路径，未访问或部署真实中继。

@@ -70,6 +70,7 @@ async function defaultHttpGet(url, timeoutMs = 10_000) {
 
 /** What /ready says about the identity the relay is bound to, if it says anything. */
 function describeReadiness(response) {
+  if (response.status !== 200 && response.status !== 503) return { kind: "unknown" };
   let body;
   try {
     body = JSON.parse(response.text);
@@ -143,11 +144,10 @@ export function createDeploy(deps) {
       }
     }
     if (!baseUrl) {
-      steps.push({
-        name: "remoteReady",
-        status: "warn",
-        detail: "no base URL (PUBLIC_BASE_URL), so a cutover binding could not be checked",
-      });
+      const detail = "no base URL (PUBLIC_BASE_URL), so a cutover binding could not be checked. " +
+        "Pass --identity <the identity recorded at cutover>; for an initial deployment, explicitly choose the identity to bind.";
+      if (options.identity === undefined) return fail("remoteReady", detail);
+      steps.push({ name: "remoteReady", status: "warn", detail });
     } else {
       let ready;
       try {
@@ -168,14 +168,11 @@ export function createDeploy(deps) {
       } else if (seen.kind === "unbound") {
         steps.push({ name: "remoteReady", status: "pass", detail: "cutover not started; no identity bound yet" });
       } else {
-        steps.push({
-          name: "remoteReady",
-          status: "warn",
-          detail:
-            `could not tell whether ${baseUrl} is already bound to an identity` +
-            `${seen.reason ? ` (/ready says: ${seen.reason})` : ready.status === 0 ? " (unreachable)" : ""}. ` +
-            "If its cutover has finished, deploy with --identity <the identity recorded at cutover>",
-        });
+        const detail = `could not tell whether ${baseUrl} is already bound to an identity` +
+          `${seen.reason ? ` (/ready says: ${seen.reason})` : ready.status === 0 ? " (unreachable)" : ""}. ` +
+          "Pass --identity <the identity recorded at cutover>; for an initial deployment, explicitly choose the identity to bind.";
+        if (options.identity === undefined) return fail("remoteReady", detail);
+        steps.push({ name: "remoteReady", status: "warn", detail });
       }
     }
 

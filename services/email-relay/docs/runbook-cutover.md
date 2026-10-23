@@ -138,7 +138,7 @@ curl -s https://mail.arxiv-daily.top/ready
 `BUILD_IDENTITY` 只标识 cutover 时绑定的“协议/ledger 世代”，不是每次代码发布的 SHA：binding 是永久的，之后任何不同的 identity 都会让 status、readiness、token 签发、automatic 授权和所有 cutover action（包括 `repair`）全部 locked，也没有重新绑定的动作。所以发布新代码时继续注入**第 0 步记录的 identity**：
 
 1. 提交代码，`services/email-relay` 下 `npm test && npm run typecheck`，工作区保持干净。
-2. `npm run deploy -- --dry-run`。线上 `/ready` 已绑定到别的 identity 时脚本会拒绝，并打印要传给 `--identity` 的值；`/ready` 读不到（locked 或不可达）时它只能警告，此时直接用第 0 步记录的值。
+2. `npm run deploy -- --dry-run`。线上 `/ready` 已绑定到别的 identity 时脚本会拒绝，并打印要传给 `--identity` 的值；`/ready` 读不到（locked 或不可达）时它也会拒绝自动选取新身份，此时必须显式传入第 0 步记录的值。首次部署且线上尚不存在时，显式传入本次选定并记录的 identity。
 3. `npm run deploy -- --identity email-relay-v2-<绑定的 SHA>`。
 4. 验证：`GET /ready` 返回 200，`automatic: "ready"`，`buildIdentity` 仍是绑定值、`readyGeneration` 不变；再确认一次**自动路径**（下一次日报，或带 `arxiv-daily:auto:` key 的真实投递），不要只发测试邮件。
 
