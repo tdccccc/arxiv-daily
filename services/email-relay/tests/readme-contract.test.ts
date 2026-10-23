@@ -82,7 +82,7 @@ describe("README matches the relay it documents", () => {
   });
 
   it("states the device token lifetime and its renewal", () => {
-    expect(readme).toMatch(/365 days without use/);
+    expect(readme).toMatch(/365 days after issuance or its last renewal/);
     expect(readme).toMatch(/half a lifetime/);
   });
 });

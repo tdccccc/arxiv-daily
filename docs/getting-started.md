@@ -150,7 +150,7 @@ With From empty, Resend’s test sender often allows mail **only to your Resend 
 3. Open the link; paste the **long code from the web page** (not the short code in the link).  
 4. **Send test**, then enable **Daily auto-send** if it works.  
 5. If you hit the daily limit, wait for the next UTC day or switch to **Send yourself**.
-6. The code stays valid while you keep using Official delivery (it is renewed as digests are sent) and expires after a year without use. If a notice says the verification code was rejected, send a new verification email and paste the new code.
+6. The code is renewed during regular Official delivery use once its current lifetime is half spent. It expires one year after issuance or its last renewal; after a long break you may need to verify again. If a notice says the verification code was rejected, send a new verification email and paste the new code.
 
 Beta capacity is intentionally small (a few messages per verified inbox per UTC day; tests count). For heavy use, use **Send yourself**.
 

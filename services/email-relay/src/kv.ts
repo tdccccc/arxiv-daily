@@ -71,7 +71,7 @@ const DEVICE_V2_PREFIX = "device-v2:";
 export const DELIVERY_V3_CUTOVER_AUDIT_KEY = "cutover:delivery-v3-audit";
 export const DELIVERY_V2_KV_VISIBILITY_MS = 60 * 1000;
 export const DELIVERY_V2_LEGACY_PENDING_TTL_MS = 120 * 1000;
-/** A device nobody uses for this long is forgotten; one in use is renewed before that. */
+/** Time from issuance or renewal to expiry; regularly used devices renew before then. */
 const DEVICE_TTL_SECONDS = 60 * 60 * 24 * 365;
 const DEVICE_RENEW_AFTER_MS = (DEVICE_TTL_SECONDS * 1000) / 2;
 const IDEMP_PREFIX = "idemp:";
@@ -206,8 +206,8 @@ export async function putDevice(
 /**
  * Gives a device that is in use a fresh expiry. The record is rewritten only
  * once half its lifetime has passed since it was written or last renewed, so an
- * active device costs about two KV writes a year, and only one left unused for
- * a whole year expires. Best effort: a failed write leaves the record as it was
+ * active device costs about two KV writes a year. Expiry is measured from
+ * issuance or the last renewal, not from every use. Best effort: a failed write leaves the record as it was
  * and must not change the outcome of the request that triggered it. Returns
  * whether the record was rewritten.
  */
