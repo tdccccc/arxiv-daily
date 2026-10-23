@@ -2,5 +2,7 @@
   "name": "arxiv-daily-embedding-runtime",
   "version": "1.0.0",
   "private": true,
-  "dependencies": { "@huggingface/transformers": "4.2.0" }
+  "dependencies": {
+    "@huggingface/transformers": "4.3.1"
+  }
 }

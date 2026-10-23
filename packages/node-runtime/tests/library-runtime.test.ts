@@ -2,7 +2,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { prepareNodeLibraryRuntime } from "../src/library-runtime";
+import { nodeLibraryRuntimePaths, prepareNodeLibraryRuntime } from "../src/library-runtime";
 
 const roots: string[] = [];
 afterEach(async () => { await Promise.all(roots.splice(0).map(root => rm(root, { recursive: true, force: true }))); });
@@ -39,4 +39,11 @@ it("does not install the CPU embedding component for remote embedding", async ()
 it("rejects incomplete installation rather than marking it ready", async () => {
   await expect(prepareNodeLibraryRuntime({ cacheDir: await root(), localEmbedding: false, install: async () => {} }))
     .rejects.toThrow(/incomplete|missing/i);
+});
+
+it("isolates upgraded embedding binaries from existing runtime installations", async () => {
+  const cacheDir = await root();
+  expect(nodeLibraryRuntimePaths(cacheDir).embedding).toBe(join(cacheDir, "runtimes", "transformers-4.3.1-cpu"));
+  const result = await prepareNodeLibraryRuntime({ cacheDir, localEmbedding: true, install: installFixture });
+  expect(JSON.parse(await readFile(join(result.embedding!, "package.json"), "utf8")).dependencies["@huggingface/transformers"]).toBe("4.3.1");
 });
