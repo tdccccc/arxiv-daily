@@ -19,6 +19,7 @@ const HELP = `Usage: npm run test:acceptance -- [options]
   --release                      Also run every persona for --host (unless --persona overrides it)
   --max-steps N                  Model decisions, 1-300 (default: 90; 220 with --release)
   --max-api-calls N              Model HTTP requests including retries (default: 2x the effective step budget)
+  --model-call-timeout-ms N      Per model attempt, 1-300000 ms (default: 45000)
   --max-duration-ms N            Exploration time budget (default: 900000; 1200000 with --release)
   --task-max-steps N             Default per-task decision budget (default: 20 task, 15 persona)
   --task-max-api-calls N         Default per-task API-call budget (default: 2x its step budget)
@@ -48,7 +49,7 @@ const RELEASE_DEFAULT_MAX_STEPS = 220;
 const RELEASE_DEFAULT_MAX_DURATION_MS = 1200000;
 
 export function parseArgs(argv) {
-  const options = { suites: ["workbench", "obsidian"], build: true, headless: true, host: "workbench" };
+  const options = { suites: ["workbench", "obsidian"], build: true, headless: true, host: "workbench", modelCallTimeoutMs: 45000 };
   let explicit = false, explore = false, explicitMaxSteps = false, explicitMaxDurationMs = false;
   for (let i = 0; i < argv.length; i++) {
     const [flag, ...rest] = argv[i].split("=");
@@ -98,6 +99,7 @@ export function parseArgs(argv) {
       }
       case "--max-steps": options.maxSteps = number(1, 300); explicitMaxSteps = true; break;
       case "--max-api-calls": options.maxApiCalls = number(1, 1000); break;
+      case "--model-call-timeout-ms": options.modelCallTimeoutMs = number(1, 300000); break;
       case "--max-duration-ms": options.maxDurationMs = number(1, 3600000); explicitMaxDurationMs = true; break;
       case "--task-max-steps": options.taskMaxSteps = number(1, 300); break;
       case "--task-max-api-calls": options.taskMaxApiCalls = number(1, 1000); break;
@@ -210,7 +212,7 @@ export async function runAcceptance(options, dependencies = {}) {
       result = await runners[suite]({
         fixture, artifactDir: directory, signal: options.signal,
         executablePath: options.executablePath, headless: options.headless,
-        ...(suite === "exploration" ? { host: options.host, configPath: options.configPath, maxSteps: options.maxSteps, maxDurationMs: options.maxDurationMs, maxApiCalls: options.maxApiCalls, taskIds: options.taskIds, personaIds: options.personaIds, taskMaxSteps: options.taskMaxSteps, taskMaxApiCalls: options.taskMaxApiCalls, release: options.release } : {}),
+        ...(suite === "exploration" ? { host: options.host, configPath: options.configPath, maxSteps: options.maxSteps, maxDurationMs: options.maxDurationMs, maxApiCalls: options.maxApiCalls, modelCallTimeoutMs: options.modelCallTimeoutMs, taskIds: options.taskIds, personaIds: options.personaIds, taskMaxSteps: options.taskMaxSteps, taskMaxApiCalls: options.taskMaxApiCalls, release: options.release } : {}),
       });
       if (!result || result.suite !== suite) throw new Error(`Runner returned no matching evidence for ${suite}`);
     } catch (error) {

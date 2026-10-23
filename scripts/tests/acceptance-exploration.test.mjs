@@ -681,13 +681,13 @@ test("provider failure text is redacted before it reaches a report", async t => 
   assert.match(report, /REDACTED/);
 });
 
-test("the real HTTP adapter aborts a stalled model within the exploration deadline", async t => {
+test("the real HTTP adapter aborts both bounded attempts of a stalled model", async t => {
   const server = await localModel(t, () => {});
   const model = await loadExplorationModel({ configPath: await modelConfig(t, server.url) });
   const result = await runExplorationLoop({ model, driver: fixtureDriver(), tasks: [task()], artifactDir: await temporary(t), modelCallTimeoutMs: 30 });
   assert.equal(result.status, "blocked");
   assert.match(result.errors.join(" "), /timeout/);
-  assert.equal(server.requests.length, 1);
+  assert.equal(server.requests.length, 2);
 });
 
 test('browser controls cannot escape the fixture through secrets, paths or external navigation', () => {
@@ -1203,4 +1203,58 @@ test("P7 workbench observer guard: a textless titled button still falls back to 
 test("P7 workbench observer: a link inside a settings row keeps the row name instead of its generic own text", async t => {
   const observation = await observeWorkbenchFixture(t, '<div data-setting-name="Report a bug"><a href="https://example.invalid/issues">Open</a></div><div data-setting-name="Documentation"><a href="https://example.invalid/docs">Open</a></div>');
   assert.deepEqual(observation.controls.filter(control => control.tag === 'a').map(control => control.name), ['Report a bug', 'Documentation']);
+});
+
+
+test("a timed-out model decision retries once and can complete the task", async t => {
+  const driver = fixtureDriver();
+  const signals = [];
+  const model = usageModel(request => {
+    signals.push(request.signal);
+    return signals.length === 1 ? new Promise(() => {}) : JSON.stringify({ type: "click", ref: request.observation.controls[0].ref });
+  });
+  const result = await runExplorationLoop({ driver, model,
+    tasks: [task(() => ({ passed: driver.executed.length === 1, checks: [{ label: "clicked", passed: driver.executed.length === 1 }] }))],
+    artifactDir: await temporary(t), modelCallTimeoutMs: 20 });
+  assert.equal(result.status, "passed");
+  assert.equal(signals.length, 2);
+  assert.equal(signals[0].aborted, true);
+  assert.equal(result.metrics.modelCalls, 2);
+  assert.equal(result.scenarios[0].usage.apiCalls, 2);
+  assert.match(result.scenarios[0].steps[0].error, /timeout/);
+  assert.equal(driver.executed.length, 1);
+});
+
+test("two consecutive model timeouts block without a third attempt", async t => {
+  const signals = [];
+  const model = usageModel(({ signal }) => { signals.push(signal); return new Promise(() => {}); });
+  const result = await runExplorationLoop({ driver: fixtureDriver(), model, tasks: [task()], artifactDir: await temporary(t), modelCallTimeoutMs: 15 });
+  assert.equal(result.status, "blocked");
+  assert.equal(signals.length, 2);
+  assert.ok(signals.every(signal => signal.aborted));
+  assert.equal(result.metrics.modelCalls, 2);
+  assert.equal(result.scenarios[0].usage.apiCalls, 2);
+});
+
+test("timeout retries obey per-task and run-wide budgets", async t => {
+  for (const budget of [{ taskMaxSteps: 1 }, { taskMaxApiCalls: 1 }, { maxSteps: 1 }, { maxDurationMs: 30 }]) {
+    let calls = 0;
+    const model = usageModel(() => { calls++; return new Promise(() => {}); });
+    const result = await runExplorationLoop({ driver: fixtureDriver(), model, tasks: [task()], artifactDir: await temporary(t),
+      modelCallTimeoutMs: budget.maxDurationMs ? 100 : 15, ...budget });
+    assert.equal(result.status, "blocked", JSON.stringify(budget));
+    assert.equal(calls, 1, JSON.stringify(budget));
+  }
+});
+
+test("authentication errors and parent cancellation never receive timeout retries", async t => {
+  let calls = 0;
+  const rejected = usageModel(() => { calls++; throw new Error("401 unauthorized"); });
+  await runExplorationLoop({ driver: fixtureDriver(), model: rejected, tasks: [task()], artifactDir: await temporary(t), modelCallTimeoutMs: 15 });
+  assert.equal(calls, 1);
+  const controller = new AbortController();
+  calls = 0;
+  const cancelled = usageModel(() => { calls++; setTimeout(() => controller.abort("stop"), 5); return new Promise(() => {}); });
+  await runExplorationLoop({ driver: fixtureDriver(), model: cancelled, tasks: [task()], artifactDir: await temporary(t), modelCallTimeoutMs: 100, signal: controller.signal });
+  assert.equal(calls, 1);
 });

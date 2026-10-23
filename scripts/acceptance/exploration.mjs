@@ -302,6 +302,7 @@ export async function runExplorationLoop({ driver, model, tasks, artifactDir, ma
     const scenario = scenarios[index], taskStart = Date.now();
     const actions = [], observations = [];
     let invalidActions = 0;
+    let consecutiveModelTimeouts = 0;
     let runEnded = false;
     // Every task gets its own step/API-call budget so it cannot consume the whole run: a goal task
     // defaults to 20 steps (roomy over the ~6-7 steps a default task takes today), a persona to 15
@@ -398,6 +399,7 @@ export async function runExplorationLoop({ driver, model, tasks, artifactDir, ma
         let action;
         try {
           const reply = await withDeadline(childSignal => callModel({ ...request, signal: childSignal }), Math.min(callTimeout, deadline - Date.now()), "Model API call", signal);
+          consecutiveModelTimeouts = 0;
           event.modelReply = typeof reply === "string" ? reply.slice(0, 16000) : "[Non-string model response]";
           try { action = parseExplorationAction(reply, observation); }
           catch (error) {
@@ -467,8 +469,16 @@ export async function runExplorationLoop({ driver, model, tasks, artifactDir, ma
             await record(event);
             throw budgetExhausted(scenario.error);
           }
-          scenario.status = "blocked";
-          scenario.error = `Model or evidence collection unavailable: ${error.message}`;
+          if (error.name === "ExplorationTimeoutError" && consecutiveModelTimeouts === 0
+            && !signal?.aborted && Date.now() < deadline) {
+            // No browser action happened. Re-observe and retry the decision once;
+            // the normal step/API/duration guards below and above still apply.
+            consecutiveModelTimeouts += 1;
+            event.retry = "model-timeout";
+          } else {
+            scenario.status = "blocked";
+            scenario.error = `Model or evidence collection unavailable: ${error.message}`;
+          }
         }
         if (scenario.status === "not-run") {
           const apiCallsUsed = usageSnapshot(model).apiCalls - usageStart.apiCalls;

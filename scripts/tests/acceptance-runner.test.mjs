@@ -165,3 +165,18 @@ test("build failures link their logs from the saved report", async t => {
   const report = await runAcceptance({ ...parseArgs(["--suite", "workbench"]), output: f.output }, f.deps);
   assert.deepEqual(report.suites[0].artifacts, ["build-apps-cli.log"]);
 });
+
+
+test("model call timeout is bounded, configurable and forwarded to exploration", async t => {
+  assert.equal(parseArgs([]).modelCallTimeoutMs, 45000);
+  for (const value of ["0", "300001", "1.5", "abc"]) {
+    assert.throws(() => parseArgs(["--model-call-timeout-ms", value]), /model-call-timeout-ms/);
+  }
+  const options = parseArgs(["--suite", "exploration", "--model-call-timeout-ms", "120000", "--skip-build"]);
+  assert.equal(options.modelCallTimeoutMs, 120000);
+  const f = await dependencies(t);
+  let received;
+  f.deps.runners.exploration = async args => { received = args.modelCallTimeoutMs; return passed("exploration"); };
+  await runAcceptance({ ...options, output: f.output }, f.deps);
+  assert.equal(received, 120000);
+});
