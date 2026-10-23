@@ -12,6 +12,7 @@ export function classifyControlRestriction(control, allowedUrl) {
   const field = control.field || "";
   const name = control.name || "";
   if (control.type === "password" || /api.?key|password|secret|token/i.test(field)) return "credentials are excluded from exploration";
+  if (control.dataAction === "enable" || /^(turn on daily reports|开启自动日报)$/i.test(name.trim())) return "scheduling settings are fixed by the fixture";
   if (control.type === "file") return "file selection is outside the browser capability";
   if (/vault|root|folder|path|dailyDir|papersDir/i.test(field)) return "filesystem locations must remain owned by the fixture";
   if (/base.?url|endpoint|^provider$|^embedding\.|^pdfParserSidecar\.|^email\.|^schedule\./i.test(field)) return "external service and scheduling settings are fixed by the fixture";
@@ -42,7 +43,7 @@ export function classifyControlRestriction(control, allowedUrl) {
 function liveControlDescriptor(node = document.activeElement) {
   return { tag: node.tagName.toLowerCase(), type: node.getAttribute("type") || "", field: node.getAttribute("name") || "",
     name: node.getAttribute("aria-label") || node.textContent || "", href: node.getAttribute("href") || "",
-    dataAction: node.getAttribute("data-settings-action") || node.getAttribute("data-settings") || node.getAttribute("data-action") || "", disabled: node.disabled === true,
+    dataAction: node.getAttribute("data-settings-action") || node.getAttribute("data-settings") || node.getAttribute("data-action") || node.getAttribute("data-setup-action") || "", disabled: node.disabled === true,
     readOnly: node.readOnly === true, outsideDialog: Boolean(document.querySelector("dialog[open]") && !node.closest("dialog[open]")),
     outsideWorkbench: node !== document.body && !node.closest(".workbench") };
 }
@@ -135,7 +136,7 @@ function browserObservation(id) {
       ...(node.tagName === "SUMMARY" && node.parentElement?.tagName === "DETAILS" ? { expanded: node.parentElement.open === true } : {}),
       ...(node.hasAttribute("href") ? { href: node.getAttribute("href").slice(0, 1000) } : {}),
       ...(node.tagName === "SELECT" ? { options: Array.from(node.options).slice(0, 60).map(option => ({ value: option.value.slice(0, 256), label: option.text.slice(0, 96), disabled: option.disabled })) } : {}),
-      dataAction: node.getAttribute("data-settings-action") || node.getAttribute("data-settings") || node.getAttribute("data-action") || "",
+      dataAction: node.getAttribute("data-settings-action") || node.getAttribute("data-settings") || node.getAttribute("data-action") || node.getAttribute("data-setup-action") || "",
       paperKey: node.getAttribute("data-paper") || "",
       purpose: node.classList.contains("sidebar-toggle") ? "sidebar-toggle" : "",
       rect: { x: Math.round(rect.x), y: Math.round(rect.y), width: Math.round(rect.width), height: Math.round(rect.height) },

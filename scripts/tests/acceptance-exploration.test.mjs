@@ -1204,3 +1204,14 @@ test("P7 workbench observer: a link inside a settings row keeps the row name ins
   const observation = await observeWorkbenchFixture(t, '<div data-setting-name="Report a bug"><a href="https://example.invalid/issues">Open</a></div><div data-setting-name="Documentation"><a href="https://example.invalid/docs">Open</a></div>');
   assert.deepEqual(observation.controls.filter(control => control.tag === 'a').map(control => control.name), ['Report a bug', 'Documentation']);
 });
+
+for (const key of ['Enter', 'Space']) test(`setup scheduler activation blocks ${key}`, async t => {
+  const { driver, page, observation } = await makePressDriver(t, { focus: { ...notFocused, tag: 'button', name: '开启自动日报', dataAction: 'enable' } });
+  await assert.rejects(driver.execute({ type: 'press', key }, observation), /ExplorationActionError/);
+  assert.ok(!page.calls.some(call => call[0] === 'press'));
+});
+test('setup scheduler observation preserves its action and restriction', async t => {
+  const observation = await observeWorkbenchFixture(t, '<button data-setup-action="enable">开启自动日报</button>');
+  assert.equal(observation.controls[0].dataAction, 'enable');
+  assert.match(classifyControlRestriction(observation.controls[0]), /scheduling/);
+});

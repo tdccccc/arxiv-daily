@@ -524,7 +524,7 @@ export function classifyControlRestriction(control, allowedUrl) {
   // instead (menu items use an is-disabled CLASS — see describeControl — not restriction-by-name); the
   // toggle itself ("Enable scheduler"/"Disable scheduler") is restricted here, same policy as the
   // settings tab's own schedule toggle just above.
-  if (/^arxiv-daily-run-window-/.test(field) || /^enable\s*·/i.test(name) || /check every \(minutes\)/i.test(name) || /^(enable|disable) scheduler$/i.test(name)) return "scheduling settings are fixed by the fixture";
+  if (/^arxiv-daily-run-window-/.test(field) || /^enable\s*·/i.test(name) || /check every \(minutes\)/i.test(name) || /^(?:(enable|disable) scheduler|turn on daily reports|开启自动日报)$/i.test(name)) return "scheduling settings are fixed by the fixture";
   // New-P3 Chunk 1 (docs/helm/2026-10-13-exploration-safety-and-coverage/phases/03-obsidian-library-
   // tasks.md), owner steer: this used to match any name containing "embedding" or "sidecar" unanchored,
   // which also caught the bare Embedding mode <select> (name: "Embedding", packages/core/src/settings/

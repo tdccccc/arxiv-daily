@@ -1364,3 +1364,16 @@ test("home still opens the dashboard normally when no plugin modal or menu is op
     assert.equal(window.document.activeElement?.className, "arxiv-daily-dashboard__tab is-active", "openDashboard()'s own focus seeding must still run");
   });
 });
+
+test('setup checklist scheduler activation is restricted', () => {
+  assert.match(classifyControlRestriction({ name: 'Turn on daily reports', tag: 'button' }), /scheduling/);
+});
+
+for (const key of ['Enter', 'Space']) test(`setup checklist blocks keyboard ${key}`, async () => {
+  const { window, calls, observe, execute } = buildSession('<div class="arxiv-daily-settings"><button>Turn on daily reports</button></div>');
+  const snapshot = observe();
+  window.document.querySelector('button').focus();
+  const result = await execute({ type: 'press', key }, snapshot);
+  assert.equal(result.ok, false);
+  assert.equal(calls.length, 0);
+});
