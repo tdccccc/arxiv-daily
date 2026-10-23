@@ -71,7 +71,10 @@ export async function runCliLibrary(config: CliRuntimeConfig, args: string[], io
       print({ prepared });
       return 0;
     }
-    if (!["scan", "index", "propose", "directions", "confirm", "search", "review"].includes(command)) throw new CliConfigError(`Unknown library command: ${command}`);
+    if (command === "maintain" && (rest.length !== 1 || rest[0] !== "--other-clients-closed")) {
+      throw new CliConfigError("Close all other Obsidian, CLI and workbench clients using this vault, then run library maintain --other-clients-closed. Keep them closed until maintenance finishes. Old-model paper files are retained.");
+    }
+    if (!["scan", "index", "propose", "directions", "confirm", "search", "review", "maintain"].includes(command)) throw new CliConfigError(`Unknown library command: ${command}`);
     const context = await createCliLibraryContext(config, { ...options, signal });
     lease = await context.storage.acquireLock("personal-library-workflow", { wait: true, signal, timeoutMs: 30_000 });
     if (!lease) throw new Error("Personal library is busy");
@@ -83,7 +86,12 @@ export async function runCliLibrary(config: CliRuntimeConfig, args: string[], io
     stopWatch = () => watcher.close();
     const onlyNew = command === "propose" && rest.length === 1 && rest[0] === "--new";
     if (["scan", "index", "propose", "directions"].includes(command) && rest.length && !onlyNew) throw new CliConfigError(`library ${command} takes no arguments${command === "propose" ? " except --new" : ""}`);
-    if (command === "scan") {
+    if (command === "maintain") {
+      // The workflow lock serializes CLI writers; the explicit confirmation is
+      // required because it cannot observe other processes' search readers.
+      io.stderr.write("Maintaining search generations; keep other vault clients closed. Old-model paper files are retained.\n");
+      print(await context.generationStore.runHostAuthorizedMaintenance());
+    } else if (command === "scan") {
       const catalog = await context.workflow.scan({ signal });
       print({ revision: catalog.revision, lastScan: catalog.lastScan, paperCount: Object.keys(catalog.papers).length });
     } else if (command === "index") {

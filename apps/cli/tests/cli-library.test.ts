@@ -13,7 +13,7 @@ import {
   decodeFullTextKnowledgeBaseManifest,
   PersonalLibraryCatalogStore,
   PersonalLibraryDirectionProposalStore,
-  FullTextKnowledgeBaseFileStore,
+  FullTextKnowledgeBaseFileStore, FullTextGenerationIndexStore,
   type DocumentParser,
   type EmbeddingModel,
   type HttpClient,
@@ -150,6 +150,37 @@ async function fixture({ authorized = true, remote = false } = {}) {
 }
 
 describe("CLI shared library workflow", () => {
+  it("requires explicit quiet-period confirmation before maintaining generations", async () => {
+    const f = await fixture();
+    const denied = await f.invoke(["maintain"]);
+    expect(denied.code).toBe(2);
+    expect(denied.stderr).toContain("--other-clients-closed");
+    expect(denied.stderr).toContain("Obsidian");
+    expect(f.options.createEmbedding).not.toHaveBeenCalled();
+    const result = await f.invoke(["maintain", "--other-clients-closed"]);
+    expect(result.code, result.stderr).toBe(0);
+    expect(JSON.parse(result.stdout)).toMatchObject({ removedGenerationIds: [] });
+    expect(f.options.createEmbedding).not.toHaveBeenCalled();
+  });
+
+  it("explicit maintenance reclaims old generations after repeated library changes", async () => {
+    const f = await fixture();
+    for (let i = 0; i < 4; i++) {
+      if (i) await f.addPapers([10 + i]);
+      const result = await f.invoke(["index"]);
+      expect(result.code, result.stderr).toBe(0);
+    }
+    const { storage, scope, identification } = f.stores();
+    const generations = new FullTextGenerationIndexStore(storage, f.config.settings.output, scope, identification);
+    const before = await storage.list(generations.paths.generationsDirectory);
+    expect(before.filter(entry => entry.type === "folder")).toHaveLength(4);
+    const result = await f.invoke(["maintain", "--other-clients-closed"]);
+    expect(result.code, result.stderr).toBe(0);
+    expect(JSON.parse(result.stdout).removedGenerationIds).toHaveLength(2);
+    expect((await storage.list(generations.paths.generationsDirectory)).filter(entry => entry.type === "folder")).toHaveLength(2);
+    expect((await f.invoke(["search", "--query", "agents", "--mode", "lexical"])).code).toBe(0);
+  }, 20_000);
+
   it("scans, indexes, proposes and confirms through existing product stores across command invocations", async () => {
     const f = await fixture();
     const result = await f.invoke(["scan"]);

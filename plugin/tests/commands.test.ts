@@ -384,6 +384,26 @@ describe("collectPaperIndexDiagnostics", () => {
 });
 
 describe("registerCommands", () => {
+  it.each(["Cancel", "Other clients are closed — clean up"])("confirms quiet-period maintenance: %s", async choice => {
+    Modal.opened = [];
+    const plugin = Object.assign(makePlugin(), {
+      maintainPersonalLibraryFullTextGenerations: vi.fn(async () => ({ removedGenerationIds: ["old"] })),
+    });
+    registerCommands(plugin as any);
+    const command = plugin.addCommand.mock.calls.map(([value]) => value).find(value => value.id === "maintain-personal-library-search-index");
+    expect(command).toBeDefined();
+    command!.callback?.();
+    const modal = Modal.opened.at(-1)!;
+    expect(modal.contentEl.textContent).toContain("other Obsidian");
+    expect(modal.contentEl.textContent).toContain("CLI");
+    expect(plugin.maintainPersonalLibraryFullTextGenerations).not.toHaveBeenCalled();
+    const button = [...modal.contentEl.querySelectorAll("button")].find(button => button.textContent === choice)!;
+    button.click();
+    await Promise.resolve();
+    if (choice === "Cancel") expect(plugin.maintainPersonalLibraryFullTextGenerations).not.toHaveBeenCalled();
+    else await vi.waitFor(() => expect(plugin.maintainPersonalLibraryFullTextGenerations).toHaveBeenCalledOnce());
+  });
+
   it("registers the run history viewer command", () => {
     const plugin = makePlugin();
 
