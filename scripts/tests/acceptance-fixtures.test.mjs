@@ -162,3 +162,16 @@ test("fixture environment resolves the actual CLI config inside its root on ever
     assert.ok(fixture.env[name]?.startsWith(join(fixture.root, "")), `${name} must be fixture-owned`);
   }
 });
+
+test('PDF downloads serve registered papers only', async t => {
+  const server = await serverFor(t);
+  for (const id of [PAPERS[0].id, `${PAPERS[0].id}v2`]) {
+    const response = await proxy(server, `https://arxiv.org/pdf/${id}`);
+    assert.equal(response.status, 200);
+    assert.equal(response.headers.get('content-type'), 'application/pdf');
+    assert.match(await response.text(), /^%PDF-/);
+    assert.equal(server.requests.at(-1).kind, 'pdf');
+  }
+  assert.equal((await proxy(server, 'https://arxiv.org/pdf/9999.99999')).status, 502);
+  assert.equal(server.requests.at(-1).kind, 'unexpected');
+});

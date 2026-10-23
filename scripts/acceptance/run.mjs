@@ -241,7 +241,7 @@ export async function runAcceptance(options, dependencies = {}) {
           const unexpected = fixture.server.requests.filter(request => ["unexpected", "fixture-error"].includes(request.kind));
           if (unexpected.length) {
             result.status = "failed";
-            result.scenarios.push({ id: `${suite}.fixture-contract`, title: "Every external request matches the controlled protocol", status: "failed", durationMs: 0, error: "Unexpected or malformed external requests reached the fixture; inspect request evidence", assertions: [{ label: "No unexpected fixture requests", passed: false, actual: unexpected.length }], artifacts: [requestsPath] });
+            result.scenarios.push({ id: `${suite}.fixture-contract`, title: "Every external request matches the controlled protocol", status: "failed", durationMs: 0, error: redact(`Unexpected or malformed external requests reached the fixture: ${unexpected.slice(0, 10).map(request => `${request.method} ${request.url}`).join("; ")}; inspect request evidence`), assertions: [{ label: "No unexpected fixture requests", passed: false, actual: unexpected.length }], artifacts: [requestsPath] });
           }
         }
       } catch (error) {

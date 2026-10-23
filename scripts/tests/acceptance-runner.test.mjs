@@ -194,3 +194,12 @@ test("build selection follows both fixed suites and exploration host", () => {
   assert.deepEqual(workspacesToBuild(["exploration"], "workbench"), ["apps/cli"]);
   assert.deepEqual(workspacesToBuild(["obsidian"], "workbench"), ["obsidian-arxiv-daily"]);
 });
+
+test('fixture contract failures identify the offending URL', async t => {
+  const { deps, output } = await dependencies(t, {
+    createFixture: async () => ({ server: { requests: [{ kind: 'unexpected', method: 'GET', url: 'https://arxiv.org/pdf/9999.99999' }] }, dispose: async () => {} }),
+    runners: { exploration: async () => passed('exploration') },
+  });
+  const report = await runAcceptance({ suites: ['exploration'], output, build: false }, deps);
+  assert.match(JSON.stringify(report), /Unexpected or malformed[^"\n]*https:\/\/arxiv.org\/pdf\/9999.99999/);
+});
