@@ -54,8 +54,9 @@ export const DAILY_SUMMARY_FIELD_LABELS: Record<
 export function normalizeMarkdownLine(value: string): string {
   const compacted = value.replace(/\s+/gu, " ").trim();
   return mapOutsideCodeSpans(compacted, segment => {
-    const math = protectLatexMath(neutralizeRawHtml(segment));
-    // Only prose is untrusted Markdown: preserve formulas and code verbatim.
+    const math = protectLatexMath(neutralizeRawHtml(segment), true);
+    // Only dollar delimiters are shared math boundaries in Markdown hosts.
+    // Bare TeX environments and backslash delimiters can still contain embeds.
     const inert = math.text.replace(/\[\[/g, "\\[\\[")
       .replace(/!\[/g, "!\\[").replace(/%%/g, "\\%\\%");
     return math.restore(inert);

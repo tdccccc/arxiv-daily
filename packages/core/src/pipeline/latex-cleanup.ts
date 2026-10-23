@@ -20,7 +20,7 @@ function closingOffset(text: string, closer: string, start: number): number {
 }
 
 /** Protect complete formulas before prose cleanup, including display environments. */
-export function protectLatexMath(input: string): { text: string; restore: (value: string) => string } {
+export function protectLatexMath(input: string, dollarDelimitersOnly = false): { text: string; restore: (value: string) => string } {
   const text = input.replace(/[\uE000\uE001]/g, "");
   const formulas: string[] = [];
   const missing = new Set<string>();
@@ -30,6 +30,10 @@ export function protectLatexMath(input: string): { text: string; restore: (value
     if (text[i] === "$") {
       opener = closer = text[i + 1] === "$" ? "$$" : "$";
     } else if (text[i] === "\\") {
+      if (dollarDelimitersOnly) {
+        i += 2;
+        continue;
+      }
       if (text[i + 1] === "(" || text[i + 1] === "[") {
         opener = text.slice(i, i + 2);
         closer = opener === "\\(" ? "\\)" : "\\]";

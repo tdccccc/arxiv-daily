@@ -479,6 +479,14 @@ describe("assembleDailySummary", () => {
     expect(report).toContain(String.raw`\%\% hidden \%\%`);
   });
 
+  it.each([
+    String.raw`\begin{equation}![](https://tracker.invalid/pixel)\end{equation}`,
+    String.raw`\(![](https://tracker.invalid/pixel)\)`,
+    String.raw`\[![](https://tracker.invalid/pixel)\]`,
+  ])("neutralizes images inside unsupported Markdown math delimiters: %s", text => {
+    expect(normalizeMarkdownLine(text)).not.toContain("![");
+  });
+
   it("preserves formula and code content and ordinary links while disabling prose embeds", () => {
     const text = String.raw`[link](https://example.test) [bracket] wow! $\text{![[math]] %%}$ ` + "`![[code]] %%`";
     expect(normalizeMarkdownLine(text)).toBe(text);
