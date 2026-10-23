@@ -184,6 +184,14 @@ describe("digestFromDailyReport", () => {
     expect(digestFromDailyReport(input(report("zh"), "en"))!.summaryLanguage).toBe("zh");
   });
 
+  it.each(["zh", "en"] as const)("keeps a CRLF %s report's language after settings change", language => {
+    const other = language === "en" ? "zh" : "en";
+    const rebuilt = digestFromDailyReport(input(report(language).replace(/\n/g, "\r\n"), other))!;
+    expect(rebuilt.summaryLanguage).toBe(language);
+    expect(renderEmailHtml(rebuilt)).toBe(renderEmailHtml(fresh(language)));
+    expect(renderEmailText(rebuilt)).toBe(renderEmailText(fresh(language)));
+  });
+
   it("keeps a paper under a section whose topic was renamed or removed since", () => {
     const renamed = report("zh").replace("## Photo-z", "## Photometric redshift");
 

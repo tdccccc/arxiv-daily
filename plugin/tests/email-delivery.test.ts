@@ -107,6 +107,20 @@ describe("createAutomaticEmailOutcomeNotifier", () => {
     expect(notify.mock.calls[0]![0]).not.toContain("developer console");
   });
 
+  it.each([
+    ["hosted_recipient_mismatch", "not the address"],
+    ["provider_quota_exceeded", "sending limit"],
+    ["provider_request_rejected", "request as invalid"],
+    ["resend_api_key_rejected", "Resend rejected the API key"],
+    ["resend_access_denied", "From domain is verified"],
+  ] as const)("explains automatic delivery failure %s", (reason, advice) => {
+    const notify = vi.fn();
+    const onResult = createAutomaticEmailOutcomeNotifier(notify);
+    onResult("2026-10-24", { kind: "failed", reason, attempts: 1 });
+    expect(notify).toHaveBeenCalledTimes(1);
+    expect(notify.mock.calls[0]![0]).toContain(advice);
+  });
+
   it("stays quiet for outcomes that need no action from the user", () => {
     const notify = vi.fn();
     const onResult = createAutomaticEmailOutcomeNotifier(notify);
