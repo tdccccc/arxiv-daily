@@ -113,6 +113,12 @@ export function parseArgs(argv) {
   if (!explicitMaxDurationMs) options.maxDurationMs = options.release ? RELEASE_DEFAULT_MAX_DURATION_MS : 900000;
   return options;
 }
+export function npmBuildCommand(platform = process.platform, env = process.env) {
+  if (env.npm_execpath) return { command: process.execPath, prefix: [env.npm_execpath] };
+  if (platform === "win32") throw new Error("Run acceptance through npm run test:acceptance on Windows");
+  return { command: "npm", prefix: [] };
+}
+
 async function buildProducts(suites, { artifactDir, signal, onProgress }) {
   const workspaces = [];
   if (suites.some(suite => suite === "workbench" || suite === "exploration")) workspaces.push("apps/cli");
@@ -122,7 +128,8 @@ async function buildProducts(suites, { artifactDir, signal, onProgress }) {
     onProgress(`Build ${workspace}`);
     const log = [];
     await new Promise((resolveBuild, rejectBuild) => {
-      const child = spawn(process.platform === "win32" ? "npm.cmd" : "npm", ["run", "build", "--workspace", workspace], {
+      const npm = npmBuildCommand();
+      const child = spawn(npm.command, [...npm.prefix, "run", "build", "--workspace", workspace], {
         cwd: repoRoot, stdio: ["ignore", "pipe", "pipe"], detached: process.platform !== "win32", windowsHide: true,
       });
       let forceTimer;

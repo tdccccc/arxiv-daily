@@ -109,7 +109,7 @@ test("aborted model requests do not leave held connections or prevent cleanup", 
 test("fixture environment owns config, data and PDFs and transports child requests without real network", async t => {
   const fixture = await createFixtureEnvironment();
   t.after(() => fixture.dispose());
-  assert.ok(fixture.vaultRoot.startsWith(fixture.root + "/"));
+  assert.ok(fixture.vaultRoot.startsWith(join(fixture.root, "")));
   assert.ok(fixture.configPath.startsWith(fixture.configHome + "/"));
   const config = await readFile(fixture.configPath, "utf8");
   assert.ok(config.includes(fixture.vaultRoot));
@@ -150,4 +150,15 @@ test("the shipping parser reads every fixture announcement date with exactly two
   assert.equal(buckets.find(bucket => bucket.announceDate === ACCEPTANCE_DATE)?.papers.length, 2);
   assert.ok(buckets.length >= 5);
   assert.ok(buckets.every(bucket => bucket.papers.length === 2));
+});
+
+test("fixture environment resolves the actual CLI config inside its root on every platform", async t => {
+  const fixture = await createFixtureEnvironment();
+  t.after(() => fixture.dispose());
+  const compiled = await build({ entryPoints: [fileURLToPath(new URL("../../apps/cli/src/config-path.ts", import.meta.url))], bundle: true, write: false, platform: "node", format: "esm" });
+  const { resolveCliConfigPath } = await import(`data:text/javascript;base64,${Buffer.from(compiled.outputFiles[0].text).toString("base64")}`);
+  for (const platform of ["win32", "darwin", "linux"]) assert.equal(resolveCliConfigPath(fixture.env, platform), fixture.configPath, platform);
+  for (const name of ["APPDATA", "LOCALAPPDATA", "HOME", "USERPROFILE", "XDG_CONFIG_HOME", "XDG_CACHE_HOME"]) {
+    assert.ok(fixture.env[name]?.startsWith(join(fixture.root, "")), `${name} must be fixture-owned`);
+  }
 });

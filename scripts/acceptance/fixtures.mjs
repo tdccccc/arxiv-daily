@@ -205,15 +205,15 @@ export async function createFixtureEnvironment({ configured = true, mode } = {})
   const root = await mkdtemp(join(tmpdir(), "arxiv-acceptance-"));
   let server;
   try {
-    const vaultRoot = join(root, "vault"), libraryRoot = join(vaultRoot, "library"), configHome = join(root, "config"), cacheDir = join(root, "cache");
+    const vaultRoot = join(root, "vault"), libraryRoot = join(vaultRoot, "library"), configHome = join(root, "config"), cacheDir = join(root, "cache"), homeDir = join(root, "home");
     const configPath = join(configHome, "arxiv-daily", "config.toml");
-    await Promise.all([mkdir(libraryRoot, { recursive: true }), mkdir(join(vaultRoot, ".obsidian"), { recursive: true }), mkdir(join(configHome, "arxiv-daily"), { recursive: true }), mkdir(cacheDir, { recursive: true })]);
+    await Promise.all([mkdir(libraryRoot, { recursive: true }), mkdir(join(vaultRoot, ".obsidian"), { recursive: true }), mkdir(join(configHome, "arxiv-daily"), { recursive: true }), mkdir(cacheDir, { recursive: true }), mkdir(homeDir, { recursive: true })]);
     await writeFile(join(vaultRoot, ".obsidian", "community-plugins.json"), '["arxiv-daily"]\n');
     await Promise.all(PAPERS.map(p => writeFile(join(libraryRoot, `${p.id}.pdf`), fixturePdf(p))));
     if (configured) await writeFile(configPath, fixtureConfig({ vaultRoot, cacheDir }), { mode: 0o600 });
     server = await startFixtureServer({ mode });
     const preload = fileURLToPath(new URL("./fixture-preload.cjs", import.meta.url));
-    const env = { ...process.env, XDG_CONFIG_HOME: configHome, XDG_CACHE_HOME: cacheDir, ARXIV_ACCEPTANCE_FIXTURE_URL: server.url, NODE_OPTIONS: `--require=${JSON.stringify(preload)}` };
+    const env = { ...process.env, APPDATA: configHome, LOCALAPPDATA: cacheDir, HOME: homeDir, USERPROFILE: homeDir, XDG_CONFIG_HOME: configHome, XDG_CACHE_HOME: cacheDir, ARXIV_ACCEPTANCE_FIXTURE_URL: server.url, NODE_OPTIONS: `--require=${JSON.stringify(preload)}` };
     let disposed;
     return { root, vaultRoot, libraryRoot, configHome, configPath, cacheDir, env, server, dispose() {
       disposed ??= (async () => { await server.close(); await rm(root, { recursive: true, force: true }); })();

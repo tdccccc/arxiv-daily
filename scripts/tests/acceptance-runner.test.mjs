@@ -3,7 +3,7 @@ import { test } from "node:test";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { parseArgs, runAcceptance } from "../acceptance/run.mjs";
+import { parseArgs, runAcceptance, npmBuildCommand } from "../acceptance/run.mjs";
 
 function passed(suite) { return { suite, status: "passed", scenarios: [{ id: `${suite}.task`, title: "User task", status: "passed", assertions: [{ label: "Observed expected state", passed: true }] }] }; }
 async function dependencies(t, overrides = {}) {
@@ -164,4 +164,9 @@ test("build failures link their logs from the saved report", async t => {
   const f = await dependencies(t, { build: async () => { throw error; } });
   const report = await runAcceptance({ ...parseArgs(["--suite", "workbench"]), output: f.output }, f.deps);
   assert.deepEqual(report.suites[0].artifacts, ["build-apps-cli.log"]);
+});
+
+test("Windows builds invoke npm through Node and never execute a cmd file directly", () => {
+  assert.deepEqual(npmBuildCommand("win32", { npm_execpath: "C:/npm/npm-cli.js" }), { command: process.execPath, prefix: ["C:/npm/npm-cli.js"] });
+  assert.throws(() => npmBuildCommand("win32", {}), /through npm/);
 });
