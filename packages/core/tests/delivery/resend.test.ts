@@ -458,6 +458,48 @@ describe("deliverDailyEmailIfEnabled", () => {
     expect(request).toHaveBeenCalledTimes(1);
   });
 
+  it.each([
+    [401, "resend_api_key_rejected"],
+    [403, "resend_access_denied"],
+    [429, "provider_quota_exceeded"],
+    [422, "provider_request_rejected"],
+    [400, "provider_request_rejected"],
+    [404, "provider_definitive_rejection"],
+  ] as const)("reports a Resend HTTP %i as %s but records the coarse rejection", async (status, reason) => {
+    const warn = vi.fn();
+    const logger = { info: vi.fn(), warn, error: vi.fn(), debug: vi.fn() };
+    const storage = memoryStorage();
+    const request = vi.fn(async () => ({
+      status,
+      headers: {},
+      bodyText: JSON.stringify({ message: "private provider detail you@example.com" }),
+    }));
+    const email = {
+      enabled: true,
+      mode: "self" as const,
+      to: "you@example.com",
+      fromEmail: "from@example.com",
+      apiKey: "re_key",
+    };
+
+    const testSend = await deliverDailyEmailIfEnabled(digest, {
+      storage, http: { request }, output, email, force: true, logger,
+    });
+    expect(testSend).toEqual({ kind: "failed", reason, attempts: 1 });
+    const automatic = await deliverDailyEmailIfEnabled(digest, {
+      storage, http: { request }, output, email, logger,
+    });
+    expect(automatic).toEqual({ kind: "failed", reason, attempts: 1 });
+    expect(warn).toHaveBeenCalledWith(`email: ${reason} date=${digest.date} status=${status}`);
+
+    const persisted = await persistedDeliveryText(storage);
+    expect(persisted).toContain("provider_definitive_rejection");
+    for (const finer of [
+      "resend_api_key_rejected", "resend_access_denied", "provider_quota_exceeded", "provider_request_rejected",
+    ]) expect(persisted).not.toContain(finer);
+    expect(JSON.stringify(warn.mock.calls)).not.toContain("you@example.com");
+  });
+
   it("does not expose or persist a sensitive Resend rejection body", async () => {
     const storage = memoryStorage();
     const sensitive = [

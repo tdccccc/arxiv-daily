@@ -55,7 +55,7 @@ arXiv Daily YYYY-MM-DD · N 篇
    - Configured arXiv categories (or future source labels) summary line
 2. **Body** — one section per configured topic (see empty topics)
 3. **Footer**
-   - Vault pointer: full Markdown daily lives at `arxiv-daily/daily/YYYY-MM-DD.md` (or configured `dailyDir`)
+   - Vault pointer: full Markdown daily lives at `arxiv-daily/daily/YYYY-MM-DD.md` (or configured `dailyDir`). Omitted when `N = 0`: such a day writes no daily file, so there is nothing to point to.
    - Optional one-line product name (“arXiv Daily”)
 4. **Omit from v1 body**
    - Generation metrics (LLM calls, tokens, wall time)
@@ -68,7 +68,7 @@ arXiv Daily YYYY-MM-DD · N 篇
 | Topic has ≥1 selected paper | Render topic heading + each paper block |
 | Topic has 0 selected papers | **Still render topic heading** + “今日无相关论文更新。” / English equivalent (mirror vault empty-topic line) |
 | Not-selected / ignored lists | **Do not** include in email |
-| Overall `N = 0` but pipeline `completed` | **Still send.** Subject: `arXiv Daily YYYY-MM-DD · 0 篇` (en: `· 0 papers`). Body: header with count 0; **lead line「今日无相关论文」** / English equivalent; **then each configured topic** with its empty-topic one-liner; footer vault path. Do not omit the zero-day signal. |
+| Overall `N = 0` but pipeline `completed` | **Still send.** Subject: `arXiv Daily YYYY-MM-DD · 0 篇` (en: `· 0 papers`). Body: header with count 0; **lead line「今日无相关论文」** / English equivalent; **then each configured topic** with its empty-topic one-liner; no footer vault path (no daily file is written). Do not omit the zero-day signal. |
 
 ## Per-paper block (isomorphic with vault daily)
 
@@ -104,7 +104,7 @@ If structured summary is unavailable (vault fallback path):
 
 | Decision | Detail |
 |---|---|
-| Email body | **Soft-normalize** for mail clients: strip `$...$` / `\(...\)` / `\[...\]` delimiters; simplify common macros (`\frac`, Greek, `\leq`, …) to Unicode or plain text via `emailProse` |
+| Email body | **Soft-normalize** for mail clients: strip `$...$` / `\(...\)` / `\[...\]` delimiters; simplify common macros (`\frac`, `\sqrt`, Greek, `\leq`/`\le`, `\odot`, accents and font wrappers, …) to Unicode or plain text via `emailProse`; a command it cannot render, and matrix-like environments, stay as written TeX instead of being fused into a word |
 | Vault daily | Unchanged (still full scientific Markdown / MathJax-oriented) |
 | Not in email | Rasterize formulas to images; full MathJax |
 

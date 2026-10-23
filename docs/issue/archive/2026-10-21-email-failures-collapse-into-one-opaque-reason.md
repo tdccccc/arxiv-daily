@@ -1,7 +1,7 @@
 # 测试邮件和自动邮件失败时，令牌错误、收件人不符、额度用完、域名未验证都只显示同一句 `provider_definitive_rejection`
 
 > 发现日期：2026-10-21 · 来源：main `d999037` 深度代码审查 · 编号 MAIL-05
-> 范围：邮件投递结果的用户提示（插件“发送测试邮件”、CLI `email test`、自动邮件日志；`self` 与 `hosted` 两种模式） · 严重程度：低 · 状态：未修复 · 置信度：已复现
+> 范围：邮件投递结果的用户提示（插件“发送测试邮件”、CLI `email test`、自动邮件日志；`self` 与 `hosted` 两种模式） · 严重程度：低 · 状态：已修复（分支 `fix/2026-10-21-batch3`，提交 808fa82） · 置信度：已复现
 
 ## 问题
 
@@ -42,3 +42,11 @@
 - `hosted`：401/403/429/422/400 各自得到不同的返回原因；自动投递的状态文件里仍然只有既有的 `provider_definitive_rejection`。
 - `self`：Resend 401/403/422/429 各自得到不同的返回原因。
 - 插件 `testEmailResultMessage` 与 CLI `emailTest` 对每种原因输出可执行的提示，不包含令牌、邮箱、响应正文（保持现有“不泄露敏感内容”的测试）。
+
+## 修复情况
+
+测试邮件和自动邮件失败时，原因不再都是 `provider_definitive_rejection`：返回值和日志现在区分 `hosted_token_rejected`（中继 401）、`hosted_recipient_mismatch`（403）、`provider_quota_exceeded`（429）、`provider_request_rejected`（400/422）、`resend_api_key_rejected`（Resend 401）、`resend_access_denied`（Resend 403），其余状态仍是 `provider_definitive_rejection`；日志同时写 `status=<HTTP 状态>`。claim 文件和 `delivery-state.json` 仍然只记录 `provider_definitive_rejection`，旧客户端读到的文件不变，之后同一天的运行仍得到 `skipped / provider_definitive_rejection`。core 新增 `emailFailureHint`，把这些原因翻成一句固定文字（不含令牌、地址、响应正文）；插件的测试邮件提示和自动邮件通知、CLI 的 `email test` 都会显示它（CLI 只改了 `apps/cli/src/email-cmd.ts` 里的一行）。
+
+偏离写作的一点：Resend 的 403 命名为 `resend_access_denied` 而不是 `resend_sender_not_allowed`，因为 Resend 对无效 API key 也返回 403，提示文字同时覆盖 key、发件域名和 onboarding 发件人只能发给账户邮箱三种原因。不需要部署中继。
+
+测试：`packages/core/tests/delivery/hosted-deliver.test.ts` 与 `resend.test.ts`（各状态码对应的原因、claim 文件里只有粗粒度代码、日志不含响应正文；这 12 个用例在旧代码下失败）、`plugin/tests/email-delivery.test.ts`（提示文字与错误码、令牌被拒时的自动邮件通知）、`apps/cli/tests/cli-email.test.ts`（`email test` 输出提示且不含令牌）。

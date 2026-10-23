@@ -1,7 +1,7 @@
 # 中继 README 里的 `/v1/deliver` 协议说明已经过时：按文档构造的请求会被 400 拒绝，部署清单也缺少必需的 secret
 
 > 发现日期：2026-10-21 · 来源：main `d999037` 深度代码审查 · 编号 MAIL-06
-> 范围：`services/email-relay/README.md`（与 `docs/technical-report.md` 对照） · 严重程度：低 · 状态：未修复 · 置信度：已复现
+> 范围：`services/email-relay/README.md`（与 `docs/technical-report.md` 对照） · 严重程度：低 · 状态：已修复（分支 `fix/2026-10-21-batch3`，提交 288e072） · 置信度：已复现
 
 ## 问题
 
@@ -32,3 +32,9 @@
 ## 修复后应补的测试
 
 - 文档一致性测试（可放在 `services/email-relay/tests`）：README 中出现的 `Idempotency-Key` 示例必须通过 `deliveryKeyKind`；README 的 secret 清单与 `scripts/cutover-preflight.mjs` 的 `REQUIRED_SECRET_NAMES` 一致。
+
+## 修复情况
+
+`services/email-relay/README.md` 重写后与现在的中继一致：四个 secret 与 `BUILD_IDENTITY`（由 `npm run deploy` 注入）、必需的 `Idempotency-Key`（`arxiv-daily:auto:<64 位十六进制>` / `arxiv-daily:test:<32 位十六进制>`）以及两种 key 不同的 Durable Object 路由、cutover 门禁与额度、全部路由（含 `/ready` 与 operator cutover 接口）和状态码表、device token 有效期；Concurrency 一节改写为 Durable Object 账本与 `VerifyRateLimiter`，KV 的 `idemp:*` 只作为 cutover 时的历史证据。只改文档，不需要部署。
+
+为避免再次漂移，新增 `services/email-relay/tests/readme-contract.test.ts`：README 里的 key 长度必须被 `deliveryKeyKind` 接受且不再出现旧格式，secret 清单必须等于 preflight 的 `REQUIRED_SECRET_NAMES`，变量表必须出现在 `wrangler.toml`，每条路由和 `/ready` 的 `reason` 名称必须出现在文档里（并且存在于源码）。

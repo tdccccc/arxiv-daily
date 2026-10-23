@@ -531,6 +531,70 @@ describe("hosted deliverDailyEmailIfEnabled", () => {
     });
   });
 
+  describe("a relay rejection says which kind it was", () => {
+    const email = {
+      enabled: true,
+      mode: "hosted" as const,
+      to: "you@example.com",
+      hostedToken: "device_token_hex",
+      fromEmail: "",
+    };
+    const reject = (status: number) => ({
+      status,
+      headers: {},
+      bodyText: JSON.stringify({ error: "private relay detail you@example.com", ambiguous: false }),
+    });
+    const finerReasons = [
+      "hosted_token_rejected",
+      "hosted_recipient_mismatch",
+      "provider_quota_exceeded",
+      "provider_request_rejected",
+    ];
+
+    it.each([
+      [401, "hosted_token_rejected"],
+      [403, "hosted_recipient_mismatch"],
+      [429, "provider_quota_exceeded"],
+      [422, "provider_request_rejected"],
+      [400, "provider_request_rejected"],
+      [404, "provider_definitive_rejection"],
+    ] as const)("reports HTTP %i as %s but keeps recording the coarse rejection", async (status, reason) => {
+      const warn = vi.fn();
+      const logger = { info: vi.fn(), warn, error: vi.fn(), debug: vi.fn() };
+      const storage = memoryStorage();
+      const request = vi.fn(async () => reject(status));
+
+      const testSend = await deliverDailyEmailIfEnabled(digest, {
+        storage, http: { request }, output, email, force: true, logger,
+      });
+      expect(testSend).toEqual({ kind: "failed", reason, attempts: 1 });
+
+      const automatic = await deliverDailyEmailIfEnabled(digest, {
+        storage, http: { request }, output, email, logger,
+      });
+      expect(automatic).toEqual({ kind: "failed", reason, attempts: 1 });
+      expect(warn).toHaveBeenCalledWith(`email: ${reason} date=${digest.date} status=${status}`);
+
+      // The durable record keeps the old code, so older clients read the same files.
+      const persisted = await persistedDeliveryText(storage);
+      expect(persisted).toContain("provider_definitive_rejection");
+      for (const finer of finerReasons) expect(persisted).not.toContain(finer);
+      // The next run is blocked with that recorded code, and the relay is not asked again.
+      expect(await deliverDailyEmailIfEnabled(digest, { storage, http: { request }, output, email, logger }))
+        .toEqual({ kind: "skipped", reason: "provider_definitive_rejection" });
+      expect(request).toHaveBeenCalledTimes(2);
+      // Neither the log nor the result carries the relay's response text.
+      expect(JSON.stringify(warn.mock.calls)).not.toContain("you@example.com");
+    });
+
+    it("leaves uncertain outcomes ambiguous whatever the status", async () => {
+      const storage = memoryStorage();
+      const request = vi.fn(async () => reject(500));
+      expect(await deliverDailyEmailIfEnabled(digest, { storage, http: { request }, output, email }))
+        .toMatchObject({ kind: "ambiguous", reason: "provider_outcome_ambiguous" });
+    });
+  });
+
   it("does not expose a sensitive verification response body", async () => {
     const sensitiveBody =
       "recipient@example.com hosted_token_super_secret private email body";

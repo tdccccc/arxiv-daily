@@ -150,12 +150,13 @@ With From empty, Resend’s test sender often allows mail **only to your Resend 
 3. Open the link; paste the **long code from the web page** (not the short code in the link).  
 4. **Send test**, then enable **Daily auto-send** if it works.  
 5. If you hit the daily limit, wait for the next UTC day or switch to **Send yourself**.
+6. The code is renewed during regular Official delivery use once its current lifetime is half spent. It expires one year after issuance or its last renewal; after a long break you may need to verify again. If a notice says the verification code was rejected, send a new verification email and paste the new code.
 
 Beta capacity is intentionally small (a few messages per verified inbox per UTC day; tests count). For heavy use, use **Send yourself**.
 
 ### After a real run
 
-With auto-send on, a **completed** daily run may email one digest for that date. The same date is not resent by default. **Send test** does not block the real daily for that day.
+With auto-send on, a **completed** daily run may email one digest for that date. The same date is not resent by default. **Send test** does not block the real daily for that day. If the run that wrote a report failed before its mail went out, or the mail could not be sent because the service was unreachable, running that date again sends it.
 
 ## Optional: personal library
 
@@ -177,6 +178,8 @@ Connect one local paper-library folder — including a folder outside your vault
 | Run failed | Dashboard → More → Show diagnostics |
 | Too many papers selected | Fewer categories, or more specific topic descriptions |
 | Test email HTTP **403** | Set **Your email** to the Resend account address named in the error; leave From empty until you verify a domain |
+| Test email says Resend refused the send, or rejected the API key | Check the API key, that your From domain is verified, and that with the default sender **Your email** is your Resend account email |
+| A notice says the verification code was rejected | Official delivery: send a new verification email and paste the new code into **Verification code** |
 | A notice says `data.json` could not be read | The plugin started on default settings and kept the unreadable file next to the original as `data.json.corrupt-<time>` in the plugin folder. Open that copy in a text editor to recover your settings (it holds your API keys in plain text, so do not share it), then enter them again. The notice repeats on every start until a save makes `data.json` readable |
 | A notice says arXiv Daily did not start because `data.json` could not be read or kept aside | The plugin stopped on purpose so that nothing can overwrite your settings. Check that the file in the plugin folder is readable, that the folder is writable and the disk is not full, then reload the plugin |
 

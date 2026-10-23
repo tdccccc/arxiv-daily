@@ -54,6 +54,8 @@ User-facing guides: `docs/getting-started.md` §8, `docs/getting-started.zh-CN.m
 
 User clarification: combine in-run limited retry **and** “wait until next completed, then idempotent retry if not delivered”.
 
+A `completed` run that only repaired a daily report already on disk (the run that wrote it failed or was cancelled afterwards, or the day is simply being re-run) also carries a digest: it is rebuilt from the committed Markdown (`digestFromDailyReport`, same mail as a fresh run would have sent). The claim machinery still decides by date + recipient: `delivered`, ambiguous and definitively rejected dates are skipped, a date that was never attempted or was released as not sent is sent. Consequence: re-running a past date whose mail was never attempted sends that day's mail.
+
 ## B4 — Dual-host and cross-mode double-send
 
 | Decision | Detail |
@@ -81,7 +83,7 @@ When `N = 0` and run `completed`:
 2. Header: date, count 0, categories
 3. **Lead line:** 「今日无相关论文」 / English equivalent
 4. **Each configured topic** still listed with empty-topic one-liner
-5. Footer: vault daily path
+5. Footer: no vault daily path (a zero-paper day writes no daily file)
 
 ## delivery-state (sketch)
 

@@ -10,7 +10,8 @@ import { RunCancelledError } from "../src/services/cancellation";
 import { Logger } from "../src/services/logger";
 import { PaperIndexStore } from "../src/services/paper-index";
 import { DEFAULT_SETTINGS } from "../src/settings/defaults";
-import type { StorageAdapter } from "../src/core/adapters";
+import { HttpTransportError, type StorageAdapter } from "../src/core/adapters";
+import { deliverDailyEmailIfEnabled } from "../src/delivery/deliver-email";
 
 
 const recentHtml = `
@@ -1860,6 +1861,216 @@ describe("ArxivPipeline", () => {
     expect(d.fetcher.fetchRecent).toHaveBeenCalledTimes(1);
     expect(paperIndex.addDailyReports).toHaveBeenCalledTimes(2);
     expect(paperIndex.setSummaries).toHaveBeenCalledTimes(1);
+  });
+
+  describe("the mail of a report whose first run failed after writing it", () => {
+    /** A pipeline over a writer that really keeps the report, so a second run takes the repair path. */
+    function committingPipeline(options: { failIndexOnce: boolean }) {
+      const d = makeDeps();
+      const date = firstDateFromFixture();
+      const id = firstBucketPapersFromFixture()[0]!.id;
+      let dailyExists = false;
+      d.writer.dailyExists = vi.fn(async () => dailyExists);
+      d.writer.writeDaily = vi.fn(async (writtenDate: string, markdown: string) => {
+        dailyExists = true;
+        d.writes[`daily/${writtenDate}.md`] = markdown;
+        return `daily/${writtenDate}.md`;
+      });
+      d.llm.call = vi.fn().mockImplementation(async (messages: any[]) => {
+        const daily = structuredDailyResponse(messages);
+        if (daily) return daily;
+        return JSON.stringify({ papers: [{ relevanceScore: 80, id, category: "photo-z", directions: ["photo-z#1"] }] });
+      });
+      let failIndex = options.failIndexOnce;
+      const paperIndex = {
+        upsertManyFromDailyPapers: vi.fn(async (inputs: any[]) =>
+          inputs.map((input) => ({ wasNew: true, entry: { status: "inbox", paperPath: null, ...input } })),
+        ),
+        reconcilePaperDetails: vi.fn(async () => 0),
+        addDailyReports: vi.fn(async () => {
+          if (failIndex) {
+            failIndex = false;
+            throw new Error("index disk full");
+          }
+        }),
+        setSummaries: vi.fn(async () => 1),
+      };
+      const pipeline = new ArxivPipeline({
+        markupParser,
+        fetcher: d.fetcher as any,
+        paperFetcher: d.paperFetcher as any,
+        writer: d.writer as any,
+        paperIndex: paperIndex as any,
+        llm: d.llm as any,
+        logger: d.logger,
+        arxiv: testArxiv,
+        advanced: DEFAULT_SETTINGS.advanced,
+        output: DEFAULT_SETTINGS.output,
+        llmSettings: DEFAULT_SETTINGS.llm,
+        detailSelection: testDetailSelection,
+      });
+      return { pipeline, date, id, paperIndex };
+    }
+
+    function claimStorage(): StorageAdapter {
+      const files = new Map<string, string>();
+      return {
+        normalizePath: (path) => path,
+        readText: async (path) => { if (!files.has(path)) throw new Error(`missing ${path}`); return files.get(path)!; },
+        writeText: async (path, text) => { files.set(path, text); },
+        writeTextAtomic: async (path, text) => { files.set(path, text); },
+        createTextExclusive: async (path, text) => { if (files.has(path)) return false; files.set(path, text); return true; },
+        guardClaimNamespace: async () => ({ assertCurrent() {}, async release() {} }),
+        exists: async (path) => files.has(path), mkdir: async () => {}, remove: async (path) => { files.delete(path); },
+        rename: async (from, to) => { files.set(to, files.get(from)!); files.delete(from); },
+        list: async (dir) => [...files.keys()].filter((path) => path.startsWith(`${dir}/`)).map((path) => ({ path, type: "file" as const })),
+      };
+    }
+
+    const sentMail = (request: ReturnType<typeof vi.fn>, call = 0) =>
+      JSON.parse((request.mock.calls[call]![0] as { body: string }).body) as { subject: string; text: string };
+
+    function emailHost() {
+      const storage = claimStorage();
+      const request = vi.fn(async () => ({ status: 200, headers: {}, bodyText: JSON.stringify({ id: "msg_1" }) }));
+      const email = {
+        enabled: true, mode: "self" as const, to: "reader@example.test",
+        apiKey: "re_key", fromEmail: "from@example.test",
+      };
+      const deliver = (digest: Parameters<typeof deliverDailyEmailIfEnabled>[0]) =>
+        deliverDailyEmailIfEnabled(digest, {
+          storage, http: { request }, output: DEFAULT_SETTINGS.output, email, maxAttempts: 1, sleep: async () => {},
+        });
+      return { request, deliver };
+    }
+
+    it("returns the digest a fresh run would have, so the retry that only repairs the index can still mail it", async () => {
+      const fresh = committingPipeline({ failIndexOnce: false });
+      const freshResult = await fresh.pipeline.runForDate(fresh.date);
+      if (freshResult.kind !== "completed" || !freshResult.digest) throw new Error("fresh run produced no digest");
+
+      const retried = committingPipeline({ failIndexOnce: true });
+      const failed = await retried.pipeline.runForDate(retried.date);
+      expect(failed).toEqual({
+        kind: "failed_transient",
+        reason: "paper index daily report update failed: index disk full",
+      });
+      const repaired = await retried.pipeline.runForDate(retried.date);
+
+      expect(repaired).toMatchObject({ kind: "completed", papersWritten: 1 });
+      if (repaired.kind !== "completed") throw new Error("not completed");
+      const sameButSections = (digest: typeof freshResult.digest) => ({
+        ...digest!,
+        topics: digest!.topics.map((topic) => ({
+          ...topic,
+          papers: topic.papers.map(({ sourceSections: _omit, ...paper }) => paper),
+        })),
+      });
+      expect(repaired.digest).toBeDefined();
+      expect(sameButSections(repaired.digest)).toEqual(sameButSections(freshResult.digest));
+      expect(repaired.digest!.paperCount).toBe(1);
+      expect(repaired.digest!.topics[0]!.papers[0]!.id).toBe(retried.id);
+      // Another repair after that still carries it; delivery, not the pipeline, prevents a second mail.
+      expect(await retried.pipeline.runForDate(retried.date)).toMatchObject({ kind: "completed", digest: expect.anything() });
+    });
+
+    it("mails the day exactly once when the first run failed after writing the report", async () => {
+      const { pipeline, date } = committingPipeline({ failIndexOnce: true });
+      const { request, deliver } = emailHost();
+
+      expect(await pipeline.runForDate(date)).toMatchObject({ kind: "failed_transient" });
+      expect(request).not.toHaveBeenCalled();
+
+      const repaired = await pipeline.runForDate(date);
+      if (repaired.kind !== "completed" || !repaired.digest) throw new Error("repair produced no digest");
+      expect(await deliver(repaired.digest)).toEqual({ kind: "delivered", attempts: 1 });
+      expect(request).toHaveBeenCalledTimes(1);
+      expect(sentMail(request).subject).toBe(`arXiv Daily ${date} · 1 篇`);
+      expect(sentMail(request).text).toContain("problem");
+
+      const again = await pipeline.runForDate(date);
+      if (again.kind !== "completed" || !again.digest) throw new Error("second repair produced no digest");
+      expect(await deliver(again.digest)).toEqual({ kind: "skipped", reason: "already_delivered" });
+      expect(request).toHaveBeenCalledTimes(1);
+    });
+
+    it("lets a completed date whose mail was released as not sent go out on the next run", async () => {
+      const { pipeline, date } = committingPipeline({ failIndexOnce: false });
+      const { request, deliver } = emailHost();
+      request.mockRejectedValueOnce(
+        new HttpTransportError("network", "connect ECONNREFUSED", { retryableAttempt: true, requestNotSent: true }),
+      );
+
+      const first = await pipeline.runForDate(date);
+      if (first.kind !== "completed" || !first.digest) throw new Error("no digest");
+      expect(await deliver(first.digest)).toMatchObject({ kind: "failed", reason: "provider_not_invoked" });
+
+      // The report already exists, so this run only repairs; it must still carry the mail.
+      const rerun = await pipeline.runForDate(date);
+      if (rerun.kind !== "completed" || !rerun.digest) throw new Error("rerun produced no digest");
+      expect(await deliver(rerun.digest)).toEqual({ kind: "delivered", attempts: 1 });
+      expect(request).toHaveBeenCalledTimes(2);
+
+      const last = await pipeline.runForDate(date);
+      if (last.kind !== "completed" || !last.digest) throw new Error("no digest");
+      expect(await deliver(last.digest)).toEqual({ kind: "skipped", reason: "already_delivered" });
+      expect(request).toHaveBeenCalledTimes(2);
+    });
+
+    function repairOnly(markdown: string, arxiv = testArxiv) {
+      const d = makeDeps();
+      d.writer.dailyExists = vi.fn(async () => true);
+      d.writer.readDaily = vi.fn(async () => markdown);
+      const paperIndex = {
+        reconcilePaperDetails: vi.fn(async () => 0),
+        addDailyReports: vi.fn(async () => undefined),
+        setSummaries: vi.fn(async () => 0),
+      };
+      const warn = vi.spyOn(d.logger, "warn");
+      const pipeline = new ArxivPipeline({
+        markupParser,
+        fetcher: d.fetcher as any,
+        paperFetcher: d.paperFetcher as any,
+        writer: d.writer as any,
+        paperIndex: paperIndex as any,
+        llm: d.llm as any,
+        logger: d.logger,
+        arxiv,
+        advanced: DEFAULT_SETTINGS.advanced,
+        output: DEFAULT_SETTINGS.output,
+        llmSettings: DEFAULT_SETTINGS.llm,
+        detailSelection: testDetailSelection,
+      });
+      return { pipeline, warn, d };
+    }
+
+    it("completes the repair without a digest when the report holds no paper it can read", async () => {
+      const { pipeline, d } = repairOnly("# arXiv astro-ph 每日追踪\n\n今日未发现相关论文。\n");
+      await expect(pipeline.runForDate(firstDateFromFixture())).resolves.toEqual({
+        kind: "completed",
+        papersWritten: 0,
+      });
+      expect(d.fetcher.fetchRecent).not.toHaveBeenCalled();
+    });
+
+    it("never fails the repair because the mail could not be rebuilt", async () => {
+      const report = [
+        "### Paper",
+        "- **arXiv**: [2605.08080](https://arxiv.org/abs/2605.08080)",
+        "- **核心问题**: Problem.",
+      ].join("\n");
+      const broken = { ...testArxiv, topics: undefined } as any;
+      const { pipeline, warn } = repairOnly(report, broken);
+
+      await expect(pipeline.runForDate(firstDateFromFixture())).resolves.toEqual({
+        kind: "completed",
+        papersWritten: 1,
+      });
+      expect(warn).toHaveBeenCalledWith(
+        expect.stringContaining("could not rebuild the email digest"),
+        expect.any(Error),
+      );
+    });
   });
 
   it("repairs the full index on retry after cancellation immediately after writeDaily", async () => {

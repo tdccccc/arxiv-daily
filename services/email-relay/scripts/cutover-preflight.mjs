@@ -85,6 +85,16 @@ async function defaultHttpGet(url, timeoutMs = 10_000) {
   return { status: res.status, text: await res.text() };
 }
 
+/** The name /ready gives for a locked runtime, when it gives one (never a value). */
+function readyReason(text) {
+  try {
+    const reason = JSON.parse(text)?.reason;
+    return typeof reason === "string" && /^[a-z_]{1,40}$/.test(reason) ? reason : "";
+  } catch {
+    return "";
+  }
+}
+
 export function createPreflight(deps) {
   const { runCommand, readTextFile, httpGet } = deps;
   const tomlPath = deps.tomlPath ?? join(RELAY_ROOT, "wrangler.toml");
@@ -182,7 +192,14 @@ export function createPreflight(deps) {
       if (ready.status === 200) {
         results.push({ name: "remoteReady", status: "pass", detail: `ready: ${ready.text.trim().slice(0, 200)}` });
       } else if (ready.status === 503) {
-        results.push({ name: "remoteReady", status: "pass", detail: "locked (503) — expected before cutover completes; manual checks continue" });
+        const reason = readyReason(ready.text);
+        results.push({
+          name: "remoteReady",
+          status: "pass",
+          detail: reason
+            ? `locked (503, reason ${reason}) — expected before cutover completes; once it has, see runbook section 8`
+            : "locked (503) — expected before cutover completes; manual checks continue",
+        });
       } else {
         results.push({ name: "remoteReady", status: "fail", detail: `${baseUrl}/ready unexpected or unreachable (${ready.status})` });
       }

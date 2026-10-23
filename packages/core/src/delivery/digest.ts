@@ -20,8 +20,19 @@ export interface BuildDailyDigestInput {
 }
 
 export function buildDailyDigest(input: BuildDailyDigestInput): DailyDigest {
+  return assembleDailyDigest(input, (input.slots ?? []).map(digestPaperFromSlot));
+}
+
+/**
+ * Group digest papers under the configured topics (empty topics are kept, and a
+ * topic tag nobody configured still gets a section). Shared by digests built
+ * from assembly slots and digests read back from a committed report.
+ */
+export function assembleDailyDigest(
+  input: Omit<BuildDailyDigestInput, "slots">,
+  papers: DigestPaper[],
+): DailyDigest {
   const language = normalizeSummaryLanguage(input.output.summaryLanguage);
-  const slots = input.slots ?? [];
   const dailyPath =
     input.dailyPath?.trim() ||
     joinVaultPath(input.output.dailyDir, `${input.date}.md`);
@@ -31,14 +42,13 @@ export function buildDailyDigest(input: BuildDailyDigestInput): DailyDigest {
     papersByTopic.set(topic.tag, []);
   }
 
-  for (const slot of slots) {
-    const paper = digestPaperFromSlot(slot);
-    const list = papersByTopic.get(slot.paper.category);
+  for (const paper of papers) {
+    const list = papersByTopic.get(paper.topicTag);
     if (list) {
       list.push(paper);
     } else {
       // Unknown topic tags still appear so body is not silently dropped.
-      papersByTopic.set(slot.paper.category, [paper]);
+      papersByTopic.set(paper.topicTag, [paper]);
     }
   }
 
@@ -49,9 +59,9 @@ export function buildDailyDigest(input: BuildDailyDigestInput): DailyDigest {
   }));
 
   // Include any papers whose category was not in configured topics.
-  for (const [tag, papers] of papersByTopic) {
+  for (const [tag, topicPapers] of papersByTopic) {
     if (topics.some((t) => t.tag === tag)) continue;
-    topics.push({ tag, name: tag, papers });
+    topics.push({ tag, name: tag, papers: topicPapers });
   }
 
   const paperCount = topics.reduce((n, topic) => n + topic.papers.length, 0);
@@ -75,10 +85,16 @@ export function emptyDailyDigest(input: {
   return buildDailyDigest({ ...input, slots: [] });
 }
 
+/** abs and PDF links of a paper, canonical when the ID is a modern arXiv one. */
+export function arxivLinks(id: string): { absUrl: string; pdfUrl: string } {
+  const resources = modernArxivResources(id);
+  return {
+    absUrl: resources?.absUrl ?? `https://arxiv.org/abs/${id}`,
+    pdfUrl: resources?.pdfUrl ?? `https://arxiv.org/pdf/${id}`,
+  };
+}
+
 function digestPaperFromSlot(slot: DailyPaperSlot): DigestPaper {
-  const resources = modernArxivResources(slot.paper.id);
-  const absUrl = resources?.absUrl ?? `https://arxiv.org/abs/${slot.paper.id}`;
-  const pdfUrl = resources?.pdfUrl ?? `https://arxiv.org/pdf/${slot.paper.id}`;
   const sourceSections = slot.paper.sourceSections?.trim() || undefined;
   const base = {
     id: slot.paper.id,
@@ -86,8 +102,7 @@ function digestPaperFromSlot(slot: DailyPaperSlot): DigestPaper {
     authors: slot.paper.authors,
     topicTag: slot.paper.category,
     sourceSections,
-    absUrl,
-    pdfUrl,
+    ...arxivLinks(slot.paper.id),
   };
 
   if (slot.result.kind === "structured") {
