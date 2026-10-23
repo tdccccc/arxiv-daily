@@ -96,7 +96,15 @@ export async function syncDashboardHistory(
   const dailyDirectoryUnavailable = dailyReportPaths.size === 0 && Object.values(baseline.papers)
     .some(entry => entry.dailyReports.some(path => dailyDateFromPath(normalizeVaultPath(path), normalizeVaultPath(deps.output.dailyDir))));
   if (dailyDirectoryUnavailable) deps.logger?.warn("dashboard: daily directory is unavailable; keeping existing report references");
-  const actualPaths = new Map(markdownFiles.map(file => [pathKey(file.path), normalizeVaultPath(file.path)]));
+  const actualPaths = new Map<string, string>();
+  const ambiguousPathKeys = new Set<string>();
+  for (const file of markdownFiles) {
+    const key = pathKey(file.path), actual = normalizeVaultPath(file.path);
+    if (actualPaths.has(key) && actualPaths.get(key) !== actual) ambiguousPathKeys.add(key);
+    else actualPaths.set(key, actual);
+  }
+  for (const key of ambiguousPathKeys) actualPaths.delete(key);
+  if (ambiguousPathKeys.size) deps.logger?.warn("dashboard: ambiguous portable paths; keeping original references and skipping their cleanup");
   const paperScan = await collectPaperCandidates(deps, markdownFiles, baseline);
   const dailyCollection = await collectDailyCandidates(
     deps,
@@ -119,6 +127,7 @@ export async function syncDashboardHistory(
       destructiveSnapshot,
       paperScan,
       deps.output,
+      ambiguousPathKeys,
     );
 
     const pruned = dailyDirectoryUnavailable ? { changed: 0, removed: 0 } : pruneStaleDailyReports(
@@ -129,6 +138,7 @@ export async function syncDashboardHistory(
       dailyCollection.paperIdsByReport,
       dailyCollection.parsedReports,
       deps.output,
+      ambiguousPathKeys,
     );
     const spellingChanged = restoreActualPaths(index, actualPaths);
     const changed =
@@ -604,6 +614,7 @@ function pruneStaleDetails(
   destructiveSnapshot: PaperInbox,
   paperScan: PaperCandidateCollection,
   output: OutputSettings,
+  ambiguousPathKeys: ReadonlySet<string>,
 ): { clearIds: string[]; removeIds: string[] } {
   const papersDir = normalizeVaultPath(output.papersDir);
   const clearIds: string[] = [];
@@ -611,7 +622,7 @@ function pruneStaleDetails(
 
   for (const baselineEntry of Object.values(baseline.papers)) {
     const baselinePath = normalizeVaultPath(baselineEntry.paperPath ?? "");
-    if (!baselinePath || !isDirectChildMarkdown(baselinePath, papersDir)) continue;
+    if (!baselinePath || !isDirectChildMarkdown(baselinePath, papersDir) || ambiguousPathKeys.has(pathKey(baselinePath))) continue;
     const scanStartEntry = destructiveSnapshot.papers[baselineEntry.paperKey];
     if (!scanStartEntry || !sameDestructiveFields(baselineEntry, scanStartEntry)) {
       continue;
@@ -655,6 +666,7 @@ function pruneStaleDailyReports(
   paperIdsByReport: Map<string, Set<string>>,
   parsedReports: Set<string>,
   output: OutputSettings,
+  ambiguousPathKeys: ReadonlySet<string>,
 ): { changed: number; removed: number } {
   const dailyDir = normalizeVaultPath(output.dailyDir);
   let changed = 0;
@@ -674,6 +686,7 @@ function pruneStaleDailyReports(
 
     const staleReports = new Set(
       managedReports.filter((path) => {
+        if (ambiguousPathKeys.has(pathKey(path))) return false;
         const reportMissing = !existingDailyReports.has(pathKey(path));
         const paperMissingFromParsedReport =
           parsedKeys.has(pathKey(path)) && !idsByKey.get(pathKey(path))?.has(baselineEntry.arxivId);

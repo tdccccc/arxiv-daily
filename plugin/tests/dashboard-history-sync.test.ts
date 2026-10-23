@@ -782,6 +782,20 @@ describe("syncDashboardHistory", () => {
     expect(dailyDateFromPath(actual, configured)).toBe("2026-06-15");
   });
 
+  it("preserves distinct reports when portable paths collide on a case-sensitive vault", async () => {
+    const upper = "ARXIV/Daily/2026-06-15.md", lower = "arxiv/daily/2026-06-15.md";
+    const { files, storage } = makeStorage({ "arxiv/.index/papers.json": indexJson({
+      "2606.10000": { title: "Upper", seenDates: ["2026-06-15"], dailyReports: [upper] },
+      "2606.10001": { title: "Lower", seenDates: ["2026-06-15"], dailyReports: [lower] },
+    }), [upper]: "# Daily\n## Photo-z\n### Upper\n- **arXiv**: [2606.10000](https://arxiv.org/abs/2606.10000)",
+    [lower]: "# Daily\n## Photo-z\n### Lower\n- **arXiv**: [2606.10001](https://arxiv.org/abs/2606.10001)" });
+    const logger = { info: vi.fn(), warn: vi.fn() };
+    const index = await syncDashboardHistory({ vault: makeVault(files), store: new PaperIndexStore(storage, output), output, topics, logger });
+    expect(index.papers["arxiv:2606.10000"]?.dailyReports).toEqual([upper]);
+    expect(index.papers["arxiv:2606.10001"]?.dailyReports).toEqual([lower]);
+    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining("ambiguous portable paths"));
+  });
+
   it("preserves history when the entire daily directory is unavailable", async () => {
     const { files, storage } = makeStorage({ "arxiv/.index/papers.json": indexJson({
       "2606.10000": { title: "Retain", seenDates: ["2026-06-15"], dailyReports: ["arxiv/daily/2026-06-15.md"] },
