@@ -204,6 +204,22 @@ export async function indexPersonalLibraryFullText(
     }
     const observationFingerprints = fingerprints as string[];
     const previous = papers[paperKey];
+    if (unit.preparationError) {
+      outcomes.push(recordFailed(
+        paperKey,
+        unit.preparationError,
+        nowIso,
+        papers,
+        embedding.modelId,
+        embedding.dimension,
+        unit,
+      ));
+      if (previous?.status === "ready") {
+        await discardOrphanedPaperDocument(store, paperKey, log);
+      }
+      continue;
+    }
+
     const exactReady = previous
       && previous.status === "ready"
       && previous.modelId === embedding.modelId
@@ -227,6 +243,35 @@ export async function indexPersonalLibraryFullText(
       }
       repairRequired = true;
       log?.warn(`fulltext: rebuilding inconsistent stored paper ${paperKey}`);
+    }
+
+    // savePaper is durable before the final manifest CAS. Recover this work
+    // after interruption, using the candidate model namespace, never switching
+    // the committed manifest until the complete run passes its final guard.
+    if (!repairRequired) {
+      try {
+        const staged = await store.loadPaper(paperKey, next);
+        if (staged && (!previous || previous.updatedAt !== staged.updatedAt || matchesStoredPaper(previous, staged))
+          && staged.paperKey === paperKey
+          && staged.modelId === embedding.modelId && staged.dimension === embedding.dimension
+          && staged.titleVersion === TITLE_EXTRACTION_VERSION
+          && staged.contentHash === unit.contentHash
+          && sameFingerprints(staged, observationFingerprints)
+          && staged.filePaths.length === unit.filePaths.length
+          && staged.filePaths.every((path, index) => path === unit.filePaths[index])
+          && reusableDerivation(staged.derivation, expectedDerivation)) {
+          const record = recordFromDocument(staged, staged.updatedAt);
+          if (matchesStoredPaper(record, staged)) {
+            papers[paperKey] = record;
+            for (const sourceKey of unit.migrationSourceKeys) completedMigrationKeys.add(sourceKey);
+            outcomes.push({ paperKey, status: "reused" });
+            continue;
+          }
+        }
+      } catch (caught) {
+        if (isCancellationErrorLike(caught, input.signal) || isIncompatibleStoreError(caught)) throw caught;
+        log?.warn(`fulltext: rebuilding unreadable staged paper ${paperKey}`);
+      }
     }
 
     // Content-addressed fallback papers can retain their chunks/vectors when a
@@ -309,22 +354,6 @@ export async function indexPersonalLibraryFullText(
       }
     }
 
-    if (unit.preparationError) {
-      outcomes.push(recordFailed(
-        paperKey,
-        unit.preparationError,
-        nowIso,
-        papers,
-        embedding.modelId,
-        embedding.dimension,
-        unit,
-      ));
-      if (previous?.status === "ready") {
-        await discardOrphanedPaperDocument(store, paperKey, log);
-      }
-      continue;
-    }
-
     try {
       const document = await buildPaperDocument({
         paperKey,
@@ -392,7 +421,7 @@ export async function indexPersonalLibraryFullText(
     if (!completedMigrationKeys.has(paperKey)) pruned += 1;
   }
 
-  if (modelChanged && total > 0 && !outcomes.some((outcome) => outcome.status === "indexed")) {
+  if (modelChanged && total > 0 && !outcomes.some((outcome) => outcome.status === "indexed" || outcome.status === "reused")) {
     throw new Error("No papers could be indexed with the selected model; the previous index was preserved. Check the model and retry.");
   }
   throwIfCancelled(input.signal);
@@ -790,7 +819,7 @@ function sameDerivation(left: EvidenceDerivation, right: EvidenceDerivation): bo
 }
 
 function sameFingerprints(
-  record: FullTextPaperKnowledgeRecord,
+  record: Pick<FullTextPaperKnowledgeRecord, "observationFingerprints">,
   fingerprints: readonly string[],
 ): boolean {
   return record.observationFingerprints.length === fingerprints.length

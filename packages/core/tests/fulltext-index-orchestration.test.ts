@@ -627,6 +627,81 @@ describe("full-text indexing orchestration", () => {
     expect((await store.loadPaper("arxiv:2403.19236"))?.derivation).toBeDefined();
   });
 
+  it("resumes eight persisted papers after cancelling the ninth embedding", async () => {
+    const catalog = makeCatalog(Array.from({ length: 10 }, (_, i) => ({
+      paperKey: `arxiv:2403.${String(10000 + i)}`, filePaths: [`lib/${i}.pdf`], fingerprint: fingerprint(`f${i}`),
+    })));
+    const store = new MemoryStore();
+    const extractor = new FakeExtractor(Object.fromEntries(Array.from({ length: 10 }, (_, i) => [`lib/${i}.pdf`, [LONG_ALPHA]])));
+    const embedding = new FakeEmbedding();
+    const controller = new AbortController();
+    const embed = embedding.embed.bind(embedding);
+    embedding.embed = async texts => {
+      if (embedding.calls === 8) { controller.abort(); throw new RunCancelledError(); }
+      return embed(texts);
+    };
+    const args = { catalog, source: new FakeSource(), extractor, embedding, store };
+    await expect(indexPersonalLibraryFullText({ ...args, signal: controller.signal })).rejects.toThrow();
+    expect((await store.loadManifest()).revision).toBe(0);
+    expect(Object.keys((await store.loadManifest()).papers)).toHaveLength(0);
+    embedding.embed = embed;
+    expect(await indexPersonalLibraryFullText(args)).toMatchObject({ indexed: 2, reused: 8 });
+    expect(embedding.calls).toBe(10);
+    expect(await indexPersonalLibraryFullText({ ...args, now: () => new Date("2026-10-25T00:00:00Z") })).toMatchObject({ indexed: 0, reused: 10 });
+    expect(embedding.calls).toBe(10);
+  });
+
+  it("reuses a staged paper after a failed final CAS without bypassing its next guard", async () => {
+    const catalog = makeCatalog([{ paperKey: "arxiv:2403.19236", filePaths: ["lib/a.pdf"], fingerprint: fingerprint("f1") }]);
+    const store = new MemoryStore(), embedding = new FakeEmbedding();
+    const args = { catalog, source: new FakeSource(), extractor: new FakeExtractor({ "lib/a.pdf": [LONG_ALPHA] }), embedding, store };
+    await expect(indexPersonalLibraryFullText({ ...args, beforeManifestCommit: () => { store.manifest.revision++; } })).rejects.toThrow(/stale revision/);
+    expect(Object.keys((await store.loadManifest()).papers)).toHaveLength(0);
+    await expect(indexPersonalLibraryFullText({ ...args, beforeManifestCommit: () => { throw new Error("guard closed"); } })).rejects.toThrow("guard closed");
+    expect(embedding.calls).toBe(1);
+    expect(await indexPersonalLibraryFullText(args)).toMatchObject({ indexed: 0, reused: 1 });
+  });
+
+  it("does not recover a staged fallback when reading its source fails", async () => {
+    const key = "arxiv:2403.19236", fp = fingerprint("f1");
+    const store = new MemoryStore(), embedding = new FakeEmbedding();
+    const extractor = new FakeExtractor({ "lib/a.pdf": [LONG_ALPHA] });
+    await expect(indexPersonalLibraryFullText({
+      catalog: makeCatalog([{ paperKey: key, filePaths: ["lib/a.pdf"], fingerprint: fp }]),
+      store, embedding, extractor, source: new FakeSource(),
+      beforeManifestCommit: () => { throw new Error("interrupted"); },
+    })).rejects.toThrow();
+    const document = (await store.loadPaper(key))!;
+    document.paperKey = `file:${fp}`;
+    await store.savePaper(document);
+    const source = new FakeSource();
+    source.readBinary = async () => { throw new Error("source unavailable"); };
+    expect(await indexPersonalLibraryFullText({
+      catalog: makeCatalog([], [{ path: "lib/a.pdf", fingerprint: fp }]),
+      store, embedding, extractor, source,
+    })).toMatchObject({ reused: 0, failed: 1 });
+  });
+
+  it.each(["model", "dimension", "fingerprint", "paths", "derivation", "title-version"])(
+    "does not resume a staged paper with a different %s", async mismatch => {
+      const key = "arxiv:2403.19236";
+      const catalog = makeCatalog([{ paperKey: key, filePaths: ["lib/a.pdf"], fingerprint: fingerprint("f1") }]);
+      const store = new MemoryStore(), embedding = new FakeEmbedding();
+      const args = { catalog, source: new FakeSource(), extractor: new FakeExtractor({ "lib/a.pdf": [LONG_ALPHA] }), embedding, store };
+      await expect(indexPersonalLibraryFullText({ ...args, beforeManifestCommit: () => { throw new Error("disk full"); } })).rejects.toThrow();
+      const document = (await store.loadPaper(key))!;
+      if (mismatch === "model") document.modelId = "another-model";
+      if (mismatch === "dimension") { document.dimension = 8; document.vectors = new Float32Array(document.chunks.length * 8); }
+      if (mismatch === "fingerprint") document.observationFingerprints = [fingerprint("f2")];
+      if (mismatch === "paths") document.filePaths = ["lib/other.pdf"];
+      if (mismatch === "derivation") document.derivation = { ...document.derivation!, parser: { id: "other", version: "1" } };
+      if (mismatch === "title-version") document.titleVersion = 1;
+      await store.savePaper(document);
+      expect(await indexPersonalLibraryFullText(args)).toMatchObject({ indexed: 1, reused: 0 });
+      expect(embedding.calls).toBe(2);
+    },
+  );
+
   it("reuses unchanged papers without re-extracting", async () => {
     const catalog = makeCatalog([{
       paperKey: "arxiv:2403.19236",
