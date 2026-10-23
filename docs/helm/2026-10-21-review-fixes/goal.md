@@ -2,8 +2,8 @@
 
 status: done
 created: 2026-10-23T22:19:51+08:00
-updated: 2026-10-24T02:13:50+08:00
-revision: 3
+updated: 2026-10-24T03:20:31+08:00
+revision: 4
 owner: codex-root-review-resume
 
 ## Intent
@@ -39,4 +39,4 @@ owner: codex-root-review-resume
 - 第三批：[PR #108](https://github.com/tdccccc/arxiv-daily/pull/108)，e8b4838，17项CI通过。
 - 第四批：[PR #109](https://github.com/tdccccc/arxiv-daily/pull/109)，f5c5852，16项CI通过。
 - 原54条全部修复归档，4项额外发现保持独立未修复记录；中继部署由用户执行。
-- 修复worktree a/b/batch1-sync及12个已合并本地修复分支已清理。当前integration仅用于发布完成记录，发布后移除；主checkout草稿保留至用户单独确认。
+- 修复worktree a/b/batch1-sync及12个已合并本地修复分支已清理。当前integration仅用于验收记录收尾，收尾后移除；主checkout草稿保留至用户单独确认。
