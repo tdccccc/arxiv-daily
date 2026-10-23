@@ -161,7 +161,7 @@ test("settings (object-graph marker only, no class — the 1.13+ declarative pat
 });
 
 const dashboardFixture = `
-  <div class="workspace-leaf">
+  <div class="workspace-leaf mod-active">
     <div class="view-content arxiv-daily-dashboard">
       <div class="arxiv-daily-dashboard__tab is-active" role="tab" tabindex="0">All</div>
       <div class="arxiv-daily-dashboard__tab" role="tab" tabindex="0">Starred</div>
@@ -174,7 +174,7 @@ const dashboardFixture = `
   </div>
 `;
 
-test("reading dashboard: paper row star is operable, Open arXiv is restricted, chrome stays excluded", () => {
+test("reading dashboard: paper row star and guarded resource opens are operable, chrome stays excluded", () => {
   const { observe } = buildWindow(dashboardFixture);
   const snapshot = observe();
   assert.equal(snapshot.layout.view, "dashboard");
@@ -183,7 +183,7 @@ test("reading dashboard: paper row star is operable, Open arXiv is restricted, c
   assert.equal(star.paperKey, "2610.10001");
   assert.equal(classifyControlRestriction(star), undefined);
   const openArxiv = snapshot.controls.find(c => c.name === "Open arXiv");
-  assert.equal(classifyControlRestriction(openArxiv), "link leaves the plugin for an external destination");
+  assert.equal(classifyControlRestriction(openArxiv), undefined, "the renderer guard records external opens without forwarding them");
   const openPdf = snapshot.controls.find(c => c.name === "Open PDF");
   assert.equal(classifyControlRestriction(openPdf), undefined, "Open PDF can resolve to a local vault file and is not unconditionally external");
   assert.ok(!snapshot.controls.some(c => c.name === "Open quick switcher"), "ribbon chrome must stay invisible even when the dashboard is open");
@@ -1376,4 +1376,33 @@ for (const key of ['Enter', 'Space']) test(`setup checklist blocks keyboard ${ke
   const result = await execute({ type: 'press', key }, snapshot);
   assert.equal(result.ok, false);
   assert.equal(calls.length, 0);
+});
+
+test('active note replaces the hidden dashboard in observation', () => {
+  const { observe } = buildWindow('<div class="workspace-leaf"><div class="arxiv-daily-dashboard">Hidden dashboard<button>Generate</button></div></div><div class="workspace-leaf mod-active"><div class="view-header-title">Daily report</div><div data-type="markdown"><div class="markdown-preview-view">Actual report content<button>Untrusted note button</button></div></div></div>');
+  const snapshot = observe();
+  assert.equal(snapshot.layout.view, 'note');
+  assert.equal(snapshot.layout.activeLeaf.type, 'markdown');
+  assert.equal(snapshot.layout.activeLeaf.title, 'Daily report');
+  assert.match(snapshot.text, /Actual report content/);
+  assert.doesNotMatch(snapshot.text, /Hidden dashboard/);
+  assert.deepEqual(snapshot.controls, []);
+});
+test('external open guard intercepts both windows and reports attempted URLs', async () => {
+  await withTempArtifactDir(async root => {
+    const { window, session } = buildCaptureSession('<div class="arxiv-daily-dashboard"></div>');
+    let forwarded = 0;
+    window.open = () => { forwarded++; };
+    window.activeWindow = { open: () => { forwarded++; } };
+    const driver = await createObsidianExplorationDriver({ session, fixture: { vaultRoot: path.join(root, 'vault'), server: { url: 'http://127.0.0.1:1' } }, artifactDir: root });
+    window.open('https://arxiv.org/abs/2610.10001');
+    window.activeWindow.open('https://arxiv.org/pdf/2610.10001');
+    assert.equal(forwarded, 0);
+    const snapshot = await driver.observe();
+    assert.deepEqual(snapshot.layout.openedUrls, ['https://arxiv.org/abs/2610.10001', 'https://arxiv.org/pdf/2610.10001']);
+    assert.match(snapshot.text, /blocked/i);
+  });
+});
+test('PDF external buttons share the guarded arXiv policy', () => {
+  assert.equal(classifyControlRestriction({ name: 'Open PDF' }), classifyControlRestriction({ name: 'Open arXiv' }));
 });
