@@ -32,7 +32,7 @@ const expectedWorkflow = {
           },
         },
         { name: "Install dependencies", run: "npm ci" },
-        { name: "Audit dependencies", run: "npm audit --audit-level=moderate" },
+        { name: "Audit dependencies", run: "node scripts/audit-lockfiles.mjs" },
         { name: "Test release tools", run: "npm run test:release-tools" },
         { name: "Check package boundaries", run: "npm run check:boundaries" },
         { name: "Lint Obsidian plugin", run: "npm run lint" },
