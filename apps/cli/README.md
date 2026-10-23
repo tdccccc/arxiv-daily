@@ -50,7 +50,7 @@ arxiv-daily ui           # open the local reading workbench
 | Linux/macOS | `$XDG_CONFIG_HOME/arxiv-daily/config.toml` (default `~/.config/arxiv-daily/config.toml`) |
 | Windows | `%APPDATA%\arxiv-daily\config.toml` |
 
-Default vault from `init`: `~/arxiv-daily`. There are no settings env vars and no `--config`/`--vault-root` flags. The file holds your API keys in plain text — lock it down:
+Default vault from `init`: `~/arxiv-daily`. There are no settings env vars and no `--config`/`--vault-root` flags. You can edit the file by hand; when the workbench's Settings or `library connect` change it, only the values they change are rewritten, so your comments and layout stay. The file holds your API keys in plain text — lock it down:
 
 ```bash
 chmod 600 ~/.config/arxiv-daily/config.toml
@@ -107,7 +107,7 @@ Or configure `[schedule]` in `config.toml` and let the CLI manage it:
 arxiv-daily schedule install
 ```
 
-`schedule install`/`uninstall` write a managed crontab entry on Linux/macOS/WSL. The entry runs `<node> <script> run --today` with the Node binary that ran `install` and appends output to `schedule.log` next to your config file; after upgrading or switching Node, run `schedule install` again. Native Windows Task Scheduler isn't supported — use WSL, or run the scheduler built into the Obsidian plugin or the workbench.
+`schedule install`/`uninstall` write a managed crontab entry on Linux/macOS/WSL. The entry runs `<node> <script> run --today` with the Node binary that ran `install` and appends output to `schedule.log` next to your config file; after upgrading or switching Node, run `schedule install` again. cron does not read your shell profile, so if the config lives under a custom `XDG_CONFIG_HOME` the entry sets that variable itself (run `schedule install` again if you move the config). Native Windows Task Scheduler isn't supported — use WSL, or run the scheduler built into the Obsidian plugin or the workbench.
 
 ## Optional personal library
 

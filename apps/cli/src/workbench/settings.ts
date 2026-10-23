@@ -6,6 +6,7 @@ import { DEFAULT_SETTINGS, arxivCategories, sha256Hex, type Topic } from "@arxiv
 import { NodeFileLock, NodeStorageAdapter } from "@arxiv-daily/node-runtime";
 import { loadCliConfig, type CliRuntimeConfig } from "../config";
 import { defaultCliVaultRoot } from "../config-path";
+import { patchConfigToml } from "../config-write";
 import { extendedSettings, type ExtendedSettingsValues } from "./settings-fields";
 import { patchWorkbenchBusinessSettings } from "./settings-adapter";
 import { WorkbenchError } from "./documents";
@@ -55,12 +56,13 @@ export async function saveWorkbenchSettings(configPath: string, body: unknown): 
     const raw = await readOptional(target);
     assertRevision(raw, expected);
     const previous = raw !== null ? await decode(configPath, raw) : null;
-    const document = raw === null ? {} : parse(raw);
+    const document: Record<string, unknown> = raw === null ? {} : parse(raw);
     const vaultRoot = resolveVaultRoot(body.values.vaultRoot ?? previous?.vaultRoot);
-    const updated: Record<string, unknown> = { ...document, vault_root: vaultRoot };
+    // A root that still resolves to the saved place keeps the way the user wrote it (`~/notes`).
+    const updated: Record<string, unknown> = { ...document, vault_root: vaultRoot === previous?.vaultRoot ? document.vault_root : vaultRoot };
     try { patchWorkbenchBusinessSettings(updated, body.values, previous); }
     catch (error) { throw new WorkbenchError(400, error instanceof Error ? error.message : "设置内容无效。"); }
-    const content = stringify(updated);
+    const content = raw === null ? stringify(updated) : patchConfigToml(raw, updated);
     await decode(configPath, content);
     assertRevision(await readOptional(target), expected);
     await new NodeStorageAdapter(directory).writeTextAtomic(fileName, content, 0o600);

@@ -214,7 +214,7 @@ extensions/vscode-arxiv-daily → 独立 CommonJS 扩展（不在 npm workspaces
 | 执行 | 需 Obsidian 保持打开 | OS cron 调用一次性 `run --today` |
 | `run` 路径 | `runForDateNow` / force 等 | 同样经 `runForDateNow`，但**不** `start()` 定时器 |
 
-cron install 在读取或修改 crontab 前先校验时间窗和可执行路径；重复运行的结束时间不能早于开始时间，控制字符路径被拒绝，shell 特殊字符及 `%` 被转义。原生 Windows 不支持 crontab install（可提示 WSL 或插件）。
+cron install 在读取或修改 crontab 前先校验时间窗和可执行路径；重复运行的结束时间不能早于开始时间，控制字符路径被拒绝，shell 特殊字符及 `%` 被转义。cron 不读 shell 启动文件，配置不在默认位置时每条任务前缀 `XDG_CONFIG_HOME=<目录>`。原生 Windows 不支持 crontab install（可提示 WSL 或插件）。
 
 ### 邮件流
 
@@ -443,7 +443,7 @@ core / node-runtime / plugin / CLI 工作区有 Vitest 覆盖；Core 流水线�
 ### 密钥与脱敏
 
 
-- LLM / Resend / hosted token 进入 logger 敏感值列表；CLI 对 stdout/stderr 做 `redactText`。  
+- LLM / Resend / hosted token 进入 logger 敏感值列表；CLI 对 stdout/stderr 做 `redactText`。不短于 8 个字符的密钥在任何位置都会被替换；更短的值（本地模型服务常用的占位密钥 `local`、`ollama`、`none`）和 `lm-studio` 这类已知占位值只在 `api_key=…`、`Bearer …` 等赋值形态里替换，否则正文里的同一个词会被改写。阅读工作台只对错误、日历消息和运行输出做密钥替换，文档、论文、设置原样返回（设置表单会把读到的方向文本再保存回去）。  
 - 插件密钥存于 Obsidian 数据（`ObsidianSettingsSecretProvider`），provider 写入经 settings candidate transaction 持久化。设置页的 LLM/Resend key 与 hosted token 以掩码输入框显示已保存值，可点按 Show/Hide 查看，编辑在 blur/Enter 时经事务提交，失败回滚显示旧值。
 - Worker 不向客户端暴露 Resend key；设备 token 只在验证完成页展示，KV key 使用 `TOKEN_SECRET` 作用域的 token hash。验证 pending/device 值仍保存规范化绑定邮箱以执行 recipient 校验；recipient/legacy identity、DO 名称、provider key、ledger、cutover control/marker 与公开成功响应使用 `IDENTITY_SECRET` 作用域哈希或无内容枚举，不保存 raw recipient、raw token、provider response body 或 provider ID。cutover status 不公开 identity fingerprint。
 

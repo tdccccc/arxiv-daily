@@ -1,6 +1,6 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import { parse, stringify } from "smol-toml";
+import { parse } from "smol-toml";
 import {
   authorizeLibraryConnection,
   createLibraryConnection,
@@ -15,6 +15,7 @@ import {
 } from "@arxiv-daily/core";
 import { NodeStorageAdapter, NodeFileLock, openScopedLibrarySource } from "@arxiv-daily/node-runtime";
 import { CliConfigError, loadCliConfig, type CliRuntimeConfig } from "./config";
+import { patchConfigToml } from "./config-write";
 
 export interface CliLibraryConnectionInspection {
   status: LibraryConnectionStatus;
@@ -103,7 +104,7 @@ async function mutateConnection(
     // document, never from mutable caller-owned configuration objects.
     const current = await loadCliConfig({ configPath: config.configPath, readText: async () => raw });
     const next = await update(current);
-    const content = stringify({ ...parse(raw), library: next });
+    const content = patchConfigToml(raw, { ...parse(raw), library: next });
     // Also catch an editor changing the file while directory validation ran.
     assertRevision(await fs.readFile(target, "utf8"), config.configRevision);
     await new NodeStorageAdapter(directory).writeTextAtomic(fileName, content, 0o600);

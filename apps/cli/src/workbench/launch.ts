@@ -3,6 +3,7 @@ import { clearTimer, setTimer } from "@arxiv-daily/core";
 import { loadCliConfig, type CliRuntimeConfig } from "../config";
 import { resolveCliConfigPath } from "../config-path";
 import { CLI_CANCEL_MESSAGE, isCliRunEvent, type CliIo } from "../main-types";
+import { latestAnnouncedDayFrom } from "./announced-day";
 import { startWorkbench } from "./server";
 import { workbenchAssets } from "./assets";
 import { WorkbenchError } from "./documents";
@@ -11,6 +12,8 @@ export interface RunWorkbenchOptions {
   port: number;
   open: boolean;
   frameOrigin?: string;
+  /** For a host that starts the workbench as a child: stop when the pipe on stdin closes, as it does when the host dies. */
+  exitOnStdinClose?: boolean;
   env: Record<string, string | undefined>;
 }
 
@@ -33,6 +36,7 @@ export async function runWorkbench(config: CliRuntimeConfig | undefined, io: Cli
   const beforeWrite = createWorkbenchConfigGuard(() => config, options.env);
   const app = await startWorkbench({
     config, configPath: config?.configPath ?? resolveCliConfigPath(options.env), onConfigSaved: next => { config = next; }, port: options.port, assets: workbenchAssets(), beforeWrite, frameOrigin: options.frameOrigin,
+    latestAnnouncedDay: latestAnnouncedDayFrom(() => config),
     run: async (args, output, signal) => {
       await beforeWrite();
       if (signal.aborted) return 1;
@@ -42,6 +46,7 @@ export async function runWorkbench(config: CliRuntimeConfig | undefined, io: Cli
   });
   let stopping = false;
   const stopped = new Promise<number>(resolve => {
+    let unwatchStdin = () => {};
     const stop = () => {
       if (stopping) return;
       stopping = true;
@@ -49,14 +54,29 @@ export async function runWorkbench(config: CliRuntimeConfig | undefined, io: Cli
       void app.close().then(() => resolve(0), error => { io.stderr.write(`${String(error)}\n`); resolve(1); }).finally(() => {
         process.off("SIGINT", stop);
         process.off("SIGTERM", stop);
+        unwatchStdin();
       });
     };
     process.on("SIGINT", stop);
     process.on("SIGTERM", stop);
+    if (options.exitOnStdinClose) unwatchStdin = watchStdin(stop);
   });
   io.stdout.write(`Workbench: ${app.url}\nKeep this process running. Press Ctrl+C to stop.\n`);
   if (options.open && !await openBrowser(app.url)) io.stderr.write("Could not open a browser automatically. Open the Workbench URL above.\n");
   return stopped;
+}
+
+/**
+ * A host that is killed or crashes cannot send SIGTERM, but the kernel closes the pipe it holds to our
+ * stdin, on every platform. Unreferenced, so that watching never keeps the process alive by itself.
+ */
+function watchStdin(onClose: () => void): () => void {
+  const stdin: NodeJS.ReadStream & { unref?: () => void } = process.stdin;
+  stdin.once("end", onClose);
+  stdin.once("close", onClose);
+  stdin.resume();
+  stdin.unref?.();
+  return () => { stdin.off("end", onClose); stdin.off("close", onClose); stdin.pause(); };
 }
 
 export function runCliChild(executable: string, args: string[], env: Record<string, string | undefined>, output: CliIo, signal: AbortSignal): Promise<number> {

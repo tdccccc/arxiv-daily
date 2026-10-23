@@ -175,6 +175,8 @@ code { font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace; }
 .run-state.running { color: var(--accent); }
 .run-tray details { margin-top: 12px; font-size: 11px; color: var(--muted); }
 .run-tray summary { cursor: pointer; }
+.announcement-offer { margin-top: 12px; font-size: 11px; color: var(--muted); }
+.announcement-offer p { margin: 0 0 8px; line-height: 1.6; }
 .run-tray pre { font-size: 10px; line-height: 1.6; max-height: 180px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; margin-bottom: 0; color: var(--ink); }
 .workbench-dialog { color: var(--ink); background: var(--surface); border: 1px solid var(--line); border-radius: 12px; width: min(560px, calc(100vw - 32px)); max-height: calc(100svh - 60px); padding: 26px 30px 28px; box-shadow: 0 24px 80px #101b2833; animation: dialog-in .17s ease-out; }
 .workbench-dialog::backdrop { background: #121c3159; }

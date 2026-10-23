@@ -108,3 +108,35 @@ it("exposes optional library status through the ordinary product CLI", async () 
   expect(result.code).toBe(0);
   expect(JSON.parse(result.stdout).status.kind).toBe("disconnected");
 });
+
+// Local servers need a non-empty key but ignore it, so the key is often an ordinary word.
+it.each(["local", "e"])("prints topics and papers as stored with model key %s", async (key) => {
+  const { config, index } = await setup();
+  config.settings.llm.apiKey = key;
+  config.settings.arxiv.topics = [{ id: "t", name: "Cosmology", tag: "cosmo", description: "photometric redshift estimation in the local universe", detail: false }];
+  await index.upsertFromDailyPaper({ arxivId: "2605.08082", title: "A local approach to calibration", authors: "An Author", date: "2026-05-11", arxivCategory: "cs.AI", primaryTopic: "cosmo", detail: false });
+  const status = await invoke(config, ["status"]);
+  const papers = await invoke(config, ["papers"]);
+  expect(JSON.parse(status.stdout).topics[0].description).toBe("photometric redshift estimation in the local universe");
+  expect(JSON.parse(papers.stdout).papers[0].title).toBe("A local approach to calibration");
+  expect(status.stdout + papers.stdout).not.toContain("[REDACTED]");
+});
+
+it("keeps library status JSON fields intact with a single-character real key", async () => {
+  const { config } = await setup();
+  config.settings.llm.apiKey = "t";
+  const result = await invoke(config, ["library", "status"]);
+  expect(result.code).toBe(0);
+  expect(JSON.parse(result.stdout).status.kind).toBe("disconnected");
+  expect(result.stdout).not.toContain("[REDACTED]");
+});
+
+it("still masks a short real key in stored errors without rewriting status fields", async () => {
+  const { config, storage } = await setup();
+  config.settings.llm.apiKey = "x9Z";
+  const state = createStorageStateStore(storage, config.settings.output);
+  await state.load();
+  await state.setFailed("2026-05-10", "transient", "network error x9Z");
+  const result = await invoke(config, ["status"]);
+  expect(JSON.parse(result.stdout).recentRuns[0].error).toBe("network error [REDACTED]");
+});

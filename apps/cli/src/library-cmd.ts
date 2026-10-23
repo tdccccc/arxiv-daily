@@ -20,6 +20,7 @@ import { CliConfigError, type CliRuntimeConfig } from "./config";
 import { connectCliLibrary, authorizeCliLibrary, revokeCliLibrary, inspectCliLibraryConnection } from "./library-connection-cmd";
 import { createCliTopicSettings } from "./library-topic-settings";
 import type { CliIo } from "./main-types";
+import { diagnosticJson } from "./diagnostic-json";
 
 export interface CliLibraryOptions {
   http?: HttpClient;
@@ -31,7 +32,7 @@ export interface CliLibraryOptions {
 /** The CLI is an application host; the shared workflow owns all library decisions and writes. */
 export async function runCliLibrary(config: CliRuntimeConfig, args: string[], io: CliIo, options: CliLibraryOptions = {}): Promise<number> {
   const secrets = [config.settings.llm.apiKey, config.settings.embedding.apiKey, config.settings.email.apiKey ?? ""];
-  const print = (value: unknown) => io.stdout.write(redactText(JSON.stringify(value), { secrets }) + "\n");
+  const print = (value: unknown) => io.stdout.write(diagnosticJson(value, secrets) + "\n");
   const controller = new AbortController();
   const signal = options.signal ? AbortSignal.any([options.signal, controller.signal]) : controller.signal;
   const cancel = () => controller.abort(new Error("Library task cancelled"));

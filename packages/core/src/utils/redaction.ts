@@ -4,6 +4,9 @@ const BEARER_RE = /\bBearer\s+[^\s,;]+/gi;
 const KEY_VALUE_RE = /\b(api[-_]?key|access[-_]?token|token|secret|password)(\s*[=:]\s*)([^\s,;&]+)/gi;
 const JSON_SECRET_RE = /(["'](?:api[-_]?key|access[-_]?token|token|secret|password)["']\s*:\s*["'])([^"']*)(["'])/gi;
 const COMMON_API_KEY_RE = /\b(?:sk|rk|pk|api)[-_][A-Za-z0-9_-]{8,}\b/g;
+// Known local-server stand-ins are ordinary words, not secrets. Every other nonempty
+// configured value is sensitive regardless of length; only diagnostic channels should use this helper.
+const PLACEHOLDER_SECRETS = new Set(["local", "none", "test", "ollama", "empty", "dummy", "lm-studio", "not-needed"]);
 
 export interface RedactionOptions {
   secrets?: readonly string[];
@@ -11,8 +14,12 @@ export interface RedactionOptions {
 
 export function redactText(value: unknown, options: RedactionOptions = {}): string {
   let text = stringify(value);
-  for (const secret of normalizedSecrets(options.secrets)) {
-    text = text.split(secret).join(REDACTED);
+  const secrets = normalizedSecrets(options.secrets);
+  if (secrets.length > 0) {
+    // A single pass cannot replace a character inside its own replacement. Recognize
+    // existing markers first as well, since errors may pass through several log layers.
+    const alternatives = [REDACTED, ...secrets].map(secret => secret.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
+    text = text.replace(new RegExp(alternatives.join("|"), "g"), REDACTED);
   }
   return text
     .replace(BEARER_RE, `Bearer ${REDACTED}`)
@@ -59,8 +66,12 @@ export function sanitizeValue(value: unknown, options: RedactionOptions = {}): u
 }
 
 function normalizedSecrets(secrets: readonly string[] | undefined): string[] {
-  return [...new Set((secrets ?? []).map((value) => value.trim()).filter((value) => value.length >= 4))]
+  return [...new Set((secrets ?? []).map((value) => value.trim()).filter(isKeyLike))]
     .sort((a, b) => b.length - a.length);
+}
+
+function isKeyLike(value: string): boolean {
+  return value.length > 0 && !PLACEHOLDER_SECRETS.has(value.toLowerCase());
 }
 
 function stringify(value: unknown): string {
