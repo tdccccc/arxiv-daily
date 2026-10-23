@@ -2,8 +2,8 @@
 
 goal_ref: ../goal.md
 created: 2026-10-24T00:42:23+08:00
-updated: 2026-10-24T01:08:30+08:00
-revision: 2
+updated: 2026-10-24T01:55:43+08:00
+revision: 3
 
 ## Outcome
 
@@ -27,7 +27,7 @@ worktree a / b分别处理工具9条和核心产品6条；协调者在integratio
 - change: 源码数学片段保真、清洗复杂度有界；不可信日报字段无法触发图片/嵌入，邮件往返保持可读。
 - first signal: 数学源码/恶意长输入/Markdown图片等回归在旧实现失败。
 - checks: source-extractor、日报渲染、digest往返及pipeline回归。
-- [ ] accepted on observed evidence
+- [x] accepted on observed evidence
 
 ### Chunk 2 — 索引进度与清理（LIB-06/07）
 
@@ -35,7 +35,7 @@ worktree a / b分别处理工具9条和核心产品6条；协调者在integratio
 - change: 中断索引复用已写入且匹配的论文文档；提供明确静默期清理入口，保留当前/备份/占用代，旧模型文件回收限制写明。
 - first signal: 取消后重建重复嵌入；没有可调用清理入口。
 - checks: 取消/失败/换模型/CAS冲突复用；多代清理和读者保护；CLI与插件入口回归。
-- [ ] accepted on observed evidence
+- [x] accepted on observed evidence
 
 ### Chunk 3 — 历史同步和真实设置输入（STATE-03/OBS-06）
 
@@ -43,7 +43,7 @@ worktree a / b分别处理工具9条和核心产品6条；协调者在integratio
 - change: 大小写不一致或整个目录暂不可见不清空索引；维度/旧版API密钥经事务保存，校验、回滚和索引状态刷新生效。
 - first signal: 大小写目录清空索引、真实DOM输入绕过事务的用例失败。
 - checks: 核心history-sync及插件路径测试；新旧设置页真实change/blur及保存失败测试。
-- [ ] accepted on observed evidence
+- [x] accepted on observed evidence
 
 ### Chunk 4 — 探索夹具与观察（SCR-02/04/05/09、EXP-04/05）
 
@@ -51,7 +51,7 @@ worktree a / b分别处理工具9条和核心产品6条；协调者在integratio
 - change: 全平台配置隔离；驱动符合现有提案契约；调度控件受限；PDF夹具可验证；活动笔记、焦点、被拦截外部打开可观察。
 - first signal: 各缺口的确定性驱动/fixture测试失败。
 - checks: acceptance-fixtures、runner、workbench、exploration-host/obsidian/labels；固定workbench验收。
-- [ ] accepted on observed evidence
+- [x] accepted on observed evidence
 
 ### Chunk 5 — 发版工具守卫（SCR-01/03/07/08）
 
@@ -59,7 +59,7 @@ worktree a / b分别处理工具9条和核心产品6条；协调者在integratio
 - change: 按宿主构建并记录产物证据；相对跨层导入不可绕过；删除退休诊断脚本入口；模型超时可配置并有限重试。
 - first signal: 构建选择、相对导入、模型超时预算回归失败；删除脚本无需行为测试。
 - checks: runner、build-deploy、boundaries、exploration预算测试及release-tools。
-- [ ] accepted on observed evidence
+- [x] accepted on observed evidence
 
 ### Chunk 6 — 依赖审计与公式渲染（SCR-06）
 
@@ -67,7 +67,7 @@ worktree a / b分别处理工具9条和核心产品6条；协调者在integratio
 - change: 6个lockfile动态纳入更新和审计；KaTeX升级消除已知低危公告，工作台公式和资源仍可用。
 - first signal: 漏配lockfile检测失败；升级前保留公式渲染基线。
 - checks: security-ci覆盖测试、所有lockfile audit；markdown/math回归、构建字体资源及真实浏览器公式显示。
-- [ ] accepted on observed evidence
+- [x] accepted on observed evidence
 
 ### Chunk 7 — 集成与合并
 
@@ -91,4 +91,12 @@ worktree a / b分别处理工具9条和核心产品6条；协调者在integratio
 - OBS-06 c607bb0：16个真实DOM回归先失败，完整设置278项、插件类型和lint通过；归档accc7d5。
 - SCR-07 d2fa7fd：4个退役脚本移除，历史说明不再提供可运行入口；引用和diff检查通过，无需运行时测试；归档c06f0c9。
 - SCR-08 5a4797b：3个新增回归先失败，探索/runner完整108项通过。
-- 协调复核PIPE-09发现裸TeX环境仍可生成img，已把实际渲染器复现交回产品代理修正，尚未验收。
+- 协调复核PIPE-09发现裸TeX及无效美元边界可生成img；44b3da0、23973e0补齐失败回归并修复，实际工作台渲染不再生成图片。
+
+- 工具分支e51a218：964项工具测试通过；产品分支42482f9完成后续密钥队列复核，4个新增回归先失败再通过。合并只解决追加测试和import冲突，保留双方用例。
+- 合并后探索/runner实为117项通过（062ebb9提交正文误写118，此处更正）；新旧设置282项通过。
+- 集成5de6769全套23项gate通过：release-tools969、acceptance-tools449；core3140（2原跳过）、node-runtime130、CLI672、plugin1248；工作台真实浏览器12/12，DSH隔离网络21/21。日志/tmp/arxiv-fix-2026-10-21/gates-b4-final/summary.txt。
+- 6份锁文件均审计0漏洞；集成首轮VSCode审计3次遇npm400，单独重试通过。日志b4-integrated-audit.log及b4-vscode-audit-retry.log，非漏洞豁免。
+- 使用真实产品运行时加载器、公开缓存权重和人工PDF夹具，在隔离网络Node22.22.2/20.19.0上分别通过384维、有限数、归一化和PDF正文验证；详见b4-runtime-smoke/result-*.json。
+- KaTeX0.17→0.19真实工作台同文档视觉对照通过，Node22/20均正确呈现3公式/MathML及字体、代码、货币文字，无请求/页面错误；截图保留在/tmp/arxiv-fix-2026-10-21/b4-math-{before,after,node20}/。
+- 原54条writeup已全部归档、索引及链接校验通过；额外4项继续未修复。PR及CI/合并尚待完成。
