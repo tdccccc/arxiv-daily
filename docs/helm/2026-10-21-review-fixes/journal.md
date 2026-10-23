@@ -18,3 +18,9 @@
 - PR #108 CodeQL 发现日报解析两处无界重叠匹配（threads PRRT_kwDORhXqAc6vqGIN、PRRT_kwDORhXqAc6vqGI6）。
 - 回归先失败：Unicode 分隔符后的合法标题被遗漏。改成有界标题前缀匹配+直接切片，十万制表符用例在500ms以内通过；邮件/pipeline253项及core类型检查通过。
 - 仍需新head CI完成，确认告警消失再解决线程和合并。
+
+## 2026-10-24T00:42:23+08:00 — P1 accepted; start P2
+
+- PR #108 已合并e8b4838，最终17项CI通过，CodeQL线程解决且CLEAN；首次合并请求EOF未合并，核查后重试成功。
+- 第四批三分支由新main创建；工具11项交给a，核心产品6项交给b，OBS-06由协调者处理。静默期维护采用显式入口，避免跨进程自动GC；索引恢复优先复用已写文档，保留末尾CAS。
+- SSH fetch卡住后已终止本任务两个进程，HTTPS fetch成功；以后Git网络操作使用HTTPS。

@@ -2,8 +2,8 @@
 
 status: active
 created: 2026-10-23T22:19:51+08:00
-updated: 2026-10-23T22:19:51+08:00
-revision: 1
+updated: 2026-10-24T00:42:23+08:00
+revision: 2
 owner: codex-root-review-resume
 
 ## Intent
@@ -12,7 +12,7 @@ owner: codex-root-review-resume
 
 ## Success criteria
 
-- [ ] 第三批 13 条修复通过本地检查和 CI，PR 合并。
+- [x] 第三批 13 条修复通过本地检查和 CI，PR 合并。
 - [ ] 第四批 18 条复核、修复、归档，检查和 CI 通过，PR 合并。
 - [ ] 问题索引状态及链接正确；额外发现独立记录。
 - [ ] 汇报行为变化、遗留事项和中继重新部署要求，清理已合并 worktree。
@@ -31,5 +31,5 @@ owner: codex-root-review-resume
 
 ## Phases
 
-1. P1 — 第三批修复可安全集成并合入 main — status: active
-2. P2 — 第四批剩余 18 条全部处理并合入 main — status: pending
+1. P1 — 第三批修复可安全集成并合入 main — status: done
+2. P2 — 第四批剩余 18 条全部处理并合入 main — status: active
