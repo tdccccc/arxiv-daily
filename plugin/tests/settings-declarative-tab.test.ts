@@ -26,6 +26,7 @@ import {
   renderEmailModeRow,
   renderEmailToRow,
   renderEmbeddingBaseUrlRow,
+  renderEmbeddingApiKeyRow,
   renderEmbeddingModeRow,
   renderHostedTokenRow,
   renderLibraryDirectionsRow,
@@ -3694,5 +3695,70 @@ describe("topic editor behavior contracts", () => {
     tab.display();
     expect(settings.arxiv).toEqual(before);
     expect(saveSettings).not.toHaveBeenCalled();
+  });
+});
+
+describe("queued embedding secret drafts", () => {
+  function setup() {
+    const made = makeTab();
+    made.settings.embedding.apiKey = "original-secret";
+    const setting = renderSetting();
+    renderEmbeddingApiKeyRow(made.tab, setting as never);
+    const input = setting.controlEl.querySelector<HTMLInputElement>("input")!;
+    const draft = (value: string, commit = true) => {
+      input.value = value;
+      input.dispatchEvent(new Event("input"));
+      if (commit) input.dispatchEvent(new Event("blur"));
+    };
+    return { ...made, input, draft };
+  }
+
+  it.each(["success", "failure"])("keeps a newer uncommitted secret draft after an older save %s", async outcome => {
+    const { settings, saveSettings, plugin, input, draft } = setup();
+    const first = deferred();
+    saveSettings.mockImplementationOnce(() => first.promise);
+    draft("first-secret");
+    await vi.waitFor(() => expect(saveSettings).toHaveBeenCalledOnce());
+    draft("newer-unsaved-secret", false);
+    if (outcome === "success") {
+      first.resolve();
+      await vi.waitFor(() => expect(settings.embedding.apiKey).toBe("first-secret"));
+    } else {
+      first.reject(new Error("disk full"));
+      await vi.waitFor(() => expect(plugin.logger.error).toHaveBeenCalled());
+      expect(settings.embedding.apiKey).toBe("original-secret");
+    }
+    expect(input.value).toBe("newer-unsaved-secret");
+    expect(saveSettings).toHaveBeenCalledOnce();
+  });
+
+  it("restores the latest durable secret when a later queued save fails", async () => {
+    const { settings, saveSettings, plugin, input, draft } = setup();
+    const first = deferred(), second = deferred();
+    saveSettings.mockImplementationOnce(() => first.promise).mockImplementationOnce(() => second.promise);
+    draft("first-secret");
+    await vi.waitFor(() => expect(saveSettings).toHaveBeenCalledOnce());
+    draft("second-secret");
+    first.resolve();
+    await vi.waitFor(() => expect(saveSettings).toHaveBeenCalledTimes(2));
+    expect(settings.embedding.apiKey).toBe("first-secret");
+    second.reject(new Error("disk full"));
+    await vi.waitFor(() => expect(plugin.logger.error).toHaveBeenCalled());
+    expect(settings.embedding.apiKey).toBe("first-secret");
+    expect(input.value).toBe("first-secret");
+  });
+
+  it("queues a return to the original secret while a different value is saving", async () => {
+    const { settings, saveSettings, input, draft } = setup();
+    const first = deferred();
+    saveSettings.mockImplementationOnce(() => first.promise);
+    draft("first-secret");
+    await vi.waitFor(() => expect(saveSettings).toHaveBeenCalledOnce());
+    draft("original-secret");
+    first.resolve();
+    await vi.waitFor(() => expect(saveSettings).toHaveBeenCalledTimes(2));
+    await vi.waitFor(() => expect(settings.embedding.apiKey).toBe("original-secret"));
+    expect(input.value).toBe("original-secret");
+    expect(saveSettings.mock.calls[1]![0]?.embedding.apiKey).toBe("original-secret");
   });
 });
