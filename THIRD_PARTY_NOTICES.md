@@ -64,7 +64,7 @@ FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR
 OTHER DEALINGS IN THE SOFTWARE.
 ```
 
-### katex 0.17.0
+### katex 0.19.0
 
 Source: https://github.com/KaTeX/KaTeX.git
 
