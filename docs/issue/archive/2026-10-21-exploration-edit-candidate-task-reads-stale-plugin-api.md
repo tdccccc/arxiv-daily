@@ -1,7 +1,7 @@
 # Obsidian 探索任务 library-edit-candidate 永远阻塞，发版探索的 Obsidian 一端无法得到绿灯
 
 > 发现日期：2026-10-21 · 来源：main `d999037` 深度代码审查 · 编号 SCR-02
-> 范围：`scripts/acceptance/exploration-obsidian.mjs`、`exploration-tasks/obsidian.mjs`、`scripts/tests/acceptance-exploration-host.test.mjs` · 严重程度：中 · 状态：未修复 · 置信度：已复现
+> 范围：`scripts/acceptance/exploration-obsidian.mjs`、`exploration-tasks/obsidian.mjs`、`scripts/tests/acceptance-exploration-host.test.mjs` · 严重程度：中 · 状态：已修复（分支 `fix/2026-10-21-batch4`，提交 82e957c） · 置信度：已复现
 
 ## 问题
 
@@ -36,3 +36,7 @@ library-edit-candidate: prepare()'s real generation did not produce any proposed
 - 把 `createFakeLibraryTaskDriver` 的 `generatePersonalLibraryDirections()` 改成返回真实形状 `{ outcome: "generated", proposal, scope: "full", fellBackToFull: false }`，让 `library-edit-candidate: prepare()` 的现有用例在真实形状下通过。
 - 为探索驱动本身加一个测试：用一个假的 `session.evaluate`，让它返回 `JSON.stringify` 后的真实包装对象，断言驱动方法返回的是 `proposal`；再加 `{ outcome: "nothing-new" }` 的用例，断言得到明确的错误。
 - 长期：给该驱动方法加一个类型/契约检查（例如从 `plugin/main.ts` 导出的 `GeneratedPersonalLibraryDirections` 形状里取字段名做断言），让插件接口再变时测试先红。
+
+## 修复情况
+
+编辑候选方向任务按当前插件的 outcome/proposal 返回契约读取已生成的提案，不再误报为空；nothing-new 会说明没有新论文。驱动保留真实包装对象，由任务显式判别结果。6 项失败回归修复后，候选任务和契约 10 项通过。

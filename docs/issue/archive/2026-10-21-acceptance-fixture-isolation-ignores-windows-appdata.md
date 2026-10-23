@@ -1,7 +1,7 @@
 # 在 Windows 上跑 workbench 验收或探索，隔离夹具不生效：产品会读写用户真实的 CLI 配置
 
 > 发现日期：2026-10-21 · 来源：main `d999037` 深度代码审查 · 编号 SCR-05
-> 范围：`scripts/acceptance/fixtures.mjs`、`workbench-session.mjs`、`run.mjs`（workbench 固定套件与 workbench 探索宿主） · 严重程度：中 · 状态：未修复 · 置信度：代码推断
+> 范围：`scripts/acceptance/fixtures.mjs`、`workbench-session.mjs`、`run.mjs`（workbench 固定套件与 workbench 探索宿主） · 严重程度：中 · 状态：已修复（分支 `fix/2026-10-21-batch4`，提交 f1faa04） · 置信度：代码推断
 
 ## 问题
 
@@ -37,3 +37,7 @@
 
 - `scripts/tests/acceptance-fixtures.test.mjs`：断言 `createFixtureEnvironment().env` 在 `win32` 解析下 `resolveCliConfigPath(env, "win32")` 落在夹具根目录之内（可用注入的平台参数在 Linux 上跑）。
 - `scripts/tests/acceptance-workbench.test.mjs`：当 `resolveCliConfigPath(fixture.env)` 指向夹具之外时，`startWorkbenchSession` 抛出 `WorkbenchBlockedError`，不启动子进程。
+
+## 修复情况
+
+Windows、macOS、Linux 验收都把实际配置、HOME 和缓存指向临时夹具；启动前用真实 CLI 路径规则核对配置位置，不匹配就拒绝启动。Windows 构建通过 Node 启动 npm，避免直接执行 cmd 的限制。2 项失败回归修复后，40 项相关测试与 CLI 类型检查通过。
