@@ -248,7 +248,7 @@ describe("rescueDailySummary", () => {
           "problem exact &lt;script>x&lt;/script> `code <b>ok</b>` z<0.1",
         );
         expect(contract.slots[1].result.originalAbstract).toBe(
-          "fallback abstract &lt;![CDATA[unsafe]]> <mailto:user@example.org>",
+          "fallback abstract &lt;!\\[CDATA[unsafe]]> <mailto:user@example.org>",
         );
         return copyTransportedContract(contract);
       }),

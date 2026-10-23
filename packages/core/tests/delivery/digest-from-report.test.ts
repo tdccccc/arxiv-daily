@@ -148,6 +148,18 @@ describe("digestFromDailyReport", () => {
     },
   );
 
+  it.each(["zh", "en"] as const)("keeps inert Markdown content readable in %s repaired mail", language => {
+    const hostile = "![](https://tracker.example/pixel) ![[Private Note]] %% hidden %%";
+    const hostileSlots = [slot("2605.08080", "photo-z", hostile, { authors: hostile })];
+    if (hostileSlots[0]!.result.kind === "structured") hostileSlots[0]!.result.summary.mainResult = hostile;
+    const markdown = assembleDailySummary({ slots: hostileSlots, dateStr: "2026-07-27", arxivSettings: arxiv, summaryLanguage: language });
+    const rebuilt = digestFromDailyReport(input(markdown, language))!;
+    const original = buildDailyDigest({ ...input(markdown, language), slots: hostileSlots });
+    expect(renderEmailHtml(rebuilt)).toBe(renderEmailHtml(original));
+    expect(renderEmailText(rebuilt)).toBe(renderEmailText(original));
+    expect(renderEmailHtml(rebuilt)).not.toContain("<img");
+  });
+
   it("keeps the report's order, configured empty topics and fallback abstract", () => {
     const rebuilt = digestFromDailyReport(input(report("en"), "en"))!;
 
