@@ -247,7 +247,7 @@ function resolveSurface() {
     }
   }
   if (!surface) {
-    const dashboard = document.querySelector(".arxiv-daily-dashboard");
+    const dashboard = Array.from(document.querySelectorAll(".arxiv-daily-dashboard")).find(node => !node.closest(".workspace-leaf") || node.closest(".workspace-leaf").classList.contains("mod-active"));
     if (dashboard) { surface = dashboard; view = "dashboard"; }
   }
   return { surface, view, modalOpen, menuOpen };
@@ -293,6 +293,10 @@ const CONTROL_SELECTOR = 'button,summary,a[href],input:not([type="hidden"]),text
 
 export function obsidianObservation(id, testMode) {
   const { surface, view, modalOpen, menuOpen } = resolveSurface();
+  const leaf = document.querySelector(".workspace-leaf.mod-active");
+  const activeLeaf = leaf ? { type: leaf.querySelector("[data-type]")?.getAttribute("data-type") || "unknown", title: leaf.querySelector(".view-header-title")?.textContent?.trim() || "" } : null;
+  const note = !surface && activeLeaf?.type === "markdown" ? leaf.querySelector(".markdown-preview-view,.markdown-source-view") : null;
+  const openedUrls = [...(document.defaultView?.__arxivExplorationOpenedUrls || [])];
   const controls = [];
   if (surface) {
     for (const node of surface.querySelectorAll(CONTROL_SELECTOR)) {
@@ -302,6 +306,11 @@ export function obsidianObservation(id, testMode) {
       controls.push(describeControl(node, ref));
     }
   }
+
+  const active = document.activeElement;
+  const focused = controls.find(control => control.ref === active?.getAttribute("data-acceptance-ref"));
+  const focus = !active || active === document.body ? null : focused ? { ref: focused.ref, tag: focused.tag, name: focused.name }
+    : !surface?.contains(active) ? { outside: true } : { tag: active.tagName.toLowerCase(), name: active.getAttribute("aria-label") || "" };
 
   // Obsidian's `.notice` is a generic class (no plugin marker); surfaced as
   // text-only context per the chunk-1 contract, never as a control.
@@ -319,18 +328,19 @@ export function obsidianObservation(id, testMode) {
   // is kept (never discarded), with the guidance appended, so no information is lost either way.
   const noControls = controls.length === 0;
   const recoveryText = "There are no interactive controls visible right now (you may be outside the arXiv Daily plugin, e.g. viewing a plain note or another pane, or on a plugin view with nothing currently visible). Use the \"home\" action to return to the Reading Dashboard.";
-  const baseText = surface ? surface.innerText ?? surface.textContent ?? "" : "";
+  const readable = surface || note;
+  const baseText = [readable ? readable.innerText ?? readable.textContent ?? "" : "", ...openedUrls.map(url => `External open blocked by exploration: ${url}`)].filter(Boolean).join("\n");
   return {
     id, title: document.title,
     text: (noControls ? [baseText, recoveryText].filter(Boolean).join("\n\n") : baseText).slice(0, 16000),
-    controls,
+    controls, focus,
     // Chunk 3: which browser-shaped actions this host currently allows, so the model does not have
     // to guess at back/reload support that differs by host and by whether a modal or the plugin's
     // own menu is open. `reload` is never listed — Obsidian has no per-page reload, and resetting
     // state between tasks is the driver's job, not an action a model can request. `home` (P4 Chunk 2
     // Fix 2) is always listed: it is a safe, idempotent recovery action from any state.
     capabilities: ["click", "fill", "select", "scroll", "wait", "press", ...((modalOpen || menuOpen) ? ["back"] : []), "home"],
-    layout: { rootMounted: Boolean(surface), view, dialogOpen: modalOpen || menuOpen, viewport: { width: innerWidth, height: innerHeight }, notices },
+    layout: { rootMounted: Boolean(surface), view: note ? "note" : view, activeLeaf, openedUrls, dialogOpen: modalOpen || menuOpen, viewport: { width: innerWidth, height: innerHeight }, notices },
   };
 }
 
@@ -524,7 +534,7 @@ export function classifyControlRestriction(control, allowedUrl) {
   // instead (menu items use an is-disabled CLASS — see describeControl — not restriction-by-name); the
   // toggle itself ("Enable scheduler"/"Disable scheduler") is restricted here, same policy as the
   // settings tab's own schedule toggle just above.
-  if (/^arxiv-daily-run-window-/.test(field) || /^enable\s*·/i.test(name) || /check every \(minutes\)/i.test(name) || /^(enable|disable) scheduler$/i.test(name)) return "scheduling settings are fixed by the fixture";
+  if (/^arxiv-daily-run-window-/.test(field) || /^enable\s*·/i.test(name) || /check every \(minutes\)/i.test(name) || /^(?:(enable|disable) scheduler|turn on daily reports|开启自动日报)$/i.test(name)) return "scheduling settings are fixed by the fixture";
   // New-P3 Chunk 1 (docs/helm/2026-10-13-exploration-safety-and-coverage/phases/03-obsidian-library-
   // tasks.md), owner steer: this used to match any name containing "embedding" or "sidecar" unanchored,
   // which also caught the bare Embedding mode <select> (name: "Embedding", packages/core/src/settings/
@@ -544,7 +554,7 @@ export function classifyControlRestriction(control, allowedUrl) {
   // run state is explicitly out of scope for exploration (goal.md), independent of the generic
   // dangerous-command handling the harness already applies elsewhere.
   if (/^clear run state/i.test(name)) return "run state cannot be cleared from exploration";
-  if (/^(open arxiv|open bug report|report a bug|open feature request|request a feature|open docs|open documentation|documentation|open repository|repository)$/i.test(name)) return "link leaves the plugin for an external destination";
+  if (/^(open bug report|report a bug|open feature request|request a feature|open docs|open documentation|documentation|open repository|repository)$/i.test(name)) return "link leaves the plugin for an external destination";
   if (control.href) {
     // No product code currently renders a real `<a href>` for external nav
     // (confirmed by reading view.ts/tab.ts — all external opens are onClick
@@ -864,6 +874,20 @@ export async function startObsidianExplorationSession({
  * `createObsidianExplorationDriver({ session, fixture, artifactDir, redact,
  * signal })` shape exactly.
  */
+// The owned renderer is discarded with the fixture. Never forward an external open to Obsidian
+// or the OS; cover a separate activeWindow as well as the main renderer window.
+function installExternalOpenGuard() {
+  const host = document.defaultView;
+  const urls = host.__arxivExplorationOpenedUrls ||= [];
+  const blockedOpen = url => {
+    urls.push(String(url ?? "").slice(0, 1000));
+    if (urls.length > 20) urls.shift();
+    return null;
+  };
+  for (const target of new Set([host, host.activeWindow].filter(Boolean))) target.open = blockedOpen;
+  return true;
+}
+
 export async function createObsidianExplorationDriver({ session, fixture, artifactDir, redact = value => String(value ?? ""), signal } = {}) {
   if (!session?.evaluate || !session?.client) throw new Error("Obsidian exploration driver needs a CDP session");
   if (!fixture?.vaultRoot || !fixture?.server?.url) throw new Error("Obsidian exploration driver needs an owned fixture");
@@ -871,6 +895,7 @@ export async function createObsidianExplorationDriver({ session, fixture, artifa
   // One real createObsidianDriver (obsidian-ui.mjs) gives command/runDate/jsonFile/exists/idle/screenshot/
   // openDashboard/closeSettings for free, installs the fixture HTTP proxy, and is the exact same code path the
   // fixed `obsidian` suite exercises — no parallel implementation of any of that here.
+  await session.evaluate(`(${installExternalOpenGuard})()`);
   const helper = await createObsidianDriver({ session, fixture, artifactDir });
   const executor = createObsidianActionExecutor({ client: session.client, evaluate: session.evaluate, redact });
   let version = 0, latest, diagnosticsSeen = 0;
@@ -896,6 +921,7 @@ export async function createObsidianExplorationDriver({ session, fixture, artifa
 
   async function observe() {
     signal?.throwIfAborted();
+    await session.evaluate(`(${installExternalOpenGuard})()`);
     const id = `s${++version}`;
     const snapshot = await helper.read(obsidianObservationExpression(id, false));
     for (const control of snapshot.controls) {
@@ -922,6 +948,7 @@ export async function createObsidianExplorationDriver({ session, fixture, artifa
 
   async function execute(action, observation, options = {}) {
     signal?.throwIfAborted();
+    await session.evaluate(`(${installExternalOpenGuard})()`);
     if (latest?.id !== observation.id) return { ok: false, error: "Stale observation; capture a new page state" };
     // P4 Chunk 2 Fix 2: `home` is the Obsidian counterpart of the model's only way back to the plugin
     // surface once it has wandered outside it (obsidianObservation offers it from any state, including
@@ -1052,6 +1079,12 @@ export async function createObsidianExplorationDriver({ session, fixture, artifa
     await helper.reloadPlugin();
     resetSignal?.throwIfAborted();
     await helper.openDashboard();
+    await helper.evaluate(`(() => {
+      const others = [];
+      app.workspace?.iterateRootLeaves(leaf => { if (leaf.view.getViewType() !== "arxiv-daily-dashboard") others.push(leaf); });
+      for (const leaf of others) leaf.detach();
+      document.defaultView.__arxivExplorationOpenedUrls.length = 0;
+    })()`);
     const durationMs = Date.now() - start;
     if (durationMs > 30000) throw new Error(`Obsidian reset took ${durationMs}ms, exceeding the 30s per-task phase-abort budget`);
     return { durationMs };

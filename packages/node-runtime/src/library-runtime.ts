@@ -24,7 +24,7 @@ export interface PrepareLibraryRuntimeOptions {
 export function nodeLibraryRuntimePaths(cacheDir: string) {
   return {
     pdf: path.resolve(cacheDir, "runtimes", "pdfjs-5.4.624"),
-    embedding: path.resolve(cacheDir, "runtimes", "transformers-4.2.0-cpu"),
+    embedding: path.resolve(cacheDir, "runtimes", "transformers-4.3.1-cpu"),
   };
 }
 

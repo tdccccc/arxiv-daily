@@ -1,7 +1,7 @@
 # 文档里的发版探索命令不构建 Obsidian 插件，会悄悄探索一份过期的插件
 
 > 发现日期：2026-10-21 · 来源：main `d999037` 深度代码审查 · 编号 SCR-01
-> 范围：`scripts/acceptance/run.mjs`、Obsidian 探索宿主（`exploration-obsidian.mjs` → `desktop-acceptance` 部署） · 严重程度：中 · 状态：未修复 · 置信度：已复现
+> 范围：`scripts/acceptance/run.mjs`、Obsidian 探索宿主（`exploration-obsidian.mjs` → `desktop-acceptance` 部署） · 严重程度：中 · 状态：已修复（分支 `fix/2026-10-21-batch4`，提交 0d5c2d4） · 置信度：已复现
 
 ## 问题
 
@@ -48,3 +48,7 @@ npm run test:acceptance -- --suite exploration --host obsidian --release
 - 在 `scripts/tests/acceptance-runner.test.mjs` 中断言：`--suite exploration --host obsidian` 和 `--explore --suite workbench --host obsidian` 会要求构建 `obsidian-arxiv-daily`；`--suite exploration --host workbench` 不会；固定的 `obsidian` 套件行为不变。
 - 断言 `--skip-build` 时不触发任何构建，并且报告元数据里带有产物指纹。
 - 若加入过期检测：构造一个比源码旧的 `plugin/main.js`，断言 `--skip-build` 的 Obsidian 探索会给出警告（或按约定拒绝运行）。
+
+## 修复情况
+
+探索现在按宿主构建：Obsidian 探索会先构建插件，混合套件构建两端。报告记录产物 SHA256 和修改时间；跳过构建仍记录指纹并对过期产物报警，桌面部署另存实际复制字节的指纹。构建选择与产物证据回归先有 3 项失败，修复后 runner/deploy/evidence 32 项通过。

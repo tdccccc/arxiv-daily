@@ -1243,11 +1243,13 @@ export function goalTasks() {
         // third, same-vector paper too.
         await seedClusterableLibraryPaper(driver);
         await driver.buildLibraryIndex();
-        const proposal = await driver.generatePersonalLibraryDirections();
+        const generated = await driver.generatePersonalLibraryDirections();
+        if (generated?.outcome === "nothing-new") throw new Error("library-edit-candidate: generation outcome nothing-new; no new papers produced a proposal");
+        const proposal = generated?.outcome === "generated" ? generated.proposal : null;
         const topic = proposal?.topics?.[0];
         const candidate = topic?.directions?.[0];
         if (!topic || !candidate) {
-          throw new Error("library-edit-candidate: prepare()'s real generation did not produce any proposed topic/direction to edit");
+          throw new Error(`library-edit-candidate: prepare()'s real generation did not produce any proposed topic/direction to edit (outcome: ${generated?.outcome ?? "missing"})`);
         }
         libraryEditCandidateBaseline = { topicId: topic.id, originalTopicName: topic.suggestedName, candidateId: candidate.id };
         await driver.openDashboard();

@@ -1132,7 +1132,7 @@ test('external-config-conflict: verify fails if "设置" is clicked again before
 // replaced so the visibility gate lets the fixture's controls through.
 // ---------------------------------------------------------------------------
 
-async function observeWorkbenchFixture(t, bodyHtml) {
+async function observeWorkbenchFixture(t, bodyHtml, prepare) {
   const root = await mkdtemp(path.join(tmpdir(), 'exploration-observer-'));
   t.after(() => rm(root, { recursive: true, force: true }));
   const fixture = { root, vaultRoot: path.join(root, 'vault'), configPath: path.join(root, 'config.toml') };
@@ -1152,6 +1152,7 @@ async function observeWorkbenchFixture(t, bodyHtml) {
   };
   const browserContext = { on() {}, off() {}, route: async () => {}, unroute: async () => {} };
   const driver = await createExplorationDriver({ page, context: browserContext, url, fixture, artifactDir: path.join(root, 'artifacts') });
+  prepare?.(window);
   t.after(() => driver.dispose());
   return driver.observe();
 }
@@ -1257,4 +1258,20 @@ test("authentication errors and parent cancellation never receive timeout retrie
   const cancelled = usageModel(() => { calls++; setTimeout(() => controller.abort("stop"), 5); return new Promise(() => {}); });
   await runExplorationLoop({ driver: fixtureDriver(), model: cancelled, tasks: [task()], artifactDir: await temporary(t), modelCallTimeoutMs: 100, signal: controller.signal });
   assert.equal(calls, 1);
+});
+
+for (const key of ['Enter', 'Space']) test(`setup scheduler activation blocks ${key}`, async t => {
+  const { driver, page, observation } = await makePressDriver(t, { focus: { ...notFocused, tag: 'button', name: '开启自动日报', dataAction: 'enable' } });
+  await assert.rejects(driver.execute({ type: 'press', key }, observation), /ExplorationActionError/);
+  assert.ok(!page.calls.some(call => call[0] === 'press'));
+});
+test('setup scheduler observation preserves its action and restriction', async t => {
+  const observation = await observeWorkbenchFixture(t, '<button data-setup-action="enable">开启自动日报</button>');
+  assert.equal(observation.controls[0].dataAction, 'enable');
+  assert.match(classifyControlRestriction(observation.controls[0]), /scheduling/);
+});
+
+test('workbench focus identifies the current numbered control without its value', async t => {
+  const snapshot = await observeWorkbenchFixture(t, '<button>Generate</button><input name="apiKey" type="password" value="sensitive-value">', window => window.document.querySelector('button').focus());
+  assert.deepEqual(snapshot.focus, { ref: snapshot.controls[0].ref, tag: 'button', name: 'Generate' });
 });

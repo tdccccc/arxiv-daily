@@ -120,6 +120,11 @@ export async function startFixtureServer(options = {}) {
         record.kind = "metadata";
         return send(200, atom(mode.arxiv === "empty" ? [] : (target.searchParams.get("id_list")?.split(",") ?? PAPERS.map(p => p.id)), extraPapers), "application/atom+xml");
       }
+      if (isArxiv && request.method === "GET" && /^\/pdf\/\d{4}\.\d{4,5}(?:v\d+)?$/.test(target.pathname)) {
+        const id = target.pathname.slice(5).replace(/v\d+$/, "");
+        const paper = [...PAPERS, ...extraPapers].find(paper => paper.id.replace(/v\d+$/, "") === id);
+        if (paper) { record.kind = "pdf"; return send(200, buildFixturePdf(paper), "application/pdf"); }
+      }
       if (isArxiv && /^\/html\/\d{4}\.\d{4,5}(?:v\d+)?$/.test(target.pathname)) { record.kind = "content"; return send(200, paperHtml(target.pathname.slice(6)), "text/html"); }
       if (isArxiv && /^\/abs\/\d{4}\.\d{4,5}(?:v\d+)?$/.test(target.pathname)) { record.kind = "abstract"; return send(200, `<blockquote class="abstract">Abstract: ${PAPERS[0].abstract}</blockquote>`, "text/html"); }
       if (isModel && /\/models$/.test(target.pathname) && request.method === "GET") { record.kind = "models"; return send(200, { object: "list", data: ["fixture-model", "fixture-model-2"].map(id => ({ id, object: "model" })) }); }
@@ -205,15 +210,15 @@ export async function createFixtureEnvironment({ configured = true, mode } = {})
   const root = await mkdtemp(join(tmpdir(), "arxiv-acceptance-"));
   let server;
   try {
-    const vaultRoot = join(root, "vault"), libraryRoot = join(vaultRoot, "library"), configHome = join(root, "config"), cacheDir = join(root, "cache");
+    const vaultRoot = join(root, "vault"), libraryRoot = join(vaultRoot, "library"), configHome = join(root, "config"), cacheDir = join(root, "cache"), homeDir = join(root, "home");
     const configPath = join(configHome, "arxiv-daily", "config.toml");
-    await Promise.all([mkdir(libraryRoot, { recursive: true }), mkdir(join(vaultRoot, ".obsidian"), { recursive: true }), mkdir(join(configHome, "arxiv-daily"), { recursive: true }), mkdir(cacheDir, { recursive: true })]);
+    await Promise.all([mkdir(libraryRoot, { recursive: true }), mkdir(join(vaultRoot, ".obsidian"), { recursive: true }), mkdir(join(configHome, "arxiv-daily"), { recursive: true }), mkdir(cacheDir, { recursive: true }), mkdir(homeDir, { recursive: true })]);
     await writeFile(join(vaultRoot, ".obsidian", "community-plugins.json"), '["arxiv-daily"]\n');
     await Promise.all(PAPERS.map(p => writeFile(join(libraryRoot, `${p.id}.pdf`), fixturePdf(p))));
     if (configured) await writeFile(configPath, fixtureConfig({ vaultRoot, cacheDir }), { mode: 0o600 });
     server = await startFixtureServer({ mode });
     const preload = fileURLToPath(new URL("./fixture-preload.cjs", import.meta.url));
-    const env = { ...process.env, XDG_CONFIG_HOME: configHome, XDG_CACHE_HOME: cacheDir, ARXIV_ACCEPTANCE_FIXTURE_URL: server.url, NODE_OPTIONS: `--require=${JSON.stringify(preload)}` };
+    const env = { ...process.env, APPDATA: configHome, LOCALAPPDATA: cacheDir, HOME: homeDir, USERPROFILE: homeDir, XDG_CONFIG_HOME: configHome, XDG_CACHE_HOME: cacheDir, ARXIV_ACCEPTANCE_FIXTURE_URL: server.url, NODE_OPTIONS: `--require=${JSON.stringify(preload)}` };
     let disposed;
     return { root, vaultRoot, libraryRoot, configHome, configPath, cacheDir, env, server, dispose() {
       disposed ??= (async () => { await server.close(); await rm(root, { recursive: true, force: true }); })();

@@ -1,7 +1,7 @@
 # Obsidian 探索里模型点一次“Download PDF”，当前任务和整次运行都会被判为失败（夹具没有 PDF 路由）
 
 > 发现日期：2026-10-21 · 来源：main `d999037` 深度代码审查 · 编号 SCR-09
-> 范围：`scripts/acceptance/fixtures.mjs`、`exploration-obsidian.mjs` 的受限控件策略、`run.mjs` 的夹具契约检查（Obsidian 探索宿主） · 严重程度：中 · 状态：未修复 · 置信度：已复现
+> 范围：`scripts/acceptance/fixtures.mjs`、`exploration-obsidian.mjs` 的受限控件策略、`run.mjs` 的夹具契约检查（Obsidian 探索宿主） · 严重程度：中 · 状态：已修复（分支 `fix/2026-10-21-batch4`，提交 d16121f） · 置信度：已复现
 
 ## 问题
 
@@ -34,3 +34,7 @@
 - `scripts/tests/acceptance-fixtures.test.mjs`：对夹具内已有论文编号请求 `/pdf/<id>` 得到 200 和 PDF 字节，对未知编号仍得到 502 并记为 `unexpected`。
 - `scripts/tests/acceptance-exploration-obsidian.test.mjs`：`Download PDF` 在策略里的处理与夹具一致（要么受限，要么有路由）；上面的“控件对照”测试。
 - `scripts/tests/acceptance-runner.test.mjs`：夹具契约失败时，报告里的错误文字能指出是哪个 URL（现在只说“inspect request evidence”），避免把夹具缺口当成产品缺陷。
+
+## 修复情况
+
+夹具为已登记论文（含版本号和动态加入的论文）提供可解析 PDF，未知编号继续返回 502 并记录 unexpected。合法 Download PDF 不再因夹具缺路由误判整次失败；契约错误文字直接列出请求 URL，方便定位。2 项失败回归修复后 fixture/runner 30 项通过。下载按钮不受限，外部打开另由 EXP-04 的记录桩处理。

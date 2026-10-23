@@ -162,3 +162,26 @@ it("separates trailing summary sources and projects saved generation statistics"
  expect(result.generationMetrics?.generatedAt).toBeUndefined();
  expect(result.html).toContain('Original text.');
 });
+
+
+it("keeps untrusted math macros inert and bounds recursive expansion", () => {
+  const html = renderMarkdown(String.raw`$\includegraphics{https://evil.test/image}$
+
+$\href{javascript:alert(1)}{click}$
+
+$\htmlStyle{background:url(https://evil.test/image)}{x}$
+
+$\def\loop{\loop}\loop$`).html;
+  expect(html).not.toMatch(/<(?:img|a|iframe)\b/);
+  expect(html).not.toMatch(/style="[^"]*(?:url\(|javascript:)/);
+  expect(html).toContain("katex-error");
+  expect(html.length).toBeLessThan(20000);
+});
+
+it("does not carry macro definitions into another formula or document", () => {
+  const defined = renderMarkdown(String.raw`$\gdef\privateMacro{42}\privateMacro$`).html;
+  expect(defined).not.toContain("katex-error");
+  const next = renderMarkdown(String.raw`$\privateMacro$`).html;
+  expect(next).toContain("privateMacro");
+  expect(next).not.toContain('<span class="mord">4</span>');
+});

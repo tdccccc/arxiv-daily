@@ -1,5 +1,5 @@
 import * as fs from "node:fs/promises";
-import { normalizeTopic } from "../../../packages/core/src/settings/topics";
+import { normalizeTopic } from "@arxiv-daily/core";
 import * as os from "node:os";
 import * as path from "node:path";
 import JSZip from "jszip";
