@@ -40,7 +40,7 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
       - name: Set up Node.js
-        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
         with:
           node-version: 22.19.0
           registry-url: https://registry.npmjs.org
@@ -83,7 +83,7 @@ jobs:
       - name: Install plugin test dependencies
         run: npm ci --prefix extensions/dsh-arxiv-daily --ignore-scripts
       - name: Download same-run verified native assets
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
         with:
           pattern: native-storage-*
           path: packages/node-runtime/native/prebuilds
