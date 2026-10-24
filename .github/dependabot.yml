@@ -12,6 +12,10 @@ updates:
       interval: weekly
       day: monday
     open-pull-requests-limit: 5
+    ignore:
+      # The Worker and CI target Node 22; newer @types/node clashes with workers-types.
+      - dependency-name: "@types/node"
+        update-types: ["version-update:semver-major"]
   - package-ecosystem: npm
     directory: "/extensions/vscode-arxiv-daily"
     schedule:
@@ -24,12 +28,22 @@ updates:
       interval: weekly
       day: monday
     open-pull-requests-limit: 2
+    ignore:
+      # Test-only copies of the React the DSH host supplies (18.x); follow the host.
+      - dependency-name: "react"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "react-dom"
+        update-types: ["version-update:semver-major"]
   - package-ecosystem: npm
     directory: "/tools/node-library-runtime/pdf"
     schedule:
       interval: weekly
       day: monday
     open-pull-requests-limit: 2
+    ignore:
+      # pdfjs-dist 6 needs Node >=22.13; the runtime must load on the Node 20.19 floor.
+      - dependency-name: "pdfjs-dist"
+        update-types: ["version-update:semver-major"]
   - package-ecosystem: npm
     directory: "/tools/node-library-runtime/embedding"
     schedule:

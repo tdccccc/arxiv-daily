@@ -57,7 +57,7 @@ const expectedRelayWorkflow = {
         checkoutStep,
         {
           name: "Set up Node.js",
-          uses: "actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444",
+          uses: "actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1",
           with: {
             "node-version": "22.17.0",
             cache: "npm",
@@ -98,7 +98,7 @@ const expectedCompanionWorkflow = {
         checkoutStep,
         {
           name: "Set up Node.js",
-          uses: "actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444",
+          uses: "actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1",
           with: {
             "node-version": "22.17.0",
             cache: "npm",
