@@ -22,7 +22,7 @@
 
 ## 安装
 
-仅支持桌面版（Obsidian 移动端不支持第三方插件）。
+仅支持桌面版——插件无法在 Obsidian 移动端运行。需要 Obsidian 1.5.7 及以上。
 
 1. **社区插件** — 设置 → 第三方插件 → 浏览 → 搜索 **arXiv Daily**
 2. **BRAT** — 安装 [BRAT](https://github.com/TfTHacker/obsidian42-brat)，然后添加 `tdccccc/arxiv-daily`
@@ -44,6 +44,8 @@
 - **日历** — 显示已有日报的日期；回溯窗口内可运行的日期会高亮，点击即可生成
 - 行内操作 — 加星、打开或生成论文总结、查找相似论文、打开日报、打开 arXiv 页面、打开或下载 PDF
 - **相似论文** — 针对某篇论文给出确定性的本地匹配结果，附匹配理由和资源链接
+
+已打开的 Dashboard 会在后台运行结束时自动刷新。
 
 ### 命令
 
@@ -67,7 +69,7 @@
 | `Show run history` | 显示完整运行历史 |
 | `Show diagnostics` | 显示可复制的本地诊断报告（不含 API 密钥） |
 
-个人文献库还有一组专用命令（审核/接受推荐方向、预览/扫描/重载目录、索引与搜索全文、诊断全文运行环境）——详见[新手教程](../docs/getting-started.zh-CN.md)。
+个人文献库还有一组专用命令（审核/接受推荐方向、预览/扫描/重载目录、索引与搜索全文、清理旧的搜索索引、诊断全文运行环境）——详见[新手教程](../docs/getting-started.zh-CN.md)。
 
 手动运行会先校验配置：`Run today`、`Run all pending`、`Run for date…` 需要有效的 LLM 配置和至少一个主题；`Summarize by paper ID…` 只需要有效的 LLM 配置。
 

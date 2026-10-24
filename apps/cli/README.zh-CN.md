@@ -41,7 +41,7 @@ arxiv-daily run --today
 arxiv-daily ui           # 打开本地阅读工作台
 ```
 
-`init` 是一个 TUI 向导——**↑/↓** 移动，**Space** 多选，**Enter** 确认/接受默认值，**Ctrl+C**/**Esc** 退出。流程依次是：vault 位置 → LLM 提供商/API key/模型 → 可选邮件 → arXiv 分类 → 时区 → 报告语言 → 研究主题 → 可选的详细总结与定时参数。
+`init` 是一个 TUI 向导——**↑/↓** 移动，**Space** 多选，**Enter** 确认/接受默认值，**Ctrl+C**/**Esc** 退出。流程依次是：vault 位置 → LLM 提供商/API key/模型 → 可选邮件 → arXiv 分类 → 时区 → 报告语言 → 研究主题 → 可选的详细总结与定时参数。如果配置文件已经存在，`init` 会先询问：**Keep existing**（默认；不改动文件并直接退出）、**Overwrite**（先把旧文件另存为 `config.toml.bak-<时间戳>`）或取消。
 
 ## 配置
 
@@ -83,7 +83,15 @@ max_daily_papers = 20
 | `data export --out PATH.zip` / `data import PATH.zip [--yes]` | 备份或恢复 vault |
 | `help` | 打印完整用法 |
 
+输错的命令不会被当成别的操作执行：未知命令或选项、重复的选项、多余的参数，以及不存在的日期或 arXiv ID（`run --id` 需要形如 `2606.12345` 的 ID），都会打印用法并以退出码 2 结束。`data export` 不会写出 `data import` 因体积限制会拒绝的压缩包。
+
+筛选时如果有候选论文没有摘要、只依据标题判断，`run` 完成时输出的那一行会写出数量（例如 `3/40 candidates judged by title only`）；日报页头和运行历史里也有同样的说明。
+
 运行被中断后重试不会重复已付费的模型调用；如果需要强制重新生成，删除 `<output-root>/.index/*-checkpoints/<date>*`。
+
+### 托管邮件
+
+`email verify-start` 会向 `email.to` 发送验证链接。打开链接后，把页面上的长验证码粘贴到 `config.toml` 的 `[email]` 表的 `hosted_token`，并设置 `mode = "hosted"`。持续发送时验证码会自动续期，自签发或上次续期起一年后失效；如果 `email test` 报告 `hosted_token_rejected`，重新运行 `email verify-start` 并粘贴新的验证码。`email test` 对其他拒绝原因（`hosted_recipient_mismatch`、`provider_quota_exceeded`、`resend_api_key_rejected`、`resend_access_denied`）也会指出原因，并给出一句修复建议。
 
 ## 本地阅读工作台
 
@@ -126,9 +134,20 @@ arxiv-daily library directions                     # 查看候选
 arxiv-daily library confirm --candidate ID --proposal-revision N
 # 也可以一次性查看/接受多个：
 arxiv-daily library review --input REQUEST.json
+arxiv-daily library revoke                         # 撤销模型处理授权
 ```
 
-被接受的方向会变成普通的研究主题设置。`library search --query TEXT` 可以直接在已索引的文献库中检索。[工作台](https://github.com/tdccccc/arxiv-daily/blob/main/docs/workbench.zh-CN.md)也支持在浏览器里连接、索引、浏览文献库和审核方向。
+被接受的方向会变成普通的研究主题设置。`library search --query TEXT [--mode hybrid|lexical|dense] [--limit N]` 可以直接在已索引的文献库中检索。[工作台](https://github.com/tdccccc/arxiv-daily/blob/main/docs/workbench.zh-CN.md)也支持在浏览器里连接、索引、浏览文献库和审核方向。
+
+### 回收旧的搜索索引
+
+多次修改文献库后，可以回收不再使用的搜索索引。先关闭使用同一 vault 的其他所有 Obsidian 窗口、CLI 任务和工作台客户端，并在清理结束前保持关闭，然后运行：
+
+```bash
+arxiv-daily library maintain --other-clients-closed
+```
+
+（在 Obsidian 里改用命令面板中的 **Clean up old personal library search indexes…**。）清理会保留当前索引和备份索引，以及仍被读取方或待写入占用的版本。它不会自动运行，因为单个进程无法看到其他客户端的读取状态。早期嵌入模型留下的单篇论文文件会保留；只回收旧的搜索版本。
 
 ## 更新
 

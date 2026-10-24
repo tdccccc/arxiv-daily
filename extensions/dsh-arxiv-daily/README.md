@@ -4,7 +4,7 @@ English · [简体中文](README.zh-CN.md)
 
 The [arXiv Daily](../../README.md) reading workbench inside DeepSeek Harness (DSH) — a fixed **arxiv-daily** entry above Settings in the left sidebar, and a matching tab in the right sidebar. Both open the same full workbench: calendar, paper list, daily reports, detailed summaries, and reading/favorite marks. Opening, searching, and marking never start an Agent conversation or call a model.
 
-The workbench uses its own saved model settings, separate from the DSH chat model, and shares your existing CLI configuration — no separate setup if you already use the [CLI](../../apps/cli/README.md) or [Obsidian plugin](../../plugin/README.md).
+The workbench uses its own saved model settings, separate from the DSH chat model, and shares your existing CLI configuration — no separate setup if you already use the [CLI](../../apps/cli/README.md). The [Obsidian plugin](../../plugin/README.md) keeps its own settings and API keys, which are not shared, but it can use the same output folder.
 
 ## Requirements
 
@@ -61,7 +61,7 @@ See [docs/workbench.md](../../docs/workbench.md) for the full feature guide.
 
 ## Build from source
 
-If the plugin isn't available on npm yet, or you want a local build:
+To try an unreleased change, or to use a local build:
 
 ```sh
 npm ci

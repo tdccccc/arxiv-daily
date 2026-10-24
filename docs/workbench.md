@@ -23,8 +23,8 @@ With no configuration yet, the workbench opens setup automatically: output folde
 - A resizable, collapsible sidebar (drag the separator or use its arrow keys) holds the **calendar** and **search/topic/reading filters**; width and collapse state persist.
 - The paper list shows all indexed discoveries, including papers without a detailed note, with sorting and pagination. Picking a date filters to that day; an explicit action opens the full saved report.
 - Opening a paper shows its saved overview and detail actions. Day cells are colored and show paper counts directly.
-- Markdown renders tables, code, images, and math (`$…$` and `$$…$$`). Relative links and unambiguous Obsidian wikilinks navigate between existing reports; Source/PDF buttons open the original paper.
-- Back/forward moves through your reading history for the current workbench session (filters, anchors, and scroll position are restored); it doesn't persist across restarts. **Return to list** restores the list's filters, page, and scroll position. **Browse Markdown files** also exposes standalone notes.
+- Markdown renders tables, code, images, and math (`$…$` and `$$…$$`). Relative links and unambiguous Obsidian wikilinks navigate between existing reports; **View on arXiv** and **Read PDF** open the original paper.
+- Back/forward moves through your reading history for the current workbench session (filters, anchors, and scroll position are restored); it doesn't persist across restarts. **Back to list** restores the list's filters, page, and scroll position. **Browse Markdown files** also exposes standalone notes.
 - Dates use your configured timezone. Browsing never infers arXiv publication timing or starts generation on its own.
 - On mobile-width screens, open the calendar/filters through the dedicated button.
 
@@ -57,6 +57,7 @@ Settings mirrors the Obsidian plugin's section order: LLM, arXiv categories, res
 - Secret fields (API keys) stay blank and keep the existing saved value when left empty. **Show** reveals a saved key; **Hide** clears the reveal.
 - **Get models** populates the model dropdown for your provider; the field stays freely editable and filterable.
 - Settings can't be saved while a generation task is running.
+- If `config.toml` is edited outside the workbench while it is open, generating reports and marking papers are refused with a message saying so, until you restart the workbench or reopen Settings and save; browsing and reading keep working.
 - The setup guide's **Generate first report** uses the newest day arXiv has announced (today when it is already out, otherwise the latest earlier day), so it works at weekends and before the announcement; its step shows the progress and result, because the Settings dialog covers the task panel.
 - **Output & schedule** also has an in-process scheduler: **Enable** + **Check every (minutes)** runs while the workbench process stays open (stored separately as `workbench_schedule`, independent of any external cron job you've set up with `schedule install`).
 

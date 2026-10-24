@@ -41,7 +41,7 @@ arxiv-daily run --today
 arxiv-daily ui           # open the local reading workbench
 ```
 
-`init` is a TUI wizard — **↑/↓** move, **Space** multi-select, **Enter** confirm/accept default, **Ctrl+C**/**Esc** exit. It walks through: vault location → LLM provider/API key/model → optional email → arXiv categories → timezone → report language → research topics → optional paper-note and schedule flags.
+`init` is a TUI wizard — **↑/↓** move, **Space** multi-select, **Enter** confirm/accept default, **Ctrl+C**/**Esc** exit. It walks through: vault location → LLM provider/API key/model → optional email → arXiv categories → timezone → report language → research topics → optional paper-note and schedule flags. If a config already exists, `init` asks first: **Keep existing** (the default; leaves the file untouched and exits), **Overwrite** (saves the old file as `config.toml.bak-<timestamp>` first), or Cancel.
 
 ## Configuration
 
@@ -83,7 +83,15 @@ Zero, negative numbers, fractions, and quoted strings are rejected; missing valu
 | `data export --out PATH.zip` / `data import PATH.zip [--yes]` | Back up or restore your vault |
 | `help` | Print full usage |
 
+A mistyped command is never run as something else: an unknown command or option, a repeated option, an extra argument, or a date or arXiv ID that is not real (`run --id` wants an ID such as `2606.12345`) prints the usage and exits with code 2. `data export` refuses to write an archive that `data import` would reject for size.
+
+When some candidates had no abstract during filtering, the line `run` prints on completion says how many were judged by title only (for example `3/40 candidates judged by title only`); the report header and the run history note it too.
+
 An interrupted run resumes without repeating paid model calls; to force a clean rerun, delete `<output-root>/.index/*-checkpoints/<date>*`.
+
+### Hosted email
+
+`email verify-start` sends a verification link to `email.to`. Open it, paste the long code from the page into `hosted_token` and set `mode = "hosted"` in the `[email]` table of `config.toml`. The code is renewed while you keep sending and expires one year after it was issued or last renewed; if `email test` reports `hosted_token_rejected`, run `email verify-start` again and paste the new code. `email test` also names the cause of other refusals (`hosted_recipient_mismatch`, `provider_quota_exceeded`, `resend_api_key_rejected`, `resend_access_denied`) with a one-line fix.
 
 ## Local reading workbench
 
@@ -126,9 +134,20 @@ arxiv-daily library directions                     # review candidates
 arxiv-daily library confirm --candidate ID --proposal-revision N
 # or review/accept several at once:
 arxiv-daily library review --input REQUEST.json
+arxiv-daily library revoke                         # withdraw model-processing authorization
 ```
 
-Accepted directions become ordinary research-topic settings. `library search --query TEXT` searches the indexed library directly. The [workbench](https://github.com/tdccccc/arxiv-daily/blob/main/docs/workbench.md) also supports connecting, indexing, browsing and direction review from a browser.
+Accepted directions become ordinary research-topic settings. `library search --query TEXT [--mode hybrid|lexical|dense] [--limit N]` searches the indexed library directly. The [workbench](https://github.com/tdccccc/arxiv-daily/blob/main/docs/workbench.md) also supports connecting, indexing, browsing and direction review from a browser.
+
+### Reclaiming old search indexes
+
+After several library changes you can reclaim unused search indexes. Close every other Obsidian window, CLI task and workbench client that uses the same vault, keep them closed until cleanup finishes, then run:
+
+```bash
+arxiv-daily library maintain --other-clients-closed
+```
+
+(In Obsidian, run **Clean up old personal library search indexes…** from the command palette instead.) Cleanup keeps the current and backup indexes and any generation still held by a reader or pending write. It never runs automatically, because one process cannot see every other client's readers. Per-paper files from earlier embedding models are kept; only old search generations are removed.
 
 ## Update
 

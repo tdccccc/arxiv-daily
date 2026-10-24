@@ -22,7 +22,7 @@ Reports land in `arxiv-daily/daily/YYYY-MM-DD.md`; paper notes in `arxiv-daily/p
 
 ## Install
 
-Desktop only (Obsidian does not support community plugins on mobile).
+Desktop only — the plugin does not run on Obsidian mobile. Requires Obsidian 1.5.7 or newer.
 
 1. **Community plugins** — Settings → Community plugins → Browse → search **arXiv Daily**
 2. **BRAT** — install [BRAT](https://github.com/TfTHacker/obsidian42-brat), then add `tdccccc/arxiv-daily`
@@ -44,6 +44,8 @@ Open it from the ribbon icon or the **Open reading dashboard** command. It's the
 - **Calendar** — dates with daily reports; dates within the lookback window that are runnable are highlighted, click to generate
 - Row actions — star, open or generate a paper note, find similar papers, open the daily report, open on arXiv, open or download the PDF
 - **Similar Papers** — deterministic local matches for a paper, with match reasons and resource links
+
+An open Dashboard refreshes itself when a background run finishes.
 
 ### Commands
 
@@ -67,7 +69,7 @@ Open it from the ribbon icon or the **Open reading dashboard** command. It's the
 | `Show run history` | Shows the full run history |
 | `Show diagnostics` | Shows a copyable local diagnostic report (no API key) |
 
-Personal library adds its own commands (review/accept proposed directions, preview/scan/reload the catalog, index and search full text, diagnose the full-text runtime) — see [Getting Started](../docs/getting-started.md).
+Personal library adds its own commands (review/accept proposed directions, preview/scan/reload the catalog, index and search full text, clean up old search indexes, diagnose the full-text runtime) — see [Getting Started](../docs/getting-started.md).
 
 Manual runs are gated on config validity: `Run today`, `Run all pending`, and `Run for date…` need a valid LLM config and at least one topic; `Summarize by paper ID…` needs a valid LLM config only.
 

@@ -4,7 +4,7 @@
 
 在 DeepSeek Harness（DSH）里提供 [arXiv Daily](../../README.md) 的阅读工作台——左侧栏“设置”上方有固定的 **arxiv-daily** 入口，右侧栏同样有对应标签。两处打开的是同一个完整工作台：日历、论文列表、日报、详细总结，以及待读/收藏标记。打开、搜索和标记都不会触发 Agent 对话，也不会调用模型。
 
-工作台使用自己保存的模型设置，与 DSH 对话模型分开；并复用你已有的 CLI 配置——如果你已经在用 [CLI](../../apps/cli/README.md) 或 [Obsidian 插件](../../plugin/README.md)，不需要再单独配置一遍。
+工作台使用自己保存的模型设置，与 DSH 对话模型分开；并复用你已有的 CLI 配置——如果你已经在用 [CLI](../../apps/cli/README.md)，不需要再单独配置一遍。[Obsidian 插件](../../plugin/README.md)有自己的设置和 API 密钥，不会共享，但可以使用同一个输出目录。
 
 ## 环境要求
 
@@ -61,7 +61,7 @@ dsh plugin --profile web add dsh-arxiv-daily@latest
 
 ## 从源码构建
 
-如果插件尚未发布到 npm，或你想要本地构建：
+如果想试用尚未发布的改动，或使用本地构建：
 
 ```sh
 npm ci
