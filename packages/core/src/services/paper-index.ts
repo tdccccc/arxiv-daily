@@ -118,7 +118,8 @@ export interface PaperIndexUpsert {
   arxivId: string;
   title: string;
   authors: string | string[];
-  date: string;
+  /** Discovery date; omit when unknown so no `seenDates`/`published` value is invented. */
+  date?: string;
   published?: string;
   updated?: string;
   arxivCategory: string;
