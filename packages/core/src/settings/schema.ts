@@ -303,7 +303,7 @@ const fields: Record<BusinessSettingId, SettingMetadata> = {
   "emailApiKey": {
     "key": "email.apiKey",
     "name": "Resend API key",
-    "description": "From your Resend account. Saved only on this device; not shown again after you save.",
+    "description": "From your Resend account. Saved only on this device; hidden by default and can be shown on demand.",
     "control": "secret"
   },
   "fromEmail": {

@@ -140,6 +140,9 @@ describe("StatusBarController", () => {
     const store = makeStore();
     await store.load();
     const frame = document.createElement("iframe");
+    // happy-dom 21 gives a src-less iframe no document while page loading is
+    // off; srcdoc still builds a same-origin child window without loading.
+    frame.srcdoc = "<!doctype html><html><body></body></html>";
     document.body.append(frame);
     const secondaryDocument = frame.contentDocument!;
     installCreateEl(secondaryDocument.body);

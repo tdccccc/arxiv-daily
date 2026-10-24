@@ -45,7 +45,8 @@ interface PaperCandidate {
   arxivId: string;
   title: string;
   authors: string;
-  date: string;
+  /** Absent when the note carries no date evidence; never a placeholder. */
+  date?: string;
   topic: string;
   path?: string;
   detail: boolean;
@@ -54,6 +55,7 @@ interface PaperCandidate {
 }
 
 interface DailyCandidate extends PaperCandidate {
+  date: string;
   dailyReport: string;
 }
 
@@ -299,10 +301,7 @@ async function collectPaperCandidates(
         arxivId,
         title: frontmatter.title || firstH1(markdown) || arxivId,
         authors: frontmatter.authors || "",
-        date:
-          frontmatter.date ||
-          dateFromDailyReport(dailyReport) ||
-          "1970-01-01",
+        date: frontmatter.date || dateFromDailyReport(dailyReport) || undefined,
         topic,
         path,
         detail: true,
@@ -507,7 +506,7 @@ function buildSyncInputs(
     const paperPath = detail ? candidatePaperPath : undefined;
     const key = [
       candidate.arxivId,
-      candidate.date,
+      candidate.date ?? "",
       dailyReport ?? "",
       paperPath ?? "",
     ].join("\t");
@@ -533,7 +532,7 @@ function buildSyncInputs(
       arxivId: candidate.arxivId,
       title: candidate.title,
       authors: candidate.authors,
-      date: candidate.date,
+      ...(candidate.date ? { date: candidate.date } : {}),
       arxivCategory: topic,
       primaryTopic: topic,
       detail,
@@ -591,7 +590,7 @@ function needsSync(
 ): boolean {
   if (!existing) return true;
   if (dailyReport && !existing.dailyReports.includes(dailyReport)) return true;
-  if (!existing.seenDates.includes(candidate.date)) return true;
+  if (candidate.date && !existing.seenDates.includes(candidate.date)) return true;
   if (detail && !existing.detail) return true;
   if (
     paperPath &&

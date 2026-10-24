@@ -274,7 +274,79 @@ describe("a data.json that loads", () => {
     expect(warnings).toEqual([]);
     expect(asideFiles(data)).toEqual([]);
     expect(Notice.calls).toEqual([]);
-    expect(adapter.exists).not.toHaveBeenCalled();
+    // null from Obsidian is a first run only if the file is really absent.
+    expect(adapter.exists).toHaveBeenCalledTimes(1);
+    expect(adapter.write).not.toHaveBeenCalled();
+  });
+});
+
+describe("a data.json that is valid JSON but not a settings object", () => {
+  it.each([
+    ["an array", "[]", "an array"],
+    ["a number", "42", "a number"],
+    ["a string", '"x"', "a string"],
+    ["a boolean", "true", "a boolean"],
+    ["a literal null", "null", "null"],
+  ])("keeps %s aside, starts on defaults and says so", async (_name, text, described) => {
+    const { data, adapter } = pluginFolder({ [DATA_JSON]: text });
+    const plugin = pluginOn(adapter);
+
+    const warnings = await plugin.loadSettingsAndState();
+
+    expect(plugin.settings.llm.apiKey).toBe("");
+    expect(asideFiles(data)).toEqual([COPY_NAME]);
+    expect(data.get(COPY_NAME)).toBe(text);
+    expect(data.get(DATA_JSON)).toBe(text);
+    expect(warnings.join("\n")).toContain(COPY_NAME);
+    expect(notices()).toHaveLength(1);
+    expect(notices()[0]).toContain("default settings");
+    expect(notices()[0]).toContain(COPY_NAME);
+    expect(notices()[0]).toContain(described);
+  });
+
+  it("finds its copy again when started again", async () => {
+    const { data, adapter } = pluginFolder({ [DATA_JSON]: "[]" });
+
+    await pluginOn(adapter).loadSettingsAndState();
+    adapter.write.mockClear();
+    await pluginOn(adapter).loadSettingsAndState();
+
+    expect(asideFiles(data)).toEqual([COPY_NAME]);
+    expect(adapter.write).not.toHaveBeenCalled();
+    expect(Notice.calls).toHaveLength(2);
+  });
+
+  it("stops the plugin starting when no copy can be kept", async () => {
+    const { data, adapter } = pluginFolder({ [DATA_JSON]: "[]" });
+    const full = new Error("disk full");
+    adapter.write.mockRejectedValue(full);
+
+    await expect(pluginOn(adapter).loadSettingsAndState()).rejects.toBe(full);
+
+    expect(asideFiles(data)).toEqual([]);
+    expect(data.get(DATA_JSON)).toBe("[]");
+  });
+
+  it("uses an object that Obsidian failed to deliver the first time", async () => {
+    const text = JSON.stringify({ settings: { llm: { apiKey: "kept", model: "m" } } });
+    const { data, adapter } = pluginFolder({ [DATA_JSON]: text });
+    const plugin = pluginOn(adapter, async () => null);
+
+    await plugin.loadSettingsAndState();
+
+    expect(plugin.settings.llm.apiKey).toBe("kept");
+    expect(asideFiles(data)).toEqual([]);
+    expect(Notice.calls).toEqual([]);
+  });
+
+  it("treats null with no file as a first run", async () => {
+    const { data, adapter } = pluginFolder({});
+
+    const warnings = await pluginOn(adapter, async () => null).loadSettingsAndState();
+
+    expect(warnings).toEqual([]);
+    expect(asideFiles(data)).toEqual([]);
+    expect(Notice.calls).toEqual([]);
   });
 });
 

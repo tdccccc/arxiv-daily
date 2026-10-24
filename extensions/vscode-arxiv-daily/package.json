@@ -52,5 +52,8 @@
   },
   "devDependencies": {
     "@vscode/vsce": "3.9.2"
+  },
+  "overrides": {
+    "@azure/msal-node": "^7.1.1"
   }
 }

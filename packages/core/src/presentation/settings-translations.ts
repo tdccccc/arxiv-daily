@@ -709,8 +709,8 @@ export const settingsMessages: Array<readonly [zh: string, en: string]> = [
     "After you open the verification link, copy the long code shown on the web page (not the short code in the email link). Use the same email address as above."
   ],
   [
-    "来自你的 Resend 账户。仅保存在此设备上，保存后默认隐藏。",
-    "From your Resend account. Saved only on this device; not shown again after you save."
+    "来自你的 Resend 账户。仅保存在此设备上，默认隐藏，需要时可主动显示。",
+    "From your Resend account. Saved only on this device; hidden by default and can be shown on demand."
   ],
   [
     "可选。留空可使用简易配置，可能只能发送到 Resend 账户邮箱。使用已在 Resend 验证的域名邮箱可放宽发送限制。",

@@ -16,6 +16,10 @@ describe('shared business settings schema', () => {
   expect(getBusinessSetting('embeddingMode',context).description).toContain('Remote sends titles and abstracts');
   expect(getBusinessSetting('emailMode',context).description).toContain('shared free service');
  });
+ it('describes the email API key as hidden by default but viewable, never as unviewable after saving', () => {
+  const description=getBusinessSetting('emailApiKey').description;
+  expect(description).toContain('Saved only on this device');expect(description).toContain('hidden by default');expect(description).toContain('shown on demand');expect(description).not.toContain('not shown again');
+ });
  it('shares exact options and preserves custom detail profile only when already selected', () => {
   expect(getBusinessSetting('reasoningEffort').options).toEqual({none:'None',low:'Low',medium:'Medium',high:'High'});
   expect(getBusinessSetting('detailProfile').options).toEqual({conservative:'Fewer',balanced:'Recommended',broad:'More'});
