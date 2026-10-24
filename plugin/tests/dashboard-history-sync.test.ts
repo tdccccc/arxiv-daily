@@ -1451,6 +1451,90 @@ describe("syncDashboardHistory", () => {
     });
   });
 
+  describe("a trusted paper note with no date evidence", () => {
+    const undatedMarkdown = (id: string, title: string) =>
+      detailMarkdown(id, title).replace(
+        'daily_report: "[[arxiv/daily/2026-06-10|2026-06-10]]"\n',
+        "",
+      );
+
+    it("keeps the paper and path without inventing a seen or published date", async () => {
+      const { files, storage } = makeStorage({
+        "arxiv/papers/2606.00006.md": undatedMarkdown("2606.00006", "Undated Paper"),
+      });
+      expect(files["arxiv/papers/2606.00006.md"]).not.toContain("daily_report");
+      const store = new PaperIndexStore(storage, output);
+
+      const index = await syncDashboardHistory({ vault: makeVault(files), store, output, topics });
+
+      const entry = index.papers["arxiv:2606.00006"];
+      expect(entry).toMatchObject({
+        title: "Undated Paper",
+        detail: true,
+        paperPath: "arxiv/papers/2606.00006.md",
+        seenDates: [],
+        published: "",
+      });
+      expect(JSON.stringify(index)).not.toContain("1970");
+    });
+
+    it("is stable across repeated syncs", async () => {
+      const { files, storage } = makeStorage({
+        "arxiv/papers/2606.00006.md": undatedMarkdown("2606.00006", "Undated Paper"),
+      });
+      const store = new PaperIndexStore(storage, output);
+      const deps = { vault: makeVault(files), store, output, topics };
+
+      const first = await syncDashboardHistory(deps);
+      const second = await syncDashboardHistory(deps);
+
+      expect(second.papers["arxiv:2606.00006"]).toEqual(first.papers["arxiv:2606.00006"]);
+      expect(second.papers["arxiv:2606.00006"]?.seenDates).toEqual([]);
+    });
+
+    it("still takes the date from a daily_report link", async () => {
+      const { files, storage } = makeStorage({
+        "arxiv/papers/2606.00007.md": detailMarkdown("2606.00007", "Linked Paper"),
+      });
+      const store = new PaperIndexStore(storage, output);
+
+      const index = await syncDashboardHistory({ vault: makeVault(files), store, output, topics });
+
+      expect(index.papers["arxiv:2606.00007"]).toMatchObject({
+        seenDates: ["2026-06-10"],
+        published: "2026-06-10",
+      });
+    });
+
+    it("leaves existing real seenDates and user marks untouched", async () => {
+      const id = "2606.00008";
+      const { files, storage } = makeStorage({
+        "arxiv/papers/2606.00008.md": undatedMarkdown(id, "Marked Paper"),
+        "arxiv/.index/papers.json": indexJson({
+          [id]: {
+            status: "saved",
+            priority: "high",
+            seenDates: ["2026-06-12", "2026-06-13"],
+            published: "2026-06-12",
+            dailyReports: [],
+          },
+        }),
+      });
+      const store = new PaperIndexStore(storage, output);
+
+      const index = await syncDashboardHistory({ vault: makeVault(files), store, output, topics });
+
+      expect(index.papers[`arxiv:${id}`]).toMatchObject({
+        status: "saved",
+        priority: "high",
+        seenDates: ["2026-06-12", "2026-06-13"],
+        published: "2026-06-12",
+        detail: true,
+        paperPath: "arxiv/papers/2606.00008.md",
+      });
+    });
+  });
+
   it("completes quickly when a daily_report wikilink has a long run of repeated slashes (CodeQL js/polynomial-redos)", async () => {
     const adversarialSlashes = "/".repeat(30_000);
     const detail = detailMarkdown("2606.00007", "Slash Timing Paper").replace(
