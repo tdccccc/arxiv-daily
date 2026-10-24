@@ -2958,6 +2958,20 @@ export default class ArxivDailyPlugin extends Plugin {
     await this.saveData(data);
   }
 
+  /**
+   * Obsidian's own `saveData` goes through `Vault.writeJson`, which catches
+   * every write error and returns normally, so a full disk or a permission
+   * failure would look like a successful save and the settings transaction
+   * could neither roll back nor tell the user. Writing through the vault
+   * adapter lets the rejection reach `persistSettings`. The output is the same
+   * JSON text. The host's bookkeeping for external changes
+   * (`onExternalSettingsChange`) is not used by this plugin, so it is skipped.
+   */
+  override async saveData(data: unknown): Promise<void> {
+    const dataPath = normalizePath(`${this.pluginDir()}/data.json`);
+    await this.app.vault.adapter.write(dataPath, JSON.stringify(data, undefined, 2));
+  }
+
   refreshSensitiveValues(): void {
     this.logger?.setSensitiveValues(
       [
