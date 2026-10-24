@@ -22,7 +22,7 @@ The workbench and Obsidian share core workflows and settings rules, while config
 
 ## What you need
 
-- Obsidian **desktop**
+- Obsidian **desktop** 1.5.7 or newer
 - An LLM API key (and base URL / model if not using a preset)
 - One or more arXiv categories (for example `astro-ph`, `cs.LG`, `hep-th`)
 - A short description of each research topic you want to track
@@ -82,7 +82,7 @@ Each topic has a **Detail report** option: papers in that topic may get a longer
 
 ## 5. Generate your first daily report
 
-In the guide, use **Generate first report**, or open the **Dashboard** and click **Run Today**.
+In the guide, use **Generate first report**, or open the **Dashboard** and click **Run today**.
 
 The plugin will:
 
@@ -103,7 +103,7 @@ arxiv-daily/daily/YYYY-MM-DD.md
 | **Daily report** | `daily/YYYY-MM-DD.md` | That day’s reading list (main result) |
 | **Paper note** | `papers/<arxiv_id>.md` | Longer note for one paper |
 
-If automatic paper notes fail or are skipped, the daily report can still succeed. Waiting for an arXiv announcement, confirmed no updates, no filtering matches and real failures are shown separately. Waiting does not consume the ordinary failure retry budget.
+If automatic paper notes fail or are skipped, the daily report can still succeed. When some candidates had no abstract while filtering, the report header says how many were judged by title only; the run history and the CLI's completion line note it too. Waiting for an arXiv announcement, confirmed no updates, no filtering matches and real failures are shown separately. Waiting does not consume the ordinary failure retry budget.
 
 ## 6. Use the Dashboard
 
@@ -156,7 +156,7 @@ Beta capacity is intentionally small (a few messages per verified inbox per UTC 
 
 ### After a real run
 
-With auto-send on, a **completed** daily run may email one digest for that date. The same date is not resent by default. **Send test** does not block the real daily for that day. If the run that wrote a report failed before its mail went out, or the mail could not be sent because the service was unreachable, running that date again sends it.
+With auto-send on, a **completed** daily run may email one digest for that date. The same date is not resent by default. **Send test** does not block the real daily for that day. If the run that wrote a report failed before its mail went out, or the mail could not be sent because the service was unreachable, running that date again sends it. If a notice says the digest for a date "may or may not have been delivered", check your inbox: that date is not sent again automatically.
 
 ## Optional: personal library
 
@@ -168,19 +168,21 @@ Connect one local paper-library folder — including a folder outside your vault
 - Changing the folder, endpoint, eligible file types, or processing depth invalidates that authorization. You can revoke it at any time.
 - The library can propose a few broad topics and directions; only directions you explicitly accept are used for daily filtering.
 - When you add, remove or rename PDFs in the folder, running the index is enough: it first compares a local listing of the folder with the last scan and, only if they differ, rescans, asking arXiv about the new papers alone. An unchanged folder is not rescanned and makes no network request. After indexing, a notice tells you once 3 or more new papers are not yet reflected in your direction suggestions. It only offers: no model is called until you choose **Update direction suggestions** in the review, which sends only the new papers (with your existing directions) to the model and then tells you how many of them your existing directions already cover. You can start the same update from the CLI with `library propose --new`.
+- After several library changes you can reclaim unused search indexes: close every other Obsidian window, CLI task and workbench client that uses the same vault, keep them closed, then run **Clean up old personal library search indexes…** from the command palette and confirm (CLI: `arxiv-daily library maintain --other-clients-closed`). The current and backup indexes are kept, and it never runs automatically.
 
 ## Troubleshooting
 
 | Problem | What to try |
 |---|---|
-| **Run Today** disabled | Finish the checklist in Settings → arXiv Daily |
+| **Run today** disabled | Finish the checklist in Settings → arXiv Daily |
 | No papers on the Dashboard | Run today (or another date) once so the index fills |
-| Run failed | Dashboard → More → Show diagnostics |
+| Run failed | Dashboard → More → Show logs & history → Diagnostics (or the **Show diagnostics** command) |
 | Too many papers selected | Fewer categories, or more specific topic descriptions |
-| Test email HTTP **403** | Set **Your email** to the Resend account address named in the error; leave From empty until you verify a domain |
-| Test email says Resend refused the send, or rejected the API key | Check the API key, that your From domain is verified, and that with the default sender **Your email** is your Resend account email |
+| Test email says Resend refused the send, or rejected the API key | Check the API key, that your From domain is verified, and that with the default sender **Your email** is your Resend account email (leave **From email** empty until you verify a domain) |
+| A notice says the recipient is not the address the verification code was issued for, or that the sending limit was reached | Official delivery: verify the address you want to use or change **Your email** back; after the limit, try again on the next UTC day |
+| A notice says the digest email for a date was not sent because the mail service could not be reached | Nothing was delivered. Run that date again to send it |
 | A notice says the verification code was rejected | Official delivery: send a new verification email and paste the new code into **Verification code** |
-| A notice says `data.json` could not be read | The plugin started on default settings and kept the unreadable file next to the original as `data.json.corrupt-<time>` in the plugin folder. Open that copy in a text editor to recover your settings (it holds your API keys in plain text, so do not share it), then enter them again. The notice repeats on every start until a save makes `data.json` readable |
+| A notice says `data.json` could not be used (not valid JSON, or not a settings object) | The plugin started on default settings and kept the file next to the original as `data.json.corrupt-<time>` in the plugin folder. Open that copy in a text editor to recover your settings (it holds your API keys in plain text, so do not share it), then enter them again. The notice repeats on every start until a save makes `data.json` readable |
 | A notice says arXiv Daily did not start because `data.json` could not be read or kept aside | The plugin stopped on purpose so that nothing can overwrite your settings. Check that the file in the plugin folder is readable, that the folder is writable and the disk is not full, then reload the plugin |
 
 ## CLI (optional)

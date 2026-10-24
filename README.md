@@ -75,16 +75,6 @@ New to arXiv Daily? Walk through [Getting Started](docs/getting-started.md) (中
 
 See [functional and interaction acceptance](scripts/acceptance/README.md) for real browser/desktop checks and optional model API exploration.
 
-## Reclaiming old library search indexes
-
-After several library changes, you can reclaim unused search indexes. Close all other Obsidian windows, CLI tasks and reading workbench clients that use the same vault, and keep them closed until cleanup finishes. In the remaining Obsidian window, run **Clean up old personal library search indexes…** from the command palette and confirm that the other clients are closed. Alternatively, with all vault clients closed, run:
-
-```sh
-arxiv-daily library maintain --other-clients-closed
-```
-
-Cleanup retains the current and backup indexes and protects generations held by readers or pending writes. It is never run automatically during indexing: a process cannot observe every other client's active readers. Per-paper files from earlier embedding models are retained; this command only reclaims old search generations.
-
 ## License
 
 MIT — see [LICENSE](LICENSE).
