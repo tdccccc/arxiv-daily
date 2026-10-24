@@ -2543,32 +2543,39 @@ export default class ArxivDailyPlugin extends Plugin {
    * is none (a first run) and, for a file it could not read or parse,
    * `undefined` rather than an error. Taken for "no settings yet" that
    * `undefined` would start the plugin on defaults and let the next save write
-   * over the only copy of the settings and keys without a word. So an
-   * existing data.json behind it is read again here: if it reads and parses,
-   * the first try failed in passing and its content is used; if it is not
-   * valid JSON it is kept beside the original, the plugin starts on default
-   * settings and says so; if it can be neither read nor kept, the plugin does
-   * not start, so nothing can save over it. A host that rejects with the parse
-   * error instead (test doubles) takes the same road; any other rejection
-   * still fails the load.
+   * over the only copy of the settings and keys without a word. The same goes
+   * for a file that is valid JSON but not an object (`[]`, `42`, `"x"`, or a
+   * literal `null`, which `loadData()` cannot tell from a missing file). So
+   * unless Obsidian returned a settings object, an existing data.json is read
+   * again here: if it reads and parses to an object, the first try failed in
+   * passing and its content is used; if it is not valid JSON or not an object
+   * it is kept beside the original, the plugin starts on default settings and
+   * says so; if it can be neither read nor kept, the plugin does not start, so
+   * nothing can save over it. No data.json at all is a first run. A host that
+   * rejects with the parse error instead (test doubles) takes the same road;
+   * any other rejection still fails the load.
    */
   private async readPersistedData(): Promise<{ raw: unknown; warning?: string }> {
     try {
       const loaded: unknown = await this.loadData();
-      if (loaded !== undefined) return { raw: loaded };
+      if (isPlainObject(loaded)) return { raw: loaded };
     } catch (error) {
       if (!isJsonSyntaxError(error)) throw error;
     }
     const adapter = this.app.vault.adapter;
     const dataPath = normalizePath(`${this.pluginDir()}/data.json`);
     let keptPath: string;
+    let problem: string;
     try {
       if (!await adapter.exists(dataPath)) return { raw: null };
       const text = await adapter.read(dataPath);
+      let parsed: unknown;
       try {
-        return { raw: JSON.parse(text) as unknown };
+        parsed = JSON.parse(text);
+        if (isPlainObject(parsed)) return { raw: parsed };
+        problem = `holds ${describeJsonValue(parsed)} instead of a settings object`;
       } catch {
-        // Not valid JSON: kept aside below.
+        problem = "is not valid JSON";
       }
       // Named after when the broken file was written, so starting again
       // without fixing it finds its copy instead of adding another. No colons:
@@ -2584,12 +2591,12 @@ export default class ArxivDailyPlugin extends Plugin {
       throw error;
     }
     new Notice(
-      `arXiv Daily: data.json could not be read, so the plugin started with default settings. The unreadable file was kept as ${keptPath}; restore your settings from it or enter them again.`,
+      `arXiv Daily: data.json could not be used (it ${problem}), so the plugin started with default settings. The unusable file was kept as ${keptPath}; restore your settings from it or enter them again.`,
       20_000,
     );
     return {
       raw: null,
-      warning: `data.json is not valid JSON; started with default settings and kept the file as ${keptPath}`,
+      warning: `data.json ${problem}; started with default settings and kept the file as ${keptPath}`,
     };
   }
 
@@ -3221,6 +3228,19 @@ export default class ArxivDailyPlugin extends Plugin {
       );
     }
   }
+}
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function describeJsonValue(value: unknown): string {
+  if (value === null) return "null";
+  if (Array.isArray(value)) return "an array";
+  if (typeof value === "string") return "a string";
+  if (typeof value === "number") return "a number";
+  if (typeof value === "boolean") return "a boolean";
+  return "a value of another type";
 }
 
 /** JSON.parse failures are SyntaxErrors; compare by name too, the error may come from another window's realm. */
