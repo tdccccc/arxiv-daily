@@ -195,8 +195,8 @@ describe("CLI runtime", () => {
     // Flat layout: no callouts, no visible directions or sources, no direction marker.
     expect.soft(markdown).not.toMatch(/\[!info\]- (?!Generation metrics)|\[!abstract\]|topic-directions|命中方向|信息来源|Galaxy observations/);
     const paperBlock = markdown.split(/^### /m)[1]!.split(/^## /m)[0]!.trimEnd().split("\n");
-    expect.soft(paperBlock[1]).toMatch(/^<!-- arxiv-daily-source-sections:v1:[A-Za-z0-9_-]+ -->$/);
-    expect.soft(paperBlock.slice(2).filter((line) => !/^- \*\*(?:作者|Authors|arXiv)\*\*/.test(line)))
+    expect.soft(markdown).not.toContain("arxiv-daily-source-sections");
+    expect.soft(paperBlock.slice(1).filter((line) => !/^- \*\*(?:作者|Authors|arXiv)\*\*/.test(line)))
       .toEqual(["- **研究问题**: Research problem", "- **方法设计**: Measured method", "- **核心结果**: Observed result", "- **研究价值**: Research value", "- **适用边界**: Known limits"]);
   }, 15_000);
 

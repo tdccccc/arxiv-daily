@@ -897,8 +897,8 @@ describe("plugin settings reload lifecycle", () => {
     // Flat layout: no callouts, no visible directions or sources, no direction marker.
     expect.soft(markdown).not.toMatch(/\[!info\]- (?!Generation metrics)|\[!abstract\]|topic-directions|Matched directions|Source sections|Galaxy observations/);
     const paperBlock = markdown.split(/^### /m)[1]!.split(/^## /m)[0]!.trimEnd().split("\n");
-    expect.soft(paperBlock[1]).toMatch(/^<!-- arxiv-daily-source-sections:v1:[A-Za-z0-9_-]+ -->$/);
-    expect.soft(paperBlock.slice(2).filter((line) => !/^- \*\*(?:作者|Authors|arXiv)\*\*/.test(line)))
+    expect.soft(markdown).not.toContain("arxiv-daily-source-sections");
+    expect.soft(paperBlock.slice(1).filter((line) => !/^- \*\*(?:作者|Authors|arXiv)\*\*/.test(line)))
       .toEqual(["- **Research problem**: Research problem", "- **Method design**: Measured method", "- **Core results**: Observed result", "- **Research value**: Research value", "- **Scope and limits**: Known limits"]);
   }, 15_000);
 

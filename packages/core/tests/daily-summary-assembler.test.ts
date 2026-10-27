@@ -24,9 +24,6 @@ import {
   parseDiscoveryProvenanceMarker,
 } from "../src/pipeline/discovery-provenance-marker";
 import { parseDailyReportTopicDirections } from "../src/pipeline/topic-direction-marker";
-import { parseSourceSectionsMarker } from "../src/pipeline/source-sections-marker";
-
-const SOURCE_MARKER_PATTERN = "<!-- arxiv-daily-source-sections:v1:[A-Za-z0-9_-]+ -->";
 
 const topics = [
   { id: "methods", name: "Methods", tag: "methods", description: "", detail: false },
@@ -260,10 +257,8 @@ describe("assembleDailySummary", () => {
     expect(markdown).toContain(
       "### Second Results → [2607.00003](../papers/2607.00003.md)",
     );
-    expect(markdown).toMatch(
-      new RegExp(`### Methods Paper\\n${SOURCE_MARKER_PATTERN}\\n- \\*\\*作者\\*\\*: Methods Paper Author\\n- \\*\\*arXiv\\*\\*: `),
-    );
-    expect(markdown).not.toMatch(/\[!info\]|\[!abstract\]|信息来源/);
+    expect(markdown).toContain("### Methods Paper\n- **作者**: Methods Paper Author\n- **arXiv**: ");
+    expect(markdown).not.toMatch(/\[!info\]|\[!abstract\]|信息来源|source-sections/);
     expect(markdown).toContain("- **作者**: Methods Paper Author");
     expect(markdown).toContain("- **研究问题**: 2607.00002 problem");
     expect(markdown).toContain("## 其他关注主题\n- **Empty** — 今日无相关论文更新。");
@@ -458,8 +453,8 @@ describe("assembleDailySummary", () => {
       expect(markdown).not.toContain("信息来源");
       expect(markdown).toContain(`- **研究问题**: ${exact}`);
       expect(markdown).toContain(`- **原始摘要**: ${exact}`);
+      expect(markdown).not.toContain("source-sections");
       expect(extractPaperSummaries(markdown)["2607.00001"]).toEqual({
-        sourceSections: exact,
         coreProblem: exact,
         keyMethod: exact,
         mainResult: exact,
@@ -630,7 +625,6 @@ describe("assembleDailySummary", () => {
     for (const slot of assemblyInput.slots) {
       if (slot.result.kind !== "structured") continue;
       expect(parsed[slot.paper.id]).toEqual({
-        sourceSections: "Abstract, Results",
         coreProblem: slot.result.summary.coreProblem,
         keyMethod: slot.result.summary.keyMethod,
         mainResult: slot.result.summary.mainResult,
@@ -818,7 +812,6 @@ describe("matched directions stay out of the report", () => {
     expect(markdown).not.toMatch(/topic-directions|命中方向|Matched directions|neural nets|\[!info\]/);
     expect(parseDailyReportTopicDirections(markdown, "2026-07-22")).toEqual({ kind: "valid", occurrences: [] });
     expect(extractPaperSummaries(markdown)["2607.00001"]).toEqual({
-      sourceSections: "Abstract, Results",
       coreProblem: "2607.00001 problem",
       keyMethod: "2607.00001 method",
       mainResult: "2607.00001 result",
@@ -846,12 +839,12 @@ describe("matched directions stay out of the report", () => {
     expect(lines[heading + 1]).toMatch(/^<!-- arxiv-daily-discovery-provenance:v1:/);
     expect(lines[heading + 2]).toMatch(/^> 发现来源：/);
     expect(lines[heading + 3]).toBe("");
-    expect(lines[heading + 4]).toMatch(new RegExp(`^${SOURCE_MARKER_PATTERN}$`));
-    expect(lines[heading + 5]).toMatch(/^- \*\*作者\*\*: /);
+    expect(lines[heading + 4]).toMatch(/^- \*\*作者\*\*: /);
     expect(parseDailyReportDiscoveryProvenance(markdown, "2026-07-22")).toMatchObject({
       kind: "valid", occurrences: [{ arxivId: "2607.00020" }],
     });
-    expect(extractPaperSummaries(markdown)["2607.00020"]?.sourceSections).toBe("Abstract, Results");
+    expect(markdown).not.toContain("source-sections");
+    expect(extractPaperSummaries(markdown)["2607.00020"]?.sourceSections).toBeUndefined();
   });
 
   it.each([
@@ -912,10 +905,8 @@ describe("future daily report reading order", () => {
       const block = markdown.split(/^### /m).find((entry) => entry.startsWith("Methods Paper\n"))!;
       const lines = block.split(/^## /m)[0]!.trimEnd().split("\n");
       const authors = language === "zh" ? "作者" : "Authors";
-      expect(lines[1]).toMatch(new RegExp(`^${SOURCE_MARKER_PATTERN}$`));
-      expect(parseSourceSectionsMarker(lines[1]!)).toBe("Abstract, Results");
       // A tight, plain bullet list: no blank lines, quotes or callouts after the heading.
-      expect(lines.slice(2)).toEqual([
+      expect(lines.slice(1)).toEqual([
         `- **${authors}**: Methods Paper Author`,
         "- **arXiv**: [2607.00002](https://arxiv.org/abs/2607.00002)",
         `- **${labels[0]}**: 2607.00002 problem`,
@@ -924,8 +915,9 @@ describe("future daily report reading order", () => {
         `- **${labels[3]}**: 2607.00002 value`,
         `- **${labels[4]}**: 2607.00002 limits`,
       ]);
+      // The report carries no sources; the pipeline hands them to the index.
       expect(extractPaperSummaries(markdown)["2607.00002"]).toEqual({
-        sourceSections: "Abstract, Results", coreProblem: "2607.00002 problem",
+        coreProblem: "2607.00002 problem",
         keyMethod: "2607.00002 method", mainResult: "2607.00002 result",
         whyRelevant: "2607.00002 value", limitations: "2607.00002 limits",
       });

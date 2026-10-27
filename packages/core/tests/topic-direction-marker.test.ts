@@ -29,7 +29,6 @@ describe("topic direction marker", () => {
   it("finds nothing in a current flat report, which no longer writes the marker", () => {
     const markdown = [
       "### A paper",
-      "<!-- arxiv-daily-source-sections:v1:QWJzdHJhY3Q -->",
       "- **作者**: A. Author",
       `- **arXiv**: [${arxivId}](https://arxiv.org/abs/${arxivId})`,
       "- **研究问题**: Q.",

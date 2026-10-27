@@ -20,7 +20,7 @@ import type { ArxivFetcher } from "./arxiv-fetcher";
 import type { PaperContentFetcher } from "./paper-content";
 import type { MarkdownWriter } from "./markdown-writer";
 import { isPermanentLlmError, type LlmClient } from "../llm/client";
-import type { PaperIndexEntry, PaperIndexStore } from "../services/paper-index";
+import type { PaperIndexEntry, PaperIndexStore, PaperSummary } from "../services/paper-index";
 import type {
   FilterDecisionOutcome,
   FilterDecisionRecordPort,
@@ -48,6 +48,8 @@ import {
   parseDailyReportDiscoveryProvenance,
   extractPaperSummaries,
 } from "./daily-summary-parser";
+import type { DailyPaperSlot } from "./daily-summary-assembler";
+import { normalizeMarkdownLine } from "./daily-summary-rendering";
 import { dailySelectionMarkerRegExp } from "../services/daily-selection-marker";
 import { GenerationMetricsCollector } from "../metrics/generation";
 import {
@@ -605,7 +607,7 @@ export class ArxivPipeline {
         }
         throwIfCancelled(signal);
         await this.deps.paperIndex.setSummaries(
-          extractPaperSummaries(dailySummary),
+          withSlotSourceSections(extractPaperSummaries(dailySummary), digestSlots),
         );
         throwIfCancelled(signal);
       } catch (e) {
@@ -960,6 +962,24 @@ export class ArxivPipeline {
       dateWindow: "recent",
     };
   }
+}
+
+/**
+ * New reports do not show which sections a summary drew on, so the report text
+ * cannot supply them. The structured slots still know, and hand them to the
+ * index here; fallback papers have no summary and so no sources.
+ */
+function withSlotSourceSections(
+  parsed: Record<string, PaperSummary>,
+  slots: ReadonlyArray<DailyPaperSlot>,
+): Record<string, PaperSummary> {
+  const out = { ...parsed };
+  for (const { paper, result } of slots) {
+    if (result.kind !== "structured") continue;
+    const sourceSections = normalizeMarkdownLine(paper.sourceSections);
+    if (sourceSections) out[paper.id] = { ...out[paper.id], sourceSections };
+  }
+  return out;
 }
 
 function extractDailyArxivIds(markdown: string): string[] {

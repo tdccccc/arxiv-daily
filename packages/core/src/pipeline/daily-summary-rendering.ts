@@ -12,7 +12,6 @@ import {
   escapeDiscoveryProvenancePlainText,
   renderDiscoveryProvenanceMarker,
 } from "./discovery-provenance-marker";
-import { renderSourceSectionsMarker } from "./source-sections-marker";
 import { hasControlCharacter } from "../utils/control-characters";
 
 export const DAILY_SUMMARY_EMERGENCY_MARKER =
@@ -146,8 +145,11 @@ export function safeDetailLink(
   return `[${paperId}](${encodeRelativeLinkTarget(decoded)})`;
 }
 
+/** A paper as the report shows it: source sections never appear in a report. */
+export type DailyReportedPaper = Omit<DailySummaryAssemblyPaper, "sourceSections">;
+
 export function renderPaperHeader(
-  paper: DailySummaryAssemblyPaper,
+  paper: DailyReportedPaper,
   language: SummaryLanguage,
   leadingMarkers: string[] = [],
   reportDate?: string,
@@ -159,7 +161,6 @@ export function renderPaperHeader(
     paper.isDetail || Boolean(paper.paperPath),
   );
   const authorLabel = language === "en" ? "Authors" : "作者";
-  const sourceMarker = renderSourceSectionsMarker(normalizeMarkdownLine(paper.sourceSections));
   return [
     ...leadingMarkers,
     `### ${normalizeMarkdownLine(paper.title)}${detailLink ? ` → ${detailLink}` : ""}`,
@@ -172,12 +173,9 @@ export function renderPaperHeader(
           ),
           renderVisibleDiscoveryProvenance(paper.discoveryProvenance, language),
           // End the quoted line so the list below is never read as part of it.
-          // The provenance marker's canonical slot is counted from the heading.
           "",
         ]
       : []),
-    // Source sections feed the paper index but are not shown to the reader.
-    ...(sourceMarker ? [sourceMarker] : []),
     `- **${authorLabel}**: ${normalizeMarkdownLine(paper.authors)}`,
     `- **arXiv**: [${paper.id}](${trustedArxivUrl(paper.id)})`,
   ];
@@ -251,7 +249,7 @@ const FALLBACK_REASON_CLAUSES: Partial<Record<DailyPaperFallbackReasonCode, Reco
 };
 
 export function renderFallbackBlock(
-  paper: DailySummaryAssemblyPaper,
+  paper: DailyReportedPaper,
   originalAbstract: string,
   language: SummaryLanguage,
   leadingMarkers: string[] = [],
@@ -259,7 +257,7 @@ export function renderFallbackBlock(
   reasonCode?: DailyPaperFallbackReasonCode,
 ): string {
   // A fallback block carries no generated summary, so it records no sources.
-  const lines = renderPaperHeader({ ...paper, sourceSections: "" }, language, leadingMarkers, reportDate);
+  const lines = renderPaperHeader(paper, language, leadingMarkers, reportDate);
   const arxivUrl = trustedArxivUrl(paper.id);
   const clause = reasonCode ? FALLBACK_REASON_CLAUSES[reasonCode]?.[language] : undefined;
   const warning = language === "en"

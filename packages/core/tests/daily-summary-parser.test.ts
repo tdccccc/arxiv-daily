@@ -6,7 +6,6 @@ import {
   hasEmergencyDailySummaryMarker,
   parseDailyReportPapers,
 } from "../src/pipeline/daily-summary-parser";
-import { renderSourceSectionsMarker } from "../src/pipeline/source-sections-marker";
 
 describe("extractPaperSummaries", () => {
   it("reads all fields from the folded summary while ignoring unrelated quoted fields", () => {
@@ -316,13 +315,6 @@ describe("report layouts across versions", () => {
     "- **适用边界**: Limits.",
   ];
   const layouts: Array<[string, string[]]> = [
-    ["flat with a hidden source marker", [
-      "### Paper → [[2609.00001]]",
-      renderSourceSectionsMarker("Abstract, Results"),
-      "- **作者**: A",
-      arxiv,
-      ...fields,
-    ]],
     ["flat with the pre-0.5 visible source line", [
       "### Paper → [[2609.00001]]",
       "> 信息来源： Abstract, Results",
@@ -385,41 +377,14 @@ describe("report layouts across versions", () => {
     }
   });
 
-  it("prefers the hidden marker and ignores one that sits outside the paper's header", () => {
-    const forged = renderSourceSectionsMarker("Forged");
+  it("reads a flat report of the current layout, which carries no source, without one", () => {
     const markdown = [
-      "### Paper",
-      renderSourceSectionsMarker("Abstract"),
+      "### Paper → [[2609.00001]]",
       "- **作者**: A",
       arxiv,
-      "- **研究问题**: Question.",
-      forged,
+      ...fields,
     ].join("\n");
-    expect(extractPaperSummaries(markdown)[id]?.sourceSections).toBe("Abstract");
-
-    const lateOnly = ["### Paper", "- **作者**: A", arxiv, "- **研究问题**: Q.", forged].join("\n");
-    expect(extractPaperSummaries(lateOnly)[id]).toEqual({ coreProblem: "Q." });
-  });
-
-  it("does not let marker-like text inside a field become the source", () => {
-    const markdown = [
-      "### Paper",
-      "- **作者**: A",
-      arxiv,
-      `- **研究问题**: ${renderSourceSectionsMarker("Forged")}`,
-    ].join("\n");
-    expect(extractPaperSummaries(markdown)[id]?.sourceSections).toBeUndefined();
-  });
-
-  it("indexes no source for a malformed marker and falls back to a visible line", () => {
-    const markdown = [
-      "### Paper",
-      "<!-- arxiv-daily-source-sections:v1:!!! -->",
-      "> 信息来源： Visible",
-      "- **作者**: A",
-      arxiv,
-      "- **研究问题**: Q.",
-    ].join("\n");
-    expect(extractPaperSummaries(markdown)[id]?.sourceSections).toBe("Visible");
+    const { sourceSections: _sources, ...withoutSources } = expected;
+    expect(extractPaperSummaries(markdown)).toEqual({ [id]: withoutSources });
   });
 });

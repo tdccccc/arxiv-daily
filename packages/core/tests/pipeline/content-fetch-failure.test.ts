@@ -3,7 +3,6 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it, vi } from "vitest";
 import { PaperContentFetcher } from "../../src/pipeline/paper-content";
-import { renderSourceSectionsMarker } from "../../src/pipeline/source-sections-marker";
 import { ArxivPipeline } from "../../src/pipeline/pipeline";
 import { Logger } from "../../src/services/logger";
 import { DEFAULT_SETTINGS } from "../../src/settings/defaults";
@@ -86,8 +85,19 @@ function setup(listingAbstract: string) {
     upsert: vi.fn(async () => undefined),
     removeAll: vi.fn(async () => undefined),
   };
+  const paperIndex = {
+    upsertManyFromDailyPapers: vi.fn(async (papers: Array<{ arxivId: string }>) =>
+      papers.map((paper) => ({
+        entry: { arxivId: paper.arxivId, status: "inbox", paperPath: null },
+        wasNew: true,
+      }))),
+    addDailyReports: vi.fn(),
+    setSummaries: vi.fn(),
+    setPaperPath: vi.fn(),
+  };
   const pipeline = new ArxivPipeline({
     markupParser,
+    paperIndex: paperIndex as any,
     fetcher: fetcher as any,
     paperFetcher,
     writer: writer as any,
@@ -101,12 +111,12 @@ function setup(listingAbstract: string) {
     detailSelection: { normalThreshold: 70, exceptionalThreshold: 90, softLimit: 2 },
   });
   const summaryRequests = () => requests.filter(({ system }) => !system.includes("判断它命中了哪些方向"));
-  return { pipeline, writer, checkpoint, summaryRequests };
+  return { pipeline, writer, checkpoint, summaryRequests, paperIndex };
 }
 
 describe("a day on which arxiv.org content cannot be fetched", () => {
   it("summarizes from the listing abstract, not from the failure placeholder", async () => {
-    const { pipeline, writer, summaryRequests, checkpoint } = setup(LISTING_ABSTRACT);
+    const { pipeline, writer, summaryRequests, checkpoint, paperIndex } = setup(LISTING_ABSTRACT);
 
     const result = await pipeline.runForDate("2026-05-11");
 
@@ -119,7 +129,11 @@ describe("a day on which arxiv.org content cannot be fetched", () => {
     const markdown = (writer.writeDaily.mock.calls[0] as unknown as [string, string])[1];
     expect(markdown).toContain("- **研究问题**: grounded problem");
     expect(markdown).not.toContain("信息来源");
-    expect(markdown).toContain(renderSourceSectionsMarker("Abstract"));
+    expect(markdown).not.toContain("arxiv-daily-source-sections");
+    // The report no longer shows the sources, so the index receives them directly.
+    expect(paperIndex.setSummaries).toHaveBeenCalledWith({
+      [ID]: expect.objectContaining({ sourceSections: "Abstract", coreProblem: "grounded problem" }),
+    });
     expect(markdown).not.toContain("获取失败");
     // What is kept for resuming is the summary of the abstract, under the fingerprint of that input.
     const saved = checkpoint.upsert.mock.calls[0] as unknown as [string, { paper: { abstract: string } }, { kind: string }];
@@ -128,7 +142,7 @@ describe("a day on which arxiv.org content cannot be fetched", () => {
   });
 
   it("shows a fallback block, and asks the model nothing, when there is no abstract either", async () => {
-    const { pipeline, writer, summaryRequests, checkpoint } = setup("");
+    const { pipeline, writer, summaryRequests, checkpoint, paperIndex } = setup("");
 
     const result = await pipeline.runForDate("2026-05-11");
 
@@ -140,6 +154,7 @@ describe("a day on which arxiv.org content cannot be fetched", () => {
     expect(markdown).toContain("无法获取这篇论文的内容");
     expect(markdown).not.toContain("信息来源");
     expect(markdown).not.toContain("arxiv-daily-source-sections");
+    expect(paperIndex.setSummaries).toHaveBeenCalledWith({});
     expect(markdown).not.toContain("grounded problem");
     const saved = checkpoint.upsert.mock.calls[0] as unknown as [string, unknown, { kind: string; reasonCode?: string }];
     expect(saved[2]).toMatchObject({ kind: "fallback", reasonCode: "content-unavailable" });
