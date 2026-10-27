@@ -12,7 +12,6 @@ import {
   escapeDiscoveryProvenancePlainText,
   renderDiscoveryProvenanceMarker,
 } from "./discovery-provenance-marker";
-import { renderTopicDirectionMarker } from "./topic-direction-marker";
 import { hasControlCharacter } from "../utils/control-characters";
 
 export const DAILY_SUMMARY_EMERGENCY_MARKER =
@@ -146,8 +145,11 @@ export function safeDetailLink(
   return `[${paperId}](${encodeRelativeLinkTarget(decoded)})`;
 }
 
+/** A paper as the report shows it: source sections never appear in a report. */
+export type DailyReportedPaper = Omit<DailySummaryAssemblyPaper, "sourceSections">;
+
 export function renderPaperHeader(
-  paper: DailySummaryAssemblyPaper,
+  paper: DailyReportedPaper,
   language: SummaryLanguage,
   leadingMarkers: string[] = [],
   reportDate?: string,
@@ -158,10 +160,6 @@ export function renderPaperHeader(
     paper.detailLink,
     paper.isDetail || Boolean(paper.paperPath),
   );
-  const sourceLabel = language === "en" ? "Source sections:" : "信息来源：";
-  const contextLabel = paper.topicDirections
-    ? language === "en" ? "Matched directions and sources" : "命中方向与信息来源"
-    : language === "en" ? "Source sections" : "信息来源";
   const authorLabel = language === "en" ? "Authors" : "作者";
   return [
     ...leadingMarkers,
@@ -174,42 +172,12 @@ export function renderPaperHeader(
             requireReportDate(reportDate),
           ),
           renderVisibleDiscoveryProvenance(paper.discoveryProvenance, language),
+          // End the quoted line so the list below is never read as part of it.
+          "",
         ]
       : []),
-    // Keep the metadata callout after the marker family, whose canonical slot
-    // is counted from the paper heading.
-    ...(paper.discoveryProvenance ? [""] : []),
-    `> [!info]- ${contextLabel}`,
-    ...(paper.topicDirections
-      ? [
-          `> ${renderTopicDirectionMarker(
-            paper.topicDirections,
-            paper.id,
-            requireReportDate(reportDate),
-          )}`,
-          ...renderVisibleTopicDirections(paper.topicDirections, language),
-          ">",
-        ]
-      : []),
-    `> ${sourceLabel} ${normalizeMarkdownLine(paper.sourceSections)}`,
-    "",
     `- **${authorLabel}**: ${normalizeMarkdownLine(paper.authors)}`,
     `- **arXiv**: [${paper.id}](${trustedArxivUrl(paper.id)})`,
-  ];
-}
-
-/**
- * Each direction gets its own list item. The report's section heading already
- * names the topic. Direction text is researcher-authored literal text.
- */
-function renderVisibleTopicDirections(
-  hits: NonNullable<DailySummaryAssemblyPaper["topicDirections"]>,
-  language: SummaryLanguage,
-): string[] {
-  const label = language === "en" ? "Matched directions" : "命中方向";
-  return [
-    `> **${label}**`,
-    ...hits.map((hit) => `> - ${escapeDiscoveryProvenancePlainText(hit.text)}`),
   ];
 }
 
@@ -251,20 +219,9 @@ export function renderStructuredFields(
   summary: StructuredPaperSummary,
   language: SummaryLanguage,
 ): string[] {
-  const fields = DAILY_SUMMARY_FIELD_LABELS[language];
-  const resultLabel = fields.find(([key]) => key === "mainResult")![1];
-  const detailsLabel = language === "en" ? "Background, methods and limits" : "研究背景、方法与边界";
-  return [
-    `- **${resultLabel}**: ${normalizeMarkdownLine(summary.mainResult)}`,
-    "",
-    `> [!abstract]- ${detailsLabel}`,
-    ...fields.filter(([key]) => key !== "mainResult").flatMap(
-      ([key, label], index) => [
-        ...(index > 0 ? [">"] : []),
-        `> - **${label}**: ${normalizeMarkdownLine(summary[key])}`,
-      ],
-    ),
-  ];
+  return DAILY_SUMMARY_FIELD_LABELS[language].map(
+    ([key, label]) => `- **${label}**: ${normalizeMarkdownLine(summary[key])}`,
+  );
 }
 
 export function renderEmptyTopics(
@@ -292,13 +249,14 @@ const FALLBACK_REASON_CLAUSES: Partial<Record<DailyPaperFallbackReasonCode, Reco
 };
 
 export function renderFallbackBlock(
-  paper: DailySummaryAssemblyPaper,
+  paper: DailyReportedPaper,
   originalAbstract: string,
   language: SummaryLanguage,
   leadingMarkers: string[] = [],
   reportDate?: string,
   reasonCode?: DailyPaperFallbackReasonCode,
 ): string {
+  // A fallback block carries no generated summary, so it records no sources.
   const lines = renderPaperHeader(paper, language, leadingMarkers, reportDate);
   const arxivUrl = trustedArxivUrl(paper.id);
   const clause = reasonCode ? FALLBACK_REASON_CLAUSES[reasonCode]?.[language] : undefined;
@@ -309,7 +267,7 @@ export function renderFallbackBlock(
   const unavailable = language === "en" ? "Unavailable." : "不可用。";
   const abstract = normalizeMarkdownLine(originalAbstract);
   // The header ends with the author and arXiv bullets. Place the warning
-  // outside the collapsed context, before the identity bullet used by parsers.
+  // before them, ahead of the identity bullet used by parsers.
   lines.splice(
     lines.length - 2,
     0,
@@ -318,9 +276,8 @@ export function renderFallbackBlock(
     ...(!abstract
       ? [`<!-- ${DAILY_SUMMARY_ABSTRACT_ABSENT_MARKER_PREFIX}:${paper.id} -->`]
       : []),
-    "",
   );
-  lines.push("", `- **${abstractLabel}**: ${abstract || unavailable}`);
+  lines.push(`- **${abstractLabel}**: ${abstract || unavailable}`);
   return lines.join("\n");
 }
 

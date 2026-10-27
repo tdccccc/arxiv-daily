@@ -178,11 +178,16 @@ describe("summarizeDaily", () => {
     expect(output).toContain(
       "### Title 2607.00001 → [2607.00001](../papers/2607.00001.md)",
     );
-    expect(output).toContain("> 信息来源： Abstract, Results");
+    expect(output).not.toContain("信息来源");
+    expect(output).not.toContain("source-sections");
+    // The sources the report no longer shows stay available to the pipeline through the slots.
+    expect(dailyResult.slots.map(({ paper }) => [paper.id, paper.sourceSections])).toEqual([
+      ["2607.00001", "Abstract, Results"],
+      ["2607.00002", "Abstract"],
+    ]);
     expect(Object.keys(parsed).sort()).toEqual(["2607.00001", "2607.00002"]);
     for (const id of Object.keys(parsed)) {
       expect(parsed[id]).toEqual({
-        sourceSections: id === "2607.00001" ? "Abstract, Results" : "Abstract",
         coreProblem: `${id} problem`,
         keyMethod: `${id} method`,
         mainResult: `${id} result`,

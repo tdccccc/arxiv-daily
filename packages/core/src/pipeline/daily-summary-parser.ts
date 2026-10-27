@@ -213,6 +213,9 @@ function extractLegacyHeadingId(headingLine: string): string | null {
 }
 
 function extractSourceSections(block: string): string {
+  // Only reports written before the flat layout show their sources, as a
+  // quoted line (inside a folded callout from 0.5). New reports carry none; the
+  // pipeline hands their sources to the paper index directly.
   // compact() below collapses and trims whatever (.+) captures, so a
   // redundant \s* immediately before it only duplicated what (.+) already
   // matches, letting CodeQL flag the ambiguous split on long whitespace runs

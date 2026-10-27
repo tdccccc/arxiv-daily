@@ -7,7 +7,6 @@ import {
   assembleEmergencyDailySummary,
 } from "../src/pipeline/daily-summary-assembler";
 import { parseDailyReportDiscoveryProvenance } from "../src/pipeline/discovery-provenance-marker";
-import { parseDailyReportTopicDirections } from "../src/pipeline/topic-direction-marker";
 import {
   buildDailySummaryRescueContract,
   DailySummaryRescueExhaustedError,
@@ -268,7 +267,7 @@ describe("rescueDailySummary", () => {
     )).not.toThrow();
   });
 
-  it.each(["zh", "en"] as const)("transports folded direction metadata as complete copyable lines in %s", async (language) => {
+  it.each(["zh", "en"] as const)("transports the flat layout without sources as complete copyable lines in %s", async (language) => {
     const assemblyInput = input();
     assemblyInput.summaryLanguage = language;
     const hits = [
@@ -287,11 +286,11 @@ describe("rescueDailySummary", () => {
     const markdown = await rescueDailySummary(assemblyInput, { llm: llm as any, logger: logger() as any });
 
     expect(llm.call).toHaveBeenCalledTimes(1);
-    expect(markdown).toMatch(/^> \[!info\]- .+\n> <!-- arxiv-daily-topic-directions:/m);
-    expect(parseDailyReportTopicDirections(markdown, assemblyInput.dateStr)).toEqual({
-      kind: "valid", occurrences: [{ arxivId: "2607.00001", hits }],
-    });
-    expect(extractPaperSummaries(markdown)["2607.00001"]?.sourceSections).toBe("Abstract, Results");
+    expect(markdown).not.toMatch(/\[!info\]|\[!abstract\]|topic-directions|命中方向|Matched directions/);
+    expect(markdown).not.toContain("source-sections");
+    expect(markdown).toMatch(new RegExp(`^### .+\\n- \\*\\*${language === "en" ? "Authors" : "作者"}\\*\\*: `, "m"));
+    expect(extractPaperSummaries(markdown)["2607.00001"]?.sourceSections).toBeUndefined();
+    expect(JSON.stringify(buildDailySummaryRescueContract(assemblyInput))).not.toContain("Abstract, Results");
     expect(extractFallbackAbstracts(markdown)).toEqual({ "2607.00002": "trusted fallback abstract" });
   });
 
@@ -377,11 +376,10 @@ describe("rescueDailySummary", () => {
       llm: llm as any,
       logger: logger() as any,
     });
-    expect(output).toContain(`> Source sections: ${exact}`);
+    expect(output).not.toContain("Source sections");
     expect(output).toContain(`- **Research problem**: ${exact}`);
     expect(output).toContain(`- **Original abstract**: ${exact}`);
     expect(extractPaperSummaries(output)["2607.00001"]).toEqual({
-      sourceSections: exact,
       coreProblem: exact,
       keyMethod: exact,
       mainResult: exact,
@@ -418,7 +416,7 @@ describe("rescueDailySummary", () => {
       logger: logger() as any,
     });
 
-    expect(output).toContain("> Source sections: ``code``` then &lt;b>outside&lt;/b>`");
+    expect(output).not.toContain("source-sections");
     expect(output).toContain("- **Authors**: \\`<mark>inside</mark>\\` &lt;em>outside&lt;/em>");
     expect(output).toContain("- **Research problem**: ``shorter ` run and <i>inside</i>`` &lt;u>outside&lt;/u>");
     expect(output).toContain("- **Original abstract**: `unmatched &lt;strong>outside&lt;/strong>");
@@ -487,7 +485,6 @@ describe("validateDailySummaryRescueMarkdown", () => {
     ["paper order", (v) => v.replace("arxiv-daily-rescue-paper:2607.00001", "arxiv-daily-rescue-paper:2607.00002")],
     ["title", (v) => v.replace("Structured Title", "Changed Title")],
     ["authors", (v) => v.replace("Trusted Author One", "Changed Author")],
-    ["source sections", (v) => v.replace("Abstract, Results", "Abstract")],
     ["arXiv link", (v) => v.replace("https://arxiv.org/abs/2607.00001", "https://evil.invalid/2607.00001")],
     ["detail link", (v) => v.replace("../papers/2607.00001.md", "../wrong.md")],
     ["structured value", (v) => v.replace("problem exact", "rewritten problem")],

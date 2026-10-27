@@ -4,6 +4,16 @@ import {
   type TopicDirectionHit,
 } from "./topic-direction-hits";
 
+/**
+ * Topic-direction markers are a **read-only legacy format**. Daily reports no
+ * longer show matched directions, so nothing writes these markers any more and
+ * no production code reads them; reports written by 0.5 and 0.6 still carry
+ * them and stay parseable (old reports are never rewritten).
+ *
+ * `renderTopicDirectionMarker` is therefore not a writer: it is the
+ * canonical-form check `parseTopicDirectionMarker` rounds a candidate line
+ * through before accepting it.
+ */
 export const TOPIC_DIRECTION_MARKER_VERSION = 1 as const;
 export const TOPIC_DIRECTION_MARKER_PREFIX = "arxiv-daily-topic-directions";
 export const TOPIC_DIRECTION_MARKER_MAX_CODE_UNITS = 48_000 as const;
@@ -84,10 +94,11 @@ export function parseTopicDirectionMarker(line: string): MarkerPayload | null {
  *
  * The marker family sits after discovery provenance and (in old reports) the
  * withdrawn personal novelty.
- * Legacy reports put the bare marker in that slot; current reports put a
+ * Pre-0.5 reports put the bare marker in that slot; 0.5 and 0.6 reports put a
  * metadata callout there (separated from preceding quotes by a blank line) and
  * its quoted marker immediately after it. Both layouts preserve the other
- * families' canonical slots.
+ * families' canonical slots. Reports written since the flat layout carry no
+ * marker at all.
  */
 export function parseDailyReportTopicDirections(
   markdown: string,

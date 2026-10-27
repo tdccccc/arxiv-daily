@@ -686,6 +686,21 @@ describe("PaperIndexStore", () => {
     });
   });
 
+  it("keeps the sources of a summary when a later report-only parse has none", async () => {
+    const { store } = makeStore();
+    await store.upsertFromDailyPaper({
+      arxivId: "2606.12345", title: "A paper", authors: "A. Author", date: "2026-06-11",
+      arxivCategory: "astro-ph", primaryTopic: "photo-z", detail: false,
+    });
+    await store.setSummaries({ "2606.12345": { sourceSections: "Abstract, Results", coreProblem: "Problem" } });
+
+    await store.setSummaries({ "2606.12345": { coreProblem: "Problem", keyMethod: "Method" } });
+
+    expect((await store.get("2606.12345"))?.summary).toEqual({
+      sourceSections: "Abstract, Results", coreProblem: "Problem", keyMethod: "Method",
+    });
+  });
+
   it("does not expose first-save content before primary promotion", async () => {
     const primaryPath = "arxiv-daily/.index/papers.json";
     const backupPath = `${primaryPath}.bak`;

@@ -4,6 +4,7 @@ import {
   extractFallbackPaperIds,
   extractPaperSummaries,
   hasEmergencyDailySummaryMarker,
+  parseDailyReportPapers,
 } from "../src/pipeline/daily-summary-parser";
 
 describe("extractPaperSummaries", () => {
@@ -292,5 +293,98 @@ describe("extractPaperSummaries", () => {
       whyRelevant: "English value.",
       limitations: "English limits.",
     });
+  });
+});
+
+describe("report layouts across versions", () => {
+  const id = "2609.00001";
+  const arxiv = `- **arXiv**: [${id}](https://arxiv.org/abs/${id})`;
+  const expected = {
+    sourceSections: "Abstract, Results",
+    coreProblem: "Question.",
+    keyMethod: "Method.",
+    mainResult: "Result.",
+    whyRelevant: "Value.",
+    limitations: "Limits.",
+  };
+  const fields = [
+    "- **研究问题**: Question.",
+    "- **方法设计**: Method.",
+    "- **核心结果**: Result.",
+    "- **研究价值**: Value.",
+    "- **适用边界**: Limits.",
+  ];
+  const layouts: Array<[string, string[]]> = [
+    ["flat with the pre-0.5 visible source line", [
+      "### Paper → [[2609.00001]]",
+      "> 信息来源： Abstract, Results",
+      "- **作者**: A",
+      arxiv,
+      ...fields,
+    ]],
+    ["folded 0.5+ callouts with direction marker", [
+      "### Paper → [[2609.00001]]",
+      "> [!info]- 命中方向与信息来源",
+      "> <!-- arxiv-daily-topic-directions:v1:e30 -->",
+      "> **命中方向**",
+      "> - photo\\-z",
+      ">",
+      "> 信息来源： Abstract, Results",
+      "",
+      "- **作者**: A",
+      arxiv,
+      fields[2]!,
+      "",
+      "> [!abstract]- 研究背景、方法与边界",
+      `> ${fields[0]}`,
+      ">",
+      `> ${fields[1]}`,
+      ">",
+      `> ${fields[3]}`,
+      ">",
+      `> ${fields[4]}`,
+    ]],
+    ["folded English layout", [
+      "### Paper",
+      "> [!info]- Source sections",
+      "> Source sections: Abstract, Results",
+      "",
+      "- **Authors**: A",
+      arxiv,
+      "- **Core results**: Result.",
+      "",
+      "> [!abstract]- Background, methods and limits",
+      "> - **Research problem**: Question.",
+      ">",
+      "> - **Method design**: Method.",
+      ">",
+      "> - **Research value**: Value.",
+      ">",
+      "> - **Scope and limits**: Limits.",
+    ]],
+  ];
+
+  it.each(layouts)("reads the same index summary from a %s paper", (_name, lines) => {
+    expect(extractPaperSummaries(lines.join("\n"))).toEqual({ [id]: expected });
+  });
+
+  it("keeps papers in the same section list for every layout", () => {
+    for (const [, lines] of layouts) {
+      const papers = parseDailyReportPapers(["## Topic", ...lines].join("\n"));
+      expect(papers).toHaveLength(1);
+      expect(papers[0]).toMatchObject({ id, section: "Topic", authors: expect.stringMatching(/^A$/), fallback: false });
+      expect(papers[0]!.summary).toEqual(expected);
+    }
+  });
+
+  it("reads a flat report of the current layout, which carries no source, without one", () => {
+    const markdown = [
+      "### Paper → [[2609.00001]]",
+      "- **作者**: A",
+      arxiv,
+      ...fields,
+    ].join("\n");
+    const { sourceSections: _sources, ...withoutSources } = expected;
+    expect(extractPaperSummaries(markdown)).toEqual({ [id]: withoutSources });
   });
 });

@@ -10,7 +10,6 @@ import {
   Logger,
   normalizeTopic,
   OperationRegistry,
-  parseDailyReportTopicDirections,
   RunHistoryStore,
   RunLock,
   SchedulerService,
@@ -891,27 +890,16 @@ describe("plugin settings reload lifecycle", () => {
       coreProblem: "Research problem", keyMethod: "Measured method", mainResult: "Observed result",
       whyRelevant: "Research value", limitations: "Known limits",
     });
-    expect(parseDailyReportTopicDirections(markdown, "2026-09-08")).toEqual({
-      kind: "valid", occurrences: [{ arxivId: "2609.00001", hits: [
-        { tag: "active", id: "d1", text: "Galaxy observations" },
-        { tag: "active", id: "d2", text: "Catalog comparisons" },
-      ] }],
-    });
     expect.soft(markdown.match(/^## .+$/gm)).toEqual(["## Active topic", "## Other followed topics"]);
     const otherTopics = markdown.split("## Other followed topics")[1] ?? "";
     expect.soft(otherTopics).toMatch(/^[-*] .*Empty topic.*(?:No relevant|No matching|no match).*$/m);
     expect.soft(otherTopics).toMatch(/^[-*] .*Limited topic.*1.*omitted.*daily.*limit.*$/m);
-    expect.soft(markdown).toContain("> [!info]- Matched directions and sources");
-    expect.soft(markdown).toContain("> - Galaxy observations\n> - Catalog comparisons");
-    expect.soft(markdown).toContain("> [!abstract]- Background, methods and limits");
-    expect.soft(markdown).toContain("\n- **Core results**: Observed result\n");
-    expect.soft(markdown.match(/^- \*\*(?:Research problem|Method design|Core results|Research value|Scope and limits)\*\*:/gm))
-      .toEqual(["- **Core results**:"]);
-    const background = markdown.match(/^> \[!abstract\]-[^\n]*\n(?:>[^\n]*(?:\n|$))*/m)?.[0] ?? "";
-    for (const line of [
-      "> - **Research problem**: Research problem", "> - **Method design**: Measured method",
-      "> - **Research value**: Research value", "> - **Scope and limits**: Known limits",
-    ]) expect.soft(background).toContain(line);
+    // Flat layout: no callouts, no visible directions or sources, no direction marker.
+    expect.soft(markdown).not.toMatch(/\[!info\]- (?!Generation metrics)|\[!abstract\]|topic-directions|Matched directions|Source sections|Galaxy observations/);
+    const paperBlock = markdown.split(/^### /m)[1]!.split(/^## /m)[0]!.trimEnd().split("\n");
+    expect.soft(markdown).not.toContain("arxiv-daily-source-sections");
+    expect.soft(paperBlock.slice(1).filter((line) => !/^- \*\*(?:作者|Authors|arXiv)\*\*/.test(line)))
+      .toEqual(["- **Research problem**: Research problem", "- **Method design**: Measured method", "- **Core results**: Observed result", "- **Research value**: Research value", "- **Scope and limits**: Known limits"]);
   }, 15_000);
 
   it("logs persisted sanitation warnings after logger initialization", () => {

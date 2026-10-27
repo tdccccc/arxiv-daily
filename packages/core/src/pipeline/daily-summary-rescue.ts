@@ -109,7 +109,8 @@ type RescueContract = {
   counts: { total: number; detail: number; fallback: number; omitted: number; titleOnly: number };
   slots: Array<{
     fixedLines: string[];
-    paper: DailySummaryAssemblyPaper & { hasDetail: boolean; arxivLink: string };
+    // Source sections are not part of the report, so the repair model never sees them.
+    paper: Omit<DailySummaryAssemblyPaper, "sourceSections"> & { hasDetail: boolean; arxivLink: string };
     result:
       | { kind: "structured"; summary: StructuredPaperSummary }
       | {
@@ -190,13 +191,13 @@ export function buildDailySummaryRescueContract(
       paper.detailLink,
       hasDetail,
     );
+    const { sourceSections: _sourceSections, ...reported } = paper;
     return {
       paper: {
-        ...paper,
+        ...reported,
         title: display(paper.title),
         authors: display(paper.authors),
         category: protectRescueContractDelimiter(paper.category),
-        sourceSections: display(paper.sourceSections),
         paperPath: paper.paperPath
           ? protectRescueContractDelimiter(paper.paperPath)
           : paper.paperPath,
@@ -327,7 +328,6 @@ function validateRescueParserProjection(
     if (slot.result.kind !== "structured") continue;
     const actual = parsed[slot.paper.id];
     const expected = {
-      sourceSections: normalizeMarkdownLine(slot.paper.sourceSections),
       coreProblem: normalizeMarkdownLine(slot.result.summary.coreProblem),
       keyMethod: normalizeMarkdownLine(slot.result.summary.keyMethod),
       mainResult: normalizeMarkdownLine(slot.result.summary.mainResult),
@@ -383,7 +383,6 @@ function renderRescueSlot(
   }
   return [
     ...renderPaperHeader(slot.paper, language, [marker], reportDate),
-    "",
     ...renderStructuredFields(slot.result.summary, language),
   ].join("\n");
 }
