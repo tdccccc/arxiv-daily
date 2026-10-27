@@ -55,7 +55,7 @@
     "@types/node": "^22.15.0",
     "@types/pako": "^2.0.3",
     "esbuild": "^0.25.5",
-    "eslint": "^9.39.5",
+    "eslint": "^10.13.0",
     "eslint-plugin-obsidianmd": "^0.4.2",
     "globals": "^17.13.0",
     "happy-dom": "^21.0.4",
