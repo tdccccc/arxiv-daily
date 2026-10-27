@@ -28,6 +28,6 @@
   },
   "dependencies": {
     "@arxiv-daily/core": "0.6.4",
-    "linkedom": "^0.18.12"
+    "linkedom": "^0.18.14"
   }
 }
