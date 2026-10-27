@@ -8,7 +8,6 @@ import {
   FilterDecisionRecordStore,
   Logger,
   normalizeTopic,
-  parseDailyReportTopicDirections,
 } from "@arxiv-daily/core";
 import { buildNodeHostAdapters } from "@arxiv-daily/node-runtime";
 import { loadCliConfig } from "../src/config";
@@ -189,27 +188,16 @@ describe("CLI runtime", () => {
       coreProblem: "Research problem", keyMethod: "Measured method", mainResult: "Observed result",
       whyRelevant: "Research value", limitations: "Known limits",
     });
-    expect(parseDailyReportTopicDirections(markdown, "2026-09-08")).toEqual({
-      kind: "valid", occurrences: [{ arxivId: "2609.00001", hits: [
-        { tag: "active", id: "d1", text: "Galaxy observations" },
-        { tag: "active", id: "d2", text: "Catalog comparisons" },
-      ] }],
-    });
     expect.soft(markdown.match(/^## .+$/gm)).toEqual(["## Active topic", "## 其他关注主题"]);
     const otherTopics = markdown.split("## 其他关注主题")[1] ?? "";
     expect.soft(otherTopics).toMatch(/^[-*] .*Empty topic.*(?:未匹配|无相关论文).*$/m);
     expect.soft(otherTopics).toMatch(/^[-*] .*Limited topic.*上限.*1.*未展示.*$/m);
-    expect.soft(markdown).toContain("> [!info]- 命中方向与信息来源");
-    expect.soft(markdown).toContain("> - Galaxy observations\n> - Catalog comparisons");
-    expect.soft(markdown).toContain("> [!abstract]- 研究背景、方法与边界");
-    expect.soft(markdown).toContain("\n- **核心结果**: Observed result\n");
-    expect.soft(markdown.match(/^- \*\*(?:研究问题|方法设计|核心结果|研究价值|适用边界)\*\*:/gm))
-      .toEqual(["- **核心结果**:"]);
-    const background = markdown.match(/^> \[!abstract\]-[^\n]*\n(?:>[^\n]*(?:\n|$))*/m)?.[0] ?? "";
-    for (const line of [
-      "> - **研究问题**: Research problem", "> - **方法设计**: Measured method",
-      "> - **研究价值**: Research value", "> - **适用边界**: Known limits",
-    ]) expect.soft(background).toContain(line);
+    // Flat layout: no callouts, no visible directions or sources, no direction marker.
+    expect.soft(markdown).not.toMatch(/\[!info\]- (?!Generation metrics)|\[!abstract\]|topic-directions|命中方向|信息来源|Galaxy observations/);
+    const paperBlock = markdown.split(/^### /m)[1]!.split(/^## /m)[0]!.trimEnd().split("\n");
+    expect.soft(paperBlock[1]).toMatch(/^<!-- arxiv-daily-source-sections:v1:[A-Za-z0-9_-]+ -->$/);
+    expect.soft(paperBlock.slice(2).filter((line) => !/^- \*\*(?:作者|Authors|arXiv)\*\*/.test(line)))
+      .toEqual(["- **研究问题**: Research problem", "- **方法设计**: Measured method", "- **核心结果**: Observed result", "- **研究价值**: Research value", "- **适用边界**: Known limits"]);
   }, 15_000);
 
   it("builds pipeline dependencies on top of Node host adapters", async () => {

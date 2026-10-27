@@ -383,7 +383,6 @@ function renderRescueSlot(
   }
   return [
     ...renderPaperHeader(slot.paper, language, [marker], reportDate),
-    "",
     ...renderStructuredFields(slot.result.summary, language),
   ].join("\n");
 }

@@ -5,6 +5,7 @@ import {
   DAILY_SUMMARY_EMERGENCY_MARKER,
 } from "./daily-summary-rendering";
 import { dailySelectionMarkerRegExp } from "../services/daily-selection-marker";
+import { parseSourceSectionsMarker } from "./source-sections-marker";
 export {
   parseDailyReportDiscoveryProvenance,
   parseDiscoveryProvenanceMarker,
@@ -213,6 +214,10 @@ function extractLegacyHeadingId(headingLine: string): string | null {
 }
 
 function extractSourceSections(block: string): string {
+  // Current reports carry the text in a hidden, encoded marker line; older
+  // reports show it as a quoted line (inside a folded callout since 0.5).
+  const hidden = extractSourceSectionsMarker(block);
+  if (hidden) return hidden;
   // compact() below collapses and trims whatever (.+) captures, so a
   // redundant \s* immediately before it only duplicated what (.+) already
   // matches, letting CodeQL flag the ambiguous split on long whitespace runs
@@ -223,6 +228,16 @@ function extractSourceSections(block: string): string {
       /^Source sections[:：](.+)$/im.exec(block)?.[1] ??
       "",
   );
+}
+
+function extractSourceSectionsMarker(block: string): string {
+  const arxivBulletIndex = block.search(ARXIV_BULLET_RE);
+  const header = arxivBulletIndex < 0 ? block : block.slice(0, arxivBulletIndex);
+  for (const line of header.split(/\r?\n/)) {
+    const value = parseSourceSectionsMarker(line);
+    if (value) return value;
+  }
+  return "";
 }
 
 function extractBulletField(block: string, label: string): string {

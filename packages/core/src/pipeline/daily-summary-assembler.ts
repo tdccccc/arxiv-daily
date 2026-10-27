@@ -350,7 +350,6 @@ function renderSlot(slot: DailyPaperSlot, language: SummaryLanguage, reportDate:
   }
   return [
     ...renderPaperHeader(slot.paper, language, [], reportDate),
-    "",
     ...renderStructuredFields(slot.result.summary, language),
   ].join("\n");
 }

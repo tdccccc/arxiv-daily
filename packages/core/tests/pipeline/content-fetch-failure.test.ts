@@ -3,6 +3,7 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it, vi } from "vitest";
 import { PaperContentFetcher } from "../../src/pipeline/paper-content";
+import { renderSourceSectionsMarker } from "../../src/pipeline/source-sections-marker";
 import { ArxivPipeline } from "../../src/pipeline/pipeline";
 import { Logger } from "../../src/services/logger";
 import { DEFAULT_SETTINGS } from "../../src/settings/defaults";
@@ -117,7 +118,8 @@ describe("a day on which arxiv.org content cannot be fetched", () => {
     expect(requests[0]!.user).not.toContain("获取失败");
     const markdown = (writer.writeDaily.mock.calls[0] as unknown as [string, string])[1];
     expect(markdown).toContain("- **研究问题**: grounded problem");
-    expect(markdown).toContain("信息来源： Abstract");
+    expect(markdown).not.toContain("信息来源");
+    expect(markdown).toContain(renderSourceSectionsMarker("Abstract"));
     expect(markdown).not.toContain("获取失败");
     // What is kept for resuming is the summary of the abstract, under the fingerprint of that input.
     const saved = checkpoint.upsert.mock.calls[0] as unknown as [string, { paper: { abstract: string } }, { kind: string }];
@@ -136,7 +138,8 @@ describe("a day on which arxiv.org content cannot be fetched", () => {
     expect(markdown).toContain(`<!-- arxiv-daily-fallback:${ID} -->`);
     expect(markdown).toContain("其中 1 篇使用回退内容。");
     expect(markdown).toContain("无法获取这篇论文的内容");
-    expect(markdown).toContain("信息来源： 获取失败");
+    expect(markdown).not.toContain("信息来源");
+    expect(markdown).not.toContain("arxiv-daily-source-sections");
     expect(markdown).not.toContain("grounded problem");
     const saved = checkpoint.upsert.mock.calls[0] as unknown as [string, unknown, { kind: string; reasonCode?: string }];
     expect(saved[2]).toMatchObject({ kind: "fallback", reasonCode: "content-unavailable" });

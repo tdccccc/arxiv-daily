@@ -7,7 +7,7 @@ Return only one complete Markdown document, without fences or explanation. Stric
 - Do not add, rewrite, summarize, or infer content.
 - Render structured slots with only the five structured fields; render fallback slots with only the warning, fallback marker, and original abstract.
 - Copy `fixedPrefix` verbatim, one item per line. It already includes the report start marker, heading, selected counts, fallback counts, and any daily-limit omission notice. Do not recalculate or omit these lines.
-- Each slot's `fixedLines` contains its complete paper block: markers, heading, collapsed source context, authors, arXiv link, and either structured fields or fallback warning and abstract. Copy every line verbatim, including empty lines and quote prefixes; do not encode markers or reconstruct formatting from other fields.
+- Each slot's `fixedLines` contains its complete paper block: markers, heading, the hidden source-sections marker line, authors, arXiv link, and either the five flat structured fields or fallback warning and abstract. Copy every line verbatim, including empty lines and quote prefixes; do not encode markers or reconstruct formatting from other fields.
 - For a topic with slots, copy its `omissionText`, if present, before the first paper. Do not create a separate section for an empty topic: copy `emptyTopicLines` after all papers. Papers omitted because of the daily limit must not be described as no relevant papers.
 - Use this exact skeleton and output no topic or paper absent from the contract:
   1. Every line in `fixedPrefix`, in order, one item per line.

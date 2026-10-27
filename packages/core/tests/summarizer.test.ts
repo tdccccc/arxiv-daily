@@ -11,6 +11,7 @@ import {
   extractPaperSummaries,
   hasEmergencyDailySummaryMarker,
 } from "../src/pipeline/daily-summary-parser";
+import { renderSourceSectionsMarker } from "../src/pipeline/source-sections-marker";
 import { summarizeDaily, summarizePaperDetail } from "../src/pipeline/summarizer";
 import { RunCancelledError } from "../src/services/cancellation";
 import { Logger } from "../src/services/logger";
@@ -178,7 +179,8 @@ describe("summarizeDaily", () => {
     expect(output).toContain(
       "### Title 2607.00001 → [2607.00001](../papers/2607.00001.md)",
     );
-    expect(output).toContain("> 信息来源： Abstract, Results");
+    expect(output).not.toContain("信息来源");
+    expect(output).toContain(renderSourceSectionsMarker("Abstract, Results"));
     expect(Object.keys(parsed).sort()).toEqual(["2607.00001", "2607.00002"]);
     for (const id of Object.keys(parsed)) {
       expect(parsed[id]).toEqual({
