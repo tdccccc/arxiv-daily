@@ -27,6 +27,8 @@ export interface NoteFinding {
   /** The section the finding is in; null for a finding about the whole note. */
   heading: string | null;
   snippet: string;
+  /** Core's math rule rejects text that renders fine; kept in the record, left out of defect counts. */
+  knownFalsePositive?: true;
 }
 
 export interface NoteChecks {
@@ -146,10 +148,10 @@ export function checkNote(note: DetailNote): NoteChecks {
     const scan = scanBody(section.body);
     prose.push(...scan.prose);
     for (const line of scan.lines) {
-      for (const { code, snippet } of findMathIssues(line, { rendered: false })) {
+      for (const { code, snippet, coreFalsePositive } of findMathIssues(line, { rendered: false })) {
         // `$$` was set aside above, so core's display-math code can only come from a stray pair; it is still allowed here.
         if (code === "display-math") continue;
-        findings.push({ kind: "math", code, heading: section.heading, snippet });
+        findings.push({ kind: "math", code, heading: section.heading, snippet, ...(coreFalsePositive ? { knownFalsePositive: true as const } : {}) });
       }
     }
     for (const block of scan.bracketBlocks) {
@@ -197,6 +199,8 @@ export interface NoteChecksAggregate {
   structure: { notes: Rate; codes: Record<string, number> };
   notesWith: Record<"math" | "generic-phrase", Rate>;
   codes: Record<"math" | "generic-phrase", Record<string, number>>;
+  /** Math findings on text that renders fine; counted apart and not in `notesWith` or `codes`. */
+  coreFalsePositives: { notes: number; findings: number; codes: Record<string, number> };
   /** Heading, then phrase: how many notes carry it in that section and how often it occurs. */
   placeholders: Record<string, Record<string, { notes: number; occurrences: number }>>;
   englishShare: LengthDistribution;
@@ -215,6 +219,7 @@ export function checkNotes(notes: readonly DetailNote[]): NoteChecksResult {
   const withKind = { math: 0, "generic-phrase": 0, structure: 0 };
   const placeholders: NoteChecksAggregate["placeholders"] = {};
   const versions = { current: 0, older: 0 };
+  const coreFalsePositives: NoteChecksAggregate["coreFalsePositives"] = { notes: 0, findings: 0, codes: {} };
 
   for (const result of results) {
     versions[result.version] += 1;
@@ -225,12 +230,22 @@ export function checkNotes(notes: readonly DetailNote[]): NoteChecksResult {
     groups.set(key, group);
 
     const kinds = new Set<NoteCheckKind>();
+    let falsePositives = 0;
     for (const finding of result.findings) {
+      if (finding.knownFalsePositive) {
+        falsePositives += 1;
+        coreFalsePositives.codes[finding.code] = (coreFalsePositives.codes[finding.code] ?? 0) + 1;
+        continue;
+      }
       kinds.add(finding.kind);
       const bucket = finding.kind === "structure" ? structureCodes : codes[finding.kind];
       bucket[finding.code] = (bucket[finding.code] ?? 0) + 1;
     }
     for (const kind of kinds) withKind[kind] += 1;
+    if (falsePositives > 0) {
+      coreFalsePositives.notes += 1;
+      coreFalsePositives.findings += falsePositives;
+    }
     for (const [heading, phrases] of Object.entries(result.placeholders)) {
       for (const [phrase, count] of Object.entries(phrases)) {
         const entry = ((placeholders[heading] ??= {})[phrase] ??= { notes: 0, occurrences: 0 });
@@ -250,6 +265,7 @@ export function checkNotes(notes: readonly DetailNote[]): NoteChecksResult {
       structure: { notes: rate(withKind.structure, versions.current), codes: structureCodes },
       notesWith: { math: rate(withKind.math, results.length), "generic-phrase": rate(withKind["generic-phrase"], results.length) },
       codes,
+      coreFalsePositives,
       placeholders,
       englishShare: distribution(results.flatMap((result) => result.englishShare === null ? [] : [result.englishShare])),
     },

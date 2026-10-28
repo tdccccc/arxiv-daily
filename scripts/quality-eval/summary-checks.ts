@@ -27,6 +27,8 @@ export interface SummaryFinding {
   snippet: string;
   /** A guideline miss rather than a rule break. */
   soft?: boolean;
+  /** Core's math rule rejects text that renders fine (see {@link isCoreFalsePositive}); kept in the record, left out of defect counts. */
+  knownFalsePositive?: true;
 }
 
 export interface EntryChecks {
@@ -77,7 +79,7 @@ export function snippetAt(text: string, offset: number, length: number): string 
   return text.slice(Math.max(0, offset - SNIPPET_BEFORE), offset + length + SNIPPET_AFTER).replace(/\s+/gu, " ");
 }
 
-export interface MathIssue { code: string; snippet: string }
+export interface MathIssue { code: string; snippet: string; coreFalsePositive?: true }
 
 /**
  * Math problems in one line of text: core's issue codes plus the ones core lacks.
@@ -86,11 +88,11 @@ export interface MathIssue { code: string; snippet: string }
 export function findMathIssues(rendered: string, options: { rendered: boolean }): MathIssue[] {
   const text = options.rendered ? unescapeRenderedField(rendered) : rendered;
   const issues: MathIssue[] = [];
-  const add = (code: string, offset: number, length: number) =>
-    issues.push({ code, snippet: snippetAt(text, offset, length) });
+  const add = (code: string, offset: number, length: number, coreFalsePositive = false) =>
+    issues.push({ code, snippet: snippetAt(text, offset, length), ...(coreFalsePositive ? { coreFalsePositive: true as const } : {}) });
 
   const result = canonicalizeScientificMarkdownMath(text);
-  for (const issue of result.issues) add(issue.code, issue.offset, issue.length);
+  for (const issue of result.issues) add(issue.code, issue.offset, issue.length, isCoreFalsePositive(text, issue.code, issue.offset));
 
   // Core quietly rewrites `\(..\)` and `\[..\]` to `$..$` and accepts, so the report must name them itself.
   let last = 0;
@@ -111,14 +113,39 @@ export function findMathIssues(rendered: string, options: { rendered: boolean })
   return issues;
 }
 
+// `$6:1$`, `$8:1:1$`: core reads a `$` before a digit as currency, so a digit-leading ratio is not paired as math.
+const DIGIT_RATIO_SPAN = /\$\d[\d.]*(?::\d[\d.]*)+\$/u;
+const RATIO_FOLLOW_ON_CODES = new Set(["unclosed-delimiter", "nested-delimiter", "unmatched-delimiter"]);
+// `(0, 0.15]`, `[0,1)`: a half-open interval is deliberately unbalanced.
+const HALF_OPEN_INTERVAL = /\([^()[\]]*\]|\[[^()[\]]*\)/u;
+
+/**
+ * Math problems core reports on text that renders fine in Obsidian. Two known patterns: the unclosed and
+ * nested follow-ons on a line holding a digit-leading colon ratio, and unbalanced parentheses or brackets inside a
+ * span written as a half-open interval. Anything else stays a defect, even on the same line.
+ */
+function isCoreFalsePositive(text: string, code: string, offset: number): boolean {
+  if (RATIO_FOLLOW_ON_CODES.has(code)) return DIGIT_RATIO_SPAN.test(text);
+  if (code !== "unbalanced-parentheses" && code !== "unbalanced-optional-argument") return false;
+  return [...text.matchAll(MATH_SPAN)].some((span) =>
+    offset >= span.index && offset <= span.index + span[0].length && HALF_OPEN_INTERVAL.test(span[0]));
+}
+
 function mathFindings(field: SummaryFieldKey, rendered: string): SummaryFinding[] {
-  return findMathIssues(rendered, { rendered: true }).map(({ code, snippet }) => ({ kind: "math", code, field, snippet }));
+  return findMathIssues(rendered, { rendered: true }).map(({ code, snippet, coreFalsePositive }) => ({
+    kind: "math" as const, code, field, snippet, ...(coreFalsePositive ? { knownFalsePositive: true as const } : {}),
+  }));
 }
 
 function cjkShare(text: string): number {
   const letters = text.replace(/\s+/gu, "");
   if (!letters) return 0;
   return (letters.match(/\p{Script=Han}/gu)?.length ?? 0) / [...letters].length;
+}
+
+/** Whether the Chinese 80-180 range says anything about this mainResult (it does not for mostly Latin text). */
+export function mainResultRangeApplies(mainResult: string): boolean {
+  return Boolean(mainResult) && cjkShare(mainResult.replace(MATH_SPAN, "")) >= MIN_CJK_SHARE_FOR_LENGTH;
 }
 
 /** Run every per-entry check; pure, so the same entry always gives the same findings. */
@@ -147,7 +174,7 @@ export function checkEntry(entry: SummaryEntry): EntryChecks {
 
   // The 80-180 range is in Chinese characters, so it says nothing about a mostly Latin (English) summary.
   const result = entry.fields.mainResult;
-  if (result && cjkShare(result.replace(MATH_SPAN, "")) >= MIN_CJK_SHARE_FOR_LENGTH) {
+  if (mainResultRangeApplies(result)) {
     const length = lengths.mainResult;
     if (length < MAIN_RESULT_LENGTH_RANGE.min) findings.push({ kind: "length", code: "main-result-short", field: "mainResult", snippet: `${length} chars`, soft: true });
     else if (length > MAIN_RESULT_LENGTH_RANGE.max) findings.push({ kind: "length", code: "main-result-long", field: "mainResult", snippet: `${length} chars`, soft: true });
@@ -164,8 +191,10 @@ export interface ChecksAggregate {
   entries: number;
   /** Per check kind: entries with at least one finding of that kind. */
   entriesWith: Record<SummaryCheckKind, Rate>;
-  /** Finding counts per check kind and code. */
+  /** Finding counts per check kind and code, known core false positives left out. */
   codes: Record<SummaryCheckKind, Record<string, number>>;
+  /** Math findings on text that renders fine; counted apart and not in `entriesWith` or `codes`. */
+  coreFalsePositives: { entries: number; findings: number; codes: Record<string, number> };
   /** Over entries where the field is present; a missing field is not a zero-length one. */
   lengths: Record<SummaryFieldKey, LengthDistribution>;
   /** Entries whose mainResult is outside the soft range, among entries the range applies to. */
@@ -205,6 +234,7 @@ export function checkSummaries(corpus: { entries: readonly SummaryEntry[]; fallb
 
   const codes = Object.fromEntries(KINDS.map((kind) => [kind, {}])) as Record<SummaryCheckKind, Record<string, number>>;
   const withKind = Object.fromEntries(KINDS.map((kind) => [kind, 0])) as Record<SummaryCheckKind, number>;
+  const coreFalsePositives: ChecksAggregate["coreFalsePositives"] = { entries: 0, findings: 0, codes: {} };
   const notStated = blank(() => ({ exact: 0, partial: 0 }));
   const claimsByField = blank(() => 0);
   let claimOccurrences = 0;
@@ -214,13 +244,23 @@ export function checkSummaries(corpus: { entries: readonly SummaryEntry[]; fallb
   for (const [index, result] of results.entries()) {
     const kinds = new Set<SummaryCheckKind>();
     let outside = false;
+    let falsePositives = 0;
     for (const finding of result.findings) {
+      if (finding.knownFalsePositive) {
+        falsePositives += 1;
+        coreFalsePositives.codes[finding.code] = (coreFalsePositives.codes[finding.code] ?? 0) + 1;
+        continue;
+      }
       kinds.add(finding.kind);
       codes[finding.kind][finding.code] = (codes[finding.kind][finding.code] ?? 0) + 1;
       if (finding.kind === "not-stated") notStated[finding.field][finding.code === "exact" ? "exact" : "partial"] += 1;
       if (finding.kind === "length") outside = true;
     }
     for (const kind of kinds) withKind[kind] += 1;
+    if (falsePositives > 0) {
+      coreFalsePositives.entries += 1;
+      coreFalsePositives.findings += falsePositives;
+    }
     for (const field of SUMMARY_FIELDS) claimsByField[field] += corpus.entries[index]!.fields[field].split(CLAIM_PHRASE).length - 1;
     claimOccurrences += result.claimCount;
     if (result.claimCount > 0) claimEntries += 1;
@@ -239,10 +279,32 @@ export function checkSummaries(corpus: { entries: readonly SummaryEntry[]; fallb
       entries: total,
       entriesWith: Object.fromEntries(KINDS.map((kind) => [kind, rate(withKind[kind], total)])) as Record<SummaryCheckKind, Rate>,
       codes,
+      coreFalsePositives,
       lengths: Object.fromEntries(SUMMARY_FIELDS.map((field) => [field, distribution(results.filter((_, index) => corpus.entries[index]!.fields[field]).map((result) => result.lengths[field]))])) as Record<SummaryFieldKey, LengthDistribution>,
       mainResultOutsideRange: rate(outsideRange, rangeApplies),
       notStated,
       claims: { occurrences: claimOccurrences, entriesWith: rate(claimEntries, total), byField: claimsByField },
     },
   };
+}
+
+export interface MonthlyMainResult { month: string; entries: number; median: number; p90: number; inRange: Rate }
+
+/** Per report month: how long mainResult runs, to see whether a prompt edit moved it. Empty fields are left out. */
+export function monthlyMainResult(entries: readonly SummaryEntry[]): MonthlyMainResult[] {
+  const months = new Map<string, SummaryEntry[]>();
+  for (const entry of entries) {
+    if (!entry.fields.mainResult) continue;
+    const key = entry.date.slice(0, 7);
+    months.set(key, [...(months.get(key) ?? []), entry]);
+  }
+  return [...months].sort(([a], [b]) => a.localeCompare(b)).map(([month, group]) => {
+    const spread = distribution(group.map((entry) => measureFieldLength(entry.fields.mainResult)));
+    const applicable = group.filter((entry) => mainResultRangeApplies(entry.fields.mainResult));
+    const inside = applicable.filter((entry) => {
+      const length = measureFieldLength(entry.fields.mainResult);
+      return length >= MAIN_RESULT_LENGTH_RANGE.min && length <= MAIN_RESULT_LENGTH_RANGE.max;
+    });
+    return { month, entries: group.length, median: spread.median, p90: spread.p90, inRange: rate(inside.length, applicable.length) };
+  });
 }

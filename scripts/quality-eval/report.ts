@@ -11,7 +11,7 @@ const withCount = (ratio: Ratio): string => (ratio.value === null ? `${NA}（n=$
 const estimate = (ratio: Ratio): string => (ratio.value === null ? NA : percent(ratio));
 
 /** One-line safe text for a Markdown table cell or list item: no newlines, pipes or emphasis. */
-function cell(text: string): string {
+export function cell(text: string): string {
   return text.replace(/\s+/g, " ").replace(/\\/g, "\\\\").replace(/\|/g, "\\|").replace(/([*_`])/g, "\\$1").trim() || " ";
 }
 

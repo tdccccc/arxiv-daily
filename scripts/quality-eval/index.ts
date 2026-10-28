@@ -11,11 +11,13 @@ export { NodeStorageAdapter } from "@arxiv-daily/node-runtime";
 export { DEFAULT_DAILY_DIR, DEFAULT_PAPERS_DIR, loadSummaryCorpus } from "./summary-corpus";
 export type { CorpusOptions, DetailNote, FallbackEntry, NoteSection, SummaryCorpus, SummaryEntry } from "./summary-corpus";
 export {
-  BANNED_GENERIC_PHRASES, checkEntry, checkSummaries, CLAIM_PHRASE, MAIN_RESULT_LENGTH_RANGE, measureFieldLength,
-  NOT_STATED_PHRASE, SUMMARY_FIELDS, unescapeRenderedField,
+  BANNED_GENERIC_PHRASES, checkEntry, checkSummaries, CLAIM_PHRASE, MAIN_RESULT_LENGTH_RANGE, mainResultRangeApplies, measureFieldLength,
+  monthlyMainResult, NOT_STATED_PHRASE, SUMMARY_FIELDS, unescapeRenderedField,
 } from "./summary-checks";
 export type {
-  ChecksAggregate, EntryChecks, LengthDistribution, Rate, SummaryCheckKind, SummaryChecksResult, SummaryFieldKey, SummaryFinding,
+  ChecksAggregate, EntryChecks, LengthDistribution, MonthlyMainResult, Rate, SummaryCheckKind, SummaryChecksResult, SummaryFieldKey, SummaryFinding,
 } from "./summary-checks";
 export { checkNote, checkNotes, CURRENT_NOTE_HEADINGS, NOTE_PLACEHOLDER_PHRASES } from "./summary-note-checks";
 export type { NoteChecks, NoteChecksAggregate, NoteChecksResult, NoteCheckKind, NoteFinding, NoteGroup } from "./summary-note-checks";
+export { parseSummaryCheckArgs, runSummaryCheck } from "./summary-check";
+export type { SummaryCheckOptions, SummaryCheckReport, SummaryCheckResult } from "./summary-check";

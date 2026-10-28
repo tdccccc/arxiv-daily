@@ -175,3 +175,16 @@ test("checkNotes copes with no notes", () => {
   assert.deepEqual(aggregate.versions, { current: 0, older: 0 });
   assert.deepEqual(aggregate.englishShare, { min: 0, median: 0, p90: 0, max: 0 });
 });
+
+test("math: digit-leading ratios and half-open intervals in a note are known false positives", () => {
+  const detail = withBody({ 核心结果: "质量比约 $6:1$，冲量参数可由 $500$ kpc 类比。\n范围 $g \\in (0, 0.15]$ 内恢复。\n同行有 \\(x\\) 的真问题。" });
+  const result = qe.checkNote(detail);
+  const math = kinds(result, "math");
+  assert.ok(math.some(finding => finding.knownFalsePositive === true && finding.code !== "paren-delimiter"));
+  const real = math.filter(finding => !finding.knownFalsePositive);
+  assert.deepEqual(real.map(finding => finding.code), ["paren-delimiter"]);
+  const { aggregate } = qe.checkNotes([detail]);
+  assert.deepEqual(aggregate.notesWith.math, { count: 1, of: 1, rate: 1 });
+  assert.deepEqual(aggregate.codes.math, { "paren-delimiter": 1 });
+  assert.equal(aggregate.coreFalsePositives.notes, 1);
+});

@@ -2,8 +2,8 @@
 
 goal_ref: ../goal.md
 created: 2026-10-28T22:50:00+08:00
-updated: 2026-10-28T23:00:00+08:00
-revision: 3
+updated: 2026-10-28T23:15:00+08:00
+revision: 4
 
 ## Outcome
 
@@ -53,7 +53,7 @@ revision: 3
 - kind: behavior
 - first signal: Red — 命令级测试（夹具 Vault → 报告文件内容、拒绝覆盖、参数校验）失败。
 - checks: 同一测试 Green；`npm run test:release-tools` 中 quality-eval 部分 Green。
-- [ ] accepted on observed evidence
+- [x] accepted on observed evidence (124/124 quality-eval tests, 1030/1030 test:release-tools; trial report on the real vault in /tmp/summary-check-trial; length demoted to reference data per the researcher)
 
 ### Chunk 5 — 抓取并缓存同口径原文
 

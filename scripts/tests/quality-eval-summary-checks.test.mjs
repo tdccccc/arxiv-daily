@@ -166,3 +166,54 @@ test("checkSummaries leaves a missing field out of the length distribution", () 
   assert.equal(aggregate.lengths.mainResult.min, aggregate.lengths.mainResult.max);
   assert.ok(aggregate.lengths.mainResult.min > 0);
 });
+
+test("core's digit-leading ratio and half-open interval rejections are marked as known false positives", () => {
+  const ratio = qe.checkEntry(entry({ keyMethod: "质量比约 $6:1$，冲量参数可由 $500$ kpc 类比，另有 $8:1:1$ 划分。" })).findings.filter(finding => finding.kind === "math");
+  assert.ok(ratio.length > 0);
+  assert.ok(ratio.every(finding => finding.knownFalsePositive === true), JSON.stringify(ratio));
+
+  const interval = qe.checkEntry(entry({ keyMethod: "剪切范围 $g \\in (0, 0.15]$ 与 $x \\in [0,1)$ 内恢复。" })).findings.filter(finding => finding.kind === "math");
+  assert.ok(interval.length >= 2);
+  assert.ok(interval.every(finding => ["unbalanced-parentheses", "unbalanced-optional-argument"].includes(finding.code)));
+  assert.ok(interval.every(finding => finding.knownFalsePositive === true));
+});
+
+test("a real error beside a ratio or interval is still a defect", () => {
+  const stray = qe.checkEntry(entry({ keyMethod: "通过$-射线探测，质量比 $0.5$ 较低" })).findings.filter(finding => finding.kind === "math");
+  assert.ok(stray.length > 0);
+  assert.ok(stray.every(finding => !finding.knownFalsePositive));
+  const bare = qe.checkEntry(entry({ keyMethod: "区间 $g \\in (0, 0.15]$ 与裸 \\alpha" })).findings.filter(finding => finding.kind === "math");
+  assert.deepEqual(bare.map(finding => `${finding.code}:${Boolean(finding.knownFalsePositive)}`).sort(), ["bare-tex:false", "unbalanced-parentheses:true"]);
+  const unbalanced = qe.checkEntry(entry({ keyMethod: "区间 $g \\in (0, 0.15]$ 与 $f(x$ 缺括号" })).findings.filter(finding => finding.kind === "math");
+  assert.deepEqual(unbalanced.map(finding => Boolean(finding.knownFalsePositive)).sort(), [false, true]);
+});
+
+test("known false positives stay out of the defect counts and are counted apart", () => {
+  const entries = [
+    entry({ keyMethod: "质量比 $6:1$，冲量 $500$ kpc。" }, { id: "2610.00001" }),
+    entry({ keyMethod: "裸 \\alpha" }, { id: "2610.00002" }),
+  ];
+  const { aggregate } = qe.checkSummaries({ entries, fallbacks: [] });
+  assert.deepEqual(aggregate.entriesWith.math, { count: 1, of: 2, rate: 0.5 });
+  assert.deepEqual(aggregate.codes.math, { "bare-tex": 1 });
+  assert.equal(aggregate.coreFalsePositives.entries, 1);
+  assert.ok(Object.values(aggregate.coreFalsePositives.codes).reduce((a, b) => a + b, 0) > 0);
+});
+
+test("monthlyMainResult gives the median, p90 and share in range per month", () => {
+  const long = "字".repeat(200);
+  const ok = "字".repeat(100);
+  const entries = [
+    entry({ mainResult: ok }, { id: "a", date: "2026-09-01" }),
+    entry({ mainResult: long }, { id: "b", date: "2026-09-02" }),
+    entry({ mainResult: ok }, { id: "c", date: "2026-10-01" }),
+    entry({ mainResult: "" }, { id: "d", date: "2026-10-02" }),
+    entry({ mainResult: "The mass ratio is large and measured precisely in this sample of clusters." }, { id: "e", date: "2026-10-03" }),
+  ];
+  const rows = qe.monthlyMainResult(entries);
+  assert.deepEqual(rows.map(row => row.month), ["2026-09", "2026-10"]);
+  assert.deepEqual(rows[0], { month: "2026-09", entries: 2, median: 150, p90: 200, inRange: { count: 1, of: 2, rate: 0.5 } });
+  // The empty field is left out; the English one is counted in length but the Chinese range does not apply to it.
+  assert.equal(rows[1].entries, 2);
+  assert.deepEqual(rows[1].inRange, { count: 1, of: 1, rate: 1 });
+});
