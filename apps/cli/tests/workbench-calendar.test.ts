@@ -88,7 +88,7 @@ it("combines real reports and full historical run state without modifying record
   expect(day("2025-01-01")).toMatchObject({ state: "has-report", reportPath: "research/daily/2025-01-01.md", reportTitle: "Report 2025-01-01", papers: null, canGenerate: false });
   expect(day("2025-01-02")).toMatchObject({ state: "has-report", papers: 4 });
   expect(day("2025-01-03")).toMatchObject({ state: "no-matches", papers: 0, reportPath: null, canGenerate: false, actionLabel: null });
-  expect(day("2025-01-04")).toMatchObject({ state: "report-missing", papers: 3, canGenerate: false });
+  expect(day("2025-01-04")).toMatchObject({ state: "report-missing", papers: 3, canGenerate: true, actionLabel: "重新生成日报", message: expect.not.stringContaining("跳过") });
   expect(day("2025-01-05")).toMatchObject({ state: "running", canGenerate: false });
   expect(day("2025-01-06")).toMatchObject({ state: "failed", canGenerate: true, actionLabel: "重试生成" });
   expect(day("2025-01-07")).toMatchObject({ state: "failed", canGenerate: true, actionLabel: "重试生成", message: "retry limit reached" });
@@ -169,7 +169,7 @@ it("shows structured announcement outcomes independently of old errors and weeke
   expect(day("2026-10-03")).toMatchObject({ state: "awaiting-announcement", canGenerate: true, actionLabel: "重新检查公告", papers: null });
   expect(day("2026-10-05")).toMatchObject({ state: "no-updates", canGenerate: false, papers: 0 });
   expect(day("2026-10-06")).toMatchObject({ state: "no-matches", canGenerate: false, papers: 0 });
-  expect(day("2026-10-07")).toMatchObject({ state: "report-missing", papers: 2 });
+  expect(day("2026-10-07")).toMatchObject({ state: "report-missing", papers: 2, canGenerate: true, actionLabel: "重新生成日报" });
   expect(day("2026-10-08")).toMatchObject({ state: "failed", message: "HTTP 503 upstream unavailable", canGenerate: true });
 });
 
@@ -193,4 +193,36 @@ it("names the newest announced day on a day whose announcement is awaited, only 
   expect(day("2026-10-21")).toMatchObject({ state: "awaiting-announcement", canGenerate: true, actionLabel: "重新检查公告", latestAnnounced: "2026-10-09" });
   expect(day("2026-10-20")).toMatchObject({ state: "not-generated" });
   expect(day("2026-10-20")).not.toHaveProperty("latestAnnounced");
+});
+
+it("offers to regenerate only completed dates that had written a report", async () => {
+  const { get, run } = await setup({ now: "2026-10-12T12:00:00Z", records: {
+    "2026-10-05": state("completed", { outcome: "papers_written", papersWritten: 4 }),
+    "2026-10-06": state("completed", { outcome: "no_matches", papersWritten: 0 }),
+    "2026-10-07": state("completed", { outcome: "no_updates", papersWritten: 0 }),
+    "2026-10-08": state("completed", { papersWritten: 0 }),
+    "2026-10-09": state("completed"),
+  }, reports: ["2026-10-05"] });
+  const result = await (await get("api/calendar?month=2026-10")).json();
+  const day = (date: string) => result.cells.find((cell: { date: string } | null) => cell?.date === date);
+  // A date whose report still exists is a normal saved report.
+  expect(day("2026-10-05")).toMatchObject({ state: "has-report", canGenerate: false });
+  expect(day("2026-10-06")).toMatchObject({ state: "no-matches", canGenerate: false, actionLabel: null });
+  expect(day("2026-10-07")).toMatchObject({ state: "no-updates", canGenerate: false, actionLabel: null });
+  expect(day("2026-10-08")).toMatchObject({ state: "no-matches", canGenerate: false, actionLabel: null });
+  expect(day("2026-10-09")).toMatchObject({ state: "report-missing", canGenerate: false, actionLabel: null });
+  expect(run).not.toHaveBeenCalled();
+});
+
+it("starts the regular date run for a regenerable missing report", async () => {
+  const run = vi.fn(async () => 0);
+  const { get, url } = await setup({ now: "2026-10-12T12:00:00Z", run, records: {
+    "2026-10-05": state("completed", { outcome: "papers_written", papersWritten: 4 }),
+  } });
+  const day = (await (await get("api/calendar?month=2026-10")).json()).cells.find((cell: { date: string } | null) => cell?.date === "2026-10-05");
+  expect(day).toMatchObject({ state: "report-missing", canGenerate: true });
+  const response = await fetch(new URL("api/runs", url), { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ kind: "daily", date: "2026-10-05" }) });
+  expect(response.status).toBeLessThan(300);
+  await vi.waitFor(() => expect(run).toHaveBeenCalled());
+  expect((run.mock.calls as unknown[][])[0]![0]).toEqual(["run", "--date", "2026-10-05"]);
 });

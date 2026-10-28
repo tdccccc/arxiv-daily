@@ -1,5 +1,5 @@
 import { isWeekendReportDate, isLegacyWeekendAnnouncementGap, WEEKEND_REPORT_MESSAGE } from "./announcement-calendar";
-import { calendarCells, createStorageStateStore, formatDate, PaperIndexStore, shiftMonth, todayInTz, type RunStateEntry } from "@arxiv-daily/core";
+import { calendarCells, createStorageStateStore, formatDate, isReportWrittenRunState, PaperIndexStore, shiftMonth, todayInTz, type RunStateEntry } from "@arxiv-daily/core";
 import { NodeStorageAdapter } from "@arxiv-daily/node-runtime";
 import type { CliRuntimeConfig } from "../config";
 import { WorkbenchError, type DocumentEntry, type WorkbenchDocuments } from "./documents";
@@ -94,8 +94,10 @@ function resolveDay(date: string, today: string, report: DocumentEntry | undefin
   if (outcome === "no_updates") return { ...base, papers: 0, state: "no-updates", message: "已确认该日期所选分类没有新论文。" };
   if (outcome === "no_matches") return { ...base, papers: 0, state: "no-matches", message: "已完成筛选，没有匹配论文，因此没有生成日报文件。" };
   if (state?.status === "completed") {
-    return state.papersWritten === 0
-      ? { ...base, state: "no-matches", message: "已完成筛选，没有匹配论文，因此没有生成日报文件。" }
+    if (state.papersWritten === 0) return { ...base, state: "no-matches", message: "已完成筛选，没有匹配论文，因此没有生成日报文件。" };
+    // The run wrote a report that has since been deleted; a manual run regenerates it.
+    return isReportWrittenRunState(state)
+      ? { ...base, state: "report-missing", canGenerate: true, actionLabel: "重新生成日报", message: "运行记录显示已完成，但日报文件已缺失；可以重新生成。" }
       : { ...base, state: "report-missing", message: "运行记录显示已完成，但日报文件已缺失；重复运行会跳过此日期。" };
   }
   if (!state?.outcome && !outcome && isWeekendReportDate(date) && (!state || state.status === "pending" && !state.error || isLegacyWeekendAnnouncementGap(date, state.error))) {

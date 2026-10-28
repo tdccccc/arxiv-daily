@@ -13,6 +13,7 @@ const states = {
   "2026-10-03": { state: "failed", message: "网络请求失败，可以重试。", canGenerate: true, actionLabel: "重试生成" },
   "2026-10-04": { state: "failed", message: "配置无效；修复后可以重试。", canGenerate: true, actionLabel: "重试生成" },
   "2026-10-05": { state: "report-missing", message: "已完成，但日报文件已移动或删除。", canGenerate: false, actionLabel: null },
+  "2026-10-06": { state: "report-missing", message: "运行记录显示已完成，但日报文件已缺失；可以重新生成。", canGenerate: true, actionLabel: "重新生成日报" },
 };
 
 function calendar(month = "2026-10") {
@@ -114,6 +115,22 @@ describe("daily calendar in the reading workbench", () => {
     await ready(root); day(root, date).click();
     await vi.waitFor(() => expect(root.querySelector(".reading-pane")?.textContent).toContain(message));
     root.querySelector<HTMLButtonElement>(".reading-pane [data-action='generate-date']")!.click();
+    expect(root.querySelector<HTMLInputElement>("#run-date")?.value).toBe(date);
+    expect(posted(fetcher)).toHaveLength(0);
+    root.querySelector<HTMLFormElement>(".generation-form")!.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+    await vi.waitFor(() => expect(posted(fetcher)).toHaveLength(1));
+    expect(JSON.parse(String(posted(fetcher)[0][1]?.body))).toEqual({ kind: "daily", date });
+  });
+
+  it("offers the regenerate action for a deleted report and only runs after the form is submitted", async () => {
+    const date = "2026-10-06";
+    const run = { id: "regen", kind: "daily", date, label: `生成 ${date} 日报`, status: "running", output: "", exitCode: null, startedAt: "2026-10-15", finishedAt: null };
+    const { root, fetcher } = setup((url, init) => url.pathname.endsWith("api/runs") && init?.method === "POST" ? json({ run }, 202) : undefined);
+    await ready(root); day(root, date).click();
+    await vi.waitFor(() => expect(root.querySelector(".reading-pane")?.textContent).toContain("可以重新生成"));
+    const action = root.querySelector<HTMLButtonElement>(".reading-pane [data-action='generate-date']")!;
+    expect(action.textContent).toContain("重新生成日报");
+    action.click();
     expect(root.querySelector<HTMLInputElement>("#run-date")?.value).toBe(date);
     expect(posted(fetcher)).toHaveLength(0);
     root.querySelector<HTMLFormElement>(".generation-form")!.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));

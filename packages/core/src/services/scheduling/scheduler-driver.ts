@@ -92,6 +92,8 @@ interface PendingNonCompletion {
   result: PendingNonCompletionResult;
   trigger: RunHistoryTrigger;
   at: Date;
+  /** A deleted-report rerun: its date goes back to completed, never to pending. */
+  restoresCompleted?: boolean;
 }
 
 interface PendingCompletionAttempt {
@@ -99,7 +101,11 @@ interface PendingCompletionAttempt {
   result?: SchedulerResult;
 }
 
-type RunMode = "normal" | "manual-retry" | "scheduled" | "run-all-pending" | "retry" | "force";
+/**
+ * "pending-retry" only finalizes this scheduler's own unfinished results; it
+ * behaves like "normal" otherwise, but never regenerates a deleted report.
+ */
+type RunMode = "normal" | "manual-retry" | "pending-retry" | "scheduled" | "run-all-pending" | "retry" | "force";
 type TryRunResult = SchedulerResult | { kind: "not-eligible" };
 
 const COMPLETION_COMMIT_FAILURE_REASON = "scheduler completion commit failed";
@@ -606,7 +612,8 @@ export class SchedulerDriver {
         let deletedReport = false;
         let runMode: RunMode = mode === "manual-retry"
           ? currentEntry.status === "failed_transient" || currentEntry.status === "failed_permanent" ? "retry" : "normal"
-          : mode;
+          : mode === "pending-retry" ? "normal" : mode;
+        const mayRerunDeletedReport = mode === "normal" || mode === "manual-retry";
         if (runMode === "scheduled") {
           const decision = checkTickGate(date, store, {
             now,
@@ -646,7 +653,11 @@ export class SchedulerDriver {
             return { kind: "skipped" as const, reason: "already running" };
           }
         } else if (runMode === "normal") {
-          if (store.isDone(date) && (await this.dailyDeletedAfterCompletion(date, currentEntry))) {
+          if (
+            store.isDone(date) &&
+            mayRerunDeletedReport &&
+            (await this.dailyDeletedAfterCompletion(date, currentEntry))
+          ) {
             runMode = "force";
             deletedReport = true;
           }
@@ -765,7 +776,12 @@ export class SchedulerDriver {
               }
             }
             if (result.kind === "pending" || result.kind === "cancelled") {
-              const pending: PendingNonCompletion = { result, trigger, at: now };
+              const pending: PendingNonCompletion = {
+              result,
+              trigger,
+              at: now,
+              ...(deletedReport ? { restoresCompleted: true } : {}),
+            };
               this.pendingNonCompletions.set(date, pending);
               return await this.finalizePendingNonCompletionLocked(date, pending, store);
             }
@@ -774,7 +790,11 @@ export class SchedulerDriver {
             this.safeEffect(() => this.deps.cancellation?.finish(date));
           }
         } finally {
-          if (deletedReport) await this.restoreDeletedReportEntry(date, store);
+          // A cancelled or pending result that could not be saved is retried by
+          // its own finalization, which restores the entry.
+          if (deletedReport && !this.pendingNonCompletions.has(date)) {
+            await this.restoreDeletedReportEntry(date, store);
+          }
         }
       });
     } finally {
@@ -893,7 +913,7 @@ export class SchedulerDriver {
     if (!this.pendingCompletions.has(date) && !this.pendingNonCompletions.has(date)) {
       return { handled: false };
     }
-    const result = await this.tryRun(date, trigger, now);
+    const result = await this.tryRun(date, trigger, now, undefined, "pending-retry");
     if (result?.kind === "not-eligible") return { handled: true };
     return { handled: true, result };
   }
@@ -1028,7 +1048,11 @@ export class SchedulerDriver {
     store: StateStore,
   ): Promise<PendingNonCompletionResult> {
     try {
-      if (pending.result.kind === "pending" && pending.result.outcome) {
+      if (pending.restoresCompleted) {
+        // The report was deleted on purpose: the date stays completed whatever
+        // this rerun ended with. A repeated attempt finds it already restored.
+        await store.restoreRerunOrigin(date);
+      } else if (pending.result.kind === "pending" && pending.result.outcome) {
         await store.setPending(date, pending.result.reason, pending.result.outcome);
       } else {
         await store.setPending(date, pending.result.reason);
@@ -1127,7 +1151,10 @@ export class SchedulerDriver {
         ),
       );
       try {
-        await store.clearDate(date);
+        // A deleted-report rerun goes back to its completed entry; clearing
+        // would drop the marker and leave the date open to automatic runs.
+        if (store.get(date).rerunOf) await store.restoreRerunOrigin(date);
+        else await store.clearDate(date);
       } catch (clearError) {
         this.safeEffect(() =>
           this.deps.logger.error(

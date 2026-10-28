@@ -17,6 +17,8 @@ const cliMessages: ReadonlyArray<readonly [string,string]> = [
  ["该日没有公告新论文，请在日历里选择另一天。", "No new papers were announced that day. Pick another day in the calendar."],
  ["{0} 的论文还没公告，最近一次公告是 {1}。", "The papers for {0} are not announced yet. The latest announcement was {1}."],
  ["改为生成 {0} 的日报", "Generate the report for {0} instead"],
+ ["重新生成日报", "Regenerate report"],
+ ["运行记录显示已完成，但日报文件已缺失；可以重新生成。", "The run is recorded as complete, but the report file is missing. You can regenerate it."],
 ];
 for (const pair of [...workbenchMessages,...settingsMessages,...readingMessages,...cliMessages]) { catalog.set(pair[0],pair); catalog.set(pair[1],pair); }
 export function setUiLanguage(value: UiLanguage): void { language=value; }

@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { SchedulerService } from "../src/services/scheduler";
-import { isReportWrittenRunState, StateStore } from "../src/services/state-store";
+import { isReportWrittenRunState, STALE_RUNNING_RECOVERY_MS, StateStore } from "../src/services/state-store";
 import { RunCancelledError } from "../src/services/cancellation";
 import { RunLock } from "../src/services/run-lock";
 import { Logger } from "../src/services/logger";
@@ -224,10 +224,99 @@ describe("isReportWrittenRunState", () => {
   });
 });
 
+describe("a deleted-report rerun whose result cannot be saved", () => {
+  const ranDates = (run: { mock: { calls: unknown[][] } }) => run.mock.calls.map((call) => call[0]);
+
+  it("keeps a cancelled rerun from reopening the date when saving its result fails once", async () => {
+    const entry = completed();
+    const f = await fixture(entry);
+    const setPending = vi.spyOn(f.store, "setPending");
+    setPending.mockRejectedValueOnce(new Error("disk busy"));
+    const restore = vi.spyOn(f.store, "restoreRerunOrigin");
+    restore.mockRejectedValueOnce(new Error("disk busy"));
+    f.run.mockResolvedValueOnce({ kind: "cancelled", reason: "stop" } as never);
+
+    expect((await f.scheduler.runForDateNow(DATE)).kind).toBe("cancelled");
+    // Nothing was restored yet; the unfinished result is held for a retry.
+    expect(f.store.get(DATE)).toMatchObject({ status: "running", rerunOf: entry });
+
+    f.run.mockClear();
+    await runAutomaticPaths(f.scheduler);
+
+    expect(ranDates(f.run)).not.toContain(DATE);
+    expect(f.store.get(DATE)).toEqual(entry);
+    expect(f.durable.runState[DATE]).toEqual(entry);
+    expect(setPending.mock.calls.map((call) => call[0])).not.toContain(DATE);
+  });
+
+  it("keeps a pending rerun completed when the retry happens through a batch run", async () => {
+    const entry = completed();
+    const f = await fixture(entry);
+    vi.spyOn(f.store, "restoreRerunOrigin").mockRejectedValueOnce(new Error("disk busy"));
+    f.run.mockResolvedValueOnce({ kind: "pending", reason: "not announced", outcome: "awaiting_announcement" } as never);
+
+    expect((await f.scheduler.runForDateNow(DATE)).kind).toBe("pending");
+    f.run.mockClear();
+    await f.scheduler.runAllPending();
+    await f.scheduler.retryFailedInLookback();
+
+    expect(ranDates(f.run)).not.toContain(DATE);
+    expect(f.store.get(DATE)).toEqual(entry);
+  });
+
+  it("restores the completed entry when saving the failure fails", async () => {
+    const entry = completed();
+    const f = await fixture(entry);
+    const clear = vi.spyOn(f.store, "clearDate");
+    vi.spyOn(f.store, "setFailed").mockRejectedValueOnce(new Error("disk busy"));
+    f.run.mockResolvedValueOnce({ kind: "failed_transient", reason: "offline" } as never);
+
+    expect((await f.scheduler.runForDateNow(DATE)).kind).toBe("failed_transient");
+    expect(f.store.get(DATE)).toEqual(entry);
+    expect(clear).not.toHaveBeenCalled();
+
+    f.run.mockClear();
+    await runAutomaticPaths(f.scheduler);
+    expect(ranDates(f.run)).not.toContain(DATE);
+    expect(f.store.get(DATE)).toEqual(entry);
+  });
+
+  it("still clears the date when an explicit Force run cannot save its failure", async () => {
+    const f = await fixture(completed());
+    vi.spyOn(f.store, "setFailed").mockRejectedValueOnce(new Error("disk busy"));
+    f.run.mockResolvedValueOnce({ kind: "failed_transient", reason: "offline" } as never);
+
+    expect((await f.scheduler.forceRunForDate(DATE)).kind).toBe("failed_transient");
+    expect(f.store.get(DATE).status).toBe("pending");
+  });
+
+  it("does not regenerate a deleted report when an automatic caller finalizes pending work", async () => {
+    const entry = completed();
+    const f = await fixture(entry);
+    const driver = (f.scheduler as unknown as { driver: { pendingNonCompletions: Map<string, unknown> } }).driver;
+    // The pending result is seen when checked but is gone once the lock is held.
+    let first = true;
+    driver.pendingNonCompletions = new (class extends Map<string, unknown> {
+      override has(key: string): boolean {
+        if (first) { first = false; return true; }
+        return super.has(key);
+      }
+    })();
+
+    const attempt = await (f.scheduler as unknown as {
+      driver: { attemptPendingCompletion(date: string, trigger: string, now: Date): Promise<{ handled: boolean; result?: unknown }> };
+    }).driver.attemptPendingCompletion(DATE, "scheduler", NOW);
+
+    expect(attempt.handled).toBe(true);
+    expect(f.run).not.toHaveBeenCalled();
+    expect(f.store.get(DATE)).toEqual(entry);
+  });
+});
+
 describe("a deleted-report rerun whose process died", () => {
   type Durable = { runState: Record<string, RunStateEntry> };
 
-  async function openProcess(durable: Durable, options: { exists?: boolean } = {}) {
+  async function openProcess(durable: Durable, options: { exists?: boolean; inProcessLock?: boolean } = {}) {
     const store = new StateStore(
       async () => structuredClone(durable),
       async (value) => { durable.runState = structuredClone(value.runState) as Durable["runState"]; },
@@ -244,7 +333,7 @@ describe("a deleted-report rerun whose process died", () => {
       getSettings: () => settings,
       store,
       // A host lock shared across processes: recovery may assume the run is dead.
-      lock: new RunLock(async () => ({ release: async () => {} })),
+      lock: options.inProcessLock ? new RunLock() : new RunLock(async () => ({ release: async () => {} })),
       runForDate: run,
       logger,
       now: () => NOW,
@@ -260,10 +349,7 @@ describe("a deleted-report rerun whose process died", () => {
     dying.run.mockImplementation(() => new Promise(() => {}));
     if (force) void dying.scheduler.forceRunForDate(DATE);
     else void dying.scheduler.runForDateNow(DATE);
-    for (let i = 0; i < 200 && durable.runState[DATE]?.status !== "running"; i += 1) {
-      await new Promise((resolve) => setTimeout(resolve, 1));
-    }
-    expect(durable.runState[DATE]?.status).toBe("running");
+    await vi.waitFor(() => expect(durable.runState[DATE]?.status).toBe("running"));
     return durable;
   }
 
@@ -340,5 +426,41 @@ describe("a deleted-report rerun whose process died", () => {
     await next.scheduler.runAllPending();
 
     expect(next.run.mock.calls.map((call) => (call as unknown[])[0])).toContain(DATE);
+  });
+
+  describe("with a lock held only by this process", () => {
+    const marked = (lastAttempt: number): RunStateEntry => ({
+      status: "running",
+      attempts: 1,
+      failureAttempts: 0,
+      lastAttempt,
+      rerunOf: completed(),
+    });
+
+    it("leaves a young marked running entry alone and runs no automatic path on it", async () => {
+      const durable: Durable = { runState: { [DATE]: marked(NOW.getTime() - STALE_RUNNING_RECOVERY_MS / 2) } };
+      const before = structuredClone(durable.runState[DATE]);
+      const next = await openProcess(durable, { inProcessLock: true });
+
+      await runAutomaticPaths(next.scheduler);
+
+      const ran = next.run.mock.calls.map((call) => (call as unknown[])[0]);
+      expect(ran.length).toBeGreaterThan(0);
+      expect(ran).not.toContain(DATE);
+      expect(durable.runState[DATE]).toEqual(before);
+    });
+
+    it("restores an old marked running entry without running the date", async () => {
+      const entry = completed();
+      const durable: Durable = { runState: { [DATE]: marked(NOW.getTime() - STALE_RUNNING_RECOVERY_MS * 2) } };
+      const next = await openProcess(durable, { inProcessLock: true });
+
+      await runAutomaticPaths(next.scheduler);
+
+      const ran = next.run.mock.calls.map((call) => (call as unknown[])[0]);
+      expect(ran.length).toBeGreaterThan(0);
+      expect(ran).not.toContain(DATE);
+      expect(durable.runState[DATE]).toEqual(entry);
+    });
   });
 });
