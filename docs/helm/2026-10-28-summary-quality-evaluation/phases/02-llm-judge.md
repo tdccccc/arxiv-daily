@@ -2,8 +2,8 @@
 
 goal_ref: ../goal.md
 created: 2026-10-28T23:50:00+08:00
-updated: 2026-10-29T00:20:00+08:00
-revision: 4
+updated: 2026-10-29T00:30:00+08:00
+revision: 5
 
 ## Outcome
 
@@ -52,7 +52,7 @@ revision: 4
 - kind: behavior
 - first signal: Red — 报告内容测试失败。
 - checks: 同一测试 Green；`npm run test:release-tools` Green。
-- [ ] accepted on observed evidence
+- [x] accepted on observed evidence (223/223 quality-eval tests, Red 11/11 first; test:release-tools 1131/1131; fake-model run over 8 real items rendered every section incl. the offline cross-check)
 
 ## Phase verification
 

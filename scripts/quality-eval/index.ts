@@ -51,3 +51,5 @@ export type {
 export { readSourceRecord } from "./summary-sources";
 export { CHARS_PER_TOKEN, parseSummaryJudgeArgs, runSummaryJudge } from "./summary-judge-run";
 export type { GeneratorConfig, JudgeCounts, JudgeModelLike, JudgePlan, SummaryJudgeDeps, SummaryJudgeOptions, SummaryJudgeResult } from "./summary-judge-run";
+export { buildJudgeReport, loadJudgments, reasonCategory, renderJudgeReport, runJudgeReportOnly, writeJudgeReport } from "./summary-judge-report";
+export type { CrossCheck, CrossCheckEntry, JudgeAggregate, JudgeReportData, JudgmentRecord } from "./summary-judge-report";

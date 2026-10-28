@@ -11,6 +11,7 @@ import { redactor } from "./rerun";
 import { buildJudgeCorrection, checkJudgeOutput, type Judgment } from "./summary-judge-contract";
 import { prepareJudgeInput, type JudgeItem, type PrepareJudgeOptions, type SkippedItem } from "./summary-judge-input";
 import { requireDate } from "./summary-check";
+import { writeJudgeReport } from "./summary-judge-report";
 
 /** Characters per token used for the size estimate: a mix of English paper text and Chinese summaries. */
 export const CHARS_PER_TOKEN = 3;
@@ -27,6 +28,10 @@ export interface SummaryJudgeOptions extends Omit<PrepareJudgeOptions, "topics">
   yes?: boolean;
   /** Judge again even when a judgment for the same judge, prompt and source exists. */
   rejudge?: boolean;
+  /** `findings.json` of summary-check run with `--sources`: the report then compares its unfound numbers with the judgments. */
+  offlinePath?: string;
+  /** Only rebuild report.md and judgments.json from what is in `outDir`. */
+  reportOnly?: boolean;
 }
 
 export interface JudgeModelLike {
@@ -74,6 +79,7 @@ export function parseSummaryJudgeArgs(argv: readonly string[]): Partial<SummaryJ
     if (flag === "--help" || flag === "-h") return { help: true };
     if (flag === "--yes") { parsed.yes = true; continue; }
     if (flag === "--rejudge") { parsed.rejudge = true; continue; }
+    if (flag === "--report-only") { parsed.reportOnly = true; continue; }
     if (flag === "--include-older-notes") { parsed.includeOlderNotes = true; continue; }
     const take = (): string => {
       const value = argv[index + 1];
@@ -95,6 +101,7 @@ export function parseSummaryJudgeArgs(argv: readonly string[]): Partial<SummaryJ
       case "--papers-dir": parsed.papersDir = take(); break;
       case "--sources": parsed.sourcesDir = take(); break;
       case "--out": parsed.outDir = take(); break;
+      case "--offline": parsed.offlinePath = take(); break;
       case "--seed": parsed.seed = take(); break;
       case "--daily": parsed.daily = count(); break;
       case "--notes": parsed.notes = count(); break;
@@ -109,9 +116,11 @@ export function parseSummaryJudgeArgs(argv: readonly string[]): Partial<SummaryJ
       default: throw new Error(`unknown option: ${flag}`);
     }
   }
-  if (!parsed.judgeConfigPath) throw new Error("--judge-config <file> is required");
-  if (!parsed.sourcesDir) throw new Error("--sources <directory> is required");
   if (!parsed.outDir) throw new Error("--out <directory> is required");
+  if (!parsed.reportOnly) {
+    if (!parsed.judgeConfigPath) throw new Error("--judge-config <file> is required");
+    if (!parsed.sourcesDir) throw new Error("--sources <directory> is required");
+  }
   if (parsed.from && parsed.to && parsed.from > parsed.to) {
     throw new Error(`--from ${parsed.from} is after --to ${parsed.to}; the start date is after the end date`);
   }
@@ -230,7 +239,7 @@ export async function runSummaryJudge(options: SummaryJudgeOptions, deps: Summar
   if (prepared.skipped.length > 0) {
     log(`Skipped ${prepared.skipped.length} (not replaced): ${prepared.skipped.slice(0, SHOWN_SKIPPED).map((entry) => `${entry.id} [${entry.reason}]`).join(", ")}${prepared.skipped.length > SHOWN_SKIPPED ? ", ..." : ""}`);
   }
-  log(`This would make at most ${plan.maxRequests} requests (${pending.length} items x ${REQUESTS_PER_ITEM}: one retry each when the reply fails validation), sending ${totalChars} characters in the first requests, about ${plan.estimatedTokens} input tokens (estimated at ${CHARS_PER_TOKEN} characters per token for mixed English and Chinese text).`);
+  log(`This ${options.yes ? "will" : "would"} make at most ${plan.maxRequests} requests (${pending.length} items x ${REQUESTS_PER_ITEM}: one retry each when the reply fails validation), sending ${totalChars} characters in the first requests, about ${plan.estimatedTokens} input tokens (estimated at ${CHARS_PER_TOKEN} characters per token for mixed English and Chinese text).`);
   if (!options.yes) {
     log("No model was called and nothing was written. Add --yes to judge.");
     return { dryRun: true, outDir, plan, counts: null, stopped: null };
@@ -307,6 +316,8 @@ export async function runSummaryJudge(options: SummaryJudgeOptions, deps: Summar
   run.counts = counts;
   run.stopped = stopped;
   await writeAtomic(runFile, `${JSON.stringify(run, null, 2)}\n`);
+  const report = await writeJudgeReport(outDir, { now, offlinePath: options.offlinePath });
+  log(`Report: ${report.files.join(" and ")}`);
   log(`Done: judged ${counts.judged}, invalid ${counts.invalid}, errors ${counts.errors}, already judged ${counts.reused}, skipped ${counts.skipped}, not attempted ${counts.remaining}.`);
   if (stopped) log(`Stopped after ${MAX_CONSECUTIVE_ERRORS} errors in a row; run the same command again to continue.`);
   return { dryRun: false, outDir, plan, counts, stopped };

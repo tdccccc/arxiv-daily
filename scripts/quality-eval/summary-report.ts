@@ -33,10 +33,10 @@ const CODE_MEANINGS: Record<string, string> = {
   "out-of-order": "章节顺序与提示词不同",
 };
 
-const percent = (rate: Rate): string => `${(rate.rate * 100).toFixed(1)}%（${rate.count}/${rate.of}）`;
+export const percent = (rate: Rate): string => `${(rate.rate * 100).toFixed(1)}%（${rate.count}/${rate.of}）`;
 const short = (hash: string): string => hash.slice(0, HASH_LENGTH);
 
-function table(header: readonly string[], rows: readonly (readonly (string | number)[])[]): string[] {
+export function table(header: readonly string[], rows: readonly (readonly (string | number)[])[]): string[] {
   return [
     `| ${header.join(" | ")} |`,
     `| ${header.map(() => "---").join(" | ")} |`,
@@ -55,14 +55,14 @@ function codeTable(codes: Record<string, number>): string[] {
   return table(["代码", "含义", "次数"], entries.map(([code, count]) => [cell(code), cell(CODE_MEANINGS[code] ?? "-"), count]));
 }
 
-interface ListRow { cells: string[] }
+export interface ListRow { cells: string[] }
 
 /** A capped table of rows, or a single line saying there are none. */
-function capped(header: readonly string[], rows: readonly ListRow[]): string[] {
+export function capped(header: readonly string[], rows: readonly ListRow[], fullListIn = "findings.json"): string[] {
   if (rows.length === 0) return ["没有。", ""];
   const shown = rows.slice(0, LIST_CAP);
   return [
-    ...(rows.length > shown.length ? [`共 ${rows.length} 条，仅列出前 ${LIST_CAP} 条，完整清单见 findings.json。`, ""] : [`共 ${rows.length} 条。`, ""]),
+    ...(rows.length > shown.length ? [`共 ${rows.length} 条，仅列出前 ${LIST_CAP} 条，完整清单见 ${fullListIn}。`, ""] : [`共 ${rows.length} 条。`, ""]),
     ...table(header, shown.map((row) => row.cells)),
   ];
 }

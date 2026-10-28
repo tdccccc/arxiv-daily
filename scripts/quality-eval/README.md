@@ -218,3 +218,58 @@ node scripts/quality-eval/summary-sources.mjs --vault ~/Notes --sources ~/qualit
 可以随时中断，用同样的命令继续：已有记录的论文会跳过（字数上限变了的记录除外，会重取）。arXiv 要求稍后重试（限流冷却）时脚本立即停止，打印还剩多少篇没取，之后再运行即可；连续失败 10 篇也会停下。只有 abs 摘要页的论文记录里 `fullSections` 是 `null`，与当时生成日报时的输入一致。
 
 注意：这是**现在**的 arXiv 内容，论文可能已经更新过版本，与当时模型读到的不一定完全一样；记录里的 `arxivVersion` 和取回时间用来说明这一点。
+
+# 摘要的大模型评审
+
+回答第三个问题：摘要有没有说错、漏掉关键内容、让读者看不懂？离线检查（上一节）看不出这些，需要另一个大模型对照原文来判断。
+
+评审模型必须和写摘要的模型不同。给评审一个单独的配置文件，只放 `[llm]` 一张表（和 `scripts/acceptance` 的 `--model-config` 同格式），建议 `chmod 600`：
+
+```toml
+[llm]
+base_url = "https://…/v1"
+api_key = "…"
+model = "评审用的模型名"
+provider = "openai"          # 可选；不写会用默认值，报告里记录的服务商就不准
+reasoning_effort = "medium"  # 可选
+thinking_mode = false        # 可选
+```
+
+脚本把评审模型名和生成模型名（`--config` 指定的 CLI 配置里的 `[llm].model`，没有 `--config` 时用 CLI 默认配置；都读不到就要用 `--generator-model <名字>` 明确给出）比较，不区分大小写和首尾空格，相同就拒绝运行。接口地址和密钥不会写进任何输出文件或屏幕。
+
+评审用的原文要先缓存好（上上一节的 `summary-sources.mjs`）。三步：
+
+```sh
+# 1. 先看计划：抽到多少条、哪些没有原文被跳过、最多多少次请求、约多少输入 token。不调用模型，不写文件。
+node scripts/quality-eval/summary-judge.mjs --judge-config ~/judge.toml --config ~/.config/arxiv-daily/config.toml \
+  --sources ~/quality-eval/summary-sources --out ~/quality-eval/judge-1 --daily 40 --notes 10
+
+# 2. 确认后加 --yes 才真正调用模型（会花钱）
+node scripts/quality-eval/summary-judge.mjs … --yes
+
+# 3. 之后只想重新生成报告（不调用模型）
+node scripts/quality-eval/summary-judge.mjs --report-only --out ~/quality-eval/judge-1 [--offline ~/quality-eval/summary-…-offline/findings.json]
+```
+
+**费用提醒**：每条要把约 8 万字符的原文连同摘要发给评审模型，50 条大约一百五十万输入 token；评审回答不合格时会重试一次，所以最多是计划里请求数的上限。先用 `--daily 2 --notes 1` 试一两条再放大。
+
+参数：
+
+| 参数 | 含义 |
+| --- | --- |
+| `--judge-config`、`--sources`、`--out` | 必填（`--report-only` 时只要 `--out`）。 |
+| `--daily N`、`--notes M` | 评审多少条日报条目、多少篇详细笔记，默认 20 和 5。日报条目按月份按条数比例分配，月内按种子随机；笔记默认只抽按当前提示词写的。 |
+| `--seed`、`--ids a,b,…` | 固定种子可复现同一批；`--ids` 直接指定论文（它的日报条目和笔记都评），不再抽样。 |
+| `--include-older-notes` | 也抽更早提示词写的笔记（它们照样按当前提示词评）。 |
+| `--from`、`--to`、`--vault`、`--daily-dir`、`--papers-dir` | 与其他命令相同。 |
+| `--rejudge` | 已评审过的也重新评。评审模型、评审提示词和原文都没变时，重跑会跳过已评审的条目，可以中断后继续。 |
+| `--offline <findings.json>` | 带 `--sources` 跑出来的离线检查结果。报告多一节“与离线检查对照”，看评审和数字溯源是否指向同一处。 |
+
+`--out` 里有：`judgments/`（每条一个文件，含评审的原始回答、校验失败的原因、重试情况）、`run.json`（参数、种子、抽到的编号）、`report.md`（中文报告）、`judgments.json`（报告用到的全部数据）。
+
+怎么看报告：
+
+- **判定分布**：准确、完整、清楚各有多少条 ok / minor（小问题）/ major（大问题）。
+- **问题清单**：每个问题带摘要原句、原文依据和说明；“原文未提及”表示评审认为摘要的这个说法在原文里找不到依据。大问题排在前面，每类只列前 30 条，其余在 `judgments.json`。
+- **评审质量**：评审回答中有多少条一次就符合格式、多少条重试后才合格、多少条无效；无效或出错的条目不进入判定分布。这反映的是评审模型遵守输出格式的程度，不是摘要的质量。
+- 评审也会出错：引用已由程序核对过确实存在，但“这算不算问题”仍是评审模型的判断，需要人工抽查。
