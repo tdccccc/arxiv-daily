@@ -679,10 +679,10 @@ export class SchedulerDriver {
           return { kind: "skipped" as const, reason: "already running" };
         }
 
-        // Only this path keeps the old entry: an explicit Force run discards it.
-        const restoreEntry = deletedReport ? { ...currentEntry } : undefined;
-
-        if (runMode === "force" || runMode === "retry") {
+        // A deleted-report rerun is not an explicit Force run: it keeps the
+        // completed entry (as `rerunOf` on the running entry) instead of
+        // clearing it, so the entry can come back if the rerun does not finish.
+        if ((runMode === "force" && !deletedReport) || runMode === "retry") {
           try {
             await store.clearDate(date);
           } catch (error) {
@@ -691,7 +691,11 @@ export class SchedulerDriver {
         }
 
         try {
-          const previousEntry = store.get(date);
+          // A rerun starts from nothing, as after Force run: the earlier
+          // completion must not lend its paper count to the new result.
+          const previousEntry = deletedReport
+            ? { status: "pending" as const, lastAttempt: 0, attempts: 0 }
+            : store.get(date);
           this.safeEffect(() => this.deps.cancellation?.prepareRun());
           const signal = this.beginCancellationRun(date, cancellationBatch);
           let result: PipelineResult;
@@ -700,7 +704,14 @@ export class SchedulerDriver {
               this.progress.setTask("arXiv Daily report", date),
             );
             try {
-              await store.setRunning(date);
+              if (deletedReport) {
+                if (!(await store.beginDeletedReportRerun(date))) {
+                  this.safeEffect(() => this.deps.cancellation?.finish(date));
+                  return { kind: "not-eligible" as const };
+                }
+              } else {
+                await store.setRunning(date);
+              }
             } catch (error) {
               this.safeEffect(() => this.deps.cancellation?.finish(date));
               return this.storeFailureResult(date, trigger, now, error);
@@ -763,7 +774,7 @@ export class SchedulerDriver {
             this.safeEffect(() => this.deps.cancellation?.finish(date));
           }
         } finally {
-          await this.restoreDeletedReportEntry(date, restoreEntry, store);
+          if (deletedReport) await this.restoreDeletedReportEntry(date, store);
         }
       });
     } finally {
@@ -803,20 +814,18 @@ export class SchedulerDriver {
   }
 
   /**
-   * A rerun of a deleted report starts from a cleared date, but only a run
-   * that completes may replace the earlier completion. Otherwise the date
-   * would look open to the scheduled tick and batch runs, which would then
-   * regenerate a report the user deleted. The caller still gets the real
-   * result and the history keeps the failed attempt.
+   * A rerun of a deleted report replaces the completed entry with a marked
+   * `running` one; only a run that completes may keep that replacement.
+   * Otherwise the date would look open to the scheduled tick and batch runs,
+   * which would regenerate a report the user deleted. The caller still gets
+   * the real result and the history keeps the failed attempt.
    */
   private async restoreDeletedReportEntry(
     date: string,
-    entry: RunStateEntry | undefined,
     store: StateStore,
   ): Promise<void> {
-    if (!entry || store.get(date).status === "completed") return;
     try {
-      await store.restoreEntry(date, entry);
+      await store.restoreRerunOrigin(date);
     } catch (error) {
       this.safeEffect(() =>
         this.deps.logger.error(
@@ -841,7 +850,25 @@ export class SchedulerDriver {
     crossProcess: boolean,
     store: StateStore,
   ): Promise<void> {
-    if (store.get(date).status !== "running") return;
+    const marked = store.get(date);
+    if (marked.rerunOf && marked.status !== "completed") {
+      // The rerun of a deleted report died or never finished its cleanup.
+      // Its date is done, so the report stays deleted until the user asks.
+      const restored = await store.restoreRerunOrigin(
+        date,
+        now.getTime(),
+        marked.status === "running" && !crossProcess ? STALE_RUNNING_RECOVERY_MS : 0,
+      );
+      if (restored) {
+        this.safeEffect(() =>
+          this.deps.logger.warn(
+            `scheduler: the rerun of ${date} did not finish; restored its completed state without regenerating the deleted report`,
+          ),
+        );
+      }
+      return;
+    }
+    if (marked.status !== "running") return;
     const recovered = await store.recoverRunningDate(
       date,
       now.getTime(),

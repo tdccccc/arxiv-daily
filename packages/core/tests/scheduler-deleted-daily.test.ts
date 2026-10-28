@@ -223,3 +223,122 @@ describe("isReportWrittenRunState", () => {
     }
   });
 });
+
+describe("a deleted-report rerun whose process died", () => {
+  type Durable = { runState: Record<string, RunStateEntry> };
+
+  async function openProcess(durable: Durable, options: { exists?: boolean } = {}) {
+    const store = new StateStore(
+      async () => structuredClone(durable),
+      async (value) => { durable.runState = structuredClone(value.runState) as Durable["runState"]; },
+    );
+    await store.loadAuthoritative();
+    const settings = structuredClone(DEFAULT_SETTINGS);
+    settings.arxiv.timezone = "UTC";
+    settings.schedule = { enabled: true, runAtLocal: "09:00", runUntilLocal: "18:00", tickIntervalMin: 20 };
+    const run = vi.fn(async () => ({ kind: "completed" as const, papersWritten: 3, outcome: "papers_written" as const }));
+    const warn = vi.fn();
+    const logger = new Logger("error");
+    logger.warn = warn;
+    const scheduler = new SchedulerService({
+      getSettings: () => settings,
+      store,
+      // A host lock shared across processes: recovery may assume the run is dead.
+      lock: new RunLock(async () => ({ release: async () => {} })),
+      runForDate: run,
+      logger,
+      now: () => NOW,
+      dailyExists: async () => options.exists ?? false,
+    });
+    return { store, run, scheduler, warn };
+  }
+
+  /** Starts a rerun in a first process whose pipeline never resolves, then abandons it. */
+  async function crashDuringRerun(entry: RunStateEntry, force = false) {
+    const durable: Durable = { runState: { [DATE]: entry } };
+    const dying = await openProcess(durable);
+    dying.run.mockImplementation(() => new Promise(() => {}));
+    if (force) void dying.scheduler.forceRunForDate(DATE);
+    else void dying.scheduler.runForDateNow(DATE);
+    for (let i = 0; i < 200 && durable.runState[DATE]?.status !== "running"; i += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 1));
+    }
+    expect(durable.runState[DATE]?.status).toBe("running");
+    return durable;
+  }
+
+  it("persists the completed entry on the running entry from the first write", async () => {
+    const entry = completed();
+    const durable = await crashDuringRerun(entry);
+
+    expect(durable.runState[DATE]).toMatchObject({ status: "running", rerunOf: entry });
+  });
+
+  it("restores the completed entry instead of reopening the date", async () => {
+    const entry = completed();
+    const durable = await crashDuringRerun(entry);
+    const next = await openProcess(durable);
+
+    await runAutomaticPaths(next.scheduler);
+
+    const ran = next.run.mock.calls.map((call) => (call as unknown[])[0]);
+    expect(ran.length).toBeGreaterThan(0);
+    expect(ran).not.toContain(DATE);
+    expect(durable.runState[DATE]).toEqual(entry);
+    expect(next.warn).toHaveBeenCalledWith(expect.stringContaining(DATE));
+  });
+
+  it.each([
+    ["tickTodayScheduled", (s: SchedulerService) => s.tickTodayScheduled()],
+    ["tickToday", (s: SchedulerService) => s.tickToday()],
+    ["tick", (s: SchedulerService) => s.tick()],
+    ["runAllPending", (s: SchedulerService) => s.runAllPending()],
+    ["retryFailedInLookback", (s: SchedulerService) => s.retryFailedInLookback()],
+  ])("%s alone leaves the date done", async (_name, trigger) => {
+    const entry = completed();
+    const durable = await crashDuringRerun(entry);
+    const next = await openProcess(durable);
+
+    await trigger(next.scheduler);
+
+    expect(next.run.mock.calls.map((call) => (call as unknown[])[0])).not.toContain(DATE);
+    expect(durable.runState[DATE]).toMatchObject({ status: "completed", papersWritten: 5 });
+  });
+
+  it("lets a manual run regenerate the report afterwards", async () => {
+    const durable = await crashDuringRerun(completed());
+    const next = await openProcess(durable);
+    await runAutomaticPaths(next.scheduler);
+    next.run.mockClear();
+
+    expect(await next.scheduler.runForDateNow(DATE)).toMatchObject({ kind: "completed", papersWritten: 3 });
+    expect(next.run.mock.calls.map((call) => (call as unknown[])[0])).toEqual([DATE]);
+    expect(durable.runState[DATE]).toMatchObject({ status: "completed", papersWritten: 3 });
+    expect(durable.runState[DATE]?.rerunOf).toBeUndefined();
+  });
+
+  it("restores a marked entry left in a failed state by a crash before cleanup", async () => {
+    const entry = completed();
+    const durable: Durable = {
+      runState: {
+        [DATE]: { status: "failed_transient", attempts: 1, failureAttempts: 1, lastAttempt: NOW.getTime(), error: "offline", rerunOf: entry },
+      },
+    };
+    const next = await openProcess(durable);
+
+    await runAutomaticPaths(next.scheduler);
+
+    expect(next.run.mock.calls.map((call) => (call as unknown[])[0])).not.toContain(DATE);
+    expect(durable.runState[DATE]).toEqual(entry);
+  });
+
+  it("keeps a crashed explicit Force run retryable", async () => {
+    const durable = await crashDuringRerun(completed(), true);
+
+    expect(durable.runState[DATE]?.rerunOf).toBeUndefined();
+    const next = await openProcess(durable);
+    await next.scheduler.runAllPending();
+
+    expect(next.run.mock.calls.map((call) => (call as unknown[])[0])).toContain(DATE);
+  });
+});
