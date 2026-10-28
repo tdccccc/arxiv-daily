@@ -21,3 +21,11 @@ export { checkNote, checkNotes, CURRENT_NOTE_HEADINGS, NOTE_PLACEHOLDER_PHRASES 
 export type { NoteChecks, NoteChecksAggregate, NoteChecksResult, NoteCheckKind, NoteFinding, NoteGroup } from "./summary-note-checks";
 export { parseSummaryCheckArgs, runSummaryCheck } from "./summary-check";
 export type { SummaryCheckOptions, SummaryCheckReport, SummaryCheckResult } from "./summary-check";
+export {
+  classifyContent, describePlan as describeSourcesPlan, fetchSources, parseSummarySourcesArgs, rebuildDailyInput, rebuildDetailInput, runSummarySources,
+} from "./summary-sources";
+export type {
+  Budgets, ContentClass, FetchSourcesOptions, FetchSourcesPlan, FetchSourcesResult, SourceFailure, SourcePath, SourceRecord, SummarySourcesOptions,
+} from "./summary-sources";
+// Re-exported so script tests can compare a rebuilt model input with what the summarizers themselves send.
+export { summarizeDailyPaper, summarizePaperDetail } from "@arxiv-daily/core";

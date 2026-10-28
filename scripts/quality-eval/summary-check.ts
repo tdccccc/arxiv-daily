@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
-import { DEFAULT_SETTINGS, type OutputSettings } from "@arxiv-daily/core";
+import { DEFAULT_SETTINGS, type Settings } from "@arxiv-daily/core";
 import dailyPromptZh from "../../packages/core/src/prompts/daily-paper-summary.system.md";
 import detailPromptZh from "../../packages/core/src/prompts/paper-detail.system.md";
 import { loadCliConfig } from "../../apps/cli/src/config";
@@ -78,12 +78,37 @@ export function parseSummaryCheckArgs(argv: readonly string[]): Partial<SummaryC
   return parsed;
 }
 
-function requireDate(flag: string, value: string): string {
+export function requireDate(flag: string, value: string): string {
   const date = /^\d{4}-\d{2}-\d{2}$/.test(value) ? new Date(`${value}T00:00:00Z`) : null;
   if (!date || Number.isNaN(date.getTime()) || date.toISOString().slice(0, 10) !== value) {
     throw new Error(`${flag} must be a date like 2026-10-14`);
   }
   return value;
+}
+
+export interface VaultLayoutOptions {
+  vaultRoot?: string;
+  configPath?: string;
+  dailyDir?: string;
+  papersDir?: string;
+}
+
+/**
+ * Where the daily reports and detail notes are. `--vault` wins over the config's vault root, explicit
+ * directories win over the config's output layout, and the built-in defaults fill the rest. `settings`
+ * are the config's when one was read, the defaults otherwise.
+ */
+export async function resolveVaultLayout(options: VaultLayoutOptions): Promise<{ vaultRoot: string; dailyDir: string; papersDir: string; settings: Settings }> {
+  const config = options.configPath || !options.vaultRoot
+    ? await loadCliConfig({ configPath: options.configPath })
+    : undefined;
+  const settings = config?.settings ?? DEFAULT_SETTINGS;
+  return {
+    vaultRoot: path.resolve(options.vaultRoot ?? config!.vaultRoot),
+    dailyDir: options.dailyDir ?? settings.output.dailyDir,
+    papersDir: options.papersDir ?? settings.output.papersDir,
+    settings,
+  };
 }
 
 const sha256 = (text: string): string => createHash("sha256").update(text).digest("hex");
@@ -98,13 +123,7 @@ export async function runSummaryCheck(options: SummaryCheckOptions, deps: Summar
   }
   await assertWritableTarget(outDir);
 
-  const config = options.configPath || !options.vaultRoot
-    ? await loadCliConfig({ configPath: options.configPath })
-    : undefined;
-  const vaultRoot = path.resolve(options.vaultRoot ?? config!.vaultRoot);
-  const output: OutputSettings = config?.settings.output ?? DEFAULT_SETTINGS.output;
-  const dailyDir = options.dailyDir ?? output.dailyDir;
-  const papersDir = options.papersDir ?? output.papersDir;
+  const { vaultRoot, dailyDir, papersDir } = await resolveVaultLayout(options);
 
   const corpus = await loadSummaryCorpus({ vaultRoot, dailyDir, papersDir, from: options.from, to: options.to });
   if (corpus.counts.reports === 0 && corpus.counts.notes === 0 && corpus.counts.legacyNotes === 0) {

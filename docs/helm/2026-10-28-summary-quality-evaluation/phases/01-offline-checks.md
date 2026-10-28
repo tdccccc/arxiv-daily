@@ -2,8 +2,8 @@
 
 goal_ref: ../goal.md
 created: 2026-10-28T22:50:00+08:00
-updated: 2026-10-28T23:15:00+08:00
-revision: 4
+updated: 2026-10-28T23:20:00+08:00
+revision: 5
 
 ## Outcome
 
@@ -61,7 +61,7 @@ revision: 4
 - kind: behavior
 - first signal: Red — 用假 HTTP 的测试断言缓存内容、续跑不重复请求、失败单列，因模块不存在而失败。
 - checks: 同一测试 Green；测试不联网。
-- [ ] accepted on observed evidence
+- [x] accepted on observed evidence (141/141 quality-eval tests, Red 17/17 first; 1049/1049 test:release-tools; dry run on the real vault: 472 papers, ≥24 min)
 
 ### Chunk 6 — 数字可溯源检查
 
