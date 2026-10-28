@@ -29,3 +29,9 @@ export type {
 } from "./summary-sources";
 // Re-exported so script tests can compare a rebuilt model input with what the summarizers themselves send.
 export { summarizeDailyPaper, summarizePaperDetail } from "@arxiv-daily/core";
+export {
+  aggregateGrounding, buildSourceIndex, checkGrounding, extractNumbers, groundNumbers, indexOfSource, SKIPPED_NUMBER_KINDS, STANDALONE_INTEGER_SKIP, stripFencedCode,
+} from "./summary-grounding";
+export type {
+  ExtractedNumber, GroundedNumber, GroundingAggregate, GroundingResult, SourceIndex, SourceTexts, UngroundedNumber, WrittenText,
+} from "./summary-grounding";

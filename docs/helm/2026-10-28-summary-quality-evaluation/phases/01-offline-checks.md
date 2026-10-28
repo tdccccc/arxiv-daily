@@ -2,8 +2,8 @@
 
 goal_ref: ../goal.md
 created: 2026-10-28T22:50:00+08:00
-updated: 2026-10-28T23:20:00+08:00
-revision: 5
+updated: 2026-10-28T23:35:00+08:00
+revision: 6
 
 ## Outcome
 
@@ -69,7 +69,7 @@ revision: 5
 - kind: behavior
 - first signal: Red — 正反例测试（原文有/无、格式不同但数值相同）失败。
 - checks: 同一测试 Green；既有测试仍 Green。
-- [ ] accepted on observed evidence
+- [x] accepted on observed evidence (163/163 quality-eval tests; partial-source trial: daily 97.8% / notes 95.9% numbers found; owner confirmed 2605.20779 daily says 11–300 GeV where the source says 1–300 GeV)
 
 ## Phase verification
 

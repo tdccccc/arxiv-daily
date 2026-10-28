@@ -275,3 +275,73 @@ test("the script prints usage on bad arguments and writes nothing", async () => 
   assert.equal(good.status, 0, good.stderr);
   assert.match(good.stdout, /report\.md/);
 });
+
+async function groundingVault() {
+  const vault = await temp("grounding-vault");
+  const daily = path.join(vault, "arxiv-daily", "daily");
+  const papers = path.join(vault, "arxiv-daily", "papers");
+  await mkdir(daily, { recursive: true });
+  await mkdir(papers, { recursive: true });
+  await writeFile(path.join(daily, "2026-10-20.md"), [
+    frontmatter("2026-10-20"), "", "## Photo-z", "",
+    ...header("2610.00101", "With source"), ...fields({ 核心结果: "质量比为 $0.85\\pm0.04$，样本 120 个，误差 0.99。" }), "",
+    ...header("2610.00102", "Without source"), ...fields({ 核心结果: "样本 450 个。" }), "",
+  ].join("\n"));
+  const quiet = Object.fromEntries(NOTE_HEADINGS.map(heading => [heading, "没有数字的内容。"]));
+  await writeFile(path.join(papers, "2607.00101.md"), note("2607.00101", { ...quiet, 核心结果: "测得 $0.85$，另有 777 个。" }));
+  return vault;
+}
+const sourceRecord = (id, text, extra = {}) => ({
+  schemaVersion: 1, id, fetchedAt: "2026-10-28T10:00:00.000Z", sourcePath: "html", arxivVersion: "v2",
+  budgets: { sectionCharLimit: 16000, paperCharLimit: 100000 },
+  content: { abstract: "ratio 0.85", abstractConclusion: "## Abstract\nratio 0.85", fullSections: text, fullTextFailure: null },
+  contentHash: "x", ...extra,
+});
+async function writeSources(records) {
+  const dir = await temp("sources");
+  for (const record of records) await writeFile(path.join(dir, `${record.id}.json`), JSON.stringify(record));
+  return dir;
+}
+
+test("without --sources the report says the number check was not run", async () => {
+  const { outDir } = await run({ vaultRoot: await groundingVault() });
+  const { md, json } = await readReport(outDir);
+  assert.equal(json.grounding.run, false);
+  assert.match(md, /没有指定 --sources，未做数字溯源检查/);
+  assert.ok(!md.includes("疑似无出处数字（需人工核对"));
+});
+
+test("with --sources numbers are looked up in the cached source and the rest are listed as suspect", async () => {
+  const sourcesDir = await writeSources([
+    sourceRecord("2610.00101", "## Methods\nWe use 120 clusters and measure 0.85 with an error of 0.04."),
+    sourceRecord("2607.00101", "## Results\nWe obtain 0.85 for the sample."),
+    sourceRecord("2606.99999", "## Unrelated\n999"),
+  ]);
+  const { outDir } = await run({ vaultRoot: await groundingVault(), rest: { sourcesDir } });
+  const { md, json } = await readReport(outDir);
+
+  assert.equal(json.grounding.run, true);
+  assert.deepEqual(json.grounding.sources.daily, { withSource: 1, withoutSource: 1 });
+  assert.deepEqual(json.grounding.sources.notes, { withSource: 1, withoutSource: 0 });
+  const daily = json.grounding.daily.aggregate;
+  assert.deepEqual(daily.numbers, { count: 3, of: 4, rate: 0.75 });
+  assert.deepEqual(daily.byPlace.mainResult, { count: 3, of: 4, rate: 0.75 });
+  assert.deepEqual(json.grounding.notes.aggregate.numbers, { count: 1, of: 2, rate: 0.5 });
+  assert.deepEqual(json.grounding.daily.results.map(result => result.id), ["2610.00101"]);
+
+  assert.ok(md.includes("疑似无出处数字（需人工核对，可能是规范化遗漏或原文版本不同）"));
+  const list = md.slice(md.indexOf("### 疑似无出处数字"));
+  assert.ok(list.includes("0.99") && list.includes("2610.00101"));
+  assert.ok(list.includes("777") && list.includes("2607.00101"));
+  assert.ok(!list.includes("2610.00102"), "an entry without a source takes no part");
+  assert.match(md, /无原文[^\n]*1/);
+  assert.match(md, /重新取回|重新抓取/);
+  assert.ok(md.includes("2026-10-28T10:00:00.000Z"));
+  assert.ok(md.includes("v2"));
+});
+
+test("--sources must name an existing directory", async () => {
+  const missing = path.join(await temp("nowhere"), "absent");
+  await assert.rejects(qe.runSummaryCheck({ vaultRoot: await groundingVault(), outDir: path.join(await temp("o"), "r"), sourcesDir: missing }), /--sources.*does not exist|not a directory/i);
+  assert.equal(qe.parseSummaryCheckArgs(["--out", "/o", "--sources", "/s"]).sourcesDir, "/s");
+});

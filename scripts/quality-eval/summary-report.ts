@@ -3,7 +3,8 @@ import {
   SUMMARY_FIELDS, type EntryChecks, type LengthDistribution, type Rate, type SummaryFieldKey, type SummaryFinding,
 } from "./summary-checks";
 import type { NoteChecks, NoteFinding } from "./summary-note-checks";
-import type { SummaryCheckReport } from "./summary-check";
+import type { GroundingItem, SummaryCheckReport } from "./summary-check";
+import type { GroundingAggregate } from "./summary-grounding";
 
 /** How many rows of one kind the report lists; findings.json has them all. */
 export const LIST_CAP = 30;
@@ -79,6 +80,54 @@ function noteRows(results: readonly NoteChecks[], keep: (finding: NoteFinding) =
   return results.flatMap((result) => result.findings.filter(keep).map((finding) => ({
     cells: [result.date ?? "-", result.id, cell(finding.heading ?? "（整篇）"), cell(finding.code), cell(finding.snippet)],
   })));
+}
+
+function groundingRows(items: readonly GroundingItem[], placeLabel: (place: string) => string): ListRow[] {
+  return items.flatMap((item) => item.ungrounded.map((number) => ({
+    cells: [item.date ?? "-", item.id, cell(placeLabel(number.where)), cell(number.token), cell(number.context)],
+  })));
+}
+
+function groundingTable(aggregate: GroundingAggregate, placeHeader: string, placeLabel: (place: string) => string): string[] {
+  return [
+    `有数字的${placeHeader === "字段" ? "条目" : "笔记"} ${aggregate.withNumbers} 个；其中数字全部找到的占 ${percent({ ...aggregate.withUngrounded, count: aggregate.withUngrounded.of - aggregate.withUngrounded.count, rate: 1 - aggregate.withUngrounded.rate })}，有至少一个没找到的占 ${percent(aggregate.withUngrounded)}。每${placeHeader === "字段" ? "条" : "篇"}找到的比例：最小 ${(aggregate.perItemShare.min * 100).toFixed(1)}%，中位数 ${(aggregate.perItemShare.median * 100).toFixed(1)}%，最大 ${(aggregate.perItemShare.max * 100).toFixed(1)}%。`,
+    "",
+    ...table([placeHeader, "找到的数字比例"], Object.entries(aggregate.byPlace).map(([place, value]) => [cell(placeLabel(place)), percent(value)])),
+  ];
+}
+
+function groundingSection(report: SummaryCheckReport): string[] {
+  const { grounding } = report;
+  if (!grounding.run) {
+    return [
+      "## 数字能否在原文中找到",
+      "",
+      "本次没有指定 --sources，未做数字溯源检查。要做这项检查，先用 summary-sources.mjs 把论文原文取回缓存，再加上 `--sources <目录>` 重跑。",
+      "",
+    ];
+  }
+  const { sources, daily, notes } = grounding;
+  const spread = (values: Record<string, number>): string => Object.entries(values).map(([key, value]) => `${key} ${value}`).join("、") || "-";
+  return [
+    "## 数字能否在原文中找到",
+    "",
+    "从日报字段和笔记正文里抽出数字（包括公式里的数值，统一负号、±、千分位、科学计数法和百分号），到缓存的原文（摘要、摘要与结论、各章节摘录）里查找。写法不同但数值相同、按摘要自己的精度取整后相同（0.25 对 0.248）、百分数与小数（25% 对 0.25）、“万”“亿”“million”换算后相同，都算找到。单独出现的 0–10 的整数、图表和章节编号、公式编号、引用编号、名称里的数字（DR10、W1、M_{500}）不检查。",
+    "",
+    `- 原文是评估时重新取回的，可能与当时生成摘要时模型读到的不同（论文可能已更新版本）。用到的原文 ${sources.records.count} 篇；取回时间 ${sources.records.fetchedAt ? `${sources.records.fetchedAt.first} 至 ${sources.records.fetchedAt.last}` : "-"}；取回路径：${spread(sources.records.bySourcePath)}；arXiv 版本：${spread(sources.records.byArxivVersion)}（读不到的记为 unknown）。`,
+    `- 无原文的条目不参与这一项：日报条目 ${sources.daily.withoutSource} 条（有原文 ${sources.daily.withSource} 条），详细笔记 ${sources.notes.withoutSource} 篇（有原文 ${sources.notes.withSource} 篇）。`,
+    "- “没找到”只说明原文里查不到这个数值，可能是模型编造，也可能是我们的规范化没覆盖（比如换算了单位），或原文版本不同，需要人工核对。",
+    "",
+    "### 日报条目",
+    "",
+    `找到的数字比例：${percent(daily.aggregate.numbers)}。`,
+    "",
+    ...groundingTable(daily.aggregate, "字段", (place) => FIELD_LABELS[place as SummaryFieldKey] ?? place),
+    "### 详细笔记",
+    "",
+    `找到的数字比例：${percent(notes.aggregate.numbers)}。`,
+    "",
+    ...groundingTable(notes.aggregate, "章节", (place) => place),
+  ];
 }
 
 export function renderSummaryReport(report: SummaryCheckReport): string {
@@ -176,6 +225,7 @@ export function renderSummaryReport(report: SummaryCheckReport): string {
     "英文占比 = 英文单词数 /（英文单词数 + 汉字数），只数公式、代码、链接地址之外的正文。只作参考，没有门槛。",
     "",
     ...table(["最小", "中位数", "第 90 百分位", "最大"], [[n.englishShare.min, n.englishShare.median, n.englishShare.p90, n.englishShare.max].map((value) => `${(value * 100).toFixed(1)}%`)]),
+    ...groundingSection(report),
     "## 问题清单",
     "",
     `每类最多列出 ${LIST_CAP} 条，完整清单在 findings.json。`,
@@ -198,6 +248,18 @@ export function renderSummaryReport(report: SummaryCheckReport): string {
     "### 详细笔记：空话",
     "",
     ...capped(NOTE_HEADER, noteRows(notes.results, (finding) => finding.kind === "generic-phrase")),
+    ...(report.grounding.run
+      ? [
+        "### 疑似无出处数字（需人工核对，可能是规范化遗漏或原文版本不同）",
+        "",
+        "日报条目：",
+        "",
+        ...capped(["日期", "编号", "字段", "数字", "片段"], groundingRows(report.grounding.daily.results, (place) => FIELD_LABELS[place as SummaryFieldKey] ?? place)),
+        "详细笔记：",
+        "",
+        ...capped(["日期", "编号", "章节", "数字", "片段"], groundingRows(report.grounding.notes.results, (place) => place)),
+      ]
+      : []),
     "### core 规则误报（渲染正常）",
     "",
     "核心代码的公式规则把 `$` 后面紧跟数字当作货币符号，所以 `$6:1$`、`$8:1:1$` 这样以数字开头的比值会连带报“未闭合”“嵌套”；半开区间 `(0, 0.15]`、`[0,1)` 则被报括号不成对。这些在 Obsidian 里渲染正常，不当作缺陷，也不计入上面的数字，只在这里列出。",

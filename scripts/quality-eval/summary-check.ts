@@ -1,13 +1,20 @@
 import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
-import { writeFile } from "node:fs/promises";
+import { readFile, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { DEFAULT_SETTINGS, type Settings } from "@arxiv-daily/core";
+import { DEFAULT_SETTINGS, modernArxivResources, type Settings } from "@arxiv-daily/core";
 import dailyPromptZh from "../../packages/core/src/prompts/daily-paper-summary.system.md";
 import detailPromptZh from "../../packages/core/src/prompts/paper-detail.system.md";
 import { loadCliConfig } from "../../apps/cli/src/config";
 import { assertWritableTarget, prepareOutDir } from "./evaluate";
-import { checkSummaries, MAIN_RESULT_LENGTH_RANGE, monthlyMainResult, type MonthlyMainResult, type SummaryChecksResult } from "./summary-checks";
+import {
+  aggregateGrounding, checkGrounding, indexOfSource, stripFencedCode,
+  type GroundingAggregate, type SourceIndex, type SourceTexts, type UngroundedNumber,
+} from "./summary-grounding";
+import {
+  checkSummaries, MAIN_RESULT_LENGTH_RANGE, monthlyMainResult, SUMMARY_FIELDS,
+  type MonthlyMainResult, type SummaryChecksResult, type SummaryFieldKey,
+} from "./summary-checks";
 import { checkNotes, type NoteChecksResult } from "./summary-note-checks";
 import { loadSummaryCorpus, type SummaryCorpus } from "./summary-corpus";
 import { renderSummaryReport } from "./summary-report";
@@ -24,6 +31,8 @@ export interface SummaryCheckOptions {
   papersDir?: string;
   from?: string;
   to?: string;
+  /** Cached sources from summary-sources.mjs; when given, the numbers are looked up in them. */
+  sourcesDir?: string;
   outDir: string;
   /** Replace an existing report.md/findings.json in `outDir`. */
   force?: boolean;
@@ -44,7 +53,39 @@ export interface SummaryCheckReport {
   daily: SummaryChecksResult;
   notes: NoteChecksResult;
   monthlyMainResult: MonthlyMainResult[];
+  grounding: GroundingReport;
 }
+
+/** How one entry's or note's numbers fared against its cached source. */
+export interface GroundingItem {
+  id: string;
+  date: string | null;
+  title: string;
+  sourcePath: string;
+  arxivVersion: string | null;
+  fetchedAt: string;
+  total: number;
+  grounded: number;
+  byPlace: Record<string, { grounded: number; total: number }>;
+  ungrounded: UngroundedNumber[];
+}
+
+export interface SourceCoverage { withSource: number; withoutSource: number }
+
+export type GroundingReport =
+  | { run: false }
+  | {
+    run: true;
+    sourcesDir: string;
+    sources: {
+      daily: SourceCoverage;
+      notes: SourceCoverage;
+      /** The cached records the check used (one per paper, however many entries cite it). */
+      records: { count: number; bySourcePath: Record<string, number>; byArxivVersion: Record<string, number>; fetchedAt: { first: string; last: string } | null };
+    };
+    daily: { results: GroundingItem[]; aggregate: GroundingAggregate };
+    notes: { results: GroundingItem[]; aggregate: GroundingAggregate };
+  };
 
 export interface SummaryCheckResult { outDir: string; files: string[]; report: SummaryCheckReport }
 
@@ -66,6 +107,7 @@ export function parseSummaryCheckArgs(argv: readonly string[]): Partial<SummaryC
       case "--daily-dir": parsed.dailyDir = take(); break;
       case "--papers-dir": parsed.papersDir = take(); break;
       case "--out": parsed.outDir = take(); break;
+      case "--sources": parsed.sourcesDir = take(); break;
       case "--from": parsed.from = requireDate(flag, take()); break;
       case "--to": parsed.to = requireDate(flag, take()); break;
       default: throw new Error(`unknown option: ${flag}`);
@@ -122,6 +164,7 @@ export async function runSummaryCheck(options: SummaryCheckOptions, deps: Summar
     if (existing) throw new Error(`${existing} already exists; choose another --out or pass --force to replace it`);
   }
   await assertWritableTarget(outDir);
+  if (options.sourcesDir) await requireDirectory(options.sourcesDir, "--sources");
 
   const { vaultRoot, dailyDir, papersDir } = await resolveVaultLayout(options);
 
@@ -143,10 +186,82 @@ export async function runSummaryCheck(options: SummaryCheckOptions, deps: Summar
     daily: checkSummaries(corpus),
     notes: checkNotes(corpus.notes),
     monthlyMainResult: monthlyMainResult(corpus.entries),
+    grounding: options.sourcesDir ? await checkAgainstSources(corpus, path.resolve(options.sourcesDir)) : { run: false },
   };
 
   await prepareOutDir(outDir);
   await writeFile(files[0]!, renderSummaryReport(report));
   await writeFile(files[1]!, `${JSON.stringify(report, null, 2)}\n`);
   return { outDir, files, report };
+}
+
+async function requireDirectory(directory: string, flag: string): Promise<void> {
+  const info = await stat(directory).catch(() => null);
+  if (!info) throw new Error(`${flag} ${directory} does not exist`);
+  if (!info.isDirectory()) throw new Error(`${flag} ${directory} is not a directory`);
+}
+
+interface CachedSource {
+  record: { id: string; fetchedAt: string; sourcePath: string; arxivVersion: string | null; content: SourceTexts & { abstract: string } };
+  index: SourceIndex;
+}
+
+/** Look the numbers of every entry and note that has a cached source up in that source; the rest are counted, not checked. */
+async function checkAgainstSources(corpus: SummaryCorpus, sourcesDir: string): Promise<GroundingReport> {
+  const cache = new Map<string, CachedSource | null>();
+  const load = async (id: string): Promise<CachedSource | null> => {
+    const canonical = modernArxivResources(id)?.id;
+    if (!canonical) return null;
+    if (!cache.has(canonical)) {
+      let found: CachedSource | null = null;
+      try {
+        const record = JSON.parse(await readFile(path.join(sourcesDir, `${canonical}.json`), "utf8")) as CachedSource["record"] & { schemaVersion?: number };
+        if (record.schemaVersion === 1 && record.content) found = { record, index: indexOfSource(record.content) };
+      } catch { /* no usable record: the paper takes no part */ }
+      cache.set(canonical, found);
+    }
+    return cache.get(canonical)!;
+  };
+  const item = (id: string, date: string | null, title: string, source: CachedSource, written: Array<{ where: string; text: string }>): GroundingItem => {
+    const result = checkGrounding(written, source.index);
+    return {
+      id, date, title, sourcePath: source.record.sourcePath, arxivVersion: source.record.arxivVersion, fetchedAt: source.record.fetchedAt,
+      total: result.total, grounded: result.grounded, byPlace: result.byWhere, ungrounded: result.ungrounded,
+    };
+  };
+
+  const daily: GroundingItem[] = [];
+  const notes: GroundingItem[] = [];
+  const coverage = { daily: { withSource: 0, withoutSource: 0 }, notes: { withSource: 0, withoutSource: 0 } };
+  for (const entry of corpus.entries) {
+    const source = await load(entry.id);
+    if (!source) { coverage.daily.withoutSource += 1; continue; }
+    coverage.daily.withSource += 1;
+    daily.push(item(entry.id, entry.date, entry.title, source, SUMMARY_FIELDS.map((field: SummaryFieldKey) => ({ where: field, text: entry.fields[field] }))));
+  }
+  for (const note of corpus.notes) {
+    const source = await load(note.id);
+    if (!source) { coverage.notes.withoutSource += 1; continue; }
+    coverage.notes.withSource += 1;
+    notes.push(item(note.id, note.date, note.title, source, note.sections.map((section) => ({ where: section.heading, text: stripFencedCode(section.body) }))));
+  }
+
+  const used = [...cache.values()].filter((value): value is CachedSource => value !== null)
+    .filter((value) => [...daily, ...notes].some((entry) => entry.id === value.record.id));
+  const count = (values: string[]) => values.reduce<Record<string, number>>((all, value) => ({ ...all, [value]: (all[value] ?? 0) + 1 }), {});
+  const times = used.map((value) => value.record.fetchedAt).sort();
+  const asResult = (items: GroundingItem[]) => items.map((entry) => ({ total: entry.total, grounded: entry.grounded, byWhere: entry.byPlace, ungrounded: entry.ungrounded }));
+  return {
+    run: true, sourcesDir,
+    sources: {
+      ...coverage,
+      records: {
+        count: used.length, bySourcePath: count(used.map((value) => value.record.sourcePath)),
+        byArxivVersion: count(used.map((value) => value.record.arxivVersion ?? "unknown")),
+        fetchedAt: times.length ? { first: times[0]!, last: times.at(-1)! } : null,
+      },
+    },
+    daily: { results: daily, aggregate: aggregateGrounding(asResult(daily)) },
+    notes: { results: notes, aggregate: aggregateGrounding(asResult(notes)) },
+  };
 }

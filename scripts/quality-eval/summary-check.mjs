@@ -13,6 +13,7 @@ No model is called and nothing is fetched. Writes report.md and findings.json to
   --papers-dir <dir>  Detail notes, relative to the vault (default: the config's, else arxiv-daily/papers)
   --from <date>       First report date to include (YYYY-MM-DD)
   --to <date>         Last report date to include (YYYY-MM-DD)
+  --sources <dir>     Cached sources from summary-sources.mjs; with it the numbers are looked up in the source text
   --force             Replace an existing report.md/findings.json in --out
 `;
 
