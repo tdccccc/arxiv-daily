@@ -4,6 +4,7 @@ const MIN_DETAIL_SUMMARY_BODY_CHARS = 400;
 const DETAIL_SUMMARY_HEADINGS = [
   "研究问题",
   "方法设计",
+  "核心结果",
   "关键证据",
   "主要结论",
   "贡献与创新点",
