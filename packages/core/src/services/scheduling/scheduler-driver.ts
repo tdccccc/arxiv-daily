@@ -1,5 +1,5 @@
 import type { PipelineResult, PipelineRunOptions } from "../../pipeline/pipeline";
-import type { PluginSettings } from "../../settings/types";
+import type { PluginSettings, RunStateEntry } from "../../settings/types";
 import {
   daysBefore,
   isTimeWithinLocalWindow,
@@ -17,6 +17,7 @@ import type { RunHistoryTrigger } from "../run-history";
 import type { RunLock } from "../run-lock";
 import {
   isFinalTransientAttempt,
+  isReportWrittenRunState,
   STALE_RUNNING_RECOVERY_MS,
   type StateStore,
 } from "../state-store";
@@ -52,6 +53,12 @@ export interface SchedulerDriverDeps {
   cancellation?: RunCancellationService;
   history: HistoryRecorder;
   recentDates?: SchedulerRecentDates;
+  /**
+   * Whether the date's daily report file is still on disk. Lets a manual run
+   * regenerate a report the user deleted; without it a completed date always
+   * answers "already done".
+   */
+  dailyExists?: (date: string) => Promise<boolean>;
   now?: () => Date;
   /**
    * Optional post-completion hook (e.g. email delivery). Failures must be
@@ -596,7 +603,7 @@ export class SchedulerDriver {
         const currentEntry = store.get(date);
         // Choose from authoritative state while holding the vault lock. A
         // concurrent completion must never be cleared by a stale retry request.
-        const runMode = mode === "manual-retry"
+        let runMode: RunMode = mode === "manual-retry"
           ? currentEntry.status === "failed_transient" || currentEntry.status === "failed_permanent" ? "retry" : "normal"
           : mode;
         if (runMode === "scheduled") {
@@ -638,7 +645,10 @@ export class SchedulerDriver {
             return { kind: "skipped" as const, reason: "already running" };
           }
         } else if (runMode === "normal") {
-          if (store.isDone(date)) {
+          if (store.isDone(date) && (await this.dailyDeletedAfterCompletion(date, currentEntry))) {
+            runMode = "force";
+          }
+          if (runMode === "normal" && store.isDone(date)) {
             await this.safeAsyncEffect(() =>
               this.deps.history.recordSkipped(date, trigger, "already done", now),
             );
@@ -750,6 +760,37 @@ export class SchedulerDriver {
     } finally {
       this.activeWork -= 1;
     }
+  }
+
+  /**
+   * A manual run of a completed date whose report was written but has since
+   * been deleted should regenerate it. Scheduled ticks and batch runs never
+   * ask: they must not resurrect a report the user removed. A failing check
+   * keeps the date "already done".
+   */
+  private async dailyDeletedAfterCompletion(
+    date: string,
+    entry: RunStateEntry,
+  ): Promise<boolean> {
+    const dailyExists = this.deps.dailyExists;
+    if (!dailyExists || !isReportWrittenRunState(entry)) return false;
+    try {
+      if (await dailyExists(date)) return false;
+    } catch (error) {
+      this.safeEffect(() =>
+        this.deps.logger.warn(
+          `scheduler: could not check the daily report for ${date}; treating it as present`,
+          error,
+        ),
+      );
+      return false;
+    }
+    this.safeEffect(() =>
+      this.deps.logger.info(
+        `scheduler: daily report for ${date} was deleted; regenerating it`,
+      ),
+    );
+    return true;
   }
 
   /**

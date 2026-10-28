@@ -43,6 +43,7 @@ async function setup(initial: RunState, reportDates: string[] = []) {
     logger: new Logger("error"),
     runForDate,
     now: () => NOW,
+    dailyExists: async (date) => reportDates.includes(date),
   });
   let create: ((leaf: unknown) => unknown) | undefined;
   const plugin = {
@@ -67,10 +68,9 @@ async function setup(initial: RunState, reportDates: string[] = []) {
   for (const date of reportDates) {
     view.calendarDailyReports.set(date, { date, path: `arxiv-daily/daily/${date}.md`, papers: 4, starred: 0 });
   }
-  const forceRun = vi.spyOn(scheduler, "forceRunForDate");
   const normalRun = vi.spyOn(scheduler, "runForDateNow");
   const notices = () => Notice.calls.map((call) => call.message);
-  return { durable, stateStore, runForDate, forceRun, normalRun, view, notices };
+  return { durable, stateStore, runForDate, normalRun, view, notices };
 }
 
 const completed = (papersWritten = 10): RunState => ({
@@ -83,14 +83,13 @@ beforeEach(() => {
 
 describe("running a date from the calendar", () => {
   it("regenerates a completed date whose daily report was deleted", async () => {
-    const { runForDate, forceRun, normalRun, view, notices, stateStore } = await setup(completed());
+    const { runForDate, normalRun, view, notices, stateStore } = await setup(completed());
 
     await view.runDateFromCalendar(DATE);
 
     expect(runForDate).toHaveBeenCalledTimes(1);
     expect((runForDate.mock.calls as unknown[][])[0]![0]).toBe(DATE);
-    expect(forceRun).toHaveBeenCalledWith(DATE);
-    expect(normalRun).not.toHaveBeenCalled();
+    expect(normalRun).toHaveBeenCalledWith(DATE, { trigger: "calendar" });
     expect(stateStore.get(DATE)).toMatchObject({ status: "completed", papersWritten: 4 });
     expect(notices().join("\n")).not.toContain("already done");
     expect(view.reloadIndex).toHaveBeenCalled();
@@ -102,23 +101,21 @@ describe("running a date from the calendar", () => {
       { [DATE]: { status: "pending", lastAttempt: 1, attempts: 1, outcome: "awaiting_announcement" } },
       { [DATE]: { status: "failed_transient", lastAttempt: 1, attempts: 1, failureAttempts: 1, error: "offline" } },
     ] as RunState[]) {
-      const { runForDate, forceRun, normalRun, view } = await setup(state);
+      const { runForDate, normalRun, view } = await setup(state);
 
       await view.runDateFromCalendar(DATE);
 
       expect(runForDate).toHaveBeenCalledTimes(1);
       expect(normalRun).toHaveBeenCalledWith(DATE, { trigger: "calendar" });
-      expect(forceRun).not.toHaveBeenCalled();
     }
   });
 
   it("does not clear a completed date that still has its daily report", async () => {
-    const { runForDate, forceRun, normalRun, view, notices, durable } = await setup(completed(), [DATE]);
+    const { runForDate, normalRun, view, notices, durable } = await setup(completed(), [DATE]);
 
     await view.runDateFromCalendar(DATE);
 
     expect(normalRun).toHaveBeenCalledWith(DATE, { trigger: "calendar" });
-    expect(forceRun).not.toHaveBeenCalled();
     expect(runForDate).not.toHaveBeenCalled();
     expect(notices().join("\n")).toContain("already done");
     expect(durable.runState[DATE]).toMatchObject({ status: "completed", papersWritten: 10 });

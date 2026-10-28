@@ -6,6 +6,17 @@ import { derivePaperInboxPaths } from "./paper-index";
 const MAX_TRANSIENT_ATTEMPTS = 10;
 export const STALE_RUNNING_RECOVERY_MS = 60 * 60 * 1000;
 
+/**
+ * A completed date whose run wrote a daily report (legacy entries have no
+ * outcome, so a positive paper count stands in for it). Dates that finished
+ * with no matches or no updates never had a daily file.
+ */
+export function isReportWrittenRunState(entry: RunStateEntry | undefined): boolean {
+  if (entry?.status !== "completed") return false;
+  if (entry.outcome) return entry.outcome === "papers_written";
+  return (entry.papersWritten ?? 0) > 0;
+}
+
 /** A run-state file that cannot be parsed, so every write to it is refused. */
 export interface RunStateDamage {
   path: string;
