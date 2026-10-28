@@ -603,6 +603,7 @@ export class SchedulerDriver {
         const currentEntry = store.get(date);
         // Choose from authoritative state while holding the vault lock. A
         // concurrent completion must never be cleared by a stale retry request.
+        let deletedReport = false;
         let runMode: RunMode = mode === "manual-retry"
           ? currentEntry.status === "failed_transient" || currentEntry.status === "failed_permanent" ? "retry" : "normal"
           : mode;
@@ -647,6 +648,7 @@ export class SchedulerDriver {
         } else if (runMode === "normal") {
           if (store.isDone(date) && (await this.dailyDeletedAfterCompletion(date, currentEntry))) {
             runMode = "force";
+            deletedReport = true;
           }
           if (runMode === "normal" && store.isDone(date)) {
             await this.safeAsyncEffect(() =>
@@ -677,6 +679,9 @@ export class SchedulerDriver {
           return { kind: "skipped" as const, reason: "already running" };
         }
 
+        // Only this path keeps the old entry: an explicit Force run discards it.
+        const restoreEntry = deletedReport ? { ...currentEntry } : undefined;
+
         if (runMode === "force" || runMode === "retry") {
           try {
             await store.clearDate(date);
@@ -685,76 +690,80 @@ export class SchedulerDriver {
           }
         }
 
-        const previousEntry = store.get(date);
-        this.safeEffect(() => this.deps.cancellation?.prepareRun());
-        const signal = this.beginCancellationRun(date, cancellationBatch);
-        let result: PipelineResult;
         try {
-          this.safeEffect(() =>
-            this.progress.setTask("arXiv Daily report", date),
-          );
+          const previousEntry = store.get(date);
+          this.safeEffect(() => this.deps.cancellation?.prepareRun());
+          const signal = this.beginCancellationRun(date, cancellationBatch);
+          let result: PipelineResult;
           try {
-            await store.setRunning(date);
-          } catch (error) {
-            this.safeEffect(() => this.deps.cancellation?.finish(date));
-            return this.storeFailureResult(date, trigger, now, error);
-          }
-          await this.safeAsyncEffect(() =>
-            this.deps.history.recordStarted(date, trigger, now),
-          );
-          // Only the final transient attempt may commit a report that carries
-          // unreachable-model fallbacks; every earlier one is retried instead.
-          result = await this.deps.runForDate(date, signal, {
-            retryTransportFallbacks: !isFinalTransientAttempt(store.get(date)),
-          });
-        } catch (error) {
-          result = isCancellationError(error)
-            ? { kind: "cancelled", reason: errorMessage(error) }
-            : { kind: "failed_transient", reason: errorMessage(error) };
-        }
-
-        try {
-          if (result.kind === "completed") {
-            const papersWritten = preservedCompletedPaperCount(
-              previousEntry,
-              result.papersWritten,
+            this.safeEffect(() =>
+              this.progress.setTask("arXiv Daily report", date),
             );
-            const pending: PendingCompletion = {
-              result: papersWritten !== result.papersWritten
-                ? { ...result, outcome: previousEntry.outcome ?? "papers_written" }
-                : result,
-              papersWritten,
-              requestedPapersWritten: result.papersWritten,
-              preservedPapersWritten: papersWritten !== result.papersWritten,
-              trigger,
-              completedAt: now,
-              committed: false,
-            };
-            this.pendingCompletions.set(date, pending);
-            const finalization = this.finalizePendingCompletionLocked(
-              date,
-              pending,
-              trigger,
-              now,
-              store,
-            );
-            this.pendingCompletionFinalizations.set(date, finalization);
             try {
-              return await finalization;
-            } finally {
-              if (this.pendingCompletionFinalizations.get(date) === finalization) {
-                this.pendingCompletionFinalizations.delete(date);
+              await store.setRunning(date);
+            } catch (error) {
+              this.safeEffect(() => this.deps.cancellation?.finish(date));
+              return this.storeFailureResult(date, trigger, now, error);
+            }
+            await this.safeAsyncEffect(() =>
+              this.deps.history.recordStarted(date, trigger, now),
+            );
+            // Only the final transient attempt may commit a report that carries
+            // unreachable-model fallbacks; every earlier one is retried instead.
+            result = await this.deps.runForDate(date, signal, {
+              retryTransportFallbacks: !isFinalTransientAttempt(store.get(date)),
+            });
+          } catch (error) {
+            result = isCancellationError(error)
+              ? { kind: "cancelled", reason: errorMessage(error) }
+              : { kind: "failed_transient", reason: errorMessage(error) };
+          }
+
+          try {
+            if (result.kind === "completed") {
+              const papersWritten = preservedCompletedPaperCount(
+                previousEntry,
+                result.papersWritten,
+              );
+              const pending: PendingCompletion = {
+                result: papersWritten !== result.papersWritten
+                  ? { ...result, outcome: previousEntry.outcome ?? "papers_written" }
+                  : result,
+                papersWritten,
+                requestedPapersWritten: result.papersWritten,
+                preservedPapersWritten: papersWritten !== result.papersWritten,
+                trigger,
+                completedAt: now,
+                committed: false,
+              };
+              this.pendingCompletions.set(date, pending);
+              const finalization = this.finalizePendingCompletionLocked(
+                date,
+                pending,
+                trigger,
+                now,
+                store,
+              );
+              this.pendingCompletionFinalizations.set(date, finalization);
+              try {
+                return await finalization;
+              } finally {
+                if (this.pendingCompletionFinalizations.get(date) === finalization) {
+                  this.pendingCompletionFinalizations.delete(date);
+                }
               }
             }
+            if (result.kind === "pending" || result.kind === "cancelled") {
+              const pending: PendingNonCompletion = { result, trigger, at: now };
+              this.pendingNonCompletions.set(date, pending);
+              return await this.finalizePendingNonCompletionLocked(date, pending, store);
+            }
+            return await this.finalizeFailureLocked(date, result, trigger, now, store);
+          } finally {
+            this.safeEffect(() => this.deps.cancellation?.finish(date));
           }
-          if (result.kind === "pending" || result.kind === "cancelled") {
-            const pending: PendingNonCompletion = { result, trigger, at: now };
-            this.pendingNonCompletions.set(date, pending);
-            return await this.finalizePendingNonCompletionLocked(date, pending, store);
-          }
-          return await this.finalizeFailureLocked(date, result, trigger, now, store);
         } finally {
-          this.safeEffect(() => this.deps.cancellation?.finish(date));
+          await this.restoreDeletedReportEntry(date, restoreEntry, store);
         }
       });
     } finally {
@@ -791,6 +800,31 @@ export class SchedulerDriver {
       ),
     );
     return true;
+  }
+
+  /**
+   * A rerun of a deleted report starts from a cleared date, but only a run
+   * that completes may replace the earlier completion. Otherwise the date
+   * would look open to the scheduled tick and batch runs, which would then
+   * regenerate a report the user deleted. The caller still gets the real
+   * result and the history keeps the failed attempt.
+   */
+  private async restoreDeletedReportEntry(
+    date: string,
+    entry: RunStateEntry | undefined,
+    store: StateStore,
+  ): Promise<void> {
+    if (!entry || store.get(date).status === "completed") return;
+    try {
+      await store.restoreEntry(date, entry);
+    } catch (error) {
+      this.safeEffect(() =>
+        this.deps.logger.error(
+          `scheduler: failed to restore the completed state of ${date} after an incomplete rerun`,
+          error,
+        ),
+      );
+    }
   }
 
   /**

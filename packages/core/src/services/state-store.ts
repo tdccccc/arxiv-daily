@@ -224,6 +224,14 @@ export class StateStore {
     });
   }
 
+  /** Puts back an entry that was cleared for a rerun which did not complete. */
+  async restoreEntry(date: string, entry: RunStateEntry): Promise<void> {
+    await this.enqueueMutation((candidate) => {
+      candidate[date] = { ...entry };
+      return { result: undefined, persist: true };
+    });
+  }
+
   async clearDate(date: string): Promise<void> {
     await this.enqueueMutation((candidate) => {
       if (!(date in candidate)) return { result: undefined, persist: false };
