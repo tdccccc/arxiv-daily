@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { seededRandom } from "./export";
 import { buildJudgeSystemPrompt, type JudgeContext } from "./summary-judge-contract";
 import { SUMMARY_FIELDS, type SummaryFieldKey } from "./summary-checks";
@@ -21,7 +22,9 @@ export interface SampleOptions {
   includeOlderNotes?: boolean;
 }
 
-export type SkipReason = "no-source" | "no-input" | "incomplete" | "duplicate-headings" | "not-found" | "fallback";
+export type SkipReason =
+  | "no-source" | "no-input" | "incomplete" | "duplicate-headings" | "not-found" | "fallback"
+  | "not-generated" | "error" | "source-changed" | "no-sections";
 
 export interface SkippedItem { kind: "daily" | "note" | "id"; id: string; reason: SkipReason; detail: string }
 
@@ -92,6 +95,19 @@ export function sampleJudgeTargets(corpus: SummaryCorpus, options: SampleOptions
   return { daily, notes, allocation: Object.fromEntries(shares), missing: [] };
 }
 
+/** Where the summary under review came from. */
+export type SummaryOrigin =
+  | { kind: "historical"; vault: string; date: string | null }
+  | {
+    kind: "regenerated";
+    generator: { provider: string; model: string; thinkingMode?: boolean; reasoningEffort?: string };
+    generationPromptHash: string;
+    generatedAt: string;
+    summariesDir: string;
+  };
+
+export const hashText = (text: string): string => createHash("sha256").update(text).digest("hex");
+
 export interface JudgeItem {
   kind: "daily" | "note";
   id: string;
@@ -105,6 +121,9 @@ export interface JudgeItem {
   locations: Array<{ key: string; text: string }>;
   /** The whole summary under review as the judge sees it. */
   judgedText: string;
+  /** SHA-256 of `judgedText`: a changed summary is judged again. */
+  summaryHash: string;
+  origin: SummaryOrigin;
   /** The `<paper_data>` message content the generator got. */
   paperData: string;
   messages: Array<{ role: "system" | "user"; content: string }>;
@@ -114,6 +133,8 @@ export interface JudgeItem {
 
 export interface BuildItemsOptions {
   sourcesDir: string;
+  /** Recorded as the origin of historical summaries. */
+  vaultRoot?: string;
   /** Topic tag to display name, as the generator was told it. */
   topics?: ReadonlyArray<{ tag: string; name: string }>;
 }
@@ -146,7 +167,8 @@ export async function buildJudgeItems(
     const judgedText = locations.map((location) => `[${location.key}] ${location.text}`).join("\n");
     const paperData = rebuilt.messages[1]!.content;
     items.push({
-      kind: "daily", id: entry.id, title: entry.title, date: entry.date, topic: entry.topic, locations, judgedText, paperData,
+      kind: "daily", id: entry.id, title: entry.title, date: entry.date, topic: entry.topic, locations, judgedText, summaryHash: hashText(judgedText),
+      origin: { kind: "historical", vault: options.vaultRoot ?? "", date: entry.date }, paperData,
       messages: [{ role: "system", content: buildJudgeSystemPrompt({ kind: "daily" }) }, { role: "user", content: userMessage(paperData, judgedText) }],
       context: { kind: "daily", locations: Object.fromEntries(locations.map((location) => [location.key, location.text])), sourceText: paperData },
       source: sourceOf(record),
@@ -165,7 +187,8 @@ export async function buildJudgeItems(
     const judgedText = note.sections.map((section) => `## ${section.heading}\n${section.body}`).join("\n\n");
     const paperData = rebuilt.messages[1]!.content;
     items.push({
-      kind: "note", id: note.id, title: note.title, date: note.date, topic: note.topic, version: checkNote(note).version, locations, judgedText, paperData,
+      kind: "note", id: note.id, title: note.title, date: note.date, topic: note.topic, version: checkNote(note).version, locations, judgedText, summaryHash: hashText(judgedText),
+      origin: { kind: "historical", vault: options.vaultRoot ?? "", date: note.date }, paperData,
       messages: [{ role: "system", content: buildJudgeSystemPrompt({ kind: "note", headings, topic: topicName }) }, { role: "user", content: userMessage(paperData, judgedText) }],
       context: { kind: "note", locations: Object.fromEntries(locations.map((location) => [location.key, location.text])), sourceText: paperData },
       source: sourceOf(record),
@@ -217,7 +240,7 @@ export async function prepareJudgeInput(options: PrepareJudgeOptions): Promise<P
   const { vaultRoot, dailyDir, papersDir, settings } = await resolveVaultLayout(options);
   const corpus = await loadSummaryCorpus({ vaultRoot, dailyDir, papersDir, from: options.from, to: options.to });
   const targets = sampleJudgeTargets(corpus, options);
-  const { items, skipped } = await buildJudgeItems(targets, { sourcesDir: options.sourcesDir, topics: options.topics ?? settings.arxiv.topics });
+  const { items, skipped } = await buildJudgeItems(targets, { sourcesDir: options.sourcesDir, vaultRoot, topics: options.topics ?? settings.arxiv.topics });
   const built = (kind: JudgeItem["kind"]) => items.filter((item) => item.kind === kind).length;
   return {
     corpus, sourcesDir: options.sourcesDir, items,

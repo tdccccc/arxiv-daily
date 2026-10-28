@@ -58,3 +58,6 @@ export type { RegenerateCounts, RegeneratePlan, SummaryRegenerateDeps, SummaryRe
 export { dailyPaperFromRecord, detailCallFromRecord } from "./summary-sources";
 // Re-exported so script tests can simulate an unreachable model endpoint the way core's client reports it.
 export { LlmTransientExhaustedError } from "@arxiv-daily/core";
+export { prepareRegeneratedJudgeInput, readRegenerateRun } from "./summary-judge-regenerated";
+export { hashText } from "./summary-judge-input";
+export type { SummaryOrigin } from "./summary-judge-input";

@@ -2,8 +2,8 @@
 
 goal_ref: ../goal.md
 created: 2026-10-29T00:55:00+08:00
-updated: 2026-10-29T01:15:00+08:00
-revision: 2
+updated: 2026-10-29T01:25:00+08:00
+revision: 3
 
 ## Outcome
 
@@ -36,7 +36,7 @@ revision: 2
 - kind: behavior
 - first signal: Red — 用假的重新生成结果构造评审输入、回退单列、来源写入报告、历史模式多版本标记的测试失败。
 - checks: 同一测试 Green；`npm run test:release-tools` Green。
-- [ ] accepted on observed evidence
+- [x] accepted on observed evidence (252/252 quality-eval tests, Red 12/12 first; test:release-tools 1160/1160)
 
 ## Phase verification
 

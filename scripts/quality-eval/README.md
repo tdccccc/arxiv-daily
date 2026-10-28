@@ -292,3 +292,19 @@ node scripts/quality-eval/summary-regenerate.mjs … --yes
 - 详细笔记提示词里的主题名取 CLI 配置里该主题 tag 对应的名称，没有就用 tag；记录里写明用了哪个。
 - 结果放在 `--out/summaries/<类型>-<编号>.json`：生成模型和推理设置（不含接口地址与密钥）、生成提示词的哈希、原文版本与内容哈希、输出（日报是五个字段或回退原因，笔记是 Markdown）、请求次数、用量、耗时。`run.json` 记录参数、种子和抽样。
 - 可以中断后继续：生成模型、提示词哈希和原文内容哈希都没变的条目会跳过；`--regenerate` 全部重做。
+
+## 评审重新生成的摘要
+
+基线评审评的是**重新生成**的摘要（见上一节）：先 `summary-regenerate.mjs`，再把它的 `--out` 目录交给评审：
+
+```sh
+node scripts/quality-eval/summary-judge.mjs --judge-config ~/judge.toml --sources ~/quality-eval/summary-sources \
+  --summaries ~/quality-eval/regen-1 --out ~/quality-eval/judge-regen-1          # 先看计划
+node scripts/quality-eval/summary-judge.mjs … --yes                               # 真正评审
+```
+
+- `--summaries` 时被评的论文就是重新生成那次 `run.json` 里记录的抽样，所以不要再给 `--daily`、`--notes`、`--ids`、`--from`、`--to`、`--include-older-notes`，也不需要 `--vault`。生成模型取自那次的记录，不会去读 CLI 配置（除非你显式给 `--config`）。评审模型仍必须与它不同。
+- 日报条目评的是模型返回的五个字段原值，笔记评的是重新生成的 Markdown 按 `##` 拆开的各章节。回退（写明原因）、出错、缓存原文已变化（内容哈希对不上）、没生成的条目会单列跳过，不替换。
+- 报告“评审对象”里有“被评摘要来源”：重新生成（生成模型、推理设置、生成提示词哈希、生成时间、输出目录）。重新生成的摘要被改写后再评，会重新评审（续跑判断加入了被评摘要的内容哈希）。
+- 不带 `--summaries` 评 Vault 里的历史摘要时，报告写明来源是“历史 Vault”，并把缓存原文版本高于 v1 的条目标出来（“原文已有新版本（vN），生成时可能看到的是旧版”），评审对象里给出条数，判定分布另给一张只含 v1 原文条目的表。这类评审只作参考。
+- `--offline` 对照的是 Vault 里的历史文字，与重新生成的摘要无法对照；和 `--summaries` 一起给时会跳过，报告里说明原因。

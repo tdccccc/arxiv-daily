@@ -194,7 +194,7 @@ function decodeScalar(raw: string): string {
 }
 
 /** Split a note body into its `#` title and ordered `##` sections, ignoring headings inside code fences. */
-function parseBody(body: string): { title: string; sections: NoteSection[] } {
+export function parseBody(body: string): { title: string; sections: NoteSection[] } {
   let title = "";
   const sections: Array<{ heading: string; lines: string[] }> = [];
   let fence: { char: string; length: number } | null = null;

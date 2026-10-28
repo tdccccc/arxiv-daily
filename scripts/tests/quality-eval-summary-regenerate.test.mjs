@@ -115,7 +115,7 @@ test("a daily entry is generated from the cached input and recorded with its ide
   assert.equal(record.schemaVersion, 1);
   assert.equal(record.status, "generated");
   assert.deepEqual(record.item, {
-    kind: "daily", id: "2610.00001", title: "Paper 2610.00001", date: "2026-10-15", topic: "Photo-z",
+    kind: "daily", id: "2610.00001", title: "Paper 2610.00001", authors: "A. Author et al.", date: "2026-10-15", topic: "Photo-z",
     source: { sourcePath: "html", arxivVersion: "v1", fetchedAt: "2026-10-28T10:00:00.000Z", contentHash: "hash-2610.00001" },
   });
   assert.deepEqual(record.generator, { provider: "openai", model: "gen-model", thinkingMode: false, reasoningEffort: "medium" });

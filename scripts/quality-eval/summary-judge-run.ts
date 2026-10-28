@@ -9,6 +9,7 @@ import { readModelSettings } from "../acceptance/exploration-model";
 import { prepareOutDir } from "./evaluate";
 import { redactor } from "./rerun";
 import { buildJudgeCorrection, checkJudgeOutput, type Judgment } from "./summary-judge-contract";
+import { prepareRegeneratedJudgeInput } from "./summary-judge-regenerated";
 import { prepareJudgeInput, type JudgeItem, type PrepareJudgeOptions, type SkippedItem } from "./summary-judge-input";
 import { requireDate } from "./summary-check";
 import { writeJudgeReport } from "./summary-judge-report";
@@ -30,6 +31,8 @@ export interface SummaryJudgeOptions extends Omit<PrepareJudgeOptions, "topics">
   rejudge?: boolean;
   /** `findings.json` of summary-check run with `--sources`: the report then compares its unfound numbers with the judgments. */
   offlinePath?: string;
+  /** The `--out` directory of summary-regenerate.mjs: judge those regenerated summaries instead of the vault's. */
+  summariesDir?: string;
   /** Only rebuild report.md and judgments.json from what is in `outDir`. */
   reportOnly?: boolean;
 }
@@ -102,6 +105,7 @@ export function parseSummaryJudgeArgs(argv: readonly string[]): Partial<SummaryJ
       case "--sources": parsed.sourcesDir = take(); break;
       case "--out": parsed.outDir = take(); break;
       case "--offline": parsed.offlinePath = take(); break;
+      case "--summaries": parsed.summariesDir = take(); break;
       case "--seed": parsed.seed = take(); break;
       case "--daily": parsed.daily = count(); break;
       case "--notes": parsed.notes = count(); break;
@@ -152,6 +156,7 @@ interface JudgmentRecord {
   status: "judged" | "invalid" | "error";
   judge: { provider: string; model: string };
   judgePromptHash: string;
+  summaryHash?: string;
   item: { source: { contentHash: string } };
 }
 
@@ -161,7 +166,8 @@ async function isCurrent(file: string, item: JudgeItem, judge: LlmSettings, prom
     const record = JSON.parse(await readFile(file, "utf8")) as JudgmentRecord;
     return (record.status === "judged" || record.status === "invalid")
       && record.judge.model === judge.model && record.judge.provider === judge.provider
-      && record.judgePromptHash === promptHash && record.item.source.contentHash === item.source.contentHash;
+      && record.judgePromptHash === promptHash && record.item.source.contentHash === item.source.contentHash
+      && record.summaryHash === item.summaryHash;
   } catch {
     return false;
   }
@@ -210,8 +216,13 @@ export async function runSummaryJudge(options: SummaryJudgeOptions, deps: Summar
   const outDir = path.resolve(options.outDir);
 
   const judge = await readModelSettings(options.judgeConfigPath, { label: "Judge model config", hint: "Pass --judge-config <file> with an [llm] table (api_key, base_url, model)." });
-  const generator = await (deps.loadGeneratorConfig ?? defaultLoadGeneratorConfig)(options.configPath);
-  const generatorModel = options.generatorModel ?? generator?.model;
+  if (options.summariesDir && (options.ids || options.daily !== undefined || options.notes !== undefined || options.includeOlderNotes || options.from || options.to)) {
+    throw new Error("--summaries judges the sample recorded by the regenerate run, so --daily, --notes, --ids, --include-older-notes, --from and --to cannot be combined with it.");
+  }
+  // With --summaries the regenerate run names its own generator; the CLI config is read only when --config is given.
+  const regenerated = options.summariesDir ? await prepareRegeneratedJudgeInput({ summariesDir: options.summariesDir, sourcesDir: options.sourcesDir }) : null;
+  const generator = regenerated && !options.configPath ? null : await (deps.loadGeneratorConfig ?? defaultLoadGeneratorConfig)(options.configPath);
+  const generatorModel = options.generatorModel ?? regenerated?.generator.model ?? generator?.model;
   if (!generatorModel?.trim()) {
     throw new Error("The generator model could not be determined, so it cannot be compared with the judge model. Pass --config <CLI config.toml> or --generator-model <name>.");
   }
@@ -219,7 +230,7 @@ export async function runSummaryJudge(options: SummaryJudgeOptions, deps: Summar
     throw new Error(`The judge must be a different model from the one that wrote the summaries, but both are "${judge.model.trim()}". Use another model in --judge-config.`);
   }
 
-  const prepared = await prepareJudgeInput({ ...options, topics: generator?.topics });
+  const prepared = regenerated ?? await prepareJudgeInput({ ...options, topics: generator?.topics });
   const hashes = new Map(prepared.items.map((item) => [item, sha256(item.messages[0]!.content)]));
   const pending: JudgeItem[] = [];
   let reused = 0;
@@ -261,7 +272,10 @@ export async function runSummaryJudge(options: SummaryJudgeOptions, deps: Summar
     schemaVersion: 1, startedAt, finishedAt: null as string | null,
     // The judge config path and the secrets it holds are not recorded.
     args: { daily: options.daily ?? null, notes: options.notes ?? null, ids: options.ids ?? null, from: options.from ?? null, to: options.to ?? null, includeOlderNotes: Boolean(options.includeOlderNotes), rejudge: Boolean(options.rejudge), sourcesDir: path.resolve(options.sourcesDir) },
-    seed: options.seed ?? "summary-judge", requested: prepared.requested, allocation: prepared.allocation,
+    seed: options.seed ?? "summary-judge",
+    summaries: options.summariesDir ? { dir: path.resolve(options.summariesDir), generator: regenerated!.generator } : null,
+    vault: options.summariesDir ? null : prepared.items[0]?.origin.kind === "historical" ? prepared.items[0].origin.vault : null,
+    requested: prepared.requested, allocation: prepared.allocation,
     judge: { provider: judge.provider, model: judge.model, thinkingMode: judge.thinkingMode, reasoningEffort: judge.reasoningEffort },
     generatorModel: generatorModel.trim(),
     sample: { daily: prepared.sample.daily, notes: prepared.sample.notes },
@@ -282,6 +296,7 @@ export async function runSummaryJudge(options: SummaryJudgeOptions, deps: Summar
       item: { kind: item.kind, id: item.id, title: item.title, date: item.date, topic: item.topic, ...(item.version ? { version: item.version } : {}), source: item.source },
       judge: { provider: judge.provider, model: judge.model, thinkingMode: judge.thinkingMode, reasoningEffort: judge.reasoningEffort },
       judgePromptHash: hashes.get(item)!,
+      summaryHash: item.summaryHash, origin: item.origin,
       attempts: outcome.attempts, startedAt: itemStart.toISOString(),
     };
     const finish = { finishedAt: now().toISOString(), elapsedMs: now().getTime() - itemStart.getTime() };

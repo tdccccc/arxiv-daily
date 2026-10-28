@@ -5,6 +5,7 @@ import { cell } from "./report";
 import { extractNumbers } from "./summary-grounding";
 import { JUDGE_DIMENSIONS, type JudgeDimension, type JudgeIssue, type Judgment } from "./summary-judge-contract";
 import { capped, percent, table } from "./summary-report";
+import type { SummaryOrigin } from "./summary-judge-input";
 import { rate } from "./summary-checks";
 
 const DIMENSION_LABELS: Record<JudgeDimension, string> = { accuracy: "准确", completeness: "完整", clarity: "清楚" };
@@ -26,6 +27,9 @@ export interface JudgmentRecord {
   };
   judge: { provider: string; model: string; thinkingMode?: boolean; reasoningEffort?: string };
   judgePromptHash: string;
+  summaryHash?: string;
+  /** Where the judged summary came from; judgments written before this field existed have none. */
+  origin?: SummaryOrigin;
   attempts: Array<{ raw: string; reasons: string[] | null; usage: unknown; elapsedMs: number }>;
   judgment: Judgment | null;
   error?: string;
@@ -40,6 +44,9 @@ export interface JudgeRunInfo {
   allocation: Record<string, number>;
   judge: { provider: string; model: string; thinkingMode?: boolean; reasoningEffort?: string };
   generatorModel: string;
+  /** Set when the judged summaries were regenerated (summary-regenerate.mjs). */
+  summaries?: { dir: string; generator: { provider: string; model: string; thinkingMode?: boolean; reasoningEffort?: string } } | null;
+  vault?: string | null;
   sample: { daily: string[]; notes: string[] };
   skipped: Array<{ kind: string; id: string; reason: string; detail: string }>;
   counts: unknown;
@@ -63,6 +70,8 @@ export interface CrossCheck {
 }
 
 export interface JudgeAggregate {
+  /** Historical mode only: the items whose cached source is still the first version. */
+  verdictsV1Only: { daily: VerdictDistribution; note: VerdictDistribution } | null;
   verdicts: { daily: VerdictDistribution; note: VerdictDistribution; dailyByMonth: Record<string, VerdictDistribution> };
   issues: { daily: Record<string, Record<JudgeDimension, SeverityTally>>; note: Record<string, Record<JudgeDimension, SeverityTally>> };
   quality: {
@@ -78,6 +87,15 @@ export interface JudgeReportData {
   records: JudgmentRecord[];
   aggregate: JudgeAggregate;
   crossCheck: CrossCheck | null;
+  /** Why the cross-check was left out although --offline was given. */
+  crossCheckSkipped: string | null;
+}
+
+/** The version a cached source has when it is above v1, for a historical summary written before that revision. */
+export function newerVersion(record: JudgmentRecord): string | null {
+  if (record.origin?.kind === "regenerated") return null;
+  const version = /^v(\d+)$/.exec(record.item.source.arxivVersion ?? "");
+  return version && Number(version[1]) > 1 ? `v${version[1]}` : null;
 }
 
 export async function loadJudgments(outDir: string): Promise<{ run: JudgeRunInfo; records: JudgmentRecord[] }> {
@@ -132,6 +150,9 @@ function aggregate(run: JudgeRunInfo, records: readonly JudgmentRecord[]): Judge
     }
   }
   verdicts.dailyByMonth = Object.fromEntries(Object.entries(verdicts.dailyByMonth).sort(([a], [b]) => a.localeCompare(b)));
+  const historical = !run.summaries;
+  const v1Only = historical ? { daily: emptyDistribution(), note: emptyDistribution() } : null;
+  if (v1Only) for (const record of judged(records)) if (!newerVersion(record)) addVerdicts(v1Only[record.item.kind], record.judgment);
 
   const counts = { validFirstTry: 0, validAfterRetry: 0, invalid: 0, errors: 0, total: records.length };
   const reasons = new Map<string, number>();
@@ -142,7 +163,7 @@ function aggregate(run: JudgeRunInfo, records: readonly JudgmentRecord[]): Judge
     for (const attempt of record.attempts) for (const reason of attempt.reasons ?? []) reasons.set(reasonCategory(reason), (reasons.get(reasonCategory(reason)) ?? 0) + 1);
   }
   return {
-    verdicts, issues,
+    verdictsV1Only: v1Only, verdicts, issues,
     quality: { counts, reasons: [...reasons].map(([reason, count]) => ({ reason, count })).sort((a, b) => b.count - a.count || a.reason.localeCompare(b.reason)) },
   };
 }
@@ -188,8 +209,8 @@ async function crossCheck(records: readonly JudgmentRecord[], offlinePath: strin
   return result;
 }
 
-export function buildJudgeReport(run: JudgeRunInfo, records: JudgmentRecord[], now: Date, cross: CrossCheck | null): JudgeReportData {
-  return { schemaVersion: 1, generatedAt: now.toISOString(), run, records, aggregate: aggregate(run, records), crossCheck: cross };
+export function buildJudgeReport(run: JudgeRunInfo, records: JudgmentRecord[], now: Date, cross: CrossCheck | null, crossCheckSkipped: string | null = null): JudgeReportData {
+  return { schemaVersion: 1, generatedAt: now.toISOString(), run, records, aggregate: aggregate(run, records), crossCheck: cross, crossCheckSkipped };
 }
 
 // ---- rendering -------------------------------------------------------------------------------------
@@ -208,7 +229,7 @@ function issueRows(records: readonly JudgmentRecord[], kind: "daily" | "note", d
     || (a.record.item.date ?? "").localeCompare(b.record.item.date ?? "") || a.record.item.id.localeCompare(b.record.item.id));
   return rows.map(({ record, issue }) => ({
     cells: [
-      record.item.date ?? "-", record.item.id, cell(clip(record.item.title, TITLE_CHARS)), cell(issue.location), issue.severity,
+      record.item.date ?? "-", record.item.id, cell(clip(record.item.title, TITLE_CHARS)) + (newerVersion(record) ? cell(`（原文已有新版本（${newerVersion(record)}），生成时可能看到的是旧版）`) : ""), cell(issue.location), issue.severity,
       cell(clip(issue.summaryQuote, QUOTE_CHARS)), issue.sourceQuote === null ? NOT_IN_SOURCE : cell(clip(issue.sourceQuote, QUOTE_CHARS)), cell(issue.explanation),
     ],
   }));
@@ -219,6 +240,31 @@ function crossTable(entries: readonly CrossCheckEntry[], withExplanation: boolea
   return capped(header, entries.map((entry) => ({
     cells: [entry.date ?? "-", entry.id, cell(entry.location), cell(entry.token), cell(clip(entry.context, QUOTE_CHARS)), ...(withExplanation ? [cell(entry.explanation ?? "")] : [])],
   })), "judgments.json");
+}
+
+const distinct = (values: readonly string[]): string => [...new Set(values)].join("、") || "-";
+
+/** The 被评摘要来源 bullets: historical vault outputs, or regenerated summaries with their generator and prompt. */
+function sourceBlock(run: JudgeRunInfo, records: readonly JudgmentRecord[]): string[] {
+  const origins = records.map((record) => record.origin).filter((origin): origin is SummaryOrigin => origin !== undefined);
+  const regenerated = origins.filter((origin): origin is Extract<SummaryOrigin, { kind: "regenerated" }> => origin.kind === "regenerated");
+  if (run.summaries || regenerated.length > 0) {
+    const generator = run.summaries?.generator ?? regenerated[0]?.generator;
+    const times = regenerated.map((origin) => origin.generatedAt).sort();
+    return [
+      "- 被评摘要来源：重新生成。摘要不是 Vault 里的历史内容，而是在缓存原文上用当前提示词和生成模型重新写的，所以评审看到的原文与生成时完全一致。",
+      `  - 生成模型：${generator ? `${generator.model}（${generator.provider}）；思考模式 ${generator.thinkingMode === undefined ? "-" : generator.thinkingMode ? "开" : "关"}，推理强度 ${generator.reasoningEffort ?? "-"}` : "-"}`,
+      `  - 生成提示词哈希（前 12 位）：${distinct(regenerated.map((origin) => origin.generationPromptHash.slice(0, 12)))}`,
+      `  - 生成时间：${times.length ? `${times[0]} 至 ${times.at(-1)}` : "-"}`,
+      `  - 重新生成的输出目录：${run.summaries?.dir ?? distinct(regenerated.map((origin) => origin.summariesDir))}`,
+    ];
+  }
+  const dates = records.map((record) => record.item.date).filter((date): date is string => Boolean(date)).sort();
+  const flagged = records.filter((record) => record.status === "judged" && newerVersion(record) !== null);
+  return [
+    `- 被评摘要来源：历史 Vault（${run.vault || "-"}），日报日期 ${dates.length ? `${dates[0]} 至 ${dates.at(-1)}` : "-"}。这些是当时生成的内容，评审看到的却是现在缓存的原文。`,
+    `- 原文已有新版本的条目：${flagged.length} 条（缓存的原文版本高于 v1：${distinct(flagged.map((record) => newerVersion(record)!))}）。这些条目生成时模型可能看到的是旧版，评审提出的问题有一部分可能来自版本差异，下面的问题清单里已逐条标出。`,
+  ];
 }
 
 export function renderJudgeReport(data: JudgeReportData): string {
@@ -242,6 +288,7 @@ export function renderJudgeReport(data: JudgeReportData): string {
     `- 评审时间：${run.startedAt}${run.finishedAt ? ` 至 ${run.finishedAt}` : ""}；报告生成时间 ${data.generatedAt}。`,
     `- 抽样：种子 ${run.seed}，要求日报条目 ${run.requested.daily} 条、详细笔记 ${run.requested.notes} 篇；实际抽到日报条目 ${run.sample.daily.length} 条、笔记 ${run.sample.notes.length} 篇${older > 0 ? `（其中 ${older} 篇是更早提示词写的笔记）` : ""}。`,
     `- 结果：评审成功 ${q.validFirstTry + q.validAfterRetry} 条，无效 ${q.invalid} 条，调用出错 ${q.errors} 条。`,
+    ...sourceBlock(run, records),
     `- 评审看到的原文是评估时重新取回的（取回时间 ${fetched.length ? `${fetched[0]} 至 ${fetched.at(-1)}` : "-"}；取回路径：${count(sources.map((source) => source.sourcePath))}；arXiv 版本：${count(sources.map((source) => source.arxivVersion ?? "unknown"))}），论文可能已更新，与生成摘要时模型读到的不一定相同。`,
     "- 评审参考的生成提示词是当前版本的提示词；更早生成的内容也按当前提示词的要求评审。",
     "",
@@ -261,6 +308,20 @@ export function renderJudgeReport(data: JudgeReportData): string {
     `### ${KIND_LABELS.note}（${a.verdicts.note.judged} 篇）`,
     "",
     ...distributionTable(a.verdicts.note),
+    ...(a.verdictsV1Only
+      ? [
+        "### 仅 v1 原文的条目",
+        "",
+        "去掉缓存原文已有新版本的条目后的判定分布（这些条目的输入与生成时更可能一致）。",
+        "",
+        `日报条目（${a.verdictsV1Only.daily.judged} 条）：`,
+        "",
+        ...distributionTable(a.verdictsV1Only.daily),
+        `详细笔记（${a.verdictsV1Only.note.judged} 篇）：`,
+        "",
+        ...distributionTable(a.verdictsV1Only.note),
+      ]
+      : []),
     "### 日报条目按月份",
     "",
     ...table(["月份", "评审条数", "准确（ok/minor/major）", "完整（ok/minor/major）", "清楚（ok/minor/major）"],
@@ -301,6 +362,9 @@ export function renderJudgeReport(data: JudgeReportData): string {
   );
   if (rec.length === 0) lines.push("没有评审成功的条目，上面的分布为空。", "");
 
+  if (data.crossCheckSkipped) {
+    lines.push("## 与离线检查对照", "", data.crossCheckSkipped, "");
+  }
   if (data.crossCheck) {
     const c = data.crossCheck;
     lines.push(
@@ -333,8 +397,10 @@ async function writeAtomic(file: string, text: string): Promise<void> {
 /** Write `report.md` and `judgments.json` from the judgments already in `outDir`. Calls no model. */
 export async function writeJudgeReport(outDir: string, options: WriteReportOptions = {}): Promise<{ files: string[]; data: JudgeReportData }> {
   const { run, records } = await loadJudgments(outDir);
-  const cross = options.offlinePath ? await crossCheck(records, options.offlinePath) : null;
-  const data = buildJudgeReport(run, records, (options.now ?? (() => new Date()))(), cross);
+  const skipCross = Boolean(options.offlinePath && run.summaries);
+  const cross = options.offlinePath && !skipCross ? await crossCheck(records, options.offlinePath) : null;
+  const skipped = skipCross ? "本次评审的是重新生成的摘要，而离线检查（--offline）检查的是 Vault 里的历史内容，两者的文字不同，数字无法对照，所以未做对照。" : null;
+  const data = buildJudgeReport(run, records, (options.now ?? (() => new Date()))(), cross, skipped);
   const files = [path.join(outDir, "report.md"), path.join(outDir, "judgments.json")];
   await writeAtomic(files[0]!, renderJudgeReport(data));
   await writeAtomic(files[1]!, `${JSON.stringify(data, null, 2)}\n`);

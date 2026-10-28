@@ -321,7 +321,7 @@ export async function runSummaryRegenerate(options: SummaryRegenerateOptions, de
     const finishedAt = now();
     const record = {
       schemaVersion: 1, status,
-      item: { kind: job.kind, id: job.id, title: job.title, date: job.date, topic: job.topic, ...(job.version ? { version: job.version } : {}), source: { sourcePath: job.record.sourcePath, arxivVersion: job.record.arxivVersion, fetchedAt: job.record.fetchedAt, contentHash: job.record.contentHash } },
+      item: { kind: job.kind, id: job.id, title: job.title, authors: job.kind === "daily" ? job.entry!.authors : job.note!.authors, date: job.date, topic: job.topic, ...(job.version ? { version: job.version } : {}), source: { sourcePath: job.record.sourcePath, arxivVersion: job.record.arxivVersion, fetchedAt: job.record.fetchedAt, contentHash: job.record.contentHash } },
       generator: identity, generationPromptHash: job.promptHash,
       ...(job.topicName ? { topicName: job.topicName } : {}),
       output, attempts, usage, validationFailures: failures.map((failure) => redact(failure)),
