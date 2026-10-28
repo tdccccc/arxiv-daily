@@ -8,3 +8,5 @@ export {
   DEFAULT_SETTINGS, FilterDecisionRecordStore, Logger,
 } from "@arxiv-daily/core";
 export { NodeStorageAdapter } from "@arxiv-daily/node-runtime";
+export { DEFAULT_DAILY_DIR, DEFAULT_PAPERS_DIR, loadSummaryCorpus } from "./summary-corpus";
+export type { CorpusOptions, DetailNote, FallbackEntry, NoteSection, SummaryCorpus, SummaryEntry } from "./summary-corpus";

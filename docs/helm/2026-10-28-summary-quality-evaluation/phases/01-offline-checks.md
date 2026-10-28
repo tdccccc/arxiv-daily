@@ -29,7 +29,7 @@ revision: 1
 - kind: behavior
 - first signal: Red — 新的 `scripts/tests/quality-eval-summary-*.test.mjs` 用夹具 Vault（平铺版式、折叠 callout 版式、早期标签、旧格式、回退条目、旧/新格式笔记）断言读出的记录，因模块不存在而失败。
 - checks: 同一测试 Green；`node --test scripts/tests/quality-eval-*.test.mjs` 全部 Green。
-- [ ] accepted on observed evidence
+- [x] accepted on observed evidence (71/71 quality-eval tests; real vault: 469 entries, 3 fallbacks, 46 current notes, 72 legacy notes)
 
 ### Chunk 2 — 日报条目的离线检查
 
