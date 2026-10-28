@@ -2,8 +2,8 @@
 
 status: active
 created: 2026-10-28T22:15:00+08:00
-updated: 2026-10-28T23:45:00+08:00
-revision: 4
+updated: 2026-10-28T23:50:00+08:00
+revision: 5
 owner: current-session
 
 ## Intent
@@ -41,5 +41,5 @@ owner: current-session
 
 <!-- Single source of truth for phase status. PN ↔ filename NN. Integer IDs are permanent and never reused; replacement phases take the next unused number. Outcomes only — no steps. The active line is the current focus. -->
 1. P1 — 不调用模型的自动检查工具，对真实 Vault 跑出第一份报告 — status: done
-2. P2 — 大模型评审工具：同口径原文、固定评分维度、确认后调用、可留存报告 — status: pending
+2. P2 — 大模型评审工具：同口径原文、固定评分维度、确认后调用、可留存报告 — status: active
 3. P3 — 评审可信度核对 + 第一次真实评审基线 — status: pending
