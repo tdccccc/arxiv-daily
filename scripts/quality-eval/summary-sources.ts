@@ -376,6 +376,36 @@ const capturingLlm = { call: async (messages: Array<{ role: string; content: str
 
 export interface InputIdentity { title: string; authors: string; summaryLanguage?: "zh" | "en" }
 
+type DailyPaperArg = Parameters<typeof summarizeDailyPaper>[0];
+type DetailPaperArg = Parameters<typeof summarizePaperDetail>[0];
+type DetailDeps = Parameters<typeof summarizePaperDetail>[1];
+
+/** The paper the pipeline hands the daily summarizer, made from a cached record. */
+export function dailyPaperFromRecord(record: SourceRecord, identity: InputIdentity): DailyPaperArg {
+  return {
+    id: record.id, title: identity.title, authors: identity.authors,
+    abstractConclusion: record.content.abstractConclusion, fullSections: record.content.fullSections,
+  };
+}
+
+/** The paper and the settings the pipeline hands the detail summarizer (everything but the model client), from a cached record. */
+export function detailCallFromRecord(
+  record: SourceRecord,
+  identity: InputIdentity & { topic: string; topics?: readonly Topic[] },
+): { paper: DetailPaperArg; deps: Omit<DetailDeps, "llm"> } {
+  return {
+    paper: {
+      id: record.id, title: identity.title, authors: identity.authors, category: identity.topic,
+      abstractConclusion: record.content.abstractConclusion, fullSections: record.content.fullSections,
+    } as unknown as DetailPaperArg,
+    deps: {
+      llmSettings: DEFAULT_SETTINGS.llm, logger: new Logger("error"), advanced: DEFAULT_SETTINGS.advanced,
+      arxivSettings: { ...DEFAULT_SETTINGS.arxiv, topics: [...(identity.topics ?? [])] } as ArxivSettings,
+      summaryLanguage: identity.summaryLanguage,
+    },
+  };
+}
+
 /**
  * The messages the daily summarizer would send for a cached paper, built by the summarizer itself (its prompt
  * rendering and `<paper_data>` builder run with a client that only records the request). Null when the cached text
@@ -384,10 +414,7 @@ export interface InputIdentity { title: string; authors: string; summaryLanguage
  */
 export async function rebuildDailyInput(record: SourceRecord, identity: InputIdentity): Promise<{ messages: Array<{ role: string; content: string }> } | null> {
   try {
-    await summarizeDailyPaper({
-      id: record.id, title: identity.title, authors: identity.authors,
-      abstractConclusion: record.content.abstractConclusion, fullSections: record.content.fullSections,
-    }, { llm: capturingLlm, summaryLanguage: identity.summaryLanguage });
+    await summarizeDailyPaper(dailyPaperFromRecord(record, identity), { llm: capturingLlm, summaryLanguage: identity.summaryLanguage });
   } catch (error) {
     if (error instanceof CapturedMessages) return { messages: error.messages };
     if (/no source text/.test((error as Error).message)) return null;
@@ -403,14 +430,8 @@ export async function rebuildDetailInput(
 ): Promise<{ messages: Array<{ role: string; content: string }> } | null> {
   if (!record.content.fullSections) return null;
   try {
-    await summarizePaperDetail({
-      id: record.id, title: identity.title, authors: identity.authors, category: identity.topic,
-      abstractConclusion: record.content.abstractConclusion, fullSections: record.content.fullSections,
-    } as unknown as Parameters<typeof summarizePaperDetail>[0], {
-      llm: capturingLlm, llmSettings: DEFAULT_SETTINGS.llm, logger: new Logger("error"), advanced: DEFAULT_SETTINGS.advanced,
-      arxivSettings: { ...DEFAULT_SETTINGS.arxiv, topics: [...(identity.topics ?? [])] } as ArxivSettings,
-      summaryLanguage: identity.summaryLanguage,
-    });
+    const { paper, deps } = detailCallFromRecord(record, identity);
+    await summarizePaperDetail(paper, { ...deps, llm: capturingLlm });
   } catch (error) {
     if (error instanceof CapturedMessages) return { messages: error.messages };
     throw error;

@@ -53,3 +53,8 @@ export { CHARS_PER_TOKEN, parseSummaryJudgeArgs, runSummaryJudge } from "./summa
 export type { GeneratorConfig, JudgeCounts, JudgeModelLike, JudgePlan, SummaryJudgeDeps, SummaryJudgeOptions, SummaryJudgeResult } from "./summary-judge-run";
 export { buildJudgeReport, loadJudgments, reasonCategory, renderJudgeReport, runJudgeReportOnly, writeJudgeReport } from "./summary-judge-report";
 export type { CrossCheck, CrossCheckEntry, JudgeAggregate, JudgeReportData, JudgmentRecord } from "./summary-judge-report";
+export { parseSummaryRegenerateArgs, runSummaryRegenerate, sha256Hex } from "./summary-regenerate";
+export type { RegenerateCounts, RegeneratePlan, SummaryRegenerateDeps, SummaryRegenerateOptions, SummaryRegenerateResult } from "./summary-regenerate";
+export { dailyPaperFromRecord, detailCallFromRecord } from "./summary-sources";
+// Re-exported so script tests can simulate an unreachable model endpoint the way core's client reports it.
+export { LlmTransientExhaustedError } from "@arxiv-daily/core";

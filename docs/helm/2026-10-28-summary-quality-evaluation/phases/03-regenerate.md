@@ -2,8 +2,8 @@
 
 goal_ref: ../goal.md
 created: 2026-10-29T00:55:00+08:00
-updated: 2026-10-29T00:55:00+08:00
-revision: 1
+updated: 2026-10-29T01:15:00+08:00
+revision: 2
 
 ## Outcome
 
@@ -28,7 +28,7 @@ revision: 1
 - kind: behavior
 - first signal: Red — 假模型测试（预览不调用、日报走校验重试与回退、笔记生成、续跑跳过、提示词变化重做、连续错误停止、无密钥泄漏）因模块不存在而失败。
 - checks: 同一测试 Green；quality-eval 全部测试 Green。
-- [ ] accepted on observed evidence
+- [x] accepted on observed evidence (240/240 quality-eval tests, Red 16/17 first; test:release-tools 1148/1148; transport-exhausted recorded as error so resume retries it)
 
 ### Chunk 2 — 评审重新生成的摘要
 
