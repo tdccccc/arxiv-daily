@@ -25,3 +25,14 @@
 - change: none; the check stays a metric, with its list marked for human review.
 - disposition: keep. After the fixes, 97.1% of daily numbers and 96.0% of note numbers are found; 84 of 462 daily entries and 18 of 46 notes have at least one number not found.
 - next: close P1 and plan P2 (the judge). P2 needs the researcher's judge model config file.
+
+## 2026-10-29 — note (real judge trial; steer pending)
+
+- evidence: The researcher approved a judge trial on claude-opus-5-5 (anthropic provider via an OpenAI-compatible proxy; omitting `provider` fails with "requires adaptive thinking"). It judged 4 items: daily 2605.20779, 2608.19669 and 2607.01175, and note 2607.01175. All 4 passed validation on the first try, using about 46–51k input and 2–4k output tokens each. Output is in `~/quality-eval/summary-judge-trial/`.
+  - The judge caught all three errors known from P1, plus many major ones (17× written as 17%, a 60% increase written as a 30% decrease, a wrong benchmark name). The owner confirmed these against the cached source.
+  - The same-input assumption breaks for historical outputs. 2608.19669 had v1 on 2026-08-20, was reported 2026-08-21, and got a heavily revised v2 on 2026-09-29; the cache holds v2, so most of its "errors" are probably revision differences. 2605.20779's v2 is dated the report day. 2607.01175 has only v1, but its note says its input lost digits, so the extraction then differed from now.
+  - The cache holds versions v2 78, v3 14 and v4 4, about 20% of 472.
+  - Judging fixed historical outputs also cannot give the before/after-prompt comparison named in Intent.
+- change: none yet. Proposed L3: regenerate the sampled summaries with the current generator on the cached input, then judge those, so the input is identical and prompt or model changes can be compared. Historical judging becomes reference only, with multi-version papers flagged. Waiting on the researcher.
+- disposition: keep all P2 code. The trial artifacts stay outside the repo.
+- next: the researcher's decision on regeneration.
