@@ -2,8 +2,8 @@
 
 goal_ref: ../goal.md
 created: 2026-10-28T22:50:00+08:00
-updated: 2026-10-28T22:50:00+08:00
-revision: 1
+updated: 2026-10-28T22:40:00+08:00
+revision: 2
 
 ## Outcome
 
@@ -37,11 +37,11 @@ revision: 1
 - kind: behavior
 - first signal: Red — 每项检查各有正反例测试，因检查不存在而失败。
 - checks: 同一测试 Green；既有 quality-eval 测试仍 Green。
-- [ ] accepted on observed evidence
+- [x] accepted on observed evidence (87/87 tests; Red recorded after the fact by moving the module aside; real vault: fallback 3/472, 0 math or generic-phrase findings, mainResult outside 80–180 in 298/464)
 
 ### Chunk 3 — 详细笔记的离线检查
 
-- change: 每篇笔记产出：八个预期章节缺失/顺序；各章节"原文未说明 / 原文未讨论"；公式问题（允许 `$$` 独立公式，禁止 `\(..\)` `\[..\]`、相邻拆开片段、公式外裸 TeX）；空话；正文（公式外）英文词占比。
+- change: 每篇笔记产出：按章节标题集合分组（46 篇来自几版提示词：结果节有"核心结果/关键证据"，末节有"学术价值判断/阅读价值/一句话价值判断"，共 4 种顺序），报告各组篇数；对照当前提示词的八个章节给出缺失/多余/顺序，旧版本组单独汇总而不算作违规；各章节"原文未说明 / 原文未讨论"；公式问题（允许 `$$` 独立公式，禁止 `\(..\)` `\[..\]`、相邻拆开片段、公式外裸 TeX）；空话；正文（公式外）英文词占比。
 - kind: behavior
 - first signal: Red — 正反例测试因检查不存在而失败。
 - checks: 同一测试 Green；既有测试仍 Green。
