@@ -42,10 +42,10 @@ export interface EntryChecks {
 }
 
 // A `$...$` span: unescaped single dollars around a non-empty body that has no dollar of its own.
-const MATH_SPAN = /(?<!\\)\$(?!\$)(?:\\.|[^$\\])+?(?<!\\)\$/gu;
+export const MATH_SPAN = /(?<!\\)\$(?!\$)(?:\\.|[^$\\])+?(?<!\\)\$/gu;
 const LATEX_PAREN_DELIMITER = /\\[()[\]]/u;
-// What may sit between two `$..$` spans without making them one formula split in two.
-const SPLIT_GAP = /^(?:\s*|\s*[=+×±∓~∼≈≃<>≤≥/·*]\s*|\s+[-−–]\s+)$/u;
+// What may sit between two `$..$` spans when they are one formula split in two. A slash is left out: it lists values.
+const SPLIT_GAP = /^(?:\s*|\s*[=+×±∓~∼≈≃<>≤≥·*]\s*|\s+[-−–]\s+)$/u;
 const SNIPPET_BEFORE = 12;
 const SNIPPET_AFTER = 28;
 
@@ -73,31 +73,33 @@ export function measureFieldLength(text: string): number {
   return [...text.replace(MATH_SPAN, "").replace(/\s+/gu, "")].length;
 }
 
-function snippetAt(text: string, offset: number, length: number): string {
+export function snippetAt(text: string, offset: number, length: number): string {
   return text.slice(Math.max(0, offset - SNIPPET_BEFORE), offset + length + SNIPPET_AFTER).replace(/\s+/gu, " ");
 }
 
-function mathFindings(field: SummaryFieldKey, rendered: string): SummaryFinding[] {
-  const text = unescapeRenderedField(rendered);
-  const findings: SummaryFinding[] = [];
+export interface MathIssue { code: string; snippet: string }
+
+/**
+ * Math problems in one line of text: core's issue codes plus the ones core lacks.
+ * Rendered daily fields are unescaped first (see unescapeRenderedField); note lines are not rendered text.
+ */
+export function findMathIssues(rendered: string, options: { rendered: boolean }): MathIssue[] {
+  const text = options.rendered ? unescapeRenderedField(rendered) : rendered;
+  const issues: MathIssue[] = [];
   const add = (code: string, offset: number, length: number) =>
-    findings.push({ kind: "math", code, field, snippet: snippetAt(text, offset, length) });
+    issues.push({ code, snippet: snippetAt(text, offset, length) });
 
   const result = canonicalizeScientificMarkdownMath(text);
   for (const issue of result.issues) add(issue.code, issue.offset, issue.length);
 
   // Core quietly rewrites `\(..\)` and `\[..\]` to `$..$` and accepts, so the report must name them itself.
   let last = 0;
-  const outside: Array<{ start: number; text: string }> = [];
   const spans = [...text.matchAll(MATH_SPAN)];
-  for (const span of spans) {
-    outside.push({ start: last, text: text.slice(last, span.index) });
-    last = span.index + span[0].length;
-  }
-  outside.push({ start: last, text: text.slice(last) });
-  for (const segment of outside) {
-    const delimiter = LATEX_PAREN_DELIMITER.exec(segment.text);
-    if (delimiter) add("paren-delimiter", segment.start + delimiter.index, delimiter[0].length);
+  for (const span of [...spans, null]) {
+    const end = span ? span.index : text.length;
+    const delimiter = LATEX_PAREN_DELIMITER.exec(text.slice(last, end));
+    if (delimiter) add("paren-delimiter", last + delimiter.index, delimiter[0].length);
+    if (span) last = span.index + span[0].length;
   }
 
   for (let index = 1; index < spans.length; index += 1) {
@@ -106,7 +108,11 @@ function mathFindings(field: SummaryFieldKey, rendered: string): SummaryFinding[
     const gapStart = before.index + before[0].length;
     if (SPLIT_GAP.test(text.slice(gapStart, after.index))) add("split-fragment", before.index, after.index + after[0].length - before.index);
   }
-  return findings;
+  return issues;
+}
+
+function mathFindings(field: SummaryFieldKey, rendered: string): SummaryFinding[] {
+  return findMathIssues(rendered, { rendered: true }).map(({ code, snippet }) => ({ kind: "math", code, field, snippet }));
 }
 
 function cjkShare(text: string): number {
@@ -149,6 +155,7 @@ export function checkEntry(entry: SummaryEntry): EntryChecks {
   return { date: entry.date, topic: entry.topic, id: entry.id, title: entry.title, findings, lengths, claimCount };
 }
 
+/** Distribution of a numeric measure; `LengthDistribution` is the same shape for field lengths. */
 export interface LengthDistribution { min: number; median: number; p90: number; max: number }
 export interface Rate { count: number; of: number; rate: number }
 
@@ -169,10 +176,10 @@ export interface ChecksAggregate {
 
 export interface SummaryChecksResult { results: EntryChecks[]; aggregate: ChecksAggregate }
 
-const rate = (count: number, of: number): Rate => ({ count, of, rate: of === 0 ? 0 : count / of });
+export const rate = (count: number, of: number): Rate => ({ count, of, rate: of === 0 ? 0 : count / of });
 const KINDS: SummaryCheckKind[] = ["math", "length", "not-stated", "generic-phrase"];
 
-function distribution(values: number[]): LengthDistribution {
+export function distribution(values: number[]): LengthDistribution {
   if (values.length === 0) return { min: 0, median: 0, p90: 0, max: 0 };
   const sorted = [...values].sort((a, b) => a - b);
   const middle = sorted.length >> 1;

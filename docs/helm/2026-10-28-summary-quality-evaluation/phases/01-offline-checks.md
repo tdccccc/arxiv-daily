@@ -2,8 +2,8 @@
 
 goal_ref: ../goal.md
 created: 2026-10-28T22:50:00+08:00
-updated: 2026-10-28T22:40:00+08:00
-revision: 2
+updated: 2026-10-28T23:00:00+08:00
+revision: 3
 
 ## Outcome
 
@@ -45,7 +45,7 @@ revision: 2
 - kind: behavior
 - first signal: Red — 正反例测试因检查不存在而失败。
 - checks: 同一测试 Green；既有测试仍 Green。
-- [ ] accepted on observed evidence
+- [x] accepted on observed evidence (105/105 tests, Red 17/17 before implementation; real vault: 30 current + 16 older-prompt notes, 10 notes with math findings of which 4 are core-rule false positives, see journal)
 
 ### Chunk 4 — 报告与命令
 

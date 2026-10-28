@@ -17,3 +17,5 @@ export {
 export type {
   ChecksAggregate, EntryChecks, LengthDistribution, Rate, SummaryCheckKind, SummaryChecksResult, SummaryFieldKey, SummaryFinding,
 } from "./summary-checks";
+export { checkNote, checkNotes, CURRENT_NOTE_HEADINGS, NOTE_PLACEHOLDER_PHRASES } from "./summary-note-checks";
+export type { NoteChecks, NoteChecksAggregate, NoteChecksResult, NoteCheckKind, NoteFinding, NoteGroup } from "./summary-note-checks";

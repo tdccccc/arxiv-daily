@@ -61,6 +61,8 @@ test("math: adjacent split fragments are found, independent formulas are not", (
   assert.deepEqual(codes({ keyMethod: "比值 $a$ = $b$" }, "math"), ["keyMethod:split-fragment"]);
   assert.deepEqual(codes({ keyMethod: "差 $a$ + $b$ 与 $c$ ± $d$" }, "math"), ["keyMethod:split-fragment", "keyMethod:split-fragment"]);
   assert.deepEqual(codes({ keyMethod: "$a$ 和 $b$ 以及 $c$，$d$ 与 $e$-$f$ 关系" }, "math"), []);
+  // A slash lists two quantities (or two values of one); it does not join them into one formula.
+  assert.deepEqual(codes({ keyMethod: "对 $\\sigma_8$/$S_8$ 与 $+37\\%$ / $-37\\%$ 的影响" }, "math"), []);
 });
 
 test("math: \\(..\\) and \\[..\\] delimiters are found even though core would accept and rewrite them", () => {
