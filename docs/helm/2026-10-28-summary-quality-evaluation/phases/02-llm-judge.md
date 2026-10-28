@@ -2,8 +2,8 @@
 
 goal_ref: ../goal.md
 created: 2026-10-28T23:50:00+08:00
-updated: 2026-10-29T00:30:00+08:00
-revision: 5
+updated: 2026-10-29T00:50:00+08:00
+revision: 6
 
 ## Outcome
 
@@ -55,6 +55,8 @@ revision: 5
 - [x] accepted on observed evidence (223/223 quality-eval tests, Red 11/11 first; test:release-tools 1131/1131; fake-model run over 8 real items rendered every section incl. the offline cross-check)
 
 ## Phase verification
+
+<!-- Observed 2026-10-29: real trial on claude-opus-5-5, 4 items (3 daily, 1 note), 4/4 valid first try, owner read every judgment and confirmed the quoted source text; test:release-tools 1131/1131. -->
 
 - 用研究者提供的评审模型试跑 2–3 条（日报 + 笔记各至少 1 条，先征得同意），报告生成，引用校验通过率和判定内容由 owner 读一遍确认合理。
 - `npm run test:release-tools` Green。

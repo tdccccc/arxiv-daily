@@ -36,3 +36,12 @@
 - change: none yet. Proposed L3: regenerate the sampled summaries with the current generator on the cached input, then judge those, so the input is identical and prompt or model changes can be compared. Historical judging becomes reference only, with multi-version papers flagged. Waiting on the researcher.
 - disposition: keep all P2 code. The trial artifacts stay outside the repo.
 - next: the researcher's decision on regeneration.
+
+## 2026-10-29 — L3 steer
+
+- evidence: See the previous entry. The researcher chose option A: "A吧".
+- change:
+  - Intent and a new success criterion now require regenerating the sampled summaries on the cached input with the current generator, then judging those. The constraint on same input became "the baseline judges regenerated summaries; historical judging is reference only, and multi-version papers are flagged".
+  - P2 is done: tool complete, real trial verified. The old P3 never started, so it was re-phased in place: P3 is now regenerate and judge regenerated summaries, and P4 is calibration plus baseline.
+- disposition: keep all code. Historical judging stays available as reference.
+- next: P3 chunk 1, the regenerate command.
