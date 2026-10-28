@@ -39,6 +39,27 @@ test("a comma between digits is a list when the number is an uncertainty or more
   assert.deepEqual(tokens("共 1,234 与 1,234,567 与 12,345.67"), ["1234", "1234567", "12345.67"]);
 });
 
+test("a sentence-ending period after a thousands run does not break the run", () => {
+  assert.deepEqual(tokens("the number is 4,454,600. The average"), ["4454600"]);
+  assert.deepEqual(tokens("数量为 4,454,600。以及 (4,454,600)."), ["4454600", "4454600"]);
+  assert.deepEqual(tokens("$4\\,454\\,600$"), ["4454600"]);
+  assert.deepEqual(ground("$4\\,454\\,600$ 个源", "within R200m from BCGs is 4,454,600. The average number"), [["4454600", true, "exact"]]);
+  // Still lists, with or without a trailing period.
+  assert.deepEqual(tokens("$\\sigma_v=135\\pm67,150\\pm85,232$."), ["135", "67", "150", "85", "232"]);
+  assert.deepEqual(tokens("scales 256,102.4,64."), ["256", "102.4", "64"]);
+});
+
+test("a decimal written without its leading zero is the same number", () => {
+  assert.deepEqual(tokens("$p=.028$"), ["0.028"]);
+  assert.deepEqual(tokens("($p=.028$)"), ["0.028"]);
+  assert.deepEqual(tokens("值 .5 与 -.25 与 (.75)"), ["0.5", "-0.25", "0.75"]);
+  // A dot that ends a sentence or follows a digit is not a decimal point.
+  assert.deepEqual(tokens("共 120. 然后 3.5.7 与 a.5"), ["120", "3.5"]);
+  assert.deepEqual(ground("$p=0.028$", "differences ($p=.028$)"), [["0.028", true, "exact"]]);
+  assert.deepEqual(ground("$p=.028$", "differences p = 0.028"), [["0.028", true, "exact"]]);
+  assert.deepEqual(ground("$p=0.029$", "differences ($p=.028$)"), [["0.029", false, null]]);
+});
+
 test("author-year citations are not numbers", () => {
   assert.deepEqual(tokens("与 Higuchi+19、Helton+24 比较，Burgett et al. 2004 与 Smith et al. (2019)"), []);
   assert.deepEqual(tokens("样本 2019 年"), ["2019"]);

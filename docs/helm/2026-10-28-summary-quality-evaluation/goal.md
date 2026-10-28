@@ -2,8 +2,8 @@
 
 status: active
 created: 2026-10-28T22:15:00+08:00
-updated: 2026-10-28T23:10:00+08:00
-revision: 3
+updated: 2026-10-28T23:45:00+08:00
+revision: 4
 owner: current-session
 
 ## Intent
@@ -12,7 +12,7 @@ owner: current-session
 
 ## Success criteria
 
-- [ ] 一条开发者命令扫描一个 Vault 里已生成的日报和详细笔记（可按日期范围），不调用模型，输出一份可留存的报告，至少包含：回退率及原因、公式格式违规、字段长度（仅作参考数据，不算问题）、"原文未说明"占比、摘要中数字在原文里找不到的条目清单；固定测试覆盖每项检查。
+- [x] 一条开发者命令扫描一个 Vault 里已生成的日报和详细笔记（可按日期范围），不调用模型，输出一份可留存的报告，至少包含：回退率及原因、公式格式违规、字段长度（仅作参考数据，不算问题）、"原文未说明"占比、摘要中数字在原文里找不到的条目清单；固定测试覆盖每项检查。
 - [ ] 一条开发者命令对抽样的日报条目和详细笔记运行大模型评审：拿到与生成时同口径的原文输入，按固定评分维度逐条判断准确（有没有原文不支持或说错的内容、是否混淆作者声称与已证实结果）、完整（有没有漏掉最重要的结果、关键条件或限制）、清楚（读者能否不看原文就理解每个字段说的是什么）逐篇给出判定和依据，汇总成可留存的报告；运行前先显示请求数和估算规模，加确认参数才真正调用；评审模型单独配置（接口、模型名、密钥），必须与生成模型不同。
 - [ ] 评审的可信度有一次核对：研究者对不少于 10 条评审判定给出"同意 / 不同意"，报告记录一致率。
 - [ ] 至少一次真实基线：自动检查跑过真实 Vault 全部历史，大模型评审跑过一批抽样（运行前征得用户同意费用），两份报告留存在仓库外的评估目录。
@@ -40,6 +40,6 @@ owner: current-session
 ## Phases
 
 <!-- Single source of truth for phase status. PN ↔ filename NN. Integer IDs are permanent and never reused; replacement phases take the next unused number. Outcomes only — no steps. The active line is the current focus. -->
-1. P1 — 不调用模型的自动检查工具，对真实 Vault 跑出第一份报告 — status: active
+1. P1 — 不调用模型的自动检查工具，对真实 Vault 跑出第一份报告 — status: done
 2. P2 — 大模型评审工具：同口径原文、固定评分维度、确认后调用、可留存报告 — status: pending
 3. P3 — 评审可信度核对 + 第一次真实评审基线 — status: pending

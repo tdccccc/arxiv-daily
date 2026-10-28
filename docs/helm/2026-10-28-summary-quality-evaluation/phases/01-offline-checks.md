@@ -2,8 +2,8 @@
 
 goal_ref: ../goal.md
 created: 2026-10-28T22:50:00+08:00
-updated: 2026-10-28T23:35:00+08:00
-revision: 6
+updated: 2026-10-28T23:45:00+08:00
+revision: 7
 
 ## Outcome
 
@@ -72,6 +72,8 @@ revision: 6
 - [x] accepted on observed evidence (163/163 quality-eval tests; partial-source trial: daily 97.8% / notes 95.9% numbers found; owner confirmed 2605.20779 daily says 11–300 GeV where the source says 1–300 GeV)
 
 ## Phase verification
+
+<!-- Observed 2026-10-28: real-vault report in ~/quality-eval/summary-2026-10-28-offline (469 entries, 46 notes, 472 sources); 10-number spot check: 2 normalisation misses (fixed), 2 likely real, 6 absent from input — see journal; test:release-tools 1073/1073. -->
 
 - 对真实 Vault 全部历史跑离线检查，报告写到 `~/quality-eval/summary-<日期>/`，条目数与预期（约 470 条日报、约 46 篇笔记）一致。
 - 抓取全部可评估论文的原文（只访问 arXiv，不调用模型）后跑数字核对；owner 人工抽查 10 条"疑似无出处数字"，记录误报率到 journal。

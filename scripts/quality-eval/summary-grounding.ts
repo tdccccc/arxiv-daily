@@ -42,7 +42,7 @@ const SEP = String.raw`(?:,|\{,\}|\\,|\;|\\!|[    ])`;
 // Thousands grouping is only read when the digits are not a list: not after a ±, and not followed by more comma-digits
 // (`135\pm67,150\pm85`, `256,102.4,64` are lists of numbers).
 const GROUPED = String.raw`\d{1,3}(?:${SEP}\d{3})+`;
-const NUM = String.raw`(?:(?<!\\pm[ \t]*|±[ \t]*)(?<![\d.])${GROUPED}(?:\.\d+(?!,\d)|(?![\d.])(?!,\d))|\d+(?:\.\d+)?)`;
+const NUM = String.raw`(?:(?<!\\pm[ \t]*|±[ \t]*)(?<![\d.])${GROUPED}(?:\.\d+(?!,\d)|(?!\.\d)(?!\d)(?!,\d))|\d+(?:\.\d+)?)`;
 const SP = String.raw`(?:\s|\\[,;!: ]|~|\{\})*`;
 const SUPERSCRIPT_DIGITS = "⁰¹²³⁴⁵⁶⁷⁸⁹";
 
@@ -54,8 +54,9 @@ const POWER_OF_TEN_SUPERSCRIPT = new RegExp(String.raw`(?<![\d.])10([⁻⁺]?[${
 // Labels and squares, not claims: `_{500}`, `_8`, `^2`, `^{-2}`. A signed or decimal exponent (`^{+0.1}_{-0.2}`) is an error bar and stays.
 const SUBSCRIPT = /_\{(?![+\-−])(?:[^{}]|\{[^{}]*\})*\}|_\d+(?:\.\d+)?/g;
 const INTEGER_EXPONENT = /\^[ \t]*\{?[ \t]*[-−+]?\d+[ \t]*\}?(?![\d.])/g;
+// A decimal may be written without its leading zero (`.028`) when it does not follow a digit, letter or dot.
 const PLAIN = new RegExp(
-  String.raw`(?<![\d.])(${NUM})(?:[ \t]*(\\?%|％|per[ \t]?cent\b|percent\b)|[ \t]*(million|billion|trillion|thousand)\b|(?:\$[ \t]*|[ \t]*)(千万|百万|万|亿))?`, "gi");
+  String.raw`(?:(?<![\d.])(${NUM})|(?<![\w.])\.(\d+))(?:[ \t]*(\\?%|％|per[ \t]?cent\b|percent\b)|[ \t]*(million|billion|trillion|thousand)\b|(?:\$[ \t]*|[ \t]*)(千万|百万|万|亿))?`, "gi");
 
 const SCALE_WORDS: Record<string, number> = {
   thousand: 1e3, million: 1e6, billion: 1e9, trillion: 1e12, 万: 1e4, 亿: 1e8, 千万: 1e7, 百万: 1e6,
@@ -141,9 +142,9 @@ export function extractNumbers(text: string, options: ExtractOptions = {}): Extr
   collect(SUBSCRIPT, 2, () => undefined);
   collect(INTEGER_EXPONENT, 2, () => undefined);
   collect(PLAIN, 3, (m) => {
-    const clean = stripSeparators(m[1]!);
-    const percent = Boolean(m[2]);
-    const multiplier = m[3] ? SCALE_WORDS[m[3].toLowerCase()]! : m[4] ? SCALE_WORDS[m[4]]! : 1;
+    const clean = m[1] ? stripSeparators(m[1]) : `0.${m[2]}`;
+    const percent = Boolean(m[3]);
+    const multiplier = m[4] ? SCALE_WORDS[m[4].toLowerCase()]! : m[5] ? SCALE_WORDS[m[5]]! : 1;
     const sign = signBefore(masked, m.index);
     return {
       token: `${sign}${clean}${percent ? "%" : ""}`, value: Number(`${sign}${clean}`) * multiplier,
