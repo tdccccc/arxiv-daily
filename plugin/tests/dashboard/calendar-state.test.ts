@@ -367,6 +367,57 @@ describe("isCalendarRunWhitelisted", () => {
   });
 });
 
+describe("isCalendarRunWhitelisted for a deleted report", () => {
+  const written = runState("completed", { papersWritten: 5, outcome: "papers_written" });
+
+  it("runs today after the Run window and outside recent dates", () => {
+    const afterWindow = new Date("2026-06-23T11:00:00Z");
+    expect(isCalendarRunWhitelisted(whitelistInput({ now: afterWindow }))).toBe(false);
+    expect(
+      isCalendarRunWhitelisted(whitelistInput({ now: afterWindow, runState: written })),
+    ).toBe(true);
+  });
+
+  it("runs a past date missing from recent dates, including legacy entries without outcome", () => {
+    for (const state of [written, runState("completed", { papersWritten: 5 })]) {
+      expect(
+        isCalendarRunWhitelisted(
+          whitelistInput({ date: "2026-06-19", recentDates: new Set(), runState: state }),
+        ),
+      ).toBe(true);
+    }
+  });
+
+  it("renders as runnable with the run label", () => {
+    const runnable = isCalendarRunWhitelisted(
+      whitelistInput({ now: new Date("2026-06-23T11:00:00Z"), runState: written }),
+    );
+    const resolution = resolveCalendarCellState({ runnable, runState: written });
+    expect(resolution).toEqual({ state: "runnable" });
+    expect(calendarCellAriaLabel({ date: "2026-06-23", ...resolution })).toBe(
+      "2026-06-23: run daily report",
+    );
+  });
+
+  it("keeps the other gates closed", () => {
+    const afterWindow = new Date("2026-06-23T11:00:00Z");
+    expect(isCalendarRunWhitelisted(whitelistInput({ now: afterWindow, runState: written, hasDailyReport: true }))).toBe(false);
+    expect(isCalendarRunWhitelisted(whitelistInput({ now: afterWindow, runState: written, isWeekend: true }))).toBe(false);
+    expect(isCalendarRunWhitelisted(whitelistInput({ now: afterWindow, runState: written, inLookback: false }))).toBe(false);
+  });
+
+  it("does not run completed dates that never had a report", () => {
+    const afterWindow = new Date("2026-06-23T11:00:00Z");
+    for (const state of [
+      runState("completed", { papersWritten: 0, outcome: "no_matches" }),
+      runState("completed", { papersWritten: 0, outcome: "no_updates" }),
+      runState("completed", { papersWritten: 0 }),
+    ]) {
+      expect(isCalendarRunWhitelisted(whitelistInput({ now: afterWindow, runState: state }))).toBe(false);
+    }
+  });
+});
+
 describe("resolveCalendarEmptyReason", () => {
   it("labels future dates distinctly", () => {
     expect(

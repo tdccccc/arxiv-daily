@@ -93,6 +93,28 @@ describe("CLI runtime", () => {
     expect(run).toHaveBeenCalledWith("2026-09-28", expect.anything(), { retryTransportFallbacks: true });
   });
 
+  it("regenerates a completed date only after its daily report was deleted", async () => {
+    const root = await makeTempDir();
+    const config = await loadCliConfig({
+      configPath: join(root, "config.toml"),
+      readText: async () => tomlForVault(root, join(root, ".cache")),
+    });
+    const host = buildNodeHostAdapters({ rootDir: root });
+    const runtime = await buildCliRuntime(config, { host });
+    const run = vi.spyOn(runtime.pipeline, "runForDate").mockResolvedValue({ kind: "completed", papersWritten: 1 });
+    const date = "2026-09-28";
+    await runtime.stateStore.setCompleted(date, 5, "papers_written");
+
+    await host.storage.mkdir("arxiv-daily/daily");
+    await host.storage.writeText(`arxiv-daily/daily/${date}.md`, "report");
+    expect(await runtime.scheduler.runForDateNow(date, { retryFailed: true })).toEqual({ kind: "skipped", reason: "already done" });
+    expect(run).not.toHaveBeenCalled();
+
+    await host.storage.remove(`arxiv-daily/daily/${date}.md`);
+    expect(await runtime.scheduler.runForDateNow(date, { retryFailed: true })).toMatchObject({ kind: "completed" });
+    expect(run).toHaveBeenCalledOnce();
+  });
+
   it("preserves another host's temporary Markdown during startup and cleans it after release", async () => {
     const root = await makeTempDir();
     const config = await loadCliConfig({

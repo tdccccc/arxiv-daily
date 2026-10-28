@@ -1,5 +1,5 @@
 import type { RunStateEntry } from "@arxiv-daily/core";
-import { isTimeWithinLocalWindow } from "@arxiv-daily/core";
+import { isReportWrittenRunState, isTimeWithinLocalWindow } from "@arxiv-daily/core";
 import type { DailyReportDay } from "./types";
 
 export type CalendarCellState =
@@ -96,6 +96,10 @@ export function isCalendarRunWhitelisted(
   if (input.isWeekend) return false;
   if (input.hasDailyReport) return false;
   if (isRunStateBlockedForCalendarRun(input.runState)) return false;
+
+  // The report was written and then deleted: a manual run regenerates it, so
+  // neither the schedule window nor the recent-dates list should hide that.
+  if (isReportWrittenRunState(input.runState)) return true;
 
   if (input.date === input.today) {
     return isTimeWithinLocalWindow(

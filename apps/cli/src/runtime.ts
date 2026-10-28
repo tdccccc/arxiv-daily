@@ -211,6 +211,7 @@ export async function buildCliRuntime(
     cancellation: new RunCancellationService(operations),
     runHistory: runHistoryStore,
     dailyPathForDate: (date) => writer.dailyPath(date),
+    dailyExists: (date) => writer.dailyExists(date),
     onDailyCompleted,
   });
 

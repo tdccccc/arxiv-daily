@@ -6,6 +6,17 @@ import { derivePaperInboxPaths } from "./paper-index";
 const MAX_TRANSIENT_ATTEMPTS = 10;
 export const STALE_RUNNING_RECOVERY_MS = 60 * 60 * 1000;
 
+/**
+ * A completed date whose run wrote a daily report (legacy entries have no
+ * outcome, so a positive paper count stands in for it). Dates that finished
+ * with no matches or no updates never had a daily file.
+ */
+export function isReportWrittenRunState(entry: RunStateEntry | undefined): boolean {
+  if (entry?.status !== "completed") return false;
+  if (entry.outcome) return entry.outcome === "papers_written";
+  return (entry.papersWritten ?? 0) > 0;
+}
+
 /** A run-state file that cannot be parsed, so every write to it is refused. */
 export interface RunStateDamage {
   path: string;
@@ -166,6 +177,7 @@ export class StateStore {
         papersWritten,
         outcome,
         error: undefined,
+        rerunOf: undefined,
       };
       return { result: undefined, persist: true };
     });
@@ -213,6 +225,48 @@ export class StateStore {
     });
   }
 
+  /**
+   * Starts the rerun of a completed date whose daily report was deleted. One
+   * write replaces the completed entry with a `running` one that carries it as
+   * `rerunOf`, so no crash can leave the date cleared but unmarked. Returns
+   * false, writing nothing, when the durable entry is no longer completed.
+   */
+  async beginDeletedReportRerun(date: string): Promise<boolean> {
+    return await this.enqueueMutation((candidate) => {
+      const prev = candidate[date];
+      if (prev?.status !== "completed") return { result: false, persist: false };
+      const origin = copyKnownEntryFields(prev);
+      candidate[date] = {
+        status: "running",
+        lastAttempt: Date.now(),
+        attempts: 1,
+        failureAttempts: 0,
+        rerunOf: origin,
+      };
+      return { result: true, persist: true };
+    });
+  }
+
+  /**
+   * Puts back the completed entry a deleted-report rerun replaced, unless the
+   * rerun has completed since. With minAgeMs the restore also waits for a
+   * `running` entry to be that old (a run that may still be alive keeps its
+   * state). Returns whether an entry was restored.
+   */
+  async restoreRerunOrigin(date: string, now = Date.now(), minAgeMs = 0): Promise<boolean> {
+    return await this.enqueueMutation((candidate) => {
+      const entry = candidate[date];
+      if (!entry?.rerunOf || entry.status === "completed") {
+        return { result: false, persist: false };
+      }
+      if (entry.status === "running" && minAgeMs > 0 && now - entry.lastAttempt < minAgeMs) {
+        return { result: false, persist: false };
+      }
+      candidate[date] = { ...entry.rerunOf };
+      return { result: true, persist: true };
+    });
+  }
+
   async clearDate(date: string): Promise<void> {
     await this.enqueueMutation((candidate) => {
       if (!(date in candidate)) return { result: undefined, persist: false };
@@ -251,11 +305,13 @@ export class StateStore {
       for (const [date, entry] of Object.entries(candidate)) {
         if (entry.status !== "running") continue;
         if (now - entry.lastAttempt < maxAgeMs) continue;
-        candidate[date] = recoveredRunningEntry(
-          entry,
-          "recovered stale running state after startup",
-          now,
-        );
+        candidate[date] = entry.rerunOf
+          ? { ...entry.rerunOf }
+          : recoveredRunningEntry(
+            entry,
+            "recovered stale running state after startup",
+            now,
+          );
         recovered.push(date);
       }
       return {
@@ -444,9 +500,19 @@ function runStatesEqual(left: RunState, right: RunState): boolean {
       leftEntry?.failureAttempts === rightEntry?.failureAttempts &&
       leftEntry?.outcome === rightEntry?.outcome &&
       leftEntry?.error === rightEntry?.error &&
-      leftEntry?.papersWritten === rightEntry?.papersWritten
+      leftEntry?.papersWritten === rightEntry?.papersWritten &&
+      sameRerunOrigin(leftEntry?.rerunOf, rightEntry?.rerunOf)
     );
   });
+}
+
+function sameRerunOrigin(
+  left: RunStateEntry["rerunOf"],
+  right: RunStateEntry["rerunOf"],
+): boolean {
+  const normalize = (origin: RunStateEntry["rerunOf"]) =>
+    origin ? JSON.stringify(copyKnownEntryFields(origin)) : undefined;
+  return normalize(left) === normalize(right);
 }
 
 function cloneRunState(runState: RunState): RunState {
@@ -641,16 +707,10 @@ function parseRunStateEntries(
       continue;
     }
     const entry = rawEntry as Partial<RunStateEntry>;
-    const optionalFieldsInvalid =
-      ("failureAttempts" in entry &&
-        (typeof entry.failureAttempts !== "number" ||
-          !Number.isSafeInteger(entry.failureAttempts) || entry.failureAttempts < 0)) ||
-      ("outcome" in entry && !isRunOutcome(entry.outcome)) ||
-      ("error" in entry && typeof entry.error !== "string") ||
-      ("papersWritten" in entry &&
-        (typeof entry.papersWritten !== "number" ||
-          !Number.isFinite(entry.papersWritten)));
-    if (optionalFieldsInvalid) {
+    if (
+      hasInvalidOptionalFields(entry) ||
+      ("rerunOf" in entry && parseRerunOrigin(entry.rerunOf) === undefined)
+    ) {
       throw new InvalidRunStateOptionalFieldError(date);
     }
     if (
@@ -661,18 +721,55 @@ function parseRunStateEntries(
       if (strict) throw new Error(`invalid run-state entry: ${date}`);
       continue;
     }
+    const rerunOf = "rerunOf" in entry ? parseRerunOrigin(entry.rerunOf) : undefined;
     out[date] = {
-      status: entry.status,
-      lastAttempt: entry.lastAttempt,
-      attempts: entry.attempts,
-      ...(entry.failureAttempts !== undefined ? { failureAttempts: entry.failureAttempts } : {}),
-      ...(entry.outcome !== undefined ? { outcome: entry.outcome } : {}),
-      error: typeof entry.error === "string" ? entry.error : undefined,
-      papersWritten:
-        typeof entry.papersWritten === "number" ? entry.papersWritten : undefined,
+      ...copyKnownEntryFields(entry as RunStateEntry),
+      ...(rerunOf ? { rerunOf } : {}),
     };
   }
   return out;
+}
+
+function hasInvalidOptionalFields(entry: Partial<RunStateEntry>): boolean {
+  return (
+    ("failureAttempts" in entry &&
+      (typeof entry.failureAttempts !== "number" ||
+        !Number.isSafeInteger(entry.failureAttempts) || entry.failureAttempts < 0)) ||
+    ("outcome" in entry && !isRunOutcome(entry.outcome)) ||
+    ("error" in entry && typeof entry.error !== "string") ||
+    ("papersWritten" in entry &&
+      (typeof entry.papersWritten !== "number" ||
+        !Number.isFinite(entry.papersWritten)))
+  );
+}
+
+function copyKnownEntryFields(entry: Omit<RunStateEntry, "rerunOf">): Omit<RunStateEntry, "rerunOf"> {
+  return {
+    status: entry.status,
+    lastAttempt: entry.lastAttempt,
+    attempts: entry.attempts,
+    ...(entry.failureAttempts !== undefined ? { failureAttempts: entry.failureAttempts } : {}),
+    ...(entry.outcome !== undefined ? { outcome: entry.outcome } : {}),
+    error: typeof entry.error === "string" ? entry.error : undefined,
+    papersWritten:
+      typeof entry.papersWritten === "number" ? entry.papersWritten : undefined,
+  };
+}
+
+/** The saved completed entry; undefined when the marker is not a valid one. */
+function parseRerunOrigin(raw: unknown): Omit<RunStateEntry, "rerunOf"> | undefined {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return undefined;
+  const origin = raw as Partial<RunStateEntry>;
+  if (
+    origin.status !== "completed" ||
+    typeof origin.lastAttempt !== "number" ||
+    typeof origin.attempts !== "number" ||
+    "rerunOf" in origin ||
+    hasInvalidOptionalFields(origin)
+  ) {
+    return undefined;
+  }
+  return copyKnownEntryFields(origin as RunStateEntry);
 }
 
 function isRunStatus(value: unknown): value is RunStatus {

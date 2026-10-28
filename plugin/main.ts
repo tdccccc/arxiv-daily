@@ -535,6 +535,7 @@ export default class ArxivDailyPlugin extends Plugin {
       recentDates: this.recentDates,
       runHistory: this.runHistoryStore,
       dailyPathForDate: (date) => this.buildMarkdownWriter().dailyPath(date),
+      dailyExists: (date) => this.buildMarkdownWriter().dailyExists(date),
       onDailyCompleted: (date, result) => this.deliverCompletedDigest(date, result),
     });
     this.settingsChanges = new SettingsChangeService({

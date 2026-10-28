@@ -1,5 +1,5 @@
 import type { PipelineResult, PipelineRunOptions } from "../../pipeline/pipeline";
-import type { PluginSettings } from "../../settings/types";
+import type { PluginSettings, RunStateEntry } from "../../settings/types";
 import {
   daysBefore,
   isTimeWithinLocalWindow,
@@ -17,6 +17,7 @@ import type { RunHistoryTrigger } from "../run-history";
 import type { RunLock } from "../run-lock";
 import {
   isFinalTransientAttempt,
+  isReportWrittenRunState,
   STALE_RUNNING_RECOVERY_MS,
   type StateStore,
 } from "../state-store";
@@ -52,6 +53,12 @@ export interface SchedulerDriverDeps {
   cancellation?: RunCancellationService;
   history: HistoryRecorder;
   recentDates?: SchedulerRecentDates;
+  /**
+   * Whether the date's daily report file is still on disk. Lets a manual run
+   * regenerate a report the user deleted; without it a completed date always
+   * answers "already done".
+   */
+  dailyExists?: (date: string) => Promise<boolean>;
   now?: () => Date;
   /**
    * Optional post-completion hook (e.g. email delivery). Failures must be
@@ -85,6 +92,8 @@ interface PendingNonCompletion {
   result: PendingNonCompletionResult;
   trigger: RunHistoryTrigger;
   at: Date;
+  /** A deleted-report rerun: its date goes back to completed, never to pending. */
+  restoresCompleted?: boolean;
 }
 
 interface PendingCompletionAttempt {
@@ -92,7 +101,11 @@ interface PendingCompletionAttempt {
   result?: SchedulerResult;
 }
 
-type RunMode = "normal" | "manual-retry" | "scheduled" | "run-all-pending" | "retry" | "force";
+/**
+ * "pending-retry" only finalizes this scheduler's own unfinished results; it
+ * behaves like "normal" otherwise, but never regenerates a deleted report.
+ */
+type RunMode = "normal" | "manual-retry" | "pending-retry" | "scheduled" | "run-all-pending" | "retry" | "force";
 type TryRunResult = SchedulerResult | { kind: "not-eligible" };
 
 const COMPLETION_COMMIT_FAILURE_REASON = "scheduler completion commit failed";
@@ -596,9 +609,11 @@ export class SchedulerDriver {
         const currentEntry = store.get(date);
         // Choose from authoritative state while holding the vault lock. A
         // concurrent completion must never be cleared by a stale retry request.
-        const runMode = mode === "manual-retry"
+        let deletedReport = false;
+        let runMode: RunMode = mode === "manual-retry"
           ? currentEntry.status === "failed_transient" || currentEntry.status === "failed_permanent" ? "retry" : "normal"
-          : mode;
+          : mode === "pending-retry" ? "normal" : mode;
+        const mayRerunDeletedReport = mode === "normal" || mode === "manual-retry";
         if (runMode === "scheduled") {
           const decision = checkTickGate(date, store, {
             now,
@@ -638,7 +653,15 @@ export class SchedulerDriver {
             return { kind: "skipped" as const, reason: "already running" };
           }
         } else if (runMode === "normal") {
-          if (store.isDone(date)) {
+          if (
+            store.isDone(date) &&
+            mayRerunDeletedReport &&
+            (await this.dailyDeletedAfterCompletion(date, currentEntry))
+          ) {
+            runMode = "force";
+            deletedReport = true;
+          }
+          if (runMode === "normal" && store.isDone(date)) {
             await this.safeAsyncEffect(() =>
               this.deps.history.recordSkipped(date, trigger, "already done", now),
             );
@@ -667,7 +690,10 @@ export class SchedulerDriver {
           return { kind: "skipped" as const, reason: "already running" };
         }
 
-        if (runMode === "force" || runMode === "retry") {
+        // A deleted-report rerun is not an explicit Force run: it keeps the
+        // completed entry (as `rerunOf` on the running entry) instead of
+        // clearing it, so the entry can come back if the rerun does not finish.
+        if ((runMode === "force" && !deletedReport) || runMode === "retry") {
           try {
             await store.clearDate(date);
           } catch (error) {
@@ -675,80 +701,158 @@ export class SchedulerDriver {
           }
         }
 
-        const previousEntry = store.get(date);
-        this.safeEffect(() => this.deps.cancellation?.prepareRun());
-        const signal = this.beginCancellationRun(date, cancellationBatch);
-        let result: PipelineResult;
         try {
-          this.safeEffect(() =>
-            this.progress.setTask("arXiv Daily report", date),
-          );
+          // A rerun starts from nothing, as after Force run: the earlier
+          // completion must not lend its paper count to the new result.
+          const previousEntry = deletedReport
+            ? { status: "pending" as const, lastAttempt: 0, attempts: 0 }
+            : store.get(date);
+          this.safeEffect(() => this.deps.cancellation?.prepareRun());
+          const signal = this.beginCancellationRun(date, cancellationBatch);
+          let result: PipelineResult;
           try {
-            await store.setRunning(date);
-          } catch (error) {
-            this.safeEffect(() => this.deps.cancellation?.finish(date));
-            return this.storeFailureResult(date, trigger, now, error);
-          }
-          await this.safeAsyncEffect(() =>
-            this.deps.history.recordStarted(date, trigger, now),
-          );
-          // Only the final transient attempt may commit a report that carries
-          // unreachable-model fallbacks; every earlier one is retried instead.
-          result = await this.deps.runForDate(date, signal, {
-            retryTransportFallbacks: !isFinalTransientAttempt(store.get(date)),
-          });
-        } catch (error) {
-          result = isCancellationError(error)
-            ? { kind: "cancelled", reason: errorMessage(error) }
-            : { kind: "failed_transient", reason: errorMessage(error) };
-        }
-
-        try {
-          if (result.kind === "completed") {
-            const papersWritten = preservedCompletedPaperCount(
-              previousEntry,
-              result.papersWritten,
+            this.safeEffect(() =>
+              this.progress.setTask("arXiv Daily report", date),
             );
-            const pending: PendingCompletion = {
-              result: papersWritten !== result.papersWritten
-                ? { ...result, outcome: previousEntry.outcome ?? "papers_written" }
-                : result,
-              papersWritten,
-              requestedPapersWritten: result.papersWritten,
-              preservedPapersWritten: papersWritten !== result.papersWritten,
-              trigger,
-              completedAt: now,
-              committed: false,
-            };
-            this.pendingCompletions.set(date, pending);
-            const finalization = this.finalizePendingCompletionLocked(
-              date,
-              pending,
-              trigger,
-              now,
-              store,
-            );
-            this.pendingCompletionFinalizations.set(date, finalization);
             try {
-              return await finalization;
-            } finally {
-              if (this.pendingCompletionFinalizations.get(date) === finalization) {
-                this.pendingCompletionFinalizations.delete(date);
+              if (deletedReport) {
+                if (!(await store.beginDeletedReportRerun(date))) {
+                  this.safeEffect(() => this.deps.cancellation?.finish(date));
+                  return { kind: "not-eligible" as const };
+                }
+              } else {
+                await store.setRunning(date);
+              }
+            } catch (error) {
+              this.safeEffect(() => this.deps.cancellation?.finish(date));
+              return this.storeFailureResult(date, trigger, now, error);
+            }
+            await this.safeAsyncEffect(() =>
+              this.deps.history.recordStarted(date, trigger, now),
+            );
+            // Only the final transient attempt may commit a report that carries
+            // unreachable-model fallbacks; every earlier one is retried instead.
+            result = await this.deps.runForDate(date, signal, {
+              retryTransportFallbacks: !isFinalTransientAttempt(store.get(date)),
+            });
+          } catch (error) {
+            result = isCancellationError(error)
+              ? { kind: "cancelled", reason: errorMessage(error) }
+              : { kind: "failed_transient", reason: errorMessage(error) };
+          }
+
+          try {
+            if (result.kind === "completed") {
+              const papersWritten = preservedCompletedPaperCount(
+                previousEntry,
+                result.papersWritten,
+              );
+              const pending: PendingCompletion = {
+                result: papersWritten !== result.papersWritten
+                  ? { ...result, outcome: previousEntry.outcome ?? "papers_written" }
+                  : result,
+                papersWritten,
+                requestedPapersWritten: result.papersWritten,
+                preservedPapersWritten: papersWritten !== result.papersWritten,
+                trigger,
+                completedAt: now,
+                committed: false,
+              };
+              this.pendingCompletions.set(date, pending);
+              const finalization = this.finalizePendingCompletionLocked(
+                date,
+                pending,
+                trigger,
+                now,
+                store,
+              );
+              this.pendingCompletionFinalizations.set(date, finalization);
+              try {
+                return await finalization;
+              } finally {
+                if (this.pendingCompletionFinalizations.get(date) === finalization) {
+                  this.pendingCompletionFinalizations.delete(date);
+                }
               }
             }
+            if (result.kind === "pending" || result.kind === "cancelled") {
+              const pending: PendingNonCompletion = {
+              result,
+              trigger,
+              at: now,
+              ...(deletedReport ? { restoresCompleted: true } : {}),
+            };
+              this.pendingNonCompletions.set(date, pending);
+              return await this.finalizePendingNonCompletionLocked(date, pending, store);
+            }
+            return await this.finalizeFailureLocked(date, result, trigger, now, store);
+          } finally {
+            this.safeEffect(() => this.deps.cancellation?.finish(date));
           }
-          if (result.kind === "pending" || result.kind === "cancelled") {
-            const pending: PendingNonCompletion = { result, trigger, at: now };
-            this.pendingNonCompletions.set(date, pending);
-            return await this.finalizePendingNonCompletionLocked(date, pending, store);
-          }
-          return await this.finalizeFailureLocked(date, result, trigger, now, store);
         } finally {
-          this.safeEffect(() => this.deps.cancellation?.finish(date));
+          // A cancelled or pending result that could not be saved is retried by
+          // its own finalization, which restores the entry.
+          if (deletedReport && !this.pendingNonCompletions.has(date)) {
+            await this.restoreDeletedReportEntry(date, store);
+          }
         }
       });
     } finally {
       this.activeWork -= 1;
+    }
+  }
+
+  /**
+   * A manual run of a completed date whose report was written but has since
+   * been deleted should regenerate it. Scheduled ticks and batch runs never
+   * ask: they must not resurrect a report the user removed. A failing check
+   * keeps the date "already done".
+   */
+  private async dailyDeletedAfterCompletion(
+    date: string,
+    entry: RunStateEntry,
+  ): Promise<boolean> {
+    const dailyExists = this.deps.dailyExists;
+    if (!dailyExists || !isReportWrittenRunState(entry)) return false;
+    try {
+      if (await dailyExists(date)) return false;
+    } catch (error) {
+      this.safeEffect(() =>
+        this.deps.logger.warn(
+          `scheduler: could not check the daily report for ${date}; treating it as present`,
+          error,
+        ),
+      );
+      return false;
+    }
+    this.safeEffect(() =>
+      this.deps.logger.info(
+        `scheduler: daily report for ${date} was deleted; regenerating it`,
+      ),
+    );
+    return true;
+  }
+
+  /**
+   * A rerun of a deleted report replaces the completed entry with a marked
+   * `running` one; only a run that completes may keep that replacement.
+   * Otherwise the date would look open to the scheduled tick and batch runs,
+   * which would regenerate a report the user deleted. The caller still gets
+   * the real result and the history keeps the failed attempt.
+   */
+  private async restoreDeletedReportEntry(
+    date: string,
+    store: StateStore,
+  ): Promise<void> {
+    try {
+      await store.restoreRerunOrigin(date);
+    } catch (error) {
+      this.safeEffect(() =>
+        this.deps.logger.error(
+          `scheduler: failed to restore the completed state of ${date} after an incomplete rerun`,
+          error,
+        ),
+      );
     }
   }
 
@@ -766,7 +870,25 @@ export class SchedulerDriver {
     crossProcess: boolean,
     store: StateStore,
   ): Promise<void> {
-    if (store.get(date).status !== "running") return;
+    const marked = store.get(date);
+    if (marked.rerunOf && marked.status !== "completed") {
+      // The rerun of a deleted report died or never finished its cleanup.
+      // Its date is done, so the report stays deleted until the user asks.
+      const restored = await store.restoreRerunOrigin(
+        date,
+        now.getTime(),
+        marked.status === "running" && !crossProcess ? STALE_RUNNING_RECOVERY_MS : 0,
+      );
+      if (restored) {
+        this.safeEffect(() =>
+          this.deps.logger.warn(
+            `scheduler: the rerun of ${date} did not finish; restored its completed state without regenerating the deleted report`,
+          ),
+        );
+      }
+      return;
+    }
+    if (marked.status !== "running") return;
     const recovered = await store.recoverRunningDate(
       date,
       now.getTime(),
@@ -791,7 +913,7 @@ export class SchedulerDriver {
     if (!this.pendingCompletions.has(date) && !this.pendingNonCompletions.has(date)) {
       return { handled: false };
     }
-    const result = await this.tryRun(date, trigger, now);
+    const result = await this.tryRun(date, trigger, now, undefined, "pending-retry");
     if (result?.kind === "not-eligible") return { handled: true };
     return { handled: true, result };
   }
@@ -926,7 +1048,11 @@ export class SchedulerDriver {
     store: StateStore,
   ): Promise<PendingNonCompletionResult> {
     try {
-      if (pending.result.kind === "pending" && pending.result.outcome) {
+      if (pending.restoresCompleted) {
+        // The report was deleted on purpose: the date stays completed whatever
+        // this rerun ended with. A repeated attempt finds it already restored.
+        await store.restoreRerunOrigin(date);
+      } else if (pending.result.kind === "pending" && pending.result.outcome) {
         await store.setPending(date, pending.result.reason, pending.result.outcome);
       } else {
         await store.setPending(date, pending.result.reason);
@@ -1025,7 +1151,10 @@ export class SchedulerDriver {
         ),
       );
       try {
-        await store.clearDate(date);
+        // A deleted-report rerun goes back to its completed entry; clearing
+        // would drop the marker and leave the date open to automatic runs.
+        if (store.get(date).rerunOf) await store.restoreRerunOrigin(date);
+        else await store.clearDate(date);
       } catch (clearError) {
         this.safeEffect(() =>
           this.deps.logger.error(

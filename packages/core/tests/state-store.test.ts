@@ -940,6 +940,83 @@ describe("StateStore", () => {
     },
   );
 
+  describe("rerunOf marker", () => {
+    const origin = { status: "completed", lastAttempt: 1, attempts: 2, papersWritten: 5, outcome: "papers_written" };
+    const storeWith = (rerunOf: unknown) => {
+      const { storage } = makeStorage({
+        "arxiv-daily/.index/run-state.json": JSON.stringify({
+          schemaVersion: 1,
+          runState: { d: { status: "running", lastAttempt: 9, attempts: 1, failureAttempts: 0, rerunOf } },
+        }),
+      });
+      return createStorageStateStore(storage, DEFAULT_SETTINGS.output, { warn: vi.fn() });
+    };
+
+    it("loads a valid marker and keeps it through a save", async () => {
+      const store = storeWith({ ...origin, unknownFutureField: true });
+      await store.load();
+
+      expect(store.get("d").rerunOf).toEqual({ ...origin, error: undefined });
+      expect(await store.restoreRerunOrigin("d")).toBe(true);
+      expect(store.get("d")).toEqual({ ...origin, error: undefined });
+    });
+
+    it.each([
+      ["not an object", "42"],
+      ["an array", "[]"],
+      ["a non-completed status", JSON.stringify({ ...origin, status: "running" })],
+      ["a missing attempts count", JSON.stringify({ status: "completed", lastAttempt: 1 })],
+      ["an invalid outcome", JSON.stringify({ ...origin, outcome: "unknown" })],
+      ["a nested marker", JSON.stringify({ ...origin, rerunOf: origin })],
+    ])("rejects a marker that is %s", async (_label, serialized) => {
+      const store = storeWith(JSON.parse(serialized));
+
+      await expect(store.load()).rejects.toThrow("invalid run-state entry");
+      expect(store.get("d").status).toBe("pending");
+    });
+
+    it("drops the marker when the rerun completes", async () => {
+      const store = storeWith(origin);
+      await store.load();
+      await store.setCompleted("d", 3, "papers_written");
+
+      expect(store.get("d").rerunOf).toBeUndefined();
+      expect(store.get("d")).toMatchObject({ status: "completed", papersWritten: 3 });
+    });
+
+    it("beginDeletedReportRerun writes one running entry carrying the completed one", async () => {
+      const { store, data } = makeStore({ d: { ...origin } } as never);
+      await store.load();
+
+      expect(await store.beginDeletedReportRerun("d")).toBe(true);
+      expect(data.runState.d).toMatchObject({ status: "running", attempts: 1, rerunOf: origin });
+      expect(data.runState.d?.papersWritten).toBeUndefined();
+
+      const pending = makeStore({ p: { status: "pending", lastAttempt: 1, attempts: 1 } });
+      await pending.store.load();
+      expect(await pending.store.beginDeletedReportRerun("p")).toBe(false);
+      expect(pending.data.runState.p?.status).toBe("pending");
+    });
+
+    it("restores a running marker only once it is old enough", async () => {
+      const store = storeWith(origin);
+      await store.load();
+
+      expect(await store.restoreRerunOrigin("d", 10, 100)).toBe(false);
+      expect(store.get("d").status).toBe("running");
+      expect(await store.restoreRerunOrigin("d", 1_000, 100)).toBe(true);
+      expect(store.get("d").status).toBe("completed");
+    });
+
+    it("startup stale-running recovery restores the completed entry", async () => {
+      const store = storeWith(origin);
+      await store.load();
+
+      expect(await store.recoverStaleRunning(10_000_000, 1000)).toEqual(["d"]);
+      expect(store.get("d")).toMatchObject({ status: "completed", papersWritten: 5 });
+    });
+  });
+
   it("falls back to the backup file when run-state.json is corrupt", async () => {
     const { storage } = makeStorage({
       "arxiv-daily/.index/run-state.json": "{not-json",

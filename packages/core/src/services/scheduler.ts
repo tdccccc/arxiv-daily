@@ -67,6 +67,8 @@ export interface SchedulerDeps {
   recentDates?: SchedulerRecentDates;
   runHistory?: Pick<RunHistoryStore, "safeAppend">;
   dailyPathForDate?: (date: string) => string;
+  /** Lets a manual run regenerate a daily report the user deleted. */
+  dailyExists?: (date: string) => Promise<boolean>;
   onDailyCompleted?: (
     date: string,
     result: Extract<PipelineResult, { kind: "completed" }>,
@@ -107,6 +109,7 @@ export class SchedulerService {
       cancellation: deps.cancellation,
       history,
       recentDates: deps.recentDates,
+      dailyExists: deps.dailyExists,
       now: deps.now,
       onDailyCompleted: deps.onDailyCompleted,
     });

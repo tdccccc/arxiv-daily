@@ -191,6 +191,13 @@ export interface RunStateEntry {
   outcome?: RunOutcome;
   error?: string;
   papersWritten?: number;
+  /**
+   * Set on the `running` entry of a rerun of a daily report the user deleted:
+   * the completed entry that rerun replaced. A rerun that does not complete
+   * (including one that was cut off by a crash) puts it back, so the date is never
+   * reopened for automatic runs. Older builds ignore the field.
+   */
+  rerunOf?: Omit<RunStateEntry, "rerunOf">;
 }
 
 export type RunState = Record<string, RunStateEntry>;
