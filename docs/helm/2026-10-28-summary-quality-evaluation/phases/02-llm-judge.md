@@ -2,8 +2,8 @@
 
 goal_ref: ../goal.md
 created: 2026-10-28T23:50:00+08:00
-updated: 2026-10-28T23:50:00+08:00
-revision: 1
+updated: 2026-10-29T00:00:00+08:00
+revision: 2
 
 ## Outcome
 
@@ -28,7 +28,7 @@ revision: 1
 - kind: behavior
 - first signal: Red — `scripts/tests/quality-eval-summary-judge-contract.test.mjs` 的合法/非法样例因模块不存在而失败。
 - checks: 同一测试 Green；quality-eval 全部测试 Green。
-- [ ] accepted on observed evidence
+- [x] accepted on observed evidence (182/182 quality-eval tests, Red 17/17 first; owner read the prompt and added the derived-number rule)
 
 ### Chunk 2 — 抽样与评审输入
 

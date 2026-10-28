@@ -35,3 +35,10 @@ export {
 export type {
   ExtractedNumber, GroundedNumber, GroundingAggregate, GroundingResult, SourceIndex, SourceTexts, UngroundedNumber, WrittenText,
 } from "./summary-grounding";
+export {
+  ABSENT_FROM_SOURCE_PHRASE, buildJudgeCorrection, buildJudgeSystemPrompt, checkJudgeOutput, JUDGE_DIMENSIONS, JUDGE_VERDICTS, normalizeQuoteText,
+  parseJudgeOutput, validateJudgment,
+} from "./summary-judge-contract";
+export type {
+  JudgeCheck, JudgeContext, JudgeDimension, JudgeIssue, JudgePromptOptions, JudgeSeverity, JudgeVerdict, Judgment,
+} from "./summary-judge-contract";
