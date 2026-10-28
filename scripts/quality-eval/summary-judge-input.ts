@@ -204,6 +204,8 @@ export interface PreparedJudgeInput {
   requested: { daily: number; notes: number };
   /** Daily entries sampled per report month. */
   allocation: Record<string, number>;
+  /** The ids that were chosen, whether or not a request could be built for them. */
+  sample: { daily: string[]; notes: string[] };
   /** How many chosen papers could not be turned into a judge request, per kind. */
   shortfall: { daily: number; notes: number };
   estimate: JudgeEstimate;
@@ -225,6 +227,7 @@ export async function prepareJudgeInput(options: PrepareJudgeOptions): Promise<P
     })), ...skipped],
     requested: options.ids ? { daily: targets.daily.length, notes: targets.notes.length } : { daily: options.daily ?? DEFAULT_JUDGE_DAILY, notes: options.notes ?? DEFAULT_JUDGE_NOTES },
     allocation: targets.allocation,
+    sample: { daily: targets.daily.map((entry) => entry.id), notes: targets.notes.map((note) => note.id) },
     shortfall: { daily: targets.daily.length - built("daily"), notes: targets.notes.length - built("note") },
     estimate: estimateJudgeInput(items),
   };

@@ -49,3 +49,5 @@ export type {
   BuildItemsOptions, JudgeEstimate, JudgeItem, PreparedJudgeInput, PrepareJudgeOptions, SampleOptions, SampleTargets, SizeStats, SkippedItem, SkipReason,
 } from "./summary-judge-input";
 export { readSourceRecord } from "./summary-sources";
+export { CHARS_PER_TOKEN, parseSummaryJudgeArgs, runSummaryJudge } from "./summary-judge-run";
+export type { GeneratorConfig, JudgeCounts, JudgeModelLike, JudgePlan, SummaryJudgeDeps, SummaryJudgeOptions, SummaryJudgeResult } from "./summary-judge-run";

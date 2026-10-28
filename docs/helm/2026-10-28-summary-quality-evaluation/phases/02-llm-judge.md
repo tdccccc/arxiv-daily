@@ -2,8 +2,8 @@
 
 goal_ref: ../goal.md
 created: 2026-10-28T23:50:00+08:00
-updated: 2026-10-29T00:10:00+08:00
-revision: 3
+updated: 2026-10-29T00:20:00+08:00
+revision: 4
 
 ## Outcome
 
@@ -44,7 +44,7 @@ revision: 3
 - kind: behavior
 - first signal: Red — 假模型下的运行测试（预览不发请求、续跑跳过已评、同模型拒绝、失败单列、输出不含密钥）失败。
 - checks: 同一测试 Green；全部测试 Green。
-- [ ] accepted on observed evidence
+- [x] accepted on observed evidence (212/212 quality-eval tests, Red 14/15 first; test:release-tools 1120/1120; preview on the real vault with a dummy config only, no real model called)
 
 ### Chunk 4 — 评审报告
 
