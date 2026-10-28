@@ -195,7 +195,7 @@ export async function runSummaryCheck(options: SummaryCheckOptions, deps: Summar
   return { outDir, files, report };
 }
 
-async function requireDirectory(directory: string, flag: string): Promise<void> {
+export async function requireDirectory(directory: string, flag: string): Promise<void> {
   const info = await stat(directory).catch(() => null);
   if (!info) throw new Error(`${flag} ${directory} does not exist`);
   if (!info.isDirectory()) throw new Error(`${flag} ${directory} is not a directory`);

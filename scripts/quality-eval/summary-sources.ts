@@ -139,6 +139,12 @@ async function readRecord(file: string): Promise<SourceRecord | null> {
   }
 }
 
+/** The cached record of a paper, or null when there is none (or it is not a readable record of this format). */
+export async function readSourceRecord(sourcesDir: string, id: string): Promise<SourceRecord | null> {
+  const canonical = modernArxivResources(id)?.id;
+  return canonical ? readRecord(path.join(sourcesDir, `${canonical}.json`)) : null;
+}
+
 async function readFailures(sourcesDir: string): Promise<SourceFailure[]> {
   try {
     const parsed = JSON.parse(await readFile(path.join(sourcesDir, FAILURES_FILE), "utf8")) as { failures?: SourceFailure[] };

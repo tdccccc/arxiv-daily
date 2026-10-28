@@ -28,6 +28,8 @@ export interface SummaryEntry {
   topic: string | null;
   id: string;
   title: string;
+  /** As the report prints them (usually the first author and "et al."). */
+  authors: string;
   fields: Record<FieldKey, string>;
 }
 
@@ -45,6 +47,8 @@ export interface DetailNote {
   topic: string;
   path: string;
   title: string;
+  /** From the note's frontmatter, as written (usually the first author and "et al."). */
+  authors: string;
   /** The report date the note links, else a plain `published` date; null when the note carries neither. */
   date: string | null;
   sections: NoteSection[];
@@ -99,7 +103,7 @@ export async function loadSummaryCorpus(options: CorpusOptions): Promise<Summary
         evaluable = true;
         const fields = readFields(paper.summary ?? {});
         if (FIELD_KEYS.some((key) => !fields[key])) corpus.counts.incompleteEntries += 1;
-        corpus.entries.push({ date, topic: paper.section, id: paper.id, title: paper.title, fields });
+        corpus.entries.push({ date, topic: paper.section, id: paper.id, title: paper.title, authors: paper.authors, fields });
       }
     }
     corpus.counts.reports += 1;
@@ -158,7 +162,7 @@ function readDetailNote(markdown: string, notePath: string): DetailNote | null {
   if (!id || !topic) return null;
   const parsed = parseBody(stripGenerationMetrics(body));
   if (!parsed.sections.some((section) => CURRENT_NOTE_HEADINGS.has(section.heading))) return null;
-  return { id, topic, path: notePath, title: parsed.title, date: noteDate(values.get("published")), sections: parsed.sections };
+  return { id, topic, path: notePath, title: parsed.title, authors: values.get("authors") ?? "", date: noteDate(values.get("published")), sections: parsed.sections };
 }
 
 function legacyNoteDate(markdown: string): string | null {

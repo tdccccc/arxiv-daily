@@ -2,8 +2,8 @@
 
 goal_ref: ../goal.md
 created: 2026-10-28T23:50:00+08:00
-updated: 2026-10-29T00:00:00+08:00
-revision: 2
+updated: 2026-10-29T00:10:00+08:00
+revision: 3
 
 ## Outcome
 
@@ -36,7 +36,7 @@ revision: 2
 - kind: behavior
 - first signal: Red — 抽样确定性、跳过无原文、消息内容与 `rebuildDailyInput` 一致等测试失败。
 - checks: 同一测试 Green；全部测试 Green。
-- [ ] accepted on observed evidence
+- [x] accepted on observed evidence (197/197 tests, Red 15/15 first; dry build 40 daily + 10 notes: 0 skipped, ≈4.48M characters total, avg ≈90k per item)
 
 ### Chunk 3 — 评审配置、预览/确认与可续跑运行
 
