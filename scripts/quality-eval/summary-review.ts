@@ -1,5 +1,5 @@
 import { existsSync } from "node:fs";
-import { mkdir, readFile, readdir, rename, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { seededRandom } from "./export";
 import { requireDirectory, resolveVaultLayout } from "./summary-check";
@@ -11,6 +11,7 @@ import { loadSummaryCorpus, parseBody, type SummaryCorpus } from "./summary-corp
 import { readSourceRecord } from "./summary-sources";
 import { cell } from "./report";
 import { FIELD_LABELS } from "./summary-report";
+import { buildMetaReport, loadMetaRecords } from "./summary-meta-review";
 
 const CONTEXT_CHARS = 300;
 const DIMENSION_LABELS: Record<JudgeDimension, string> = { accuracy: "准确", completeness: "完整", clarity: "清楚" };
@@ -50,7 +51,7 @@ export interface ReviewCard {
   /** About 300 characters of the cached source before and after the source quote. */
   sourceContext: string | null;
   /** Why there is no source context although there is a source quote. */
-  sourceContextNote: "no-sources" | "cached-source-lacks-quote" | null;
+  sourceContextNote: "no-sources" | "cached-source-lacks-quote" | "source-changed" | null;
   explanation: string;
   /** Present on cards of a dispute page: what the second model said about this judge issue. */
   meta?: CardMeta;
@@ -101,7 +102,7 @@ export interface BuildCardsOptions {
   seed: string;
 }
 
-export interface BuiltCards { cards: ReviewCard[]; pageId: string; shortfall: number; available: { judgments: number; extra: number }; disputeSampling?: DisputeSamplingPlan | null }
+export interface BuiltCards { cards: ReviewCard[]; pageId: string; shortfall: number; available: { judgments: number; extra: number }; integrityWarnings: string[]; metaAggregate?: MetaAggregateSummary; disputeSampling?: DisputeSamplingPlan | null }
 
 const sha = async (text: string): Promise<string> => (await import("node:crypto")).createHash("sha256").update(text).digest("hex");
 
@@ -200,12 +201,12 @@ async function completeCards(chosen: readonly Chosen[], options: BuildCardsOptio
     const layout = await resolveVaultLayout(options);
     corpus = await loadSummaryCorpus(layout);
   }
-  const sourceCache = new Map<string, string | null>();
-  const sourceOf = async (id: string): Promise<string | null> => {
+  const sourceCache = new Map<string, { text: string; contentHash: string } | null>();
+  const sourceOf = async (id: string): Promise<{ text: string; contentHash: string } | null> => {
     if (!options.sourcesDir) return null;
     if (!sourceCache.has(id)) {
       const cached = await readSourceRecord(options.sourcesDir, id);
-      sourceCache.set(id, cached ? sourceTextOf(cached) : null);
+      sourceCache.set(id, cached ? { text: sourceTextOf(cached), contentHash: cached.contentHash } : null);
     }
     return sourceCache.get(id) ?? null;
   };
@@ -215,21 +216,14 @@ async function completeCards(chosen: readonly Chosen[], options: BuildCardsOptio
     if (summaryText === null && card.origin.kind === "regenerated") summaryText = await regeneratedText(card.origin.summariesDir, card.kind, card.id, card.location);
     if (summaryText === null && corpus) summaryText = vaultText(corpus, card.kind, card.id, card.location, record.item.date);
 
-    let sourceContext: string | null = null;
-    let sourceContextNote: ReviewCard["sourceContextNote"] = null;
-    if (card.sourceQuote !== null) {
-      if (!options.sourcesDir) sourceContextNote = "no-sources";
-      else {
-        const text = await sourceOf(card.id);
-        sourceContext = text ? contextAround(text, card.sourceQuote) : null;
-        if (sourceContext === null) sourceContextNote = text ? "cached-source-lacks-quote" : "no-sources";
-      }
-    }
+    const source = card.sourceQuote !== null || meta?.evidenceQuote ? await sourceOf(card.id) : null;
+    const sourceChanged = source !== null && source.contentHash !== record.item.source.contentHash;
+    const text = sourceChanged ? null : source?.text ?? null;
+    const sourceContext = text && card.sourceQuote !== null ? contextAround(text, card.sourceQuote) : null;
+    const sourceContextNote: ReviewCard["sourceContextNote"] = sourceChanged ? "source-changed"
+      : card.sourceQuote === null || sourceContext !== null ? null : text ? "cached-source-lacks-quote" : "no-sources";
     const completed: ReviewCard = { ...card, summaryText, sourceContext, sourceContextNote };
-    if (meta) {
-      const text = meta.evidenceQuote ? await sourceOf(card.id) : null;
-      completed.meta = { ...meta, evidenceContext: text && meta.evidenceQuote ? contextAround(text, meta.evidenceQuote) : null };
-    }
+    if (meta) completed.meta = { ...meta, evidenceContext: text && meta.evidenceQuote ? contextAround(text, meta.evidenceQuote) : null };
     cards.push(completed);
   }
   return cards;
@@ -237,24 +231,6 @@ async function completeCards(chosen: readonly Chosen[], options: BuildCardsOptio
 
 async function pageIdOf(cards: readonly ReviewCard[]): Promise<string> {
   return (await sha(JSON.stringify(cards.map((card) => [card.cardId, card.origin.judgeDir, card.summaryQuote, card.meta?.verdict ?? null])))).slice(0, 16);
-}
-
-interface MetaFileRecord {
-  status: string;
-  item: JudgmentRecord["item"] & { origin?: JudgmentRecord["origin"] };
-  judge: JudgmentRecord["judge"];
-  issues: JudgeIssueLike[];
-  reviews: Array<{ index: number; verdict: CardMeta["verdict"]; severity: CardMeta["severityOpinion"]; reason: string; evidenceQuote: string | null }> | null;
-}
-type JudgeIssueLike = NonNullable<JudgmentRecord["judgment"]>["issues"][number];
-
-async function readJsonDir<T>(dir: string): Promise<T[]> {
-  if (!existsSync(dir)) return [];
-  const records: T[] = [];
-  for (const name of (await readdir(dir)).filter((entry) => entry.endsWith(".json")).sort()) {
-    try { records.push(JSON.parse(await readFile(path.join(dir, name), "utf8")) as T); } catch { /* not a record */ }
-  }
-  return records;
 }
 
 const STRATUM_LABELS: Record<string, string> = { must: "必选（准确性分歧和评审判为大问题的分歧）", accuracy: "准确", completeness: "完整", clarity: "清楚" };
@@ -287,23 +263,38 @@ function sampleDisputes<T extends Candidate & { meta: Chosen["meta"] }>(disputes
  */
 async function buildMetaCards(options: BuildCardsOptions): Promise<BuiltCards> {
   const metaDir = path.resolve(options.metaDir!);
-  const records = (await readJsonDir<MetaFileRecord>(path.join(metaDir, "meta"))).filter((record) => record.status === "reviewed" && record.reviews);
+  const loadedMeta = await loadMetaRecords(metaDir);
+  const aggregate = buildMetaReport(loadedMeta.run, loadedMeta.records, new Date());
+  const records = loadedMeta.records.filter((record) => record.status === "reviewed" && record.reviews);
   if (records.length === 0) throw new Error(`no reviews found in ${path.join(metaDir, "meta")}; run summary-meta-review.mjs with --yes first`);
-  let judgedDir = options.judgmentsDir ? path.resolve(options.judgmentsDir) : metaDir;
-  try {
-    const run = JSON.parse(await readFile(path.join(metaDir, "run.json"), "utf8")) as { judged?: { dir?: string } };
-    if (!options.judgmentsDir && run.judged?.dir) judgedDir = run.judged.dir;
-  } catch { /* the summary text then comes from the other sources */ }
+  const judgedDir = path.resolve(options.judgmentsDir ?? loadedMeta.run.judged?.dir ?? metaDir);
   const judgeRecords = new Map<string, JudgmentRecord>();
-  try { for (const record of (await loadJudgments(judgedDir)).records) judgeRecords.set(`${record.item.kind}-${record.item.id}`, record); } catch { /* no judge records */ }
+  const integrityWarnings: string[] = [...loadedMeta.integrityWarnings];
+  try {
+    const loaded = await loadJudgments(judgedDir);
+    integrityWarnings.push(...loaded.integrityWarnings);
+    for (const record of loaded.records) judgeRecords.set(`${record.item.kind}-${record.item.id}`, record);
+  } catch { integrityWarnings.push("原评审记录无法验证，未从该目录补充摘要上下文。"); }
 
   const disputes: Array<Candidate & { meta: Chosen["meta"] }> = [];
   const agreed: Array<Candidate & { meta: Chosen["meta"] }> = [];
   for (const record of records) {
-    const original = judgeRecords.get(`${record.item.kind}-${record.item.id}`);
+    const key = `${record.item.kind}-${record.item.id}`;
+    const original = judgeRecords.get(key);
+    if (original?.status !== "judged" || !original.judgment || !original.summaryHash || !original.summary?.locations
+        || record.issues.some((issue) => !original.summary!.locations.some((location) => location.key === issue.location && typeof location.text === "string"))) {
+      throw new Error(`The original judgment for ${key} is missing or cannot be verified with its saved summary text; restore the matching judgment before generating the dispute page.`);
+    }
+    const originalText = original.item.kind === "daily"
+      ? original.summary.locations.map((location) => `[${location.key}] ${location.text}`).join("\n")
+      : original.summary.locations.map((location) => `## ${location.key}\n${location.text}`).join("\n\n");
+    const judgmentHash = await sha(JSON.stringify({ summaryHash: original.summaryHash, source: original.item.source.contentHash, issues: original.judgment.issues }));
+    if (await sha(originalText) !== original.summaryHash || judgmentHash !== record.judgmentHash) {
+      throw new Error(`The original judgment for ${key} does not match this meta-review; restore the matching judgment or rerun the meta-review before generating the dispute page.`);
+    }
     const pseudo = {
       schemaVersion: 1, status: "judged", invalid: false, item: record.item, judge: record.judge, origin: record.item.origin, attempts: [], judgePromptHash: "",
-      judgment: { verdicts: { accuracy: "ok", completeness: "ok", clarity: "ok" }, issues: record.issues }, ...(original?.summary ? { summary: original.summary } : {}),
+      judgment: { verdicts: { accuracy: "ok", completeness: "ok", clarity: "ok" }, issues: record.issues }, summary: original.summary,
     } as unknown as JudgmentRecord;
     for (const candidate of candidatesOf([pseudo], judgedDir, "meta")) {
       const review = record.reviews!.find((entry) => entry.index === candidate.index);
@@ -319,7 +310,7 @@ async function buildMetaCards(options: BuildCardsOptions): Promise<BuiltCards> {
   const room = options.count === undefined ? Infinity : Math.max(0, options.count - chosenDisputes.length);
   const chosenAgreed = pickSpread(agreed, Math.min(options.agreedSample ?? 3, room), options.seed);
   const cards = await completeCards([...chosenDisputes, ...chosenAgreed], options);
-  return { cards, pageId: await pageIdOf(cards), shortfall: 0, available: { judgments: disputes.length, extra: agreed.length }, disputeSampling: sampled?.plan ?? null };
+  return { cards, pageId: await pageIdOf(cards), shortfall: 0, available: { judgments: disputes.length, extra: agreed.length }, disputeSampling: sampled?.plan ?? null, integrityWarnings: [...new Set(integrityWarnings)], metaAggregate: { issues: aggregate.counts.issues, aggregate: aggregate.aggregate } };
 }
 
 /** Choose the issues to show a reviewer and gather what the page needs around each one. */
@@ -327,9 +318,12 @@ export async function buildReviewCards(options: BuildCardsOptions): Promise<Buil
   if (options.metaDir) return buildMetaCards(options);
   if (!options.judgmentsDir || options.count === undefined) throw new Error("buildReviewCards needs judgmentsDir and count (or metaDir)");
   const count = options.count;
+  const integrityWarnings: string[] = [];
   const load = async (dir: string, pool: ReviewCard["pool"]) => {
     const resolved = path.resolve(dir);
-    return candidatesOf((await loadJudgments(resolved)).records, resolved, pool);
+    const loaded = await loadJudgments(resolved);
+    integrityWarnings.push(...loaded.integrityWarnings);
+    return candidatesOf(loaded.records, resolved, pool);
   };
   const main = await load(options.judgmentsDir, "judgments");
   const extra = options.extraDir ? await load(options.extraDir, "extra") : [];
@@ -337,7 +331,7 @@ export async function buildReviewCards(options: BuildCardsOptions): Promise<Buil
   const fromMain = pickSpread(main, count, options.seed);
   const fromExtra = pickSpread(extra, count - fromMain.length, options.seed);
   const cards = await completeCards([...fromMain, ...fromExtra], options);
-  return { cards, pageId: await pageIdOf(cards), shortfall: Math.max(0, count - cards.length), available: { judgments: main.length, extra: extra.length } };
+  return { cards, pageId: await pageIdOf(cards), shortfall: Math.max(0, count - cards.length), available: { judgments: main.length, extra: extra.length }, integrityWarnings: [...new Set(integrityWarnings)] };
 }
 
 // ---- the page --------------------------------------------------------------------------------------
@@ -377,11 +371,12 @@ function groupBanner(card: ReviewCard): string {
 }
 
 function renderCard(card: ReviewCard, position: number, total: number): string {
+  const changedSourceNote = "缓存原文已变化，无法显示评审当时的上下文；这里只保留评审和复核记录的原始引用。";
   const sourceBlock = card.sourceQuote === null
-    ? `<p class="absent">原文未提及（评审认为摘要的这个说法在原文里没有依据）</p>`
+    ? `<p class="absent">原文未提及（评审认为摘要的这个说法在原文里没有依据）</p>${card.sourceContextNote === "source-changed" ? `<p class="note">${changedSourceNote}</p>` : ""}`
     : `<blockquote class="quote">${escapeHtml(card.sourceQuote)}</blockquote>${card.sourceContext
       ? `<p class="label">原文上下文</p><div class="text">…${highlighted(card.sourceContext, card.sourceQuote)}…</div>`
-      : `<p class="note">${card.sourceContextNote === "no-sources" ? "没有提供原文缓存，无法显示上下文。" : "当前缓存的原文里找不到这句话，无法显示上下文（原文可能已更新）。"}</p>`}`;
+      : `<p class="note">${card.sourceContextNote === "source-changed" ? changedSourceNote : card.sourceContextNote === "no-sources" ? "没有提供原文缓存，无法显示上下文。" : "当前缓存的原文里找不到这句话，无法显示上下文（原文可能已更新）。"}</p>`}`;
   return `<article class="card" id="card-${position}" data-card-id="${escapeHtml(card.cardId)}">
 <header><span class="count">${position} / ${total}</span><h2>${escapeHtml(card.title)}</h2><p class="id">${escapeHtml(card.id)} · ${card.kind === "daily" ? "日报条目" : "详细笔记"}</p><p class="origin origin-${card.origin.kind}">被评摘要来源：${escapeHtml(originLabel(card.origin))}</p>${groupBanner(card)}</header>
 <p class="chips"><span class="chip">位置：${escapeHtml(locationLabel(card.kind, card.location))}</span><span class="chip">维度：${DIMENSION_LABELS[card.dimension]}</span><span class="chip sev-${card.severity}">${SEVERITY_LABELS[card.severity]}</span></p>
@@ -462,7 +457,7 @@ document.getElementById("copy").addEventListener("click", function(){
 load(); render();
 })();`;
 
-export interface RenderOptions { pageId: string; createdAt: string }
+export interface RenderOptions { pageId: string; createdAt: string; integrityWarnings?: string[] }
 
 /** One self-contained HTML page (no external resources) with a card per issue; all text is escaped. */
 export function renderReviewPage(cards: readonly ReviewCard[], options: RenderOptions): string {
@@ -478,6 +473,7 @@ export function renderReviewPage(cards: readonly ReviewCard[], options: RenderOp
 <div class="bar"><span class="progress" id="progress">已判断 0 / ${cards.length}</span><button type="button" id="export">导出结果</button><button type="button" id="copy">复制结果</button><span id="status" role="status"></span></div>
 <main>
 <h1>评审判定核对</h1>
+${(options.integrityWarnings ?? []).map((warning) => `<p class="note">${escapeHtml(warning)}</p>`).join("\n")}
 ${cards.some((card) => card.meta) ? `<p class="intro">下面每一条是评审模型提出的一个问题，第二个模型复核后与它有分歧（“复核分歧”），或者同意它（“复核同意的抽查”，只抽少数）。每条都列出了评审说明和复核理由。请斟酌后裁定：分歧的条目点“评审对”“复核对”或“拿不准”；抽查的条目点“同意”（两个模型都对）、“不同意”或“拿不准”，需要时写备注。进度保存在这台设备的浏览器里，全部完成后点“导出结果”（或“复制结果”）把结果发回。页面编号 ${escapeHtml(options.pageId)}，生成于 ${escapeHtml(options.createdAt)}。</p>` : `<p class="intro">下面每一条是评审模型提出的一个问题。请对照“原文依据”和摘要，判断评审说得对不对：对就点“同意”，评审看错了或说错了点“不同意”，一时判断不了点“拿不准”，需要时写备注。进度保存在这台设备的浏览器里，全部完成后点“导出结果”（或“复制结果”）把结果发回。页面编号 ${escapeHtml(options.pageId)}，生成于 ${escapeHtml(options.createdAt)}。</p>`}
 ${cards.map((card, index) => renderCard(card, index + 1, cards.length)).join("\n")}
 </main>
@@ -497,28 +493,19 @@ async function writeAtomic(file: string, text: string): Promise<void> {
   await rename(temporary, file);
 }
 
-/** What the meta-review recorded about the reviewer's verdicts over all issues (the page holds only some of them). */
-async function readMetaAggregate(metaDir: string): Promise<MetaAggregateSummary> {
-  const file = path.join(path.resolve(metaDir), "meta-review.json");
-  let data: { counts?: { issues: number }; aggregate?: MetaAggregateSummary["aggregate"] };
-  try { data = JSON.parse(await readFile(file, "utf8")); }
-  catch { throw new Error(`${file} is missing; run summary-meta-review.mjs (or its --report-only) on ${metaDir} first`); }
-  if (!data.aggregate || !data.counts) throw new Error(`${file} is not a meta-review report`);
-  return { issues: data.counts.issues, aggregate: data.aggregate };
-}
 
 interface MetaAggregateSummary { issues: number; aggregate: { overall: Tally; byDimension: Record<JudgeDimension, Tally>; bySeverity: Record<"major" | "minor", Tally>; byKind: Record<"daily" | "note", Tally> } }
 
 export async function runSummaryReview(options: SummaryReviewOptions, deps: { now?: () => Date } = {}): Promise<{ files: string[]; pageId: string; cards: number; shortfall: number }> {
   if (options.sourcesDir) await requireDirectory(options.sourcesDir, "--sources");
   const built = await buildReviewCards(options);
-  const metaAggregate = options.metaDir ? await readMetaAggregate(options.metaDir) : undefined;
+  const metaAggregate = built.metaAggregate;
   const createdAt = (deps.now ?? (() => new Date()))().toISOString();
   const outDir = path.resolve(options.outDir);
   await mkdir(outDir, { recursive: true });
   const files = [path.join(outDir, "review.html"), path.join(outDir, "review.json")];
-  await writeAtomic(files[0]!, renderReviewPage(built.cards, { pageId: built.pageId, createdAt }));
-  await writeAtomic(files[1]!, `${JSON.stringify({ schemaVersion: 1, pageId: built.pageId, createdAt, seed: options.seed, requested: options.count ?? null, available: built.available, ...(metaAggregate ? { mode: "meta", metaDir: path.resolve(options.metaDir!), metaAggregate, disputeSampling: built.disputeSampling ?? null } : {}), cards: built.cards }, null, 2)}\n`);
+  await writeAtomic(files[0]!, renderReviewPage(built.cards, { pageId: built.pageId, createdAt, integrityWarnings: built.integrityWarnings }));
+  await writeAtomic(files[1]!, `${JSON.stringify({ schemaVersion: 1, pageId: built.pageId, createdAt, seed: options.seed, requested: options.count ?? null, available: built.available, integrityWarnings: built.integrityWarnings, ...(metaAggregate ? { mode: "meta", metaDir: path.resolve(options.metaDir!), metaAggregate, disputeSampling: built.disputeSampling ?? null } : {}), cards: built.cards }, null, 2)}\n`);
   return { files, pageId: built.pageId, cards: built.cards.length, shortfall: built.shortfall };
 }
 
@@ -539,6 +526,7 @@ export interface Calibration {
   unsureCards: Array<{ cardId: string; id: string; location: string; locationLabel: string; note: string }>;
   /** Only for a dispute page (`--meta`). */
   meta?: MetaCalibration;
+  integrityWarnings?: string[];
 }
 
 interface DisputeTally { judge: number; reviewer: number; unsure: number; unanswered: number; total: number }
@@ -683,6 +671,7 @@ function renderMetaCalibration(calibration: Calibration): string {
   const lines = [
     "# 评审判定核对报告（含第二个模型的复核）",
     "",
+    ...(calibration.integrityWarnings ?? []).flatMap((warning) => [`> ${warning}`, ""]),
     `核对页面 ${calibration.pageId}；页面共 ${calibration.total} 条，已判断 ${calibration.answered} 条，未判断 ${calibration.unanswered} 条。生成时间 ${calibration.generatedAt}。`,
     "",
     "第二个模型先逐条复核了评审提出的所有问题；研究者只裁定它与评审有分歧的问题（复核不同意或拿不准），并抽查了少数双方都同意的问题。",
@@ -765,6 +754,7 @@ export function renderCalibration(calibration: Calibration): string {
   const lines = [
     "# 评审判定核对报告",
     "",
+    ...(calibration.integrityWarnings ?? []).flatMap((warning) => [`> ${warning}`, ""]),
     `核对页面 ${calibration.pageId}；共 ${calibration.total} 条，已判断 ${calibration.answered} 条，未判断 ${calibration.unanswered} 条。生成时间 ${calibration.generatedAt}。`,
     "",
     "一致率 = 同意 /（同意 + 不同意）。“拿不准”不计入一致率，单独列出。一致率说的是：研究者认为评审提出的问题站得住的比例。",
@@ -809,7 +799,7 @@ export async function runReviewImport(options: { resultsPath: string; outDir: st
   const outDir = path.resolve(options.outDir);
   const manifestFile = path.join(outDir, "review.json");
   if (!existsSync(manifestFile)) throw new Error(`${manifestFile} not found; --out must be the directory the review page was generated into (review.json lists its cards)`);
-  const manifest = JSON.parse(await readFile(manifestFile, "utf8")) as { pageId: string; cards: ReviewCard[]; mode?: string; metaAggregate?: MetaAggregateSummary; disputeSampling?: DisputeSamplingPlan | null };
+  const manifest = JSON.parse(await readFile(manifestFile, "utf8")) as { pageId: string; cards: ReviewCard[]; mode?: string; metaAggregate?: MetaAggregateSummary; integrityWarnings?: string[]; disputeSampling?: DisputeSamplingPlan | null };
   let parsed: { pageId?: unknown; results?: unknown };
   try { parsed = JSON.parse(await readFile(options.resultsPath, "utf8")); }
   catch { throw new Error(`${options.resultsPath} is not readable JSON`); }
@@ -822,10 +812,11 @@ export async function runReviewImport(options: { resultsPath: string; outDir: st
     if (!card) throw new Error(`results[${index}].cardId ${JSON.stringify(entry?.cardId)} does not belong to this review page`);
     const allowed = decisionsFor(card);
     if (!allowed.includes(entry.decision as Decision)) throw new Error(`results[${index}].decision ${JSON.stringify(entry.decision)} is not allowed on this card; it must be one of ${allowed.join(", ")}`);
-    if (answers.has(entry.cardId)) throw new Error(`results[${index}].cardId ${entry.cardId} 重复出现 (duplicate)`);
-    answers.set(entry.cardId, { decision: entry.decision as Decision, note: typeof entry.note === "string" ? entry.note : "" });
+    if (answers.has(card.cardId)) throw new Error(`results[${index}].cardId ${entry.cardId} 重复出现 (duplicate)`);
+    answers.set(card.cardId, { decision: entry.decision as Decision, note: typeof entry.note === "string" ? entry.note : "" });
   }
   const calibration = computeCalibration(manifest.cards, manifest.pageId, answers, (deps.now ?? (() => new Date()))().toISOString(), manifest.mode === "meta" ? manifest.metaAggregate : undefined, manifest.disputeSampling ?? undefined);
+  calibration.integrityWarnings = manifest.integrityWarnings ?? [];
   const files = [path.join(outDir, "calibration.md"), path.join(outDir, "calibration.json")];
   await writeAtomic(files[0]!, renderCalibration(calibration));
   await writeAtomic(files[1]!, `${JSON.stringify(calibration, null, 2)}\n`);

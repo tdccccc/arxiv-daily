@@ -105,10 +105,10 @@ function reviewerLlm(script) {
     },
   };
 }
-const execute = async (state, { llm = reviewerLlm() } = {}, more = {}) => {
+const execute = async (state, { llm = reviewerLlm(), reviewerBase = REVIEWER_BASE } = {}, more = {}) => {
   const log = [];
   const options = { judgedDir: state.judged, sourcesDir: state.sources, configPath: "/fixture/config.toml", reviewerModel: "reviewer-model", reviewerEffort: "xhigh", outDir: state.out, ...more };
-  const result = await qe.runSummaryMetaReview(options, { llm, now: () => NOW, log: line => log.push(line), loadReviewerBase: async () => REVIEWER_BASE });
+  const result = await qe.runSummaryMetaReview(options, { llm, now: () => NOW, log: line => log.push(line), loadReviewerBase: async () => reviewerBase });
   return { result, llm, log };
 };
 async function setup() {
@@ -359,9 +359,14 @@ test("historical judgments are rebuilt from the vault", async () => {
 
 test("a judgment whose summary or source has changed since is skipped, not reviewed against different text", async () => {
   const state = await setup();
-  const file = path.join(state.judged, "judgments", "daily-2610.00001.json");
-  const record = JSON.parse(await readFile(file, "utf8"));
-  await writeFile(file, JSON.stringify({ ...record, summaryHash: "f".repeat(64) }));
+  const original = regenLlm();
+  const changedGenerator = { async call(messages, options) {
+    const reply = await original.call(messages, options);
+    if (idIn(messages) !== "2610.00001") return reply;
+    return JSON.stringify({ ...JSON.parse(reply), mainResult: "重新生成后不同的结果。" });
+  } };
+  await qe.runSummaryRegenerate({ vaultRoot: state.vault, sourcesDir: state.sources, outDir: state.regen, daily: 3, notes: 1, seed: "s", yes: true, regenerate: true },
+    { llm: changedGenerator, now: () => NOW, log: () => undefined, loadGeneratorConfig: async () => GENERATOR });
   const { result } = await execute(state);
   assert.deepEqual(result.plan.skipped.map(entry => [entry.id, entry.reason]), [["2610.00001", "summary-changed"]]);
   assert.equal(result.plan.items, 1);
@@ -390,4 +395,78 @@ test("the script prints usage on bad arguments", async () => {
   assert.equal(bad.status, 1);
   assert.match(bad.stderr, /Usage: node scripts\/quality-eval\/summary-meta-review\.mjs/);
   assert.equal(spawnSync(process.execPath, [script, "--help"], { encoding: "utf8" }).status, 0);
+});
+
+
+test("legacy judgment identity limitations survive the meta-review plan and report", async () => {
+  const state = await setup();
+  const runPath = path.join(state.judged, "run.json");
+  const run = JSON.parse(await readFile(runPath, "utf8"));
+  delete run.resultManifest;
+  await writeFile(runPath, JSON.stringify(run));
+  const { log } = await execute(state, {}, { yes: true });
+  assert.match(log.join("\n"), /旧格式运行没有结果清单/);
+  const report = JSON.parse(await readFile(path.join(state.out, "meta-review.json"), "utf8"));
+  assert.equal(report.run.integrityWarnings.length, 1);
+  assert.match(await readFile(path.join(state.out, "meta-review.md"), "utf8"), /旧格式运行没有结果清单/);
+});
+
+
+test("a narrowed judge sample excludes old meta reviews from the report and dispute page", async () => {
+  const state = await setup();
+  await execute(state, {}, { yes: true });
+  const runPath = path.join(state.judged, "run.json");
+  const run = JSON.parse(await readFile(runPath, "utf8"));
+  run.sample = { daily: ["2610.00001"], notes: [] };
+  if (run.resultManifest) run.resultManifest = run.resultManifest.filter(item => item.kind === "daily" && item.id === "2610.00001");
+  await writeFile(runPath, JSON.stringify(run));
+  const { result } = await execute(state, {}, { yes: true, reviewerModel: "new-reviewer" });
+  assert.equal(result.counts.items, 1);
+  assert.equal(result.counts.reviewed, 1);
+  await qe.runMetaReportOnly({ outDir: state.out }, { now: () => NOW });
+  const report = JSON.parse(await readFile(path.join(state.out, "meta-review.json"), "utf8"));
+  assert.deepEqual(report.records.map(item => [item.item.kind, item.item.id, item.reviewer.model]), [["daily", "2610.00001", "new-reviewer"]]);
+  const built = await qe.buildReviewCards({ metaDir: state.out, seed: "s", agreedSample: 20 });
+  assert.ok(built.cards.length > 0);
+  assert.ok(built.cards.every(item => item.kind === "daily" && item.id === "2610.00001"));
+});
+
+test("an empty meta result manifest does not resurrect previous successes after an interrupted rereview", async () => {
+  const state = await setup();
+  await execute(state, {}, { yes: true });
+  const runPath = path.join(state.out, "run.json");
+  const run = JSON.parse(await readFile(runPath, "utf8"));
+  run.resultManifest = [];
+  run.finishedAt = null;
+  run.counts = null;
+  await writeFile(runPath, JSON.stringify(run));
+  await qe.runMetaReportOnly({ outDir: state.out }, { now: () => NOW });
+  const report = JSON.parse(await readFile(path.join(state.out, "meta-review.json"), "utf8"));
+  assert.equal(report.counts.items, 0);
+  assert.equal(report.counts.reviewed, 0);
+  await assert.rejects(qe.buildReviewCards({ metaDir: state.out, seed: "s" }), /no reviews|no issues/);
+});
+
+test("meta report and dispute page reject a result that no longer matches the run manifest", async () => {
+  const state = await setup();
+  await execute(state, {}, { yes: true });
+  const file = path.join(state.out, "meta", "daily-2610.00001.json");
+  const record = JSON.parse(await readFile(file, "utf8"));
+  record.reviewer.model = "unrelated-reviewer";
+  await writeFile(file, JSON.stringify(record));
+  await assert.rejects(qe.runMetaReportOnly({ outDir: state.out }), /manifest/i);
+  await assert.rejects(qe.buildReviewCards({ metaDir: state.out, seed: "s" }), /manifest/i);
+});
+
+test("a reviewer endpoint change invalidates the cache, while key rotation preserves it", async () => {
+  const state = await setup();
+  await execute(state, {}, { yes: true });
+  const reviewerBase = { ...REVIEWER_BASE, baseUrl: "https://new-review-endpoint.example.invalid/v1" };
+  const changed = await execute(state, { reviewerBase }, { yes: true });
+  assert.equal(changed.llm.calls.length, 2);
+  const report = await readFile(path.join(state.out, "meta-review.json"), "utf8");
+  assert.ok(!report.includes("new-review-endpoint.example.invalid"));
+  const rotated = await execute(state, { reviewerBase: { ...reviewerBase, apiKey: "ROTATED-TEST-SECRET" } }, { yes: true });
+  assert.equal(rotated.llm.calls.length, 0);
+  assert.equal(rotated.result.counts.reused, 2);
 });

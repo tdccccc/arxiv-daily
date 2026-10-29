@@ -235,6 +235,7 @@ test("rebuilding the daily input gives exactly what the summarizer sends the mod
     abstractConclusion: record.content.abstractConclusion, fullSections: record.content.fullSections,
   }, { llm }), /stop/);
   assert.deepEqual(rebuilt.messages, sent[0]);
+  assert.equal(rebuilt.options.temperature, 0);
   assert.equal(rebuilt.messages[0].role, "system");
   assert.ok(rebuilt.messages[1].content.includes("A title"));
   assert.ok(rebuilt.messages[1].content.includes(record.content.fullSections));
@@ -253,6 +254,7 @@ test("rebuilding the detail input gives exactly what the detail summarizer sends
     id: "2610.00001", title: "A title", authors: "A. Author et al.", category: "galaxy-cluster", abstractConclusion: "", fullSections: record.content.fullSections,
   }, { llm, arxivSettings: { ...qe.DEFAULT_SETTINGS.arxiv, topics }, logger: new qe.Logger("error"), advanced: qe.DEFAULT_SETTINGS.advanced });
   assert.deepEqual(rebuilt.messages, sent[0]);
+  assert.equal(rebuilt.options.temperature, undefined);
   assert.ok(rebuilt.messages[0].content.includes("Galaxy Cluster"));
   assert.ok(rebuilt.messages[1].content.includes("以下是论文各章节内容"));
   // Abs-only content has no full text, and a detail note cannot be written from it.

@@ -14,9 +14,11 @@ import { JUDGE_DIMENSIONS, type JudgeDimension, type JudgeIssue } from "./summar
 import { prepareJudgeInput, type JudgeItem } from "./summary-judge-input";
 import { prepareRegeneratedJudgeInput } from "./summary-judge-regenerated";
 import { loadJudgments, type JudgmentRecord } from "./summary-judge-report";
+import { isSummaryResultId, isSummaryResultKind, readSummaryResultManifest, type SummaryResultManifestEntry } from "./summary-result-manifest";
 import { CHARS_PER_TOKEN } from "./summary-judge-run";
 import { buildMetaCorrection, buildMetaSystemPrompt, checkMetaOutput, type MetaReview, type MetaSeverityOpinion, type MetaVerdict } from "./summary-meta-review-contract";
 import { locationLabel } from "./summary-review";
+import { buildSummaryCacheIdentity, matchesSummaryCacheIdentity, type SummaryCacheIdentity } from "./summary-cache-identity";
 import { capped, percent, table } from "./summary-report";
 
 const MAX_CONSECUTIVE_ERRORS = 3;
@@ -200,7 +202,7 @@ async function collectTargets(options: MetaReviewOptions, records: readonly Judg
   return { targets, skipped };
 }
 
-interface MetaRecord {
+export interface MetaRecord {
   schemaVersion: 1;
   status: "reviewed" | "invalid" | "error";
   item: { kind: "daily" | "note"; id: string; title: string; date: string | null; topic: string | null; version?: string; source: JudgeItem["source"]; origin: JudgeItem["origin"] };
@@ -209,6 +211,7 @@ interface MetaRecord {
   reviewer: { provider: string; model: string; thinkingMode: boolean; reasoningEffort: string };
   reviewerPromptHash: string;
   judgmentHash: string;
+  cacheIdentity?: SummaryCacheIdentity;
   attempts: Array<{ raw: string; reasons: string[] | null; usage: unknown; elapsedMs: number }>;
   reviews: MetaReview[] | null;
   error?: string;
@@ -217,14 +220,16 @@ interface MetaRecord {
   elapsedMs: number;
 }
 
-async function isCurrent(file: string, target: Target, reviewer: LlmSettings): Promise<boolean> {
+async function currentRecordHash(file: string, target: Target, cacheIdentity: SummaryCacheIdentity): Promise<string | null> {
   try {
-    const record = JSON.parse(await readFile(file, "utf8")) as MetaRecord;
+    const serialized = await readFile(file, "utf8");
+    const record = JSON.parse(serialized) as MetaRecord;
     return (record.status === "reviewed" || record.status === "invalid")
-      && record.reviewer.model === reviewer.model && record.reviewer.provider === reviewer.provider && record.reviewer.reasoningEffort === reviewer.reasoningEffort
-      && record.reviewerPromptHash === target.promptHash && record.judgmentHash === target.judgmentHash;
+      && matchesSummaryCacheIdentity(record.cacheIdentity, cacheIdentity)
+      && record.reviewerPromptHash === target.promptHash && record.judgmentHash === target.judgmentHash
+      ? sha256(serialized) : null;
   } catch {
-    return false;
+    return null;
   }
 }
 
@@ -265,18 +270,27 @@ export async function runSummaryMetaReview(options: MetaReviewOptions, deps: Met
 
   const base = await (deps.loadReviewerBase ?? defaultLoadReviewerBase)(options.configPath);
   const reviewer = reviewerSettings(base, { model: options.reviewerModel, effort: options.reviewerEffort });
-  const { run, records } = await loadJudgments(path.resolve(options.judgedDir));
+  const { run, records, integrityWarnings } = await loadJudgments(path.resolve(options.judgedDir));
+  for (const warning of integrityWarnings) log(warning);
   const judgeModels = [...new Set(records.map((record) => record.judge.model))];
   const clash = judgeModels.find((model) => sameModel(model, reviewer.model));
   if (clash) throw new Error(`The reviewer must be a different model from the judge, but both are "${reviewer.model}". Use another --reviewer-model.`);
   if (run.generatorModel && sameModel(run.generatorModel, reviewer.model)) log(`Note: the reviewer is the same model as the generator (${reviewer.model}); that is allowed.`);
 
   const { targets, skipped } = await collectTargets(options, records);
+  const cacheIdentities = new Map(targets.map((target) => [target, buildSummaryCacheIdentity(reviewer, target.messages, undefined, {
+    judge: target.record.judge, judgmentHash: target.judgmentHash, origin: target.item.origin,
+  })]));
   const pending: Target[] = [];
+  const resultManifest: SummaryResultManifestEntry[] = [];
   let reused = 0;
   for (const target of targets) {
-    if (!options.rereview && await isCurrent(fileFor(outDir, target.record.item.kind, target.record.item.id), target, reviewer)) reused += 1;
-    else pending.push(target);
+    const file = fileFor(outDir, target.record.item.kind, target.record.item.id);
+    const recordHash = options.rereview ? null : await currentRecordHash(file, target, cacheIdentities.get(target)!);
+    if (recordHash !== null) {
+      resultManifest.push({ kind: target.item.kind, id: target.item.id, recordHash });
+      reused += 1;
+    } else pending.push(target);
   }
   const totalChars = pending.reduce((sum, target) => sum + target.messages.reduce((size, message) => size + message.content.length, 0), 0);
   const plan: MetaPlan = {
@@ -305,7 +319,9 @@ export async function runSummaryMetaReview(options: MetaReviewOptions, deps: Met
     schemaVersion: 1, startedAt: now().toISOString(), finishedAt: null as string | null,
     // The CLI config path and the secrets in it are not recorded.
     judged: { dir: path.resolve(options.judgedDir), judgeModels, generatorModel: run.generatorModel ?? null }, sourcesDir: path.resolve(options.sourcesDir),
-    reviewer: identity, plan, skipped, counts: null as unknown, stopped: null as "errors" | null,
+    reviewer: identity, plan, skipped, integrityWarnings,
+    sample: { daily: targets.filter((target) => target.item.kind === "daily").map((target) => target.item.id), notes: targets.filter((target) => target.item.kind === "note").map((target) => target.item.id) },
+    resultManifest, counts: null as unknown, stopped: null as "errors" | null,
   };
   await writeAtomic(path.join(outDir, "run.json"), `${JSON.stringify(runInfo, null, 2)}\n`);
 
@@ -328,11 +344,14 @@ export async function runSummaryMetaReview(options: MetaReviewOptions, deps: Met
     const record: MetaRecord = {
       schemaVersion: 1, status,
       item: { kind: item.kind, id: item.id, title: item.title, date: item.date, topic: item.topic, ...(item.version ? { version: item.version } : {}), source: item.source, origin: item.origin },
-      judge: target.record.judge, issues: target.issues, reviewer: identity, reviewerPromptHash: target.promptHash, judgmentHash: target.judgmentHash,
+      judge: target.record.judge, issues: target.issues, reviewer: identity, reviewerPromptHash: target.promptHash, judgmentHash: target.judgmentHash, cacheIdentity: cacheIdentities.get(target)!,
       attempts: outcome.attempts, reviews: outcome.reviews, ...(error !== undefined ? { error } : {}),
       startedAt: started.toISOString(), finishedAt: finished.toISOString(), elapsedMs: finished.getTime() - started.getTime(),
     };
-    await writeAtomic(fileFor(outDir, item.kind, item.id), `${JSON.stringify(record, null, 2)}\n`);
+    const serialized = `${JSON.stringify(record, null, 2)}\n`;
+    await writeAtomic(fileFor(outDir, item.kind, item.id), serialized);
+    resultManifest.push({ kind: item.kind, id: item.id, recordHash: sha256(serialized) });
+    await writeAtomic(path.join(outDir, "run.json"), `${JSON.stringify(runInfo, null, 2)}\n`);
     if (status === "error") {
       consecutiveErrors += 1;
       log(`[${attempted}/${pending.length}] ${item.kind} ${item.id}: error: ${error}`);
@@ -381,20 +400,64 @@ export interface MetaReportData {
   records: MetaRecord[];
 }
 
-async function loadMetaRecords(outDir: string): Promise<{ run: unknown; records: MetaRecord[] }> {
+export interface MetaRunInfo {
+  schemaVersion: 1;
+  judged: { dir: string; judgeModels?: string[]; generatorModel?: string | null };
+  reviewer: MetaRecord["reviewer"];
+  sample?: { daily: string[]; notes: string[] };
+  skipped?: MetaSkip[];
+  resultManifest?: SummaryResultManifestEntry[];
+  integrityWarnings?: string[];
+}
+
+function validMetaRecord(value: unknown): value is MetaRecord {
+  if (typeof value !== "object" || value === null) return false;
+  const record = value as Partial<MetaRecord>;
+  return record.schemaVersion === 1 && isSummaryResultKind(record.item?.kind) && isSummaryResultId(record.item?.id)
+    && ["reviewed", "invalid", "error"].includes(record.status ?? "") && Array.isArray(record.issues) && Array.isArray(record.attempts)
+    && typeof record.reviewer?.provider === "string" && typeof record.reviewer?.model === "string"
+    && typeof record.judgmentHash === "string" && (record.status !== "reviewed" || Array.isArray(record.reviews));
+}
+
+/** Used by both the numeric report and the researcher's dispute page. */
+export async function loadMetaRecords(outDir: string): Promise<{ run: MetaRunInfo; records: MetaRecord[]; integrityWarnings: string[] }> {
   const dir = path.join(outDir, "meta");
-  const names = existsSync(dir) ? (await readdir(dir)).filter((name) => name.endsWith(".json")).sort() : [];
+  let run: MetaRunInfo;
+  try { run = JSON.parse(await readFile(path.join(outDir, "run.json"), "utf8")) as MetaRunInfo; }
+  catch { throw new Error(`no reviews can be described: ${path.join(outDir, "run.json")} is missing or unreadable`); }
+  if (run?.schemaVersion !== 1 || typeof run.reviewer?.provider !== "string" || typeof run.reviewer?.model !== "string") throw new Error(`invalid meta-review run metadata in ${outDir}`);
+  const integrityWarnings = [...(run.integrityWarnings ?? [])];
   const records: MetaRecord[] = [];
-  for (const name of names) {
-    try {
-      const record = JSON.parse(await readFile(path.join(dir, name), "utf8")) as MetaRecord;
-      if (record.schemaVersion === 1 && record.item) records.push(record);
-    } catch { /* not a record */ }
+  if (Object.prototype.hasOwnProperty.call(run, "resultManifest")) {
+    if (!Array.isArray(run.sample?.daily) || !Array.isArray(run.sample?.notes) || ![...run.sample.daily, ...run.sample.notes].every(isSummaryResultId)) throw new Error(`invalid result manifest sample in ${outDir}`);
+    const sample = new Set([...run.sample.daily.map((id) => keyOf("daily", id)), ...run.sample.notes.map((id) => keyOf("note", id))]);
+    const skipped = new Set((run.skipped ?? []).map((item) => keyOf(item.kind, item.id)));
+    records.push(...await readSummaryResultManifest(dir, run.resultManifest, sample, skipped, (record, entry): record is MetaRecord =>
+      validMetaRecord(record) && record.item.kind === entry.kind && record.item.id === entry.id
+      && record.reviewer.provider === run.reviewer.provider && record.reviewer.model === run.reviewer.model));
+  } else {
+    if (!run.judged?.dir) throw new Error(`legacy meta-review has no result manifest or judge directory in ${outDir}; rerun the review to verify its results`);
+    const judged = await loadJudgments(run.judged.dir);
+    integrityWarnings.push(...judged.integrityWarnings,
+      "旧格式复核运行没有结果清单：仅保留能与当前评审问题及复核配置匹配的记录，无法核验每条结果是否属于本次复核运行。重新运行复核可生成可验证的清单。");
+    const current = new Map(judged.records.filter((record) => record.status === "judged" && record.judgment).map((record) => [keyOf(record.item.kind, record.item.id), record]));
+    const skipped = new Set((run.skipped ?? []).map((item) => keyOf(item.kind, item.id)));
+    const names = existsSync(dir) ? (await readdir(dir)).filter((name) => name.endsWith(".json")).sort() : [];
+    for (const name of names) {
+      let record: unknown;
+      try { record = JSON.parse(await readFile(path.join(dir, name), "utf8")); } catch { continue; }
+      if (!validMetaRecord(record)) continue;
+      const key = keyOf(record.item.kind, record.item.id);
+      const original = current.get(key);
+      if (name !== `${key}.json` || skipped.has(key) || !original?.judgment || !original.summaryHash) continue;
+      if (record.reviewer.provider !== run.reviewer.provider || record.reviewer.model !== run.reviewer.model
+          || record.reviewer.thinkingMode !== run.reviewer.thinkingMode || record.reviewer.reasoningEffort !== run.reviewer.reasoningEffort) continue;
+      const judgmentHash = sha256(JSON.stringify({ summaryHash: original.summaryHash, source: original.item.source.contentHash, issues: original.judgment.issues }));
+      if (record.judgmentHash === judgmentHash) records.push(record);
+    }
   }
-  if (records.length === 0) throw new Error(`no reviews found in ${dir}; run summary-meta-review.mjs with --yes first`);
-  let run: unknown = null;
-  try { run = JSON.parse(await readFile(path.join(outDir, "run.json"), "utf8")); } catch { /* the report can still be built */ }
-  return { run, records };
+  const warnings = [...new Set(integrityWarnings)];
+  return { run: { ...run, integrityWarnings: warnings }, records, integrityWarnings: warnings };
 }
 
 export function buildMetaReport(run: unknown, records: readonly MetaRecord[], now: Date): MetaReportData {
@@ -441,7 +504,7 @@ const tallyRow = (label: string, tally: Tally): (string | number)[] => [label, t
 const clip = (text: string, limit: number): string => (text.length > limit ? `${text.slice(0, limit)}…` : text);
 
 export function renderMetaReport(data: MetaReportData): string {
-  const run = (data.run ?? {}) as { reviewer?: { model: string; provider: string; thinkingMode: boolean; reasoningEffort: string }; judged?: { judgeModels?: string[]; generatorModel?: string | null }; startedAt?: string; finishedAt?: string | null; skipped?: MetaSkip[] };
+  const run = (data.run ?? {}) as { reviewer?: { model: string; provider: string; thinkingMode: boolean; reasoningEffort: string }; judged?: { judgeModels?: string[]; generatorModel?: string | null }; startedAt?: string; finishedAt?: string | null; skipped?: MetaSkip[]; integrityWarnings?: string[] };
   const a = data.aggregate;
   const header = ["分组", "同意", "不同意", "拿不准", "复核一致率"];
   const opinionRow = (label: string, o: Opinion): (string | number)[] => [label, o.ok, o["too-high"], o["too-low"]];
@@ -450,6 +513,7 @@ export function renderMetaReport(data: MetaReportData): string {
     "",
     "本报告由第二个模型逐条复核评审模型提出的问题：每个问题是否真的存在（同意 / 不同意 / 拿不准），以及评审定的严重程度合不合适。复核模型看到的原文和被评摘要与评审模型完全相同，评审引用是否属实由程序另外核对。",
     "",
+    ...(run.integrityWarnings ?? []).flatMap((warning) => [`> ${warning}`, ""]),
     "## 复核对象",
     "",
     `- 复核模型：${run.reviewer ? `${run.reviewer.model}（${run.reviewer.provider}）；思考模式 ${run.reviewer.thinkingMode ? "开" : "关"}，推理强度 ${run.reviewer.reasoningEffort}` : "-"}`,

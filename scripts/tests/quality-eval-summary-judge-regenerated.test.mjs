@@ -72,8 +72,25 @@ async function regenerated(state, script) {
 }
 const editRecord = async (dir, kind, id, change) => {
   const file = path.join(dir, "summaries", `${kind}-${id}.json`);
+  const text = JSON.stringify(change(JSON.parse(await readFile(file, "utf8"))));
+  await writeFile(file, text);
+  // Model a new committed generation result; tampering tests deliberately bypass this helper.
+  const runFile = path.join(dir, "run.json");
+  const run = JSON.parse(await readFile(runFile, "utf8"));
+  if (run.resultManifest) {
+    const entry = run.resultManifest.find(item => item.kind === kind && item.id === id);
+    if (entry) entry.recordHash = qe.hashText(text);
+    await writeFile(runFile, JSON.stringify(run));
+  }
+};
+const editRun = async (dir, change) => {
+  const file = path.join(dir, "run.json");
   await writeFile(file, JSON.stringify(change(JSON.parse(await readFile(file, "utf8")))));
 };
+const manifestFor = async (dir, items) => Promise.all(items.map(async ({ kind, id }) => ({
+  kind, id, recordHash: qe.hashText(await readFile(path.join(dir, "summaries", `${kind}-${id}.json`), "utf8")),
+})));
+const withoutManifest = run => { const { resultManifest, ...legacy } = run; return legacy; };
 
 const OK = JSON.stringify({ verdicts: { accuracy: "ok", completeness: "ok", clarity: "ok" }, issues: [] });
 const judgeLlm = (reply = () => OK) => ({ calls: [], async call(messages, options) { this.calls.push(messages); options?.onMetrics?.({ logicalCalls: 1, attempts: 1, elapsedMs: 1, usageComplete: true }); return reply(this.calls.length, messages); } });
@@ -163,6 +180,98 @@ test("an unreadable regenerate directory is a clear error", async () => {
   const dir = await regenerated(state);
   await rm(path.join(dir, "run.json"));
   await assert.rejects(qe.prepareRegeneratedJudgeInput({ summariesDir: dir, sourcesDir: state.sources }), /run\.json/);
+});
+
+test("an interrupted new generator run only judges results committed in its manifest", async () => {
+  const state = await fixture();
+  const dir = await regenerated(state);
+  const generator = { provider: "openai", model: "new-generator", thinkingMode: false, reasoningEffort: "medium" };
+  await editRecord(dir, "daily", DAILY_IDS[0], record => ({ ...record, generator }));
+  const resultManifest = await manifestFor(dir, [{ kind: "daily", id: DAILY_IDS[0] }]);
+  await editRun(dir, run => ({ ...run, generator, finishedAt: null, counts: null, resultManifest }));
+
+  const prepared = await qe.prepareRegeneratedJudgeInput({ summariesDir: dir, sourcesDir: state.sources });
+  assert.deepEqual(prepared.items.map(item => item.id), [DAILY_IDS[0]]);
+  assert.equal(prepared.items[0].origin.generator.model, "new-generator");
+  assert.equal(prepared.generator.model, "new-generator");
+  assert.equal(prepared.skipped.length, 5);
+  assert.ok(prepared.skipped.every(item => item.reason === "not-generated"));
+});
+
+test("an empty generation manifest never falls back to previous output files", async () => {
+  const state = await fixture();
+  const dir = await regenerated(state);
+  await editRun(dir, run => ({ ...run, resultManifest: [], finishedAt: null }));
+  const prepared = await qe.prepareRegeneratedJudgeInput({ summariesDir: dir, sourcesDir: state.sources });
+  assert.equal(prepared.items.length, 0);
+  assert.equal(prepared.skipped.length, 6);
+  assert.ok(prepared.skipped.every(item => item.reason === "not-generated"));
+});
+
+test("a forced regeneration interrupted by errors does not judge unattempted old summaries", async () => {
+  const state = await fixture();
+  const dir = await regenerated(state);
+  const rerun = await qe.runSummaryRegenerate({
+    vaultRoot: state.vault, sourcesDir: state.sources, outDir: dir, daily: 5, notes: 1, seed: "s", yes: true, regenerate: true,
+  }, {
+    llm: regenLlm(call => call === 1 ? undefined : new Error("HTTP 500")), now: () => NOW, log: () => undefined,
+    loadGeneratorConfig: async () => GENERATOR,
+  });
+  assert.equal(rerun.stopped, "errors");
+  assert.equal(rerun.counts.generated, 1);
+  assert.equal(rerun.counts.remaining, 2);
+  const prepared = await qe.prepareRegeneratedJudgeInput({ summariesDir: dir, sourcesDir: state.sources });
+  assert.deepEqual(prepared.items.map(item => item.id), [DAILY_IDS[0]]);
+  assert.deepEqual(prepared.skipped.filter(item => item.reason === "not-generated").map(item => item.id), [DAILY_IDS[4], NOTE_ID]);
+});
+
+test("a changed record cannot be judged under its old generation manifest hash", async () => {
+  const state = await fixture();
+  const dir = await regenerated(state);
+  const resultManifest = await manifestFor(dir, [{ kind: "daily", id: DAILY_IDS[0] }]);
+  await editRun(dir, run => ({ ...run, resultManifest }));
+  const file = path.join(dir, "summaries", `daily-${DAILY_IDS[0]}.json`);
+  const record = JSON.parse(await readFile(file, "utf8"));
+  await writeFile(file, JSON.stringify({ ...record, output: { ...record.output, summary: { ...record.output.summary, mainResult: "改写后未提交的结果" } } }));
+  await assert.rejects(qe.prepareRegeneratedJudgeInput({ summariesDir: dir, sourcesDir: state.sources }), /manifest.*hash|hash.*manifest/i);
+});
+
+test("invalid generation manifests are rejected instead of treated as legacy directories", async () => {
+  const state = await fixture();
+  const dir = await regenerated(state);
+  const entry = (await manifestFor(dir, [{ kind: "daily", id: DAILY_IDS[0] }]))[0];
+  for (const resultManifest of [null, {}, [entry, entry], [{ ...entry, id: "2610.99999" }], [{ ...entry, recordHash: "bad" }]]) {
+    await editRun(dir, run => ({ ...run, resultManifest }));
+    await assert.rejects(qe.prepareRegeneratedJudgeInput({ summariesDir: dir, sourcesDir: state.sources }), /manifest/i);
+  }
+});
+
+test("legacy generation outputs remain readable but cannot claim a different generator", async () => {
+  const state = await fixture();
+  const dir = await regenerated(state);
+  await editRun(dir, withoutManifest);
+  assert.equal((await qe.prepareRegeneratedJudgeInput({ summariesDir: dir, sourcesDir: state.sources })).items.length, 6);
+  await editRun(dir, run => ({ ...run, generator: { ...run.generator, model: "new-generator" } }));
+  const prepared = await qe.prepareRegeneratedJudgeInput({ summariesDir: dir, sourcesDir: state.sources });
+  assert.equal(prepared.items.length, 0);
+  assert.equal(prepared.skipped.length, 6);
+  assert.ok(prepared.skipped.every(item => /generator/i.test(item.detail)));
+});
+
+test("legacy generator settings compare effective mode and reject known language mismatches", async () => {
+  const state = await fixture();
+  const dir = await regenerated(state);
+  await editRun(dir, run => ({ ...withoutManifest(run), generator: { ...run.generator, reasoningEffort: "high" } }));
+  // Effort has no effect with thinking disabled.
+  assert.equal((await qe.prepareRegeneratedJudgeInput({ summariesDir: dir, sourcesDir: state.sources })).items.length, 6);
+  await editRecord(dir, "daily", DAILY_IDS[0], record => ({ ...record, summaryLanguage: "en" }));
+  let prepared = await qe.prepareRegeneratedJudgeInput({ summariesDir: dir, sourcesDir: state.sources });
+  assert.equal(prepared.items.length, 5);
+  assert.match(prepared.skipped.find(item => item.id === DAILY_IDS[0]).detail, /language/i);
+  await editRun(dir, run => ({ ...run, generator: { ...run.generator, thinkingMode: true } }));
+  prepared = await qe.prepareRegeneratedJudgeInput({ summariesDir: dir, sourcesDir: state.sources });
+  assert.equal(prepared.items.length, 0);
+  assert.ok(prepared.skipped.every(item => /generator/i.test(item.detail)));
 });
 
 test("the judge run uses the regenerated summaries, never reads a CLI config, and records the source block", async () => {

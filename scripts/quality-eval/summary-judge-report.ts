@@ -7,6 +7,7 @@ import { JUDGE_DIMENSIONS, type JudgeDimension, type JudgeIssue, type Judgment }
 import { capped, percent, table } from "./summary-report";
 import type { SummaryOrigin } from "./summary-judge-input";
 import { rate } from "./summary-checks";
+import { isSummaryResultId, isSummaryResultKind, readSummaryResultManifest, summaryResultKey, type SummaryResultManifestEntry } from "./summary-result-manifest";
 
 const DIMENSION_LABELS: Record<JudgeDimension, string> = { accuracy: "准确", completeness: "完整", clarity: "清楚" };
 const DIMENSION_ISSUE_TITLES: Record<JudgeDimension, string> = { accuracy: "准确性问题", completeness: "完整性问题", clarity: "清楚性问题" };
@@ -28,12 +29,16 @@ export interface JudgmentRecord {
   judge: { provider: string; model: string; thinkingMode?: boolean; reasoningEffort?: string };
   judgePromptHash: string;
   summaryHash?: string;
+  summary?: { locations: Array<{ key: string; text: string }> };
   /** Where the judged summary came from; judgments written before this field existed have none. */
   origin?: SummaryOrigin;
   attempts: Array<{ raw: string; reasons: string[] | null; usage: unknown; elapsedMs: number }>;
   judgment: Judgment | null;
   error?: string;
 }
+
+/** Exact result bytes admitted to this run, including explicitly reused results. */
+export type JudgeResultManifestEntry = SummaryResultManifestEntry;
 
 export interface JudgeRunInfo {
   schemaVersion: 1;
@@ -51,6 +56,8 @@ export interface JudgeRunInfo {
   skipped: Array<{ kind: string; id: string; reason: string; detail: string }>;
   counts: unknown;
   stopped: string | null;
+  /** Absent only in older runs, whose result identities cannot be fully verified. */
+  resultManifest?: JudgeResultManifestEntry[];
 }
 
 type Tally = Record<"ok" | "minor" | "major", number>;
@@ -89,6 +96,7 @@ export interface JudgeReportData {
   crossCheck: CrossCheck | null;
   /** Why the cross-check was left out although --offline was given. */
   crossCheckSkipped: string | null;
+  integrityWarnings: string[];
 }
 
 /** The version a cached source has when it is above v1, for a historical summary written before that revision. */
@@ -98,22 +106,62 @@ export function newerVersion(record: JudgmentRecord): string | null {
   return version && Number(version[1]) > 1 ? `v${version[1]}` : null;
 }
 
-export async function loadJudgments(outDir: string): Promise<{ run: JudgeRunInfo; records: JudgmentRecord[] }> {
+const LEGACY_RESULTS_WARNING = "旧格式运行没有结果清单：已按抽样、跳过条目和评审配置筛选，但无法核验每条结果的提示词、输入及本次运行身份。这些结果只供参考；重新运行评审可生成可验证的清单。";
+const recordKey = summaryResultKey;
+const safeId = isSummaryResultId;
+const isKind = isSummaryResultKind;
+
+function validRecord(value: unknown): value is JudgmentRecord {
+  if (typeof value !== "object" || value === null) return false;
+  const record = value as Partial<JudgmentRecord>;
+  return record.schemaVersion === 1 && isKind(record.item?.kind) && safeId(record.item?.id)
+    && ["judged", "invalid", "error"].includes(record.status ?? "")
+    && typeof record.judge?.provider === "string" && typeof record.judge?.model === "string"
+    && typeof record.judgePromptHash === "string" && Array.isArray(record.attempts)
+    && typeof record.item?.source?.contentHash === "string"
+    && (record.status !== "judged" || Boolean(record.judgment && record.judgment.verdicts && Array.isArray(record.judgment.issues)));
+}
+
+/** Load only this run's committed results; directory leftovers are never an implicit result set. */
+export async function loadJudgments(outDir: string): Promise<{ run: JudgeRunInfo; records: JudgmentRecord[]; integrityWarnings: string[] }> {
   const dir = path.join(outDir, "judgments");
-  const names = existsSync(dir) ? (await readdir(dir)).filter((name) => name.endsWith(".json")).sort() : [];
-  const records: JudgmentRecord[] = [];
-  for (const name of names) {
-    try {
-      const record = JSON.parse(await readFile(path.join(dir, name), "utf8")) as JudgmentRecord;
-      if (record.schemaVersion === 1 && record.item) records.push(record);
-    } catch { /* a half-written or foreign file is not a judgment */ }
-  }
-  if (records.length === 0) throw new Error(`no judgments found in ${dir}; run summary-judge.mjs with --yes first`);
   let run: JudgeRunInfo;
   try { run = JSON.parse(await readFile(path.join(outDir, "run.json"), "utf8")) as JudgeRunInfo; }
-  catch { throw new Error(`${path.join(outDir, "run.json")} is missing or unreadable; the judgments cannot be described without it`); }
+  catch { throw new Error(`no judgments can be described: ${path.join(outDir, "run.json")} is missing or unreadable`); }
+  if (run?.schemaVersion !== 1 || !Array.isArray(run.sample?.daily) || !Array.isArray(run.sample?.notes)
+      || ![...run.sample.daily, ...run.sample.notes].every(safeId) || !Array.isArray(run.skipped)
+      || typeof run.judge?.provider !== "string" || typeof run.judge?.model !== "string") {
+    throw new Error(`invalid judgment run metadata in ${path.join(outDir, "run.json")}`);
+  }
+  const sample = new Set([
+    ...run.sample.daily.map((id) => recordKey("daily", id)),
+    ...run.sample.notes.map((id) => recordKey("note", id)),
+  ]);
+  const skipped = new Set(run.skipped.flatMap((item) => item.kind === "id"
+    ? [recordKey("daily", item.id), recordKey("note", item.id)] : [recordKey(item.kind, item.id)]));
+  const records: JudgmentRecord[] = [];
+  const hasManifest = Object.prototype.hasOwnProperty.call(run, "resultManifest");
+  if (hasManifest) {
+    records.push(...await readSummaryResultManifest(dir, run.resultManifest, sample, skipped, (record, entry): record is JudgmentRecord =>
+      validRecord(record) && record.item.kind === entry.kind && record.item.id === entry.id
+      && record.judge.provider === run.judge.provider && record.judge.model === run.judge.model));
+  } else {
+    // Old runs lack exact result hashes. Filter everything that can be verified and disclose the remaining limitation.
+    const names = existsSync(dir) ? (await readdir(dir)).filter((name) => name.endsWith(".json")).sort() : [];
+    for (const name of names) {
+      let record: unknown;
+      try { record = JSON.parse(await readFile(path.join(dir, name), "utf8")); }
+      catch { continue; }
+      if (!validRecord(record)) continue;
+      const key = recordKey(record.item.kind, record.item.id);
+      if (name !== `${key}.json` || !sample.has(key) || skipped.has(key)) continue;
+      if (record.judge.model !== run.judge.model || record.judge.provider !== run.judge.provider
+          || record.judge.thinkingMode !== run.judge.thinkingMode || record.judge.reasoningEffort !== run.judge.reasoningEffort) continue;
+      records.push(record);
+    }
+  }
   records.sort((a, b) => a.item.kind.localeCompare(b.item.kind) || (a.item.date ?? "").localeCompare(b.item.date ?? "") || a.item.id.localeCompare(b.item.id));
-  return { run, records };
+  return { run, records, integrityWarnings: hasManifest ? [] : [LEGACY_RESULTS_WARNING] };
 }
 
 const emptyTally = (): Tally => ({ ok: 0, minor: 0, major: 0 });
@@ -210,7 +258,8 @@ async function crossCheck(records: readonly JudgmentRecord[], offlinePath: strin
 }
 
 export function buildJudgeReport(run: JudgeRunInfo, records: JudgmentRecord[], now: Date, cross: CrossCheck | null, crossCheckSkipped: string | null = null): JudgeReportData {
-  return { schemaVersion: 1, generatedAt: now.toISOString(), run, records, aggregate: aggregate(run, records), crossCheck: cross, crossCheckSkipped };
+  const integrityWarnings = Object.prototype.hasOwnProperty.call(run, "resultManifest") ? [] : [LEGACY_RESULTS_WARNING];
+  return { schemaVersion: 1, generatedAt: now.toISOString(), run, records, aggregate: aggregate(run, records), crossCheck: cross, crossCheckSkipped, integrityWarnings };
 }
 
 // ---- rendering -------------------------------------------------------------------------------------
@@ -281,6 +330,8 @@ export function renderJudgeReport(data: JudgeReportData): string {
     "",
     "本报告由评审模型对照原文，按准确、完整、清楚三项检查已生成的日报条目和详细笔记。评审的引用已由程序核对过：摘要原句必须出现在被评审的位置，原文依据必须出现在评审看到的原文里，对不上的判定记为无效。格式、长度和公式写法不在评审范围内，由离线检查负责。",
     "",
+    ...data.integrityWarnings.flatMap((warning) => [`> ${warning}`, ""]),
+    ...(run.finishedAt === null ? ["> 本次运行尚未完成；只统计已经写入本次结果清单的记录，未完成的条目不计为通过。", ""] : []),
     "## 评审对象",
     "",
     `- 评审模型：${run.judge.model}（${run.judge.provider}）；思考模式 ${run.judge.thinkingMode === undefined ? "-" : run.judge.thinkingMode ? "开" : "关"}，推理强度 ${run.judge.reasoningEffort ?? "-"}。`,

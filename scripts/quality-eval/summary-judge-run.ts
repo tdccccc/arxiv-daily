@@ -13,6 +13,8 @@ import { prepareRegeneratedJudgeInput } from "./summary-judge-regenerated";
 import { prepareJudgeInput, type JudgeItem, type PrepareJudgeOptions, type SkippedItem } from "./summary-judge-input";
 import { requireDate } from "./summary-check";
 import { writeJudgeReport } from "./summary-judge-report";
+import { buildSummaryCacheIdentity, matchesSummaryCacheIdentity, type SummaryCacheIdentity } from "./summary-cache-identity";
+import { type SummaryResultManifestEntry } from "./summary-result-manifest";
 
 /** Characters per token used for the size estimate: a mix of English paper text and Chinese summaries. */
 export const CHARS_PER_TOKEN = 3;
@@ -157,19 +159,23 @@ interface JudgmentRecord {
   judge: { provider: string; model: string };
   judgePromptHash: string;
   summaryHash?: string;
-  item: { source: { contentHash: string } };
+  cacheIdentity?: SummaryCacheIdentity;
+  item: { kind: string; id: string; source: { contentHash: string } };
 }
 
 /** A finished judgment stands when the judge, its prompt and the source text are all the same. */
-async function isCurrent(file: string, item: JudgeItem, judge: LlmSettings, promptHash: string): Promise<boolean> {
+async function currentRecordHash(file: string, item: JudgeItem, judge: LlmSettings, promptHash: string, cacheIdentity: SummaryCacheIdentity): Promise<string | null> {
   try {
-    const record = JSON.parse(await readFile(file, "utf8")) as JudgmentRecord;
-    return (record.status === "judged" || record.status === "invalid")
+    const text = await readFile(file, "utf8");
+    const record = JSON.parse(text) as JudgmentRecord;
+    const current = (record.status === "judged" || record.status === "invalid")
       && record.judge.model === judge.model && record.judge.provider === judge.provider
       && record.judgePromptHash === promptHash && record.item.source.contentHash === item.source.contentHash
-      && record.summaryHash === item.summaryHash;
+      && record.summaryHash === item.summaryHash && record.item.kind === item.kind && record.item.id === item.id
+      && matchesSummaryCacheIdentity(record.cacheIdentity, cacheIdentity);
+    return current ? sha256(text) : null;
   } catch {
-    return false;
+    return null;
   }
 }
 
@@ -187,7 +193,7 @@ async function judgeItem(
   now: () => Date,
 ): Promise<{ attempts: Attempt[]; judgment: Judgment | null; error?: unknown }> {
   const attempts: Attempt[] = [];
-  let messages = item.messages;
+  let messages: Parameters<JudgeModelLike["call"]>[0] = item.messages;
   for (let attempt = 1; attempt <= REQUESTS_PER_ITEM; attempt += 1) {
     const started = now().getTime();
     let metrics: LlmCallMetrics | undefined;
@@ -231,12 +237,21 @@ export async function runSummaryJudge(options: SummaryJudgeOptions, deps: Summar
   }
 
   const prepared = regenerated ?? await prepareJudgeInput({ ...options, topics: generator?.topics });
+  const itemKeys = prepared.items.map(({ kind, id }) => `${kind}-${id}`);
+  if (new Set(itemKeys).size !== itemKeys.length) {
+    throw new Error("the sample contains multiple summaries of the same paper and kind; narrow --from/--to so each judgment has one source entry");
+  }
   const hashes = new Map(prepared.items.map((item) => [item, sha256(item.messages[0]!.content)]));
+  const identities = new Map(prepared.items.map((item) => [item, buildSummaryCacheIdentity(judge, item.messages, 0, item.origin)]));
   const pending: JudgeItem[] = [];
+  const resultManifest: SummaryResultManifestEntry[] = [];
   let reused = 0;
   for (const item of prepared.items) {
-    if (!options.rejudge && await isCurrent(fileFor(outDir, item), item, judge, hashes.get(item)!)) reused += 1;
-    else pending.push(item);
+    const recordHash = !options.rejudge ? await currentRecordHash(fileFor(outDir, item), item, judge, hashes.get(item)!, identities.get(item)!) : null;
+    if (recordHash) {
+      reused += 1;
+      resultManifest.push({ kind: item.kind, id: item.id, recordHash });
+    } else pending.push(item);
   }
   const totalChars = pending.reduce((sum, item) => sum + item.messages.reduce((size, message) => size + message.content.length, 0), 0);
   const plan: JudgePlan = {
@@ -279,6 +294,7 @@ export async function runSummaryJudge(options: SummaryJudgeOptions, deps: Summar
     judge: { provider: judge.provider, model: judge.model, thinkingMode: judge.thinkingMode, reasoningEffort: judge.reasoningEffort },
     generatorModel: generatorModel.trim(),
     sample: { daily: prepared.sample.daily, notes: prepared.sample.notes },
+    resultManifest,
     skipped: prepared.skipped, plan: { ...plan, skipped: undefined }, counts: null as JudgeCounts | null, stopped: null as "errors" | null,
   };
   await writeAtomic(runFile, `${JSON.stringify(run, null, 2)}\n`);
@@ -296,6 +312,7 @@ export async function runSummaryJudge(options: SummaryJudgeOptions, deps: Summar
       item: { kind: item.kind, id: item.id, title: item.title, date: item.date, topic: item.topic, ...(item.version ? { version: item.version } : {}), source: item.source },
       judge: { provider: judge.provider, model: judge.model, thinkingMode: judge.thinkingMode, reasoningEffort: judge.reasoningEffort },
       judgePromptHash: hashes.get(item)!,
+      cacheIdentity: identities.get(item)!,
       summaryHash: item.summaryHash, origin: item.origin, summary: { locations: item.locations },
       attempts: outcome.attempts, startedAt: itemStart.toISOString(),
     };
@@ -323,7 +340,10 @@ export async function runSummaryJudge(options: SummaryJudgeOptions, deps: Summar
       consecutiveErrors = 0;
       log(`[${attempted}/${pending.length}] ${item.kind} ${item.id}: invalid after ${outcome.attempts.length} attempts`);
     }
-    await writeAtomic(fileFor(outDir, item), `${JSON.stringify(record, null, 2)}\n`);
+    const text = `${JSON.stringify(record, null, 2)}\n`;
+    await writeAtomic(fileFor(outDir, item), text);
+    resultManifest.push({ kind: item.kind, id: item.id, recordHash: sha256(text) });
+    await writeAtomic(runFile, `${JSON.stringify(run, null, 2)}\n`);
   }
 
   counts.remaining = pending.length - attempted;
