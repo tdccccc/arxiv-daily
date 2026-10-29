@@ -2,8 +2,8 @@
 
 goal_ref: ../goal.md
 created: 2026-10-29T01:50:00+08:00
-updated: 2026-10-29T02:00:00+08:00
-revision: 2
+updated: 2026-10-29T21:45:00+08:00
+revision: 3
 
 ## Outcome
 
@@ -35,7 +35,7 @@ revision: 2
 - kind: behavior
 - first signal: Red — 抽题、页面内容、导入计算的测试失败。
 - checks: 同一测试 Green；`npm run test:release-tools` Green。
-- [ ] accepted on observed evidence
+- [x] accepted on observed evidence (272/272 quality-eval tests, Red 14/14 first; test:release-tools 1180/1180; owner opened the sample page in headless Chrome at 1200px and 390px: no errors, no horizontal scroll, buttons and progress work)
 
 ### Chunk 3 — 基线评审
 

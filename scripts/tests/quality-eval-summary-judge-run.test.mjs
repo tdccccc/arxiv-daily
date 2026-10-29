@@ -343,3 +343,13 @@ test("the script prints usage on bad arguments and never needs a model for --hel
   assert.match(bad.stderr, /Usage: node scripts\/quality-eval\/summary-judge\.mjs/);
   assert.equal(spawnSync(process.execPath, [script, "--help"], { encoding: "utf8" }).status, 0);
 });
+
+test("each judgment keeps the summary text it judged, so a reviewer can see the quote in context", async () => {
+  const state = await setup();
+  await execute(state, {}, { yes: true });
+  const daily = await readJudgment(state.outDir, "daily", "2610.00001");
+  assert.deepEqual(daily.summary.locations.map(location => location.key), ["coreProblem", "keyMethod", "mainResult", "whyRelevant", "limitations"]);
+  assert.ok(daily.summary.locations.every(location => location.text.length > 0));
+  const note = await readJudgment(state.outDir, "note", NOTE_ID);
+  assert.equal(note.summary.locations[0].key, "研究问题");
+});

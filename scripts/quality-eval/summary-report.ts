@@ -1,4 +1,5 @@
 import { cell } from "./report";
+import { DAILY_SUMMARY_FIELD_LABELS } from "../../packages/core/src/pipeline/daily-summary-rendering";
 import {
   SUMMARY_FIELDS, type EntryChecks, type LengthDistribution, type Rate, type SummaryFieldKey, type SummaryFinding,
 } from "./summary-checks";
@@ -10,9 +11,8 @@ import type { GroundingAggregate } from "./summary-grounding";
 export const LIST_CAP = 30;
 const HASH_LENGTH = 12;
 
-const FIELD_LABELS: Record<SummaryFieldKey, string> = {
-  coreProblem: "研究问题", keyMethod: "方法设计", mainResult: "核心结果", whyRelevant: "研究价值", limitations: "适用边界",
-};
+// One table of field labels: core's own, the ones the daily report prints.
+export const FIELD_LABELS: Record<SummaryFieldKey, string> = Object.fromEntries(DAILY_SUMMARY_FIELD_LABELS.zh) as Record<SummaryFieldKey, string>;
 
 const CODE_MEANINGS: Record<string, string> = {
   "bare-tex": "TeX 命令写在公式外面",

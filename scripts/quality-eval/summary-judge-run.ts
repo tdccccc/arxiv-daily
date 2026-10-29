@@ -296,7 +296,7 @@ export async function runSummaryJudge(options: SummaryJudgeOptions, deps: Summar
       item: { kind: item.kind, id: item.id, title: item.title, date: item.date, topic: item.topic, ...(item.version ? { version: item.version } : {}), source: item.source },
       judge: { provider: judge.provider, model: judge.model, thinkingMode: judge.thinkingMode, reasoningEffort: judge.reasoningEffort },
       judgePromptHash: hashes.get(item)!,
-      summaryHash: item.summaryHash, origin: item.origin,
+      summaryHash: item.summaryHash, origin: item.origin, summary: { locations: item.locations },
       attempts: outcome.attempts, startedAt: itemStart.toISOString(),
     };
     const finish = { finishedAt: now().toISOString(), elapsedMs: now().getTime() - itemStart.getTime() };

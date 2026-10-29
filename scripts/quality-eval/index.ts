@@ -61,3 +61,7 @@ export { LlmTransientExhaustedError } from "@arxiv-daily/core";
 export { prepareRegeneratedJudgeInput, readRegenerateRun } from "./summary-judge-regenerated";
 export { hashText } from "./summary-judge-input";
 export type { SummaryOrigin } from "./summary-judge-input";
+export {
+  buildReviewCards, computeCalibration, locationLabel, contextAround, escapeHtml, parseSummaryReviewArgs, pickSpread, renderCalibration, renderReviewPage, runReviewImport, runSummaryReview,
+} from "./summary-review";
+export type { BuildCardsOptions, BuiltCards, Calibration, ReviewCard, ReviewOrigin, SummaryReviewOptions } from "./summary-review";
