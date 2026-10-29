@@ -2,8 +2,8 @@
 
 goal_ref: ../goal.md
 created: 2026-10-29T00:55:00+08:00
-updated: 2026-10-29T01:25:00+08:00
-revision: 3
+updated: 2026-10-29T01:40:00+08:00
+revision: 4
 
 ## Outcome
 
@@ -39,6 +39,8 @@ revision: 3
 - [x] accepted on observed evidence (252/252 quality-eval tests, Red 12/12 first; test:release-tools 1160/1160)
 
 ## Phase verification
+
+<!-- Observed 2026-10-29: 3 papers regenerated (3 daily + 1 note) and judged, 4/4 valid; regenerated accuracy ok on all 4 vs many majors on historical; owner hand-checked 2608.19669; test:release-tools 1160/1160. See journal. -->
 
 - 征得研究者同意后，对 2605.20779、2608.19669、2607.01175 三篇重新生成（日报条目 3 条 + 笔记 1 篇），再用评审模型评这 4 条；owner 读评审结果，与 P2 试跑（历史摘要）对照，确认"输入一致"后剩下的问题是否站得住。
 - `npm run test:release-tools` Green。

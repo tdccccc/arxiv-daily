@@ -45,3 +45,19 @@
   - P2 is done: tool complete, real trial verified. The old P3 never started, so it was re-phased in place: P3 is now regenerate and judge regenerated summaries, and P4 is calibration plus baseline.
 - disposition: keep all code. Historical judging stays available as reference.
 - next: P3 chunk 1, the regenerate command.
+
+## 2026-10-29 — note (P3 phase verification)
+
+- evidence: With the researcher's approval, the 4 trial items were regenerated with gpt-6.1-sol on the cached input: 4 generated, 1 request each, no fallbacks. Output is in `~/quality-eval/summary-regen-trial/`. Claude-opus-5-5 then judged them: 4 of 4 valid on the first try (`~/quality-eval/summary-judge-regen-trial/`). Verdicts, historical then regenerated:
+
+  | Item | Historical | Regenerated |
+  | --- | --- | --- |
+  | daily 2605.20779 | 7 accuracy-major + 1 completeness-major | accuracy ok, 1 completeness-minor + 1 clarity-minor |
+  | daily 2607.01175 | 3 accuracy-major + 5 minor | accuracy ok, 3 minor |
+  | daily 2608.19669 | 4 accuracy-major + 4 accuracy-minor | no issues |
+  | note 2607.01175 | 5 accuracy-major + 1 completeness-major | no issues |
+
+  The owner checked regenerated 2608.19669 by hand: 9.5, 19 and 5.6 points all match the source.
+- change: none.
+- disposition: keep. The historical errors cannot be attributed to a single cause. Generation then used gpt-6-luna until 2026-10-15, older prompts and older extraction; the current setup is accurate on these 4. n=4 and the papers were chosen for their known errors, so the P4 baseline must confirm this.
+- next: close P3 and start P4 (baseline run, then calibration on its issues).
