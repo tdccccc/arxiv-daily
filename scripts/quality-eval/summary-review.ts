@@ -6,6 +6,7 @@ import { requireDirectory, resolveVaultLayout } from "./summary-check";
 import { JUDGE_DIMENSIONS, type JudgeDimension } from "./summary-judge-contract";
 import { loadJudgments, type JudgmentRecord } from "./summary-judge-report";
 import { SUMMARY_FIELDS } from "./summary-checks";
+import { proportionalShares } from "./summary-judge-input";
 import { loadSummaryCorpus, parseBody, type SummaryCorpus } from "./summary-corpus";
 import { readSourceRecord } from "./summary-sources";
 import { cell } from "./report";
@@ -64,6 +65,15 @@ export interface CardMeta {
   evidenceQuote: string | null;
   /** About 300 characters of the cached source around the evidence quote. */
   evidenceContext: string | null;
+  /** With a dispute sample: the stratum this card was drawn from (`must`, or a dimension). */
+  stratum?: string;
+}
+
+/** How the disputes were sampled: each stratum's population and how many of it are on the page. */
+export interface DisputeSamplingPlan {
+  requested: number;
+  population: number;
+  strata: Array<{ key: string; label: string; population: number; sampled: number }>;
 }
 
 export interface BuildCardsOptions {
@@ -73,6 +83,11 @@ export interface BuildCardsOptions {
   metaDir?: string;
   /** With `metaDir`: how many issues the reviewer agreed with to add as a spot-check (default 3). */
   agreedSample?: number;
+  /**
+   * With `metaDir`: show only this many disputes. Every accuracy dispute and every dispute on a judge-major issue is
+   * kept; the rest is filled in proportion to each other dimension's disputes.
+   */
+  disputeSample?: number;
   extraDir?: string;
   /** Cached sources, for the source context around each quote. */
   sourcesDir?: string;
@@ -86,7 +101,7 @@ export interface BuildCardsOptions {
   seed: string;
 }
 
-export interface BuiltCards { cards: ReviewCard[]; pageId: string; shortfall: number; available: { judgments: number; extra: number } }
+export interface BuiltCards { cards: ReviewCard[]; pageId: string; shortfall: number; available: { judgments: number; extra: number }; disputeSampling?: DisputeSamplingPlan | null }
 
 const sha = async (text: string): Promise<string> => (await import("node:crypto")).createHash("sha256").update(text).digest("hex");
 
@@ -110,10 +125,14 @@ function candidatesOf(records: readonly JudgmentRecord[], dir: string, pool: Rev
  * Pick `count` candidates: all majors before any minor, and within a severity the ones that add the least to what is
  * already picked (a paper not yet used, then a dimension not yet used), ties broken by a seeded key.
  */
-export function pickSpread<T extends { card: { cardId: string; id: string; dimension: string; severity: string } }>(candidates: readonly T[], count: number, seed: string): T[] {
+export function pickSpread<T extends { card: { cardId: string; id: string; dimension: string; severity: string } }>(candidates: readonly T[], count: number, seed: string, alreadyPicked: readonly T[] = []): T[] {
   const remaining = candidates.map((candidate) => ({ candidate, key: seededRandom(`${seed}|${candidate.card.cardId}`)() }));
   const papers = new Map<string, number>();
   const dimensions = new Map<string, number>();
+  for (const earlier of alreadyPicked) {
+    papers.set(earlier.card.id, (papers.get(earlier.card.id) ?? 0) + 1);
+    dimensions.set(earlier.card.dimension, (dimensions.get(earlier.card.dimension) ?? 0) + 1);
+  }
   const picked: T[] = [];
   while (picked.length < count && remaining.length > 0) {
     let best = 0;
@@ -238,6 +257,30 @@ async function readJsonDir<T>(dir: string): Promise<T[]> {
   return records;
 }
 
+const STRATUM_LABELS: Record<string, string> = { must: "必选（准确性分歧和评审判为大问题的分歧）", accuracy: "准确", completeness: "完整", clarity: "清楚" };
+
+/**
+ * Choose `requested` disputes: all the accuracy disputes and all the ones on a judge-major issue ("must"), then the
+ * rest shared out over the other dimensions in proportion to their dispute counts (largest remainder, ties to the
+ * dimension listed first), preferring papers not on the page yet within a dimension.
+ */
+function sampleDisputes<T extends Candidate & { meta: Chosen["meta"] }>(disputes: readonly T[], requested: number, seed: string): { chosen: T[]; plan: DisputeSamplingPlan } {
+  const stratumOf = (candidate: T): string => (candidate.card.dimension === "accuracy" || candidate.card.severity === "major" ? "must" : candidate.card.dimension);
+  const groups = new Map<string, T[]>();
+  for (const candidate of disputes) groups.set(stratumOf(candidate), [...(groups.get(stratumOf(candidate)) ?? []), candidate]);
+  const must = groups.get("must") ?? [];
+  const rest = JUDGE_DIMENSIONS.filter((dimension) => dimension !== "accuracy" && (groups.get(dimension)?.length ?? 0) > 0);
+  const shares = proportionalShares(new Map(rest.map((dimension) => [dimension, groups.get(dimension)!.length])), requested - must.length);
+  const chosen: T[] = must.map((candidate) => ({ ...candidate, meta: { ...candidate.meta!, stratum: "must" } }));
+  const strata: DisputeSamplingPlan["strata"] = [{ key: "must", label: STRATUM_LABELS.must!, population: must.length, sampled: must.length }];
+  for (const dimension of rest) {
+    const picked = pickSpread(groups.get(dimension)!, shares.get(dimension) ?? 0, seed, chosen);
+    chosen.push(...picked.map((candidate) => ({ ...candidate, meta: { ...candidate.meta!, stratum: dimension } })));
+    strata.push({ key: dimension, label: STRATUM_LABELS[dimension]!, population: groups.get(dimension)!.length, sampled: picked.length });
+  }
+  return { chosen, plan: { requested, population: disputes.length, strata } };
+}
+
 /**
  * The issues a second model disputed (disagree or unsure) from a meta-review directory, plus a seeded spot-check of
  * the ones it agreed with. The judge's own records, found through the meta run's `judged.dir`, supply the summary text.
@@ -270,12 +313,13 @@ async function buildMetaCards(options: BuildCardsOptions): Promise<BuiltCards> {
     }
   }
   if (disputes.length + agreed.length === 0) throw new Error("no issues to review: the reviews contain no issues");
-  const chosenDisputes = pickSpread(disputes, options.count ?? disputes.length, options.seed);
+  const sampled = options.disputeSample !== undefined && options.disputeSample < disputes.length ? sampleDisputes(disputes, options.disputeSample, options.seed) : null;
+  const chosenDisputes = sampled ? sampled.chosen : pickSpread(disputes, options.count ?? disputes.length, options.seed);
   // --count caps the whole page: the disputes come first and the spot-check only takes the room left.
   const room = options.count === undefined ? Infinity : Math.max(0, options.count - chosenDisputes.length);
   const chosenAgreed = pickSpread(agreed, Math.min(options.agreedSample ?? 3, room), options.seed);
   const cards = await completeCards([...chosenDisputes, ...chosenAgreed], options);
-  return { cards, pageId: await pageIdOf(cards), shortfall: 0, available: { judgments: disputes.length, extra: agreed.length } };
+  return { cards, pageId: await pageIdOf(cards), shortfall: 0, available: { judgments: disputes.length, extra: agreed.length }, disputeSampling: sampled?.plan ?? null };
 }
 
 /** Choose the issues to show a reviewer and gather what the page needs around each one. */
@@ -474,7 +518,7 @@ export async function runSummaryReview(options: SummaryReviewOptions, deps: { no
   await mkdir(outDir, { recursive: true });
   const files = [path.join(outDir, "review.html"), path.join(outDir, "review.json")];
   await writeAtomic(files[0]!, renderReviewPage(built.cards, { pageId: built.pageId, createdAt }));
-  await writeAtomic(files[1]!, `${JSON.stringify({ schemaVersion: 1, pageId: built.pageId, createdAt, seed: options.seed, requested: options.count ?? null, available: built.available, ...(metaAggregate ? { mode: "meta", metaDir: path.resolve(options.metaDir!), metaAggregate } : {}), cards: built.cards }, null, 2)}\n`);
+  await writeAtomic(files[1]!, `${JSON.stringify({ schemaVersion: 1, pageId: built.pageId, createdAt, seed: options.seed, requested: options.count ?? null, available: built.available, ...(metaAggregate ? { mode: "meta", metaDir: path.resolve(options.metaDir!), metaAggregate, disputeSampling: built.disputeSampling ?? null } : {}), cards: built.cards }, null, 2)}\n`);
   return { files, pageId: built.pageId, cards: built.cards.length, shortfall: built.shortfall };
 }
 
@@ -504,14 +548,22 @@ export interface MetaCalibration {
   reviewer: MetaAggregateSummary["aggregate"];
   /** Judge issues the reviewer looked at. */
   issues: number;
-  disputes: { overall: DisputeTally; byDimension: Record<JudgeDimension, DisputeTally>; bySeverity: Record<"major" | "minor", DisputeTally> };
+  disputes: { overall: DisputeTally; /** Disputes the reviewer raised in all; larger than `overall.total` when only a sample is on the page. */ population?: number; byDimension: Record<JudgeDimension, DisputeTally>; bySeverity: Record<"major" | "minor", DisputeTally> };
   agreedSample: SampleTally;
+  /** Only when the disputes were sampled: the per-stratum answers and the extrapolation to all disputes. */
+  sampling?: {
+    requested: number;
+    population: number;
+    strata: Array<{ key: string; label: string; population: number; sampled: number; judge: number; reviewer: number; unsure: number; unanswered: number; answered: number; judgeEstimateLow: number; judgeEstimateHigh: number }>;
+    judgeSidedLow: number;
+    judgeSidedHigh: number;
+  };
   precisionEstimate: {
-    /** Unsure and unanswered disputes count as the judge being wrong. */
+    /** Unsure and unanswered disputes count as the judge being wrong (sampled: only the judge-sided share counts). */
     point: number | null;
     /** Unsure and unanswered disputes count as the judge being right. */
     upper: number | null;
-    components: { reviewerAgreed: number; agreedSampleRate: number | null; judgeSidedDisputes: number; disputesTotal: number; disputesNotJudged: number; issues: number };
+    components: { reviewerAgreed: number; agreedSampleRate: number | null; judgeSidedDisputes: number; disputesTotal: number; disputesNotJudged: number; issues: number; extrapolated?: boolean };
   };
   disagreedWithJudge: Array<{ cardId: string; id: string; title: string; group: "dispute" | "agreed-sample"; location: string; locationLabel: string; dimension: JudgeDimension; severity: string; summaryQuote: string; explanation: string; note: string }>;
 }
@@ -524,7 +576,7 @@ function finish(tally: Tally): Tally {
 /** On a dispute page "judge" and "reviewer" are the researcher's view of whether the judge's issue stands. */
 const asJudgeCorrect = (decision: Decision): "agree" | "disagree" | "unsure" => (decision === "judge" ? "agree" : decision === "reviewer" ? "disagree" : decision);
 
-export function computeCalibration(cards: readonly ReviewCard[], pageId: string, answers: ReadonlyMap<string, { decision: Decision; note: string }>, generatedAt: string, metaAggregate?: MetaAggregateSummary): Calibration {
+export function computeCalibration(cards: readonly ReviewCard[], pageId: string, answers: ReadonlyMap<string, { decision: Decision; note: string }>, generatedAt: string, metaAggregate?: MetaAggregateSummary, sampling?: DisputeSamplingPlan): Calibration {
   const overall = emptyTally();
   const byDimension = Object.fromEntries(JUDGE_DIMENSIONS.map((dimension) => [dimension, emptyTally()])) as Record<JudgeDimension, Tally>;
   const bySeverity = { major: emptyTally(), minor: emptyTally() };
@@ -551,13 +603,13 @@ export function computeCalibration(cards: readonly ReviewCard[], pageId: string,
     byOrigin: Object.fromEntries(Object.entries(byOrigin).map(([kind, tally]) => [kind, finish(tally)])),
     disagreements, unsureCards,
   };
-  if (metaAggregate) calibration.meta = computeMetaCalibration(cards, answers, metaAggregate, calibration.disagreements);
+  if (metaAggregate) calibration.meta = computeMetaCalibration(cards, answers, metaAggregate, calibration.disagreements, sampling);
   return calibration;
 }
 
 const emptyDispute = (): DisputeTally => ({ judge: 0, reviewer: 0, unsure: 0, unanswered: 0, total: 0 });
 
-function computeMetaCalibration(cards: readonly ReviewCard[], answers: ReadonlyMap<string, { decision: Decision; note: string }>, summary: MetaAggregateSummary, disagreements: Calibration["disagreements"]): MetaCalibration {
+function computeMetaCalibration(cards: readonly ReviewCard[], answers: ReadonlyMap<string, { decision: Decision; note: string }>, summary: MetaAggregateSummary, disagreements: Calibration["disagreements"], plan?: DisputeSamplingPlan): MetaCalibration {
   const overall = emptyDispute();
   const byDimension = Object.fromEntries(JUDGE_DIMENSIONS.map((dimension) => [dimension, emptyDispute()])) as Record<JudgeDimension, DisputeTally>;
   const bySeverity = { major: emptyDispute(), minor: emptyDispute() };
@@ -575,18 +627,40 @@ function computeMetaCalibration(cards: readonly ReviewCard[], answers: ReadonlyM
     }
   }
   const sampleRate = sample.agree + sample.disagree === 0 ? null : sample.agree / (sample.agree + sample.disagree);
+  const strata = plan ? plan.strata.map((stratum) => {
+    const mine = cards.filter((card) => card.meta?.group === "dispute" && card.meta.stratum === stratum.key);
+    const count = (decision: string): number => mine.filter((card) => answers.get(card.cardId)?.decision === decision).length;
+    const judge = count("judge"); const reviewer = count("reviewer"); const unsure = count("unsure");
+    const answered = judge + reviewer + unsure;
+    // Unsure answers are neither side, but they were answered: the low bound counts them against the judge, the high bound for it.
+    return {
+      ...stratum, judge, reviewer, unsure, unanswered: mine.length - answered, answered,
+      judgeEstimateLow: answered === 0 ? 0 : (judge / answered) * stratum.population,
+      judgeEstimateHigh: answered === 0 ? stratum.population : ((judge + unsure) / answered) * stratum.population,
+    };
+  }) : undefined;
+  const sampling = strata && plan ? {
+    requested: plan.requested, population: plan.population, strata,
+    judgeSidedLow: strata.reduce((sum, stratum) => sum + stratum.judgeEstimateLow, 0),
+    judgeSidedHigh: strata.reduce((sum, stratum) => sum + stratum.judgeEstimateHigh, 0),
+  } : undefined;
   const reviewerAgreed = summary.aggregate.overall.agree;
   const disputesTotal = summary.aggregate.overall.disagree + summary.aggregate.overall.unsure;
   const disputesNotJudged = Math.max(0, disputesTotal - overall.judge - overall.reviewer);
   const issues = summary.issues;
-  const estimate = (extra: number): number | null => (sampleRate === null || issues === 0 ? null : (reviewerAgreed * sampleRate + overall.judge + extra) / issues);
+  const estimate = (extra: number): number | null => {
+    if (sampleRate === null || issues === 0) return null;
+    if (sampling) return (reviewerAgreed * sampleRate + (extra === 0 ? sampling.judgeSidedLow : sampling.judgeSidedHigh)) / issues;
+    return (reviewerAgreed * sampleRate + overall.judge + extra) / issues;
+  };
   return {
     reviewer: summary.aggregate, issues,
-    disputes: { overall, byDimension, bySeverity },
+    disputes: { overall, ...(sampling ? { population: sampling.population } : {}), byDimension, bySeverity },
+    ...(sampling ? { sampling } : {}),
     agreedSample: { ...sample, rate: sampleRate },
     precisionEstimate: {
       point: estimate(0), upper: estimate(disputesNotJudged),
-      components: { reviewerAgreed, agreedSampleRate: sampleRate, judgeSidedDisputes: overall.judge, disputesTotal, disputesNotJudged, issues },
+      components: { reviewerAgreed, agreedSampleRate: sampleRate, judgeSidedDisputes: overall.judge, disputesTotal, disputesNotJudged: sampling ? 0 : disputesNotJudged, issues, ...(sampling ? { extrapolated: true } : {}) },
     },
     disagreedWithJudge: disagreements.map((entry) => {
       const card = cards.find((candidate) => candidate.cardId === entry.cardId)!;
@@ -625,6 +699,19 @@ function renderMetaCalibration(calibration: Calibration): string {
     "",
     "研究者认为谁对：评审对 = 评审提出的问题成立；复核对 = 评审的问题不成立或不该这么重。",
     "",
+    ...(m.sampling ? [
+      `分歧一共 ${m.sampling.population} 条，页面只抽了 ${m.sampling.requested} 条（各层抽样见下表）。下面的总体、按维度、按严重程度只统计页面上的条目；对全部分歧的数字是按各层抽样结果推算的。`,
+      "",
+      "### 抽样的各层",
+      "",
+      "“必选”层（准确性分歧和评审判为大问题的分歧）全部在页面上；其余各层按分歧数的比例抽样。推算：每层评审对的条数 ≈ 评审对 / 已回答 × 该层分歧总数。拿不准算已回答，但不算哪一边：下界把它们算作评审错，上界算作评审对；整层没回答时下界为 0、上界为全层。",
+      "",
+      "| 层 | 分歧总数 | 抽到 | 评审对 | 复核对 | 拿不准 | 未回答 | 推算评审对（下界） | 推算评审对（上界） |",
+      "| --- | --- | --- | --- | --- | --- | --- | --- | --- |",
+      ...m.sampling.strata.map((stratum) => `| ${cell(stratum.label)} | ${stratum.population} | ${stratum.sampled} | ${stratum.judge} | ${stratum.reviewer} | ${stratum.unsure} | ${stratum.unanswered} | ${stratum.judgeEstimateLow.toFixed(1)} | ${stratum.judgeEstimateHigh.toFixed(1)} |`),
+      `| 合计 | ${m.sampling.population} | ${m.sampling.strata.reduce((sum, stratum) => sum + stratum.sampled, 0)} | | | | | ${m.sampling.judgeSidedLow.toFixed(1)} | ${m.sampling.judgeSidedHigh.toFixed(1)} |`,
+      "",
+    ] : []),
     "### 总体",
     "",
     "| 分组 | 评审对 | 复核对 | 拿不准 | 未回答 | 合计 |",
@@ -650,11 +737,19 @@ function renderMetaCalibration(calibration: Calibration): string {
     "",
     "## 评审精确率估计",
     "",
-    `估计：评审提出的问题里，经研究者认可成立的比例 ≈ ${pct(m.precisionEstimate.point)}（上界 ${pct(m.precisionEstimate.upper)}）。`,
+    `估计：评审提出的问题里，经研究者认可成立的比例 ≈ ${pct(m.precisionEstimate.point)}（${m.sampling ? "下界" : "点估计"}），上界 ${pct(m.precisionEstimate.upper)}。`,
     "",
-    `- 公式：（复核同意的问题数 × 抽查同意率 + 研究者站在评审一边的分歧数）/ 全部问题数 =（${c.reviewerAgreed} × ${pct(c.agreedSampleRate)} + ${c.judgeSidedDisputes}）/ ${c.issues}。`,
-    `- 分歧一共 ${c.disputesTotal} 条，其中 ${c.disputesNotJudged} 条研究者没有裁定为评审对或复核对（拿不准或未回答）。点估计把它们按“评审错”算，上界把它们按“评审对”算。`,
-    "- 这只是估计：抽查样本很小，复核同意的问题里没被抽到的部分按抽查同意率外推；复核模型本身也可能出错。",
+    ...(m.sampling
+      ? [
+        `- 公式：（复核同意的问题数 × 抽查同意率 + 推算的评审对的分歧数）/ 全部问题数 =（${c.reviewerAgreed} × ${pct(c.agreedSampleRate)} + ${m.sampling.judgeSidedLow.toFixed(1)}）/ ${c.issues}；上界把推算的评审对换成 ${m.sampling.judgeSidedHigh.toFixed(1)}。`,
+        `- 分歧共 ${c.disputesTotal} 条，只有 ${m.sampling.strata.reduce((sum, stratum) => sum + stratum.sampled, 0)} 条交给研究者，其余按各层已回答条目里评审对的比例推算。`,
+        "- 这是基于抽样的估计：每层的样本很小，推算有抽样误差；复核同意的问题里没被抽到的部分按抽查同意率外推；复核模型本身也可能出错。",
+      ]
+      : [
+        `- 公式：（复核同意的问题数 × 抽查同意率 + 研究者站在评审一边的分歧数）/ 全部问题数 =（${c.reviewerAgreed} × ${pct(c.agreedSampleRate)} + ${c.judgeSidedDisputes}）/ ${c.issues}。`,
+        `- 分歧一共 ${c.disputesTotal} 条，其中 ${c.disputesNotJudged} 条研究者没有裁定为评审对或复核对（拿不准或未回答）。点估计把它们按“评审错”算，上界把它们按“评审对”算。`,
+        "- 这只是估计：抽查样本很小，复核同意的问题里没被抽到的部分按抽查同意率外推；复核模型本身也可能出错。",
+      ]),
     "",
     "## 研究者不认同评审的条目",
     "",
@@ -714,7 +809,7 @@ export async function runReviewImport(options: { resultsPath: string; outDir: st
   const outDir = path.resolve(options.outDir);
   const manifestFile = path.join(outDir, "review.json");
   if (!existsSync(manifestFile)) throw new Error(`${manifestFile} not found; --out must be the directory the review page was generated into (review.json lists its cards)`);
-  const manifest = JSON.parse(await readFile(manifestFile, "utf8")) as { pageId: string; cards: ReviewCard[]; mode?: string; metaAggregate?: MetaAggregateSummary };
+  const manifest = JSON.parse(await readFile(manifestFile, "utf8")) as { pageId: string; cards: ReviewCard[]; mode?: string; metaAggregate?: MetaAggregateSummary; disputeSampling?: DisputeSamplingPlan | null };
   let parsed: { pageId?: unknown; results?: unknown };
   try { parsed = JSON.parse(await readFile(options.resultsPath, "utf8")); }
   catch { throw new Error(`${options.resultsPath} is not readable JSON`); }
@@ -730,7 +825,7 @@ export async function runReviewImport(options: { resultsPath: string; outDir: st
     if (answers.has(entry.cardId)) throw new Error(`results[${index}].cardId ${entry.cardId} 重复出现 (duplicate)`);
     answers.set(entry.cardId, { decision: entry.decision as Decision, note: typeof entry.note === "string" ? entry.note : "" });
   }
-  const calibration = computeCalibration(manifest.cards, manifest.pageId, answers, (deps.now ?? (() => new Date()))().toISOString(), manifest.mode === "meta" ? manifest.metaAggregate : undefined);
+  const calibration = computeCalibration(manifest.cards, manifest.pageId, answers, (deps.now ?? (() => new Date()))().toISOString(), manifest.mode === "meta" ? manifest.metaAggregate : undefined, manifest.disputeSampling ?? undefined);
   const files = [path.join(outDir, "calibration.md"), path.join(outDir, "calibration.json")];
   await writeAtomic(files[0]!, renderCalibration(calibration));
   await writeAtomic(files[1]!, `${JSON.stringify(calibration, null, 2)}\n`);
@@ -753,6 +848,12 @@ export function parseSummaryReviewArgs(argv: readonly string[]): ReviewArgs {
     switch (flag) {
       case "--judgments": parsed.judgmentsDir = take(); break;
       case "--meta": parsed.metaDir = take(); break;
+      case "--dispute-sample": {
+        const value = take();
+        if (!/^\d+$/.test(value) || Number(value) < 1) throw new Error("--dispute-sample must be a whole number of at least 1");
+        parsed.disputeSample = Number(value);
+        break;
+      }
       case "--agreed-sample": {
         const value = take();
         if (!/^\d+$/.test(value)) throw new Error("--agreed-sample must be a whole number, 0 or more");
@@ -782,9 +883,11 @@ export function parseSummaryReviewArgs(argv: readonly string[]): ReviewArgs {
     if (parsed.judgmentsDir || parsed.extraDir || parsed.metaDir || parsed.count !== undefined) throw new Error("--import only reads the results file and the review.json in --out; do not combine it with --judgments, --extra, --meta or --count");
   } else if (parsed.metaDir) {
     if (parsed.extraDir) throw new Error("--meta takes its issues from the meta-review directory; do not combine it with --extra");
+    if (parsed.disputeSample !== undefined && parsed.count !== undefined) throw new Error("--dispute-sample and --count both limit the disputes; use one (--count caps the whole page)");
   } else {
     if (!parsed.judgmentsDir) throw new Error("--judgments <judge output directory> is required (or --meta <meta-review directory>)");
     if (parsed.agreedSample !== undefined) throw new Error("--agreed-sample only applies with --meta");
+    if (parsed.disputeSample !== undefined) throw new Error("--dispute-sample only applies with --meta");
   }
   return parsed;
 }

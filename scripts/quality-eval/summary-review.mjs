@@ -10,6 +10,8 @@ and later turns the exported answers into an agreement rate. No model is called 
   --judgments <dir>   Output directory of summary-judge.mjs; issues are taken from here first (required unless --meta)
   --meta <dir>        Output directory of summary-meta-review.mjs: a dispute page with the issues the second model disagreed with or
                       was unsure about (all of them unless --count), plus a small spot-check of the ones it agreed with
+  --dispute-sample <n> With --meta: show only n disputes: all accuracy disputes and all on judge-major issues, the rest shared out over the
+                      other dimensions in proportion (seeded); the calibration then extrapolates per stratum
   --agreed-sample <n> With --meta: how many agreed issues to add as a spot-check (default 3; 0 for none)
   --extra <dir>       Another judge output directory, used to fill up to --count when --judgments has fewer issues
   --sources <dir>     Cached sources (summary-sources.mjs): shows about 300 characters of source around each quote

@@ -51,7 +51,7 @@ function shuffled<T>(items: readonly T[], seed: string): T[] {
 }
 
 /** Largest-remainder shares of `total` over the groups by size; ties go to the earlier group. */
-function proportionalShares(sizes: ReadonlyMap<string, number>, total: number): Map<string, number> {
+export function proportionalShares(sizes: ReadonlyMap<string, number>, total: number): Map<string, number> {
   const all = [...sizes.values()].reduce((sum, size) => sum + size, 0);
   const wanted = Math.min(Math.max(0, total), all);
   const shares = new Map<string, number>();
