@@ -2,8 +2,8 @@
 
 goal_ref: ../goal.md
 created: 2026-10-29T01:50:00+08:00
-updated: 2026-10-29T22:20:00+08:00
-revision: 4
+updated: 2026-10-29T22:40:00+08:00
+revision: 5
 
 ## Outcome
 
@@ -45,12 +45,28 @@ revision: 4
 - checks: 评审完成数、无效数、错误数；预览规模不超过估算。
 - [x] accepted on observed evidence (50/50 regenerated with 0 fallbacks; 50/50 judged valid, 47 first try and 3 after retry; 11 transient proxy cut-offs at ~24 s succeeded on resume; owner read the report and checked the major and accuracy issues)
 
-### Chunk 4 — 研究者核对
+### Chunk 4 — 第二模型复核全部评审问题
 
-- change: 生成核对网页（不少于 10 条），研究者完成核对并导出结果，导入得到一致率。
-- kind: non-behavioral（研究者操作）
+- change: `summary-meta-review.mjs --judged <基线评审目录> --sources <dir> --config <cli toml> --reviewer-model <name> --reviewer-effort <effort> --out <dir> [--yes]`：复核模型用 CLI 配置的接口，覆盖模型名与推理强度（研究者指定 gpt-6-astra、xhigh），必须与评审模型不同。每篇有问题的条目一次请求：给出同一份 `<paper_data>`、被评摘要和评审的问题列表，复核模型逐条给出 同意 / 不同意 / 拿不准、严重程度是否合适（合适 / 偏重 / 偏轻）、中文理由，可附原文引用（程序核对为原文子串）。严格 JSON 合同、一次纠正重试、预览/确认、逐条可续跑、无密钥泄漏；写 `meta-review.md`（复核一致率：总体、按维度、按严重程度；严重程度意见；分歧清单）和 `meta-review.json`。
+- kind: behavior
+- first signal: Red — 假模型测试（合同校验、逐条覆盖、续跑、同模型拒绝、报告计算）失败。
+- checks: 同一测试 Green；`npm run test:release-tools` Green。
+- [ ] accepted on observed evidence
+
+### Chunk 5 — 只把分歧条目交给研究者
+
+- change: `summary-review.mjs` 新增 `--meta <复核目录>`：卡片只取复核模型不同意或拿不准的问题，卡片上同时显示评审说明与复核理由；`--import` 的核对报告合并复核结果：复核同意的条数、分歧条目中研究者站在评审一边 / 复核一边 / 拿不准的条数。
+- kind: behavior
+- first signal: Red — 分歧筛选、卡片内容、合并报告的测试失败。
+- checks: 同一测试 Green；`npm run test:release-tools` Green。
+- [ ] accepted on observed evidence
+
+### Chunk 6 — 真实复核与研究者裁定
+
+- change: 用 gpt-6-astra（xhigh）复核基线（研究者已同意，约 45 次请求、约 180 万输入 token；预览超出时再问），生成分歧核对页，研究者裁定并导入。
+- kind: non-behavioral（真实运行 + 研究者操作）
 - first signal: n/a
-- checks: `calibration.md` 存在，核对条数 ≥ 10。
+- checks: `meta-review.md` 与 `calibration.md` 存在。
 - [ ] accepted on observed evidence
 
 ## Phase verification

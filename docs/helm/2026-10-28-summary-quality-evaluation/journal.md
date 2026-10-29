@@ -89,3 +89,14 @@
 - change: none.
 - disposition: keep. The review page has 15 cards, at `~/quality-eval/summary-baseline-2026-10-29/review/review.html`.
 - next: the researcher reviews the page, then results are imported for the agreement rate.
+
+## 2026-10-29 — L3 steer (calibration method)
+
+- evidence: The researcher asked whether gpt-6-astra at xhigh could do the check of the judge. A one-call probe through the CLI config's endpoint with model gpt-6-astra and reasoning_effort xhigh succeeded. The options offered were:
+  - A: astra re-checks every judge issue, and the researcher arbitrates only the disagreements;
+  - B: astra replaces the researcher entirely;
+  - C: astra becomes the judge.
+  The researcher chose A.
+- change: Success criterion 3 now reads: "a second model re-checks every judge issue from the baseline; the researcher arbitrates the disputed or unsure ones". The old criterion, "the researcher checks at least 10", is replaced. P4 chunk 4 (the researcher reviewing 15 cards) is replaced by chunks 4–6: the meta-review tool, a disputes-only review page, and the real run.
+- disposition: keep the 15-card page as a fallback. Keep all code.
+- next: P4 chunk 4, the meta-review tool.
