@@ -60,27 +60,37 @@ function table(value: unknown): Record<string, unknown> | undefined {
   return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : undefined;
 }
 
-async function readModelSettings(configPath: string): Promise<LlmSettings> {
+/**
+ * Read the `[llm]` table of a model config file. Errors never echo the file, its endpoint or its key.
+ * `label` names the config in the messages, and `hint` ends the "unavailable" message (the exploration tool
+ * and the quality-eval judge each tell the user what to supply).
+ */
+export async function readModelSettings(
+  configPath: string,
+  describe: { label?: string; hint?: string } = {},
+): Promise<LlmSettings> {
+  const label = describe.label ?? "Exploration model config";
+  const hint = describe.hint ?? "Configure the workbench model first or supply --model-config.";
   let raw: string;
   try { raw = await readFile(configPath, "utf8"); }
-  catch { throw new Error(`Exploration model config is unavailable: ${configPath}. Configure the workbench model first or supply --model-config.`); }
+  catch { throw new Error(`${label} is unavailable: ${configPath}. ${hint}`); }
   let parsed: Record<string, unknown> | undefined;
   try { parsed = table(parseToml(raw)); }
-  catch { throw new Error("Exploration model config is invalid TOML; its contents were omitted to protect credentials"); }
+  catch { throw new Error(`${label} is invalid TOML; its contents were omitted to protect credentials`); }
   const llm = table(parsed?.llm);
-  if (!llm) throw new Error("Exploration model config has no [llm] table");
+  if (!llm) throw new Error(`${label} has no [llm] table`);
   const required = (name: string): string => {
     const value = llm[name];
-    if (typeof value !== "string" || !value.trim()) throw new Error(`Exploration model config requires llm.${name}; configure the workbench model first`);
+    if (typeof value !== "string" || !value.trim()) throw new Error(`${label} requires llm.${name}; ${describe.hint ? "see the usage" : "configure the workbench model first"}`);
     return value.trim();
   };
   const apiKey = required("api_key");
   const baseUrl = required("base_url");
   let endpoint: URL;
   try { endpoint = new URL(baseUrl); }
-  catch { throw new Error("Exploration model config llm.base_url is not a valid HTTP URL"); }
-  if (!["http:", "https:"].includes(endpoint.protocol)) throw new Error("Exploration model config llm.base_url must use HTTP or HTTPS");
-  if (llm.thinking_mode !== undefined && typeof llm.thinking_mode !== "boolean") throw new Error("Exploration model config llm.thinking_mode must be a boolean");
+  catch { throw new Error(`${label} llm.base_url is not a valid HTTP URL`); }
+  if (!["http:", "https:"].includes(endpoint.protocol)) throw new Error(`${label} llm.base_url must use HTTP or HTTPS`);
+  if (llm.thinking_mode !== undefined && typeof llm.thinking_mode !== "boolean") throw new Error(`${label} llm.thinking_mode must be a boolean`);
   const fallback = DEFAULT_SETTINGS.llm;
   return {
     apiKey, baseUrl, model: required("model"),

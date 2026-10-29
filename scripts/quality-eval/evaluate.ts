@@ -170,7 +170,7 @@ async function nearestExistingPath(target: string): Promise<string> {
 }
 
 /** Fail with a clear message when `target` cannot become a writable directory (creating nothing). */
-async function assertWritableTarget(target: string): Promise<void> {
+export async function assertWritableTarget(target: string): Promise<void> {
   const existing = await nearestExistingPath(target);
   const info = await stat(existing);
   if (!info.isDirectory()) {
@@ -183,7 +183,7 @@ async function assertWritableTarget(target: string): Promise<void> {
   }
 }
 
-async function prepareOutDir(outDir: string): Promise<void> {
+export async function prepareOutDir(outDir: string): Promise<void> {
   await assertWritableTarget(outDir);
   await mkdir(outDir, { recursive: true });
   // Write and remove a probe so a directory that exists but is not writable fails here,

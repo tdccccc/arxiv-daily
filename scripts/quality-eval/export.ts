@@ -157,7 +157,7 @@ function compare(left: string, right: string): number {
   return left < right ? -1 : left > right ? 1 : 0;
 }
 
-function seededRandom(seed: string): () => number {
+export function seededRandom(seed: string): () => number {
   let hash = 2166136261;
   for (const char of seed) hash = Math.imul(hash ^ char.codePointAt(0)!, 16777619) >>> 0;
   let state = hash;

@@ -146,7 +146,7 @@ export function topicsFromSnapshot(meta: SheetMeta): Topic[] {
   }));
 }
 
-function redactor(settings: { apiKey: string; baseUrl: string }): (value: unknown) => string {
+export function redactor(settings: { apiKey: string; baseUrl: string }): (value: unknown) => string {
   const secrets = [settings.apiKey];
   try {
     const endpoint = new URL(settings.baseUrl);
