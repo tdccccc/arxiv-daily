@@ -308,3 +308,38 @@ node scripts/quality-eval/summary-judge.mjs … --yes                           
 - 报告“评审对象”里有“被评摘要来源”：重新生成（生成模型、推理设置、生成提示词哈希、生成时间、输出目录）。重新生成的摘要被改写后再评，会重新评审（续跑判断加入了被评摘要的内容哈希）。
 - 不带 `--summaries` 评 Vault 里的历史摘要时，报告写明来源是“历史 Vault”，并把缓存原文版本高于 v1 的条目标出来（“原文已有新版本（vN），生成时可能看到的是旧版”），评审对象里给出条数，判定分布另给一张只含 v1 原文条目的表。这类评审只作参考。
 - `--offline` 对照的是 Vault 里的历史文字，与重新生成的摘要无法对照；和 `--summaries` 一起给时会跳过，报告里说明原因。
+
+## 让第二个模型复核评审提出的问题
+
+评审模型也会看错。与其让研究者逐条核对所有评审问题，不如让另一个模型先把评审提出的**每一个**问题复核一遍，研究者只裁定两边有分歧的。
+
+```sh
+# 先看计划：有多少条目有评审问题、最多多少次请求、输入规模。不调用模型，不写文件。
+node scripts/quality-eval/summary-meta-review.mjs --judged ~/quality-eval/judge-1 --sources ~/quality-eval/summary-sources \
+  --config ~/.config/arxiv-daily/config.toml --reviewer-model <复核模型名> --reviewer-effort xhigh --out ~/quality-eval/meta-1
+
+# 确认后加 --yes 才真正调用（会花钱）
+node scripts/quality-eval/summary-meta-review.mjs … --yes
+
+# 之后只想重新生成报告（不调用模型）
+node scripts/quality-eval/summary-meta-review.mjs --report-only --out ~/quality-eval/meta-1
+```
+
+- 复核模型用 CLI 配置 `[llm]` 里的接口和密钥，`--reviewer-model` 和 `--reviewer-effort` 覆盖模型名和推理强度（强度原样传给接口，`xhigh` 之类也行；不同服务商支持不同，用 `anthropic` 服务商时 `xhigh` 会被降成 `high`）。复核模型必须与评审模型不同，可以与生成模型相同。
+- 每个有评审问题的条目发一次请求，没有问题的条目不发。复核模型看到的原文和被评摘要与评审完全相同，再加上按编号列出的评审问题，逐条回答：同意 / 不同意 / 拿不准、评审的严重程度合不合适（合适 / 偏重 / 偏轻）、中文理由，可附原文引用。回答不合格（编号缺漏、理由不是中文、引用不在原文里等）会纠正重试一次，仍不合格记为无效。
+- 评审的是 Vault 里的历史摘要时要给 `--vault`，用来还原评审当时看到的内容；评审后摘要或原文变过的条目会跳过并写明原因。
+- 可以中断后继续：复核模型、推理强度、复核提示词和评审结果都没变的条目会跳过，`--rereview` 全部重做。
+- 输出：`meta/`（每条一个文件）、`run.json`、`meta-review.md`（复核一致率、按维度/严重程度/类型的分布、严重程度意见、不同意和拿不准的清单）、`meta-review.json`。
+
+### 只把分歧交给研究者
+
+```sh
+node scripts/quality-eval/summary-review.mjs --meta ~/quality-eval/meta-1 --sources ~/quality-eval/summary-sources \
+  [--agreed-sample 3] [--count N] [--seed 种子] --out ~/quality-eval/review-meta-1
+# 在浏览器里打开 review.html，裁定完点“导出结果”，然后：
+node scripts/quality-eval/summary-review.mjs --import 导出的结果.json --out ~/quality-eval/review-meta-1
+```
+
+- 页面里的卡片是复核模型不同意或拿不准的所有评审问题（默认不限数量，`--count` 给了就限制整页的条数，分歧优先），再加几条双方都同意的问题作抽查（`--agreed-sample`，默认 3，0 为不抽），抽查的卡片明确标着“复核同意的抽查”。
+- 卡片上同时显示评审的说明和复核的裁定、严重程度意见与理由（有引用时附原文上下文）。分歧卡片的按钮是“评审对 / 复核对 / 拿不准”；抽查卡片是“同意 / 不同意 / 拿不准”（同意 = 评审和复核都对）。
+- 导入后的 `calibration.md` / `calibration.json` 合并了复核的结果：复核一致率；分歧条目里研究者站评审、站复核、拿不准和未回答的条数（总体、按维度、按严重程度）；抽查的同意率；以及**评审精确率的估计** =（复核同意的问题数 × 抽查同意率 + 研究者站评审一边的分歧数）/ 全部问题数。它只是估计（抽查样本很小，复核模型也会错），报告里同时给出各个组成部分；拿不准和未回答的分歧在点估计里按“评审错”算，上界里按“评审对”算。最后列出研究者不认同评审的条目和备注。

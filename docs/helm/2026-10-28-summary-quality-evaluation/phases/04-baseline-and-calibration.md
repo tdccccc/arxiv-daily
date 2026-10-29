@@ -2,8 +2,8 @@
 
 goal_ref: ../goal.md
 created: 2026-10-29T01:50:00+08:00
-updated: 2026-10-29T22:50:00+08:00
-revision: 6
+updated: 2026-10-29T23:00:00+08:00
+revision: 7
 
 ## Outcome
 
@@ -59,7 +59,7 @@ revision: 6
 - kind: behavior
 - first signal: Red — 分歧筛选、卡片内容、合并报告的测试失败。
 - checks: 同一测试 Green；`npm run test:release-tools` Green。
-- [ ] accepted on observed evidence
+- [x] accepted on observed evidence (300/300 quality-eval tests, Red 10/11 first; test:release-tools 1208/1208)
 
 ### Chunk 6 — 真实复核与研究者裁定
 
