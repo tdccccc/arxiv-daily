@@ -186,7 +186,7 @@ const EPSILON = 1e-9;
 /** Trailing zeros of a whole number of at least 100 ("41000", "450"): the zeros may be rounding, not digits. */
 function roundingZeros(number: ExtractedNumber): number {
   if (number.decimals > 0) return 0;
-  const digits = number.token.replace(/^-/, "").replace("%", "");
+  const digits = number.token.replace(/^-/, "").replace(/%/g, "");
   return Number(digits) >= 100 ? (/0+$/.exec(digits)?.[0].length ?? 0) : 0;
 }
 
