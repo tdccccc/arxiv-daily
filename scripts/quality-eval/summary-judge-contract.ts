@@ -16,6 +16,22 @@ export type JudgeSeverity = Exclude<JudgeVerdict, "ok">;
 /** The sentence an accuracy issue must contain when its claim has no counterpart in the source. */
 export const ABSENT_FROM_SOURCE_PHRASE = "原文未提及";
 
+/** An explanation needs at least this share of Han characters among its letters, outside math, code and quotes. */
+export const MIN_EXPLANATION_HAN_SHARE = 0.3;
+
+/**
+ * Han characters over all letters of an explanation, after removing `$...$` math, `code` spans and quoted spans
+ * (“…”, "…", 「…」), which may legitimately be English. Null when nothing else is left to measure.
+ */
+export function explanationHanShare(text: string): number | null {
+  const own = text
+    .replace(/\$[^$]*\$/gu, " ").replace(/`[^`]*`/gu, " ")
+    .replace(/“[^”]*”/gu, " ").replace(/"[^"]*"/gu, " ").replace(/「[^」]*」/gu, " ");
+  const han = own.match(/\p{Script=Han}/gu)?.length ?? 0;
+  const letters = own.match(/\p{L}/gu)?.length ?? 0;
+  return letters === 0 ? null : han / letters;
+}
+
 export interface JudgeIssue {
   dimension: JudgeDimension;
   severity: JudgeSeverity;
@@ -171,8 +187,15 @@ export function validateJudgment(value: unknown, context: JudgeContext): JudgeCh
         }
       }
 
-      if ("explanation" in issue && (typeof issue.explanation !== "string" || !issue.explanation.trim())) {
-        reasons.push(`${path}.explanation 必须是非空字符串。`);
+      if ("explanation" in issue) {
+        if (typeof issue.explanation !== "string" || !issue.explanation.trim()) {
+          reasons.push(`${path}.explanation 必须是非空字符串。`);
+        } else {
+          const share = explanationHanShare(issue.explanation);
+          if (share !== null && share < MIN_EXPLANATION_HAN_SHARE) {
+            reasons.push(`${path}.explanation 必须用中文书写（专有名词、缩写、公式和引文可保留原文），现在几乎全是外文。`);
+          }
+        }
       }
 
       if (reasons.length > before) issuesValid = false;
@@ -207,6 +230,6 @@ export function buildJudgeCorrection(reasons: readonly string[]): string {
     "你上一次的输出没有通过程序校验，原因如下：",
     ...reasons.map((reason) => `- ${reason}`),
     "",
-    "请重新评审并只输出完整的 JSON 对象，不要输出任何其他文字。修正以上问题：引用必须逐字摘自对应的摘要位置或 <paper_data>，位置只能用允许的值，三项判定必须等于各自问题里最严重的那个（没有问题就是 \"ok\"）。",
+    "请重新评审并只输出完整的 JSON 对象，不要输出任何其他文字。说明一律用中文书写，专有名词、缩写和公式可以保留原文。修正以上问题：引用必须逐字摘自对应的摘要位置或 <paper_data>，位置只能用允许的值，三项判定必须等于各自问题里最严重的那个（没有问题就是 \"ok\"）。",
   ].join("\n");
 }

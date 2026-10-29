@@ -2,8 +2,8 @@
 
 goal_ref: ../goal.md
 created: 2026-10-29T01:50:00+08:00
-updated: 2026-10-29T01:50:00+08:00
-revision: 1
+updated: 2026-10-29T02:00:00+08:00
+revision: 2
 
 ## Outcome
 
@@ -27,7 +27,7 @@ revision: 1
 - kind: behavior
 - first signal: Red — 英文说明的判定被接受（测试期望拒绝）。
 - checks: 同一测试 Green；quality-eval 全部测试 Green。
-- [ ] accepted on observed evidence
+- [x] accepted on observed evidence (256/256 tests, Red 3/4 first; all 37 real trial explanations have Han share ≥ 0.60 against the 0.3 threshold)
 
 ### Chunk 2 — 中文核对网页与一致率
 

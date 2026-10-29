@@ -200,3 +200,35 @@ test("the prompt template and the contract agree on the output shape", () => {
   }
   assert.ok(prompt.includes("原文未提及"));
 });
+
+test("an explanation must be written in Chinese; English terms, math and quoted text do not count against it", () => {
+  const english = judgment([issue({ explanation: "The sample size does not match the source, which says 130 clusters." })]);
+  const reasons = reasonsOf(english);
+  assert.ok(reasons.some(reason => reason.includes("issues[0].explanation") && reason.includes("中文")), reasons.join("\n"));
+  assert.ok(reasons.join("\n").length > 0);
+
+  const chinese = judgment([issue({ explanation: "摘要把样本数写成 120，而原文给出的是 130；$N=130$ 出自 “using 130 clusters”，且 `Planck` 的结果无关。" })]);
+  assert.equal(check(chinese).ok, true, JSON.stringify(check(chinese)));
+  assert.equal(check(judgment([issue({ explanation: "ΛCDM 下的 H0 取值与 Planck 不一致：摘要写 67.4，原文是 73.5，差异来自 SH0ES 的测量。" })])).ok, true);
+  // English inside quotes and math is ignored: the sentence around it is what is measured.
+  assert.ok(reasonsOf(judgment([issue({ explanation: "“The mass ratio is 0.85 with a careful calibration” and $0.85\\pm0.04$ differ" })])).some(reason => reason.includes("explanation")));
+  assert.equal(check(judgment([issue({ explanation: "原文写的是 \"The mass ratio is 0.85 with a careful calibration\"，摘要把它写成了 0.58。" })])).ok, true);
+  assert.equal(check(judgment([issue({ explanation: "原文写的是「The mass ratio is 0.85 with a careful calibration」，摘要写成 0.58。" })])).ok, true);
+});
+
+test("the Chinese share of an explanation is measured outside math, code and quotes", () => {
+  assert.equal(qe.MIN_EXPLANATION_HAN_SHARE, 0.3);
+  assert.equal(qe.explanationHanShare("全是中文的说明"), 1);
+  assert.equal(qe.explanationHanShare("English only"), 0);
+  assert.equal(qe.explanationHanShare("中文 $x=1$ `code` “quoted text here” 结尾"), 1);
+  assert.equal(qe.explanationHanShare("$x$ “abc”"), null);
+});
+
+test("the correction message tells the judge to write the explanation in Chinese", () => {
+  assert.match(qe.buildJudgeCorrection(["issues[0].explanation 必须用中文书写"]), /中文/);
+  assert.match(qe.buildJudgeCorrection([]), /说明一律用中文/);
+});
+
+test("the system prompt requires Chinese explanations", () => {
+  assert.ok(qe.buildJudgeSystemPrompt({ kind: "daily" }).includes("说明一律用中文书写，专有名词、缩写和公式可以保留原文。"));
+});

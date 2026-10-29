@@ -36,7 +36,7 @@ export type {
   ExtractedNumber, GroundedNumber, GroundingAggregate, GroundingResult, SourceIndex, SourceTexts, UngroundedNumber, WrittenText,
 } from "./summary-grounding";
 export {
-  ABSENT_FROM_SOURCE_PHRASE, buildJudgeCorrection, buildJudgeSystemPrompt, checkJudgeOutput, JUDGE_DIMENSIONS, JUDGE_VERDICTS, normalizeQuoteText,
+  ABSENT_FROM_SOURCE_PHRASE, buildJudgeCorrection, buildJudgeSystemPrompt, checkJudgeOutput, explanationHanShare, MIN_EXPLANATION_HAN_SHARE, JUDGE_DIMENSIONS, JUDGE_VERDICTS, normalizeQuoteText,
   parseJudgeOutput, validateJudgment,
 } from "./summary-judge-contract";
 export type {

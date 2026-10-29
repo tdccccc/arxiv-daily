@@ -57,4 +57,4 @@
   - "dimension"：只能是 "accuracy"、"completeness"、"clarity"。
   - "severity"：只能是 "minor"、"major"。
   - "location"：问题所在的位置，只能是下面这些之一：{{locations}}。
-  - "summaryQuote"、"sourceQuote"、"explanation"：见上。"explanation" 用一两句话说清楚错在哪里、漏了什么或哪里看不懂。
+  - "summaryQuote"、"sourceQuote"、"explanation"：见上。"explanation" 用一两句话说清楚错在哪里、漏了什么或哪里看不懂。说明一律用中文书写，专有名词、缩写和公式可以保留原文。
