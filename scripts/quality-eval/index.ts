@@ -65,3 +65,7 @@ export {
   buildReviewCards, computeCalibration, locationLabel, contextAround, escapeHtml, parseSummaryReviewArgs, pickSpread, renderCalibration, renderReviewPage, runReviewImport, runSummaryReview,
 } from "./summary-review";
 export type { BuildCardsOptions, BuiltCards, Calibration, ReviewCard, ReviewOrigin, SummaryReviewOptions } from "./summary-review";
+export { buildMetaCorrection, buildMetaSystemPrompt, checkMetaOutput, validateMetaReviews } from "./summary-meta-review-contract";
+export type { MetaCheck, MetaReview, MetaVerdict, MetaSeverityOpinion } from "./summary-meta-review-contract";
+export { buildMetaReport, parseSummaryMetaReviewArgs, renderMetaReport, reviewerSettings, runMetaReportOnly, runSummaryMetaReview, writeMetaReport } from "./summary-meta-review";
+export type { MetaAggregate, MetaReportData, MetaReviewDeps, MetaReviewOptions, MetaReviewResult } from "./summary-meta-review";

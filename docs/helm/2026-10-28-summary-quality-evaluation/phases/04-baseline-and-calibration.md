@@ -2,8 +2,8 @@
 
 goal_ref: ../goal.md
 created: 2026-10-29T01:50:00+08:00
-updated: 2026-10-29T22:40:00+08:00
-revision: 5
+updated: 2026-10-29T22:50:00+08:00
+revision: 6
 
 ## Outcome
 
@@ -51,7 +51,7 @@ revision: 5
 - kind: behavior
 - first signal: Red — 假模型测试（合同校验、逐条覆盖、续跑、同模型拒绝、报告计算）失败。
 - checks: 同一测试 Green；`npm run test:release-tools` Green。
-- [ ] accepted on observed evidence
+- [x] accepted on observed evidence (289/289 quality-eval tests, Red 17/17 first; test:release-tools 1197/1197; owner read the reviewer prompt)
 
 ### Chunk 5 — 只把分歧条目交给研究者
 
