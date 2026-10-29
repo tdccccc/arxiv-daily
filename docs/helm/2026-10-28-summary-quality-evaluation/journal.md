@@ -100,3 +100,19 @@
 - change: Success criterion 3 now reads: "a second model re-checks every judge issue from the baseline; the researcher arbitrates the disputed or unsure ones". The old criterion, "the researcher checks at least 10", is replaced. P4 chunk 4 (the researcher reviewing 15 cards) is replaced by chunks 4–6: the meta-review tool, a disputes-only review page, and the real run.
 - disposition: keep the 15-card page as a fallback. Keep all code.
 - next: P4 chunk 4, the meta-review tool.
+
+## 2026-10-29 — waiver (calibration arbiter)
+
+- evidence: The researcher said: "我不想看，有些我也看不太懂，你帮我裁定吧". The owner session (claude-opus-5-5, the same family as the judge) arbitrated all 33 disputes plus 3 agreed-sample cards against the cached source, with no sampling. Results are in `~/quality-eval/summary-baseline-2026-10-29/review-all-disputes/` (`claude-arbitration.json` and `calibration.md`, which carries a note naming the arbiter).
+  - 4 disputes went to the judge: 2607.01175 omits mass and redshift reach; 2610.24104's "非均匀" is unsupported; 2607.10304 conflates two uv-subtraction cases; 2606.19907 recommends GNN with no GNN result.
+  - 29 went to the reviewer, nearly all secondary-detail completeness asks and over-strict clarity or wording calls.
+  - 3 of 3 agreed-sample cards were upheld, including both judge majors: 2609.31944 omits that its lensing power exceeds every HFF cluster, and 2606.17614 omits that H(z) sits 1.6σ below ΛCDM.
+  - Estimated judge precision: (41 × 3/3 + 4) / 74 ≈ 60.8%.
+  - Root cause found: the judge prompt's severity text counts "漏掉的是次要内容" as minor, while its completeness definition says secondary omissions are not issues. The judge followed the former.
+- change: Criterion 3 is waived as worded. Arbitration was by the owner session at the researcher's request, not by the researcher, and the judge-family caveat applies.
+- disposition: keep all artifacts. Follow-ups, outside this initiative:
+  1. Remove the minor-severity contradiction from the judge prompt, then re-judge the baseline with --rejudge.
+  2. Relax core's math validator for colon ratios and half-open intervals.
+  3. Detail notes get no math validation at generation.
+  4. Filter labelling resumes once 2–3 weeks of filter records accumulate.
+- next: close the initiative.

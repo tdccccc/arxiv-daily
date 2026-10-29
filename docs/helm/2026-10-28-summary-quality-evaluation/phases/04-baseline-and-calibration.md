@@ -2,8 +2,8 @@
 
 goal_ref: ../goal.md
 created: 2026-10-29T01:50:00+08:00
-updated: 2026-10-29T23:00:00+08:00
-revision: 7
+updated: 2026-10-30T00:00:00+08:00
+revision: 8
 
 ## Outcome
 
@@ -67,9 +67,11 @@ revision: 7
 - kind: non-behavioral（真实运行 + 研究者操作）
 - first signal: n/a
 - checks: `meta-review.md` 与 `calibration.md` 存在。
-- [ ] accepted on observed evidence
+- [x] accepted on observed evidence (astra re-check 40/40 valid, 74 issues, 41 agreed; dispute page built; arbitration by the owner session at the researcher's request, see journal waiver)
 
 ## Phase verification
+
+<!-- Observed 2026-10-29: baseline report, meta-review.md and calibration.md all in ~/quality-eval/summary-baseline-2026-10-29/; test:release-tools 1218/1218. -->
 
 - 基线报告与核对报告都在评估目录；goal 的成功标准逐条打勾或记录豁免。
 - `npm run test:release-tools` Green。
