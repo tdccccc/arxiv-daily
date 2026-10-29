@@ -61,3 +61,31 @@
 - change: none.
 - disposition: keep. The historical errors cannot be attributed to a single cause. Generation then used gpt-6-luna until 2026-10-15, older prompts and older extraction; the current setup is accurate on these 4. n=4 and the papers were chosen for their known errors, so the P4 baseline must confirm this.
 - next: close P3 and start P4 (baseline run, then calibration on its issues).
+
+## 2026-10-29 — note (baseline run)
+
+- evidence:
+  - Regeneration: 40 daily entries and 10 notes, seed "summary-judge", sampled in proportion by month, regenerated with gpt-6.1-sol: 50 generated, 0 fallbacks, 0 errors.
+  - Judging with claude-opus-5-5: the first pass judged 29 and stopped on 11 errors. All 11 were "HTTP network failure" about 24 s into a request, from the proxy, not the client, whose idle timeout is 120 s. Resuming judged the other 21 with 0 errors. In total 50 of 50 are valid (47 first try, 3 after retry).
+  - Daily, 40 entries:
+
+    | Dimension | ok | minor | major |
+    | --- | --- | --- | --- |
+    | accuracy | 37 | 3 | 0 |
+    | completeness | 13 | 25 | 2 |
+    | clarity | 23 | 17 | 0 |
+
+  - Notes, 10:
+
+    | Dimension | ok | minor | major |
+    | --- | --- | --- | --- |
+    | accuracy | 8 | 2 | 0 |
+    | completeness | 6 | 4 | 0 |
+    | clarity | 4 | 6 | 0 |
+
+  - Completeness issues sit almost entirely in mainResult (36 minor, 2 major). Clarity issues are mostly undefined abbreviations.
+  - The owner read all 7 accuracy and major issues; they are well grounded, and the severities are sometimes strict.
+  - Report: `~/quality-eval/summary-baseline-2026-10-29/judged/report.md`.
+- change: none.
+- disposition: keep. The review page has 15 cards, at `~/quality-eval/summary-baseline-2026-10-29/review/review.html`.
+- next: the researcher reviews the page, then results are imported for the agreement rate.

@@ -2,8 +2,8 @@
 
 goal_ref: ../goal.md
 created: 2026-10-29T01:50:00+08:00
-updated: 2026-10-29T21:45:00+08:00
-revision: 3
+updated: 2026-10-29T22:20:00+08:00
+revision: 4
 
 ## Outcome
 
@@ -43,7 +43,7 @@ revision: 3
 - kind: non-behavioral（真实运行）
 - first signal: n/a
 - checks: 评审完成数、无效数、错误数；预览规模不超过估算。
-- [ ] accepted on observed evidence
+- [x] accepted on observed evidence (50/50 regenerated with 0 fallbacks; 50/50 judged valid, 47 first try and 3 after retry; 11 transient proxy cut-offs at ~24 s succeeded on resume; owner read the report and checked the major and accuracy issues)
 
 ### Chunk 4 — 研究者核对
 
