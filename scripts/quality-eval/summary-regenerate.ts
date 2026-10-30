@@ -14,6 +14,8 @@ import { loadSummaryCorpus, type DetailNote, type SummaryEntry } from "./summary
 import { sampleJudgeTargets, type SampleOptions, type SkippedItem } from "./summary-judge-input";
 import { checkNote } from "./summary-note-checks";
 import { CHARS_PER_TOKEN } from "./summary-judge-run";
+import { buildSummaryCacheIdentity, matchesSummaryCacheIdentity, type SummaryCacheIdentity } from "./summary-cache-identity";
+import { type SummaryResultManifestEntry } from "./summary-result-manifest";
 import {
   dailyPaperFromRecord, detailCallFromRecord, readSourceRecord, rebuildDailyInput, rebuildDetailInput, type SourceRecord,
 } from "./summary-sources";
@@ -149,6 +151,7 @@ interface Job {
   /** The system and user messages of the first request, as the pipeline's functions build them. */
   messages: Messages;
   promptHash: string;
+  cacheIdentity: SummaryCacheIdentity;
 }
 
 const fileFor = (outDir: string, job: Pick<Job, "kind" | "id">): string => path.join(outDir, "summaries", `${job.kind}-${job.id}.json`);
@@ -159,16 +162,21 @@ async function writeAtomic(file: string, text: string): Promise<void> {
   await rename(temporary, file);
 }
 
-async function isCurrent(file: string, job: Job, model: LlmSettings): Promise<boolean> {
+async function currentRecordHash(file: string, job: Job, model: LlmSettings): Promise<string | null> {
   try {
-    const record = JSON.parse(await readFile(file, "utf8")) as {
-      status: string; generator: { provider: string; model: string }; generationPromptHash: string; item: { source: { contentHash: string } };
+    const text = await readFile(file, "utf8");
+    const record = JSON.parse(text) as {
+      status: string; generator: { provider: string; model: string }; generationPromptHash: string;
+      cacheIdentity?: SummaryCacheIdentity; item: { kind: string; id: string; source: { contentHash: string } };
     };
-    return (record.status === "generated" || record.status === "fallback")
+    const current = (record.status === "generated" || record.status === "fallback")
       && record.generator.model === model.model && record.generator.provider === model.provider
-      && record.generationPromptHash === job.promptHash && record.item.source.contentHash === job.record.contentHash;
+      && record.generationPromptHash === job.promptHash && record.item.source.contentHash === job.record.contentHash
+      && record.item.kind === job.kind && record.item.id === job.id
+      && matchesSummaryCacheIdentity(record.cacheIdentity, job.cacheIdentity);
+    return current ? sha256Hex(text) : null;
   } catch {
-    return false;
+    return null;
   }
 }
 
@@ -198,7 +206,11 @@ export async function runSummaryRegenerate(options: SummaryRegenerateOptions, de
   const { vaultRoot, dailyDir, papersDir } = await resolveVaultLayout(options);
   const corpus = await loadSummaryCorpus({ vaultRoot, dailyDir, papersDir, from: options.from, to: options.to });
   const targets = sampleJudgeTargets(corpus, options);
-  const language = generator.summaryLanguage;
+  const language = generator.summaryLanguage ?? "zh";
+  const targetKeys = [...targets.daily.map(({ id }) => `daily-${id}`), ...targets.notes.map(({ id }) => `note-${id}`)];
+  if (new Set(targetKeys).size !== targetKeys.length) {
+    throw new Error("the sample contains multiple summaries of the same paper and kind; narrow --from/--to so each cached result has one source entry");
+  }
 
   const skipped: SkippedItem[] = targets.missing.map((entry) => ({
     kind: "id" as const, id: entry.id, reason: entry.reason,
@@ -210,7 +222,7 @@ export async function runSummaryRegenerate(options: SummaryRegenerateOptions, de
     if (!record) { skipped.push({ kind: "daily", id: entry.id, reason: "no-source", detail: "no cached source record" }); continue; }
     const rebuilt = await rebuildDailyInput(record, { title: entry.title, authors: entry.authors, summaryLanguage: language });
     if (!rebuilt) { skipped.push({ kind: "daily", id: entry.id, reason: "no-input", detail: "the cached text is not enough for the pipeline to summarize from (it would fall back without a model call)" }); continue; }
-    jobs.push({ kind: "daily", id: entry.id, title: entry.title, date: entry.date, topic: entry.topic, record, entry, messages: rebuilt.messages, promptHash: sha256Hex(rebuilt.messages[0]!.content) });
+    jobs.push({ kind: "daily", id: entry.id, title: entry.title, date: entry.date, topic: entry.topic, record, entry, messages: rebuilt.messages, promptHash: sha256Hex(rebuilt.messages[0]!.content), cacheIdentity: buildSummaryCacheIdentity(generator.llm, rebuilt.messages, rebuilt.options.temperature) });
   }
   for (const note of targets.notes) {
     const record = await readSourceRecord(options.sourcesDir, note.id);
@@ -222,14 +234,19 @@ export async function runSummaryRegenerate(options: SummaryRegenerateOptions, de
       kind: "note", id: note.id, title: note.title, date: note.date, topic: note.topic, version: checkNote(note).version,
       topicName: { name: configured?.name || note.topic, fromConfig: Boolean(configured?.name) }, record, note,
       messages: rebuilt.messages, promptHash: sha256Hex(rebuilt.messages[0]!.content),
+      cacheIdentity: buildSummaryCacheIdentity(generator.llm, rebuilt.messages, rebuilt.options.temperature),
     });
   }
 
   const pending: Job[] = [];
+  const resultManifest: SummaryResultManifestEntry[] = [];
   let reused = 0;
   for (const job of jobs) {
-    if (!options.regenerate && await isCurrent(fileFor(outDir, job), job, generator.llm)) reused += 1;
-    else pending.push(job);
+    const recordHash = !options.regenerate ? await currentRecordHash(fileFor(outDir, job), job, generator.llm) : null;
+    if (recordHash) {
+      reused += 1;
+      resultManifest.push({ kind: job.kind, id: job.id, recordHash });
+    } else pending.push(job);
   }
   const chars = (job: Job): number => job.messages.reduce((sum, message) => sum + message.content.length, 0);
   const totalChars = pending.reduce((sum, job) => sum + chars(job), 0);
@@ -267,8 +284,9 @@ export async function runSummaryRegenerate(options: SummaryRegenerateOptions, de
     // The CLI config path and the secrets in it are not recorded.
     args: { daily: options.daily ?? null, notes: options.notes ?? null, ids: options.ids ?? null, from: options.from ?? null, to: options.to ?? null, includeOlderNotes: Boolean(options.includeOlderNotes), regenerate: Boolean(options.regenerate), sourcesDir: path.resolve(options.sourcesDir) },
     seed: options.seed ?? "summary-judge", allocation: targets.allocation,
-    generator: identity, summaryLanguage: language ?? null,
+    generator: identity, summaryLanguage: language,
     sample: { daily: targets.daily.map((entry) => entry.id), notes: targets.notes.map((note) => note.id) },
+    resultManifest,
     skipped, plan, counts: null as RegenerateCounts | null, stopped: null as "errors" | null,
   };
   await writeAtomic(runFile, `${JSON.stringify(run, null, 2)}\n`);
@@ -322,13 +340,16 @@ export async function runSummaryRegenerate(options: SummaryRegenerateOptions, de
     const record = {
       schemaVersion: 1, status,
       item: { kind: job.kind, id: job.id, title: job.title, authors: job.kind === "daily" ? job.entry!.authors : job.note!.authors, date: job.date, topic: job.topic, ...(job.version ? { version: job.version } : {}), source: { sourcePath: job.record.sourcePath, arxivVersion: job.record.arxivVersion, fetchedAt: job.record.fetchedAt, contentHash: job.record.contentHash } },
-      generator: identity, generationPromptHash: job.promptHash,
+      generator: identity, generationPromptHash: job.promptHash, cacheIdentity: job.cacheIdentity, summaryLanguage: language,
       ...(job.topicName ? { topicName: job.topicName } : {}),
       output, attempts, usage, validationFailures: failures.map((failure) => redact(failure)),
       ...(error !== undefined ? { error } : {}),
       startedAt: started.toISOString(), finishedAt: finishedAt.toISOString(), elapsedMs: finishedAt.getTime() - started.getTime(),
     };
-    await writeAtomic(fileFor(outDir, job), `${JSON.stringify(record, null, 2)}\n`);
+    const text = `${JSON.stringify(record, null, 2)}\n`;
+    await writeAtomic(fileFor(outDir, job), text);
+    resultManifest.push({ kind: job.kind, id: job.id, recordHash: sha256Hex(text) });
+    await writeAtomic(runFile, `${JSON.stringify(run, null, 2)}\n`);
 
     if (status === "error") {
       counts.errors += 1;

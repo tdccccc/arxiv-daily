@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -23,15 +24,22 @@ const issue = (overrides = {}) => ({
   dimension: "accuracy", severity: "major", location: "mainResult", summaryQuote: "样本为130个星团", sourceQuote: "stack the weak lensing shear profiles of 120 clusters",
   explanation: "摘要把样本数写成 130，原文是 120。", ...overrides,
 });
-const judgeRecord = (kind, id, issues) => ({
-  schemaVersion: 1, status: "judged", invalid: false,
-  item: { kind, id, title: `Title of ${id}`, date: "2026-08-10", topic: "Photo-z", source: { sourcePath: "html", arxivVersion: "v1", fetchedAt: "2026-10-28T10:00:00.000Z", contentHash: `hash-${id}` } },
-  judge: { provider: "openai", model: "judge-model" }, judgePromptHash: "p".repeat(64), attempts: [],
-  judgment: { verdicts: { accuracy: "ok", completeness: "ok", clarity: "ok" }, issues },
-  summary: { locations: kind === "daily"
-    ? qe.SUMMARY_FIELDS.map(key => ({ key, text: key === "mainResult" ? "弱透镜质量比为 0.85，样本为130个星团，误差较小。" : `${id} 的 ${key} 内容。` }))
-    : [{ key: "核心结果", text: "第一段。\n\n样本为130个星团。\n\n第三段。" }] },
-});
+const judgeRecord = (kind, id, issues) => {
+  const record = {
+    schemaVersion: 1, status: "judged", invalid: false,
+    item: { kind, id, title: `Title of ${id}`, date: "2026-08-10", topic: "Photo-z", source: { sourcePath: "html", arxivVersion: "v1", fetchedAt: "2026-10-28T10:00:00.000Z", contentHash: `hash-${id}` } },
+    judge: { provider: "openai", model: "judge-model" }, judgePromptHash: "p".repeat(64), attempts: [],
+    judgment: { verdicts: { accuracy: "ok", completeness: "ok", clarity: "ok" }, issues },
+    summary: { locations: kind === "daily"
+      ? qe.SUMMARY_FIELDS.map(key => ({ key, text: key === "mainResult" ? "弱透镜质量比为 0.85，样本为130个星团，误差较小。" : `${id} 的 ${key} 内容。` }))
+      : [{ key: "核心结果", text: "第一段。\n\n样本为130个星团。\n\n第三段。" }] },
+  };
+  const judgedText = kind === "daily"
+    ? record.summary.locations.map(location => `[${location.key}] ${location.text}`).join("\n")
+    : record.summary.locations.map(location => `## ${location.key}\n${location.text}`).join("\n\n");
+  return { ...record, summaryHash: createHash("sha256").update(judgedText).digest("hex") };
+};
+const judgmentHash = record => createHash("sha256").update(JSON.stringify({ summaryHash: record.summaryHash, source: record.item.source.contentHash, issues: record.judgment.issues })).digest("hex");
 const JUDGE_RECORDS = () => [
   judgeRecord("daily", "2608.00001", [issue(), issue({ dimension: "completeness", severity: "minor", location: "limitations", summaryQuote: "2608.00001 的 limitations 内容", sourceQuote: "padding words padding words" })]),
   judgeRecord("daily", "2608.00002", [issue({ dimension: "clarity", severity: "major", sourceQuote: null, location: "keyMethod", summaryQuote: "2608.00002 的 keyMethod 内容", explanation: "缩写未解释。" })]),
@@ -48,8 +56,9 @@ const VERDICTS = {
 async function fixture() {
   const judged = await temp("judged");
   await mkdir(path.join(judged, "judgments"), { recursive: true });
-  await writeFile(path.join(judged, "run.json"), JSON.stringify({ schemaVersion: 1, startedAt: "x", seed: "s", sample: { daily: [], notes: [] }, generatorModel: "gen-model" }));
   const records = JUDGE_RECORDS();
+  const sample = { daily: records.filter(record => record.item.kind === "daily").map(record => record.item.id), notes: records.filter(record => record.item.kind === "note").map(record => record.item.id) };
+  await writeFile(path.join(judged, "run.json"), JSON.stringify({ schemaVersion: 1, startedAt: "x", seed: "s", sample, judge: records[0].judge, skipped: [], generatorModel: "gen-model" }));
   for (const record of records) await writeFile(path.join(judged, "judgments", `${record.item.kind}-${record.item.id}.json`), JSON.stringify(record));
   const sources = await temp("sources");
   for (const record of records) {
@@ -61,15 +70,20 @@ async function fixture() {
     schemaVersion: 1, status: "reviewed",
     item: { ...record.item, origin: { kind: "historical", vault: "/vault", date: record.item.date } },
     judge: record.judge, issues: record.judgment.issues,
-    reviewer: { provider: "openai", model: "reviewer-model", thinkingMode: true, reasoningEffort: "xhigh" }, reviewerPromptHash: "r".repeat(64), judgmentHash: "j".repeat(64), attempts: [],
+    reviewer: { provider: "openai", model: "reviewer-model", thinkingMode: true, reasoningEffort: "xhigh" }, reviewerPromptHash: "r".repeat(64), judgmentHash: judgmentHash(record), attempts: [],
     reviews: record.judgment.issues.map((_, index) => {
       const [verdict, severity] = VERDICTS[`${record.item.id}#${index}`];
       return { index, verdict, severity, reason: verdict === "agree" ? "问题确实存在。" : `复核认为${verdict === "disagree" ? "摘要没有问题" : "原文信息不足"}：<b>标记</b>。`, evidenceQuote: verdict === "disagree" ? "stack the weak lensing shear profiles of 120 clusters" : null };
     }),
     startedAt: "x", finishedAt: "x", elapsedMs: 1,
   }));
-  for (const record of metaRecords) await writeFile(path.join(meta, "meta", `${record.item.kind}-${record.item.id}.json`), JSON.stringify(record));
-  const run = { schemaVersion: 1, startedAt: "x", judged: { dir: judged, judgeModels: ["judge-model"], generatorModel: "gen-model" }, reviewer: metaRecords[0].reviewer };
+  const resultManifest = [];
+  for (const record of metaRecords) {
+    const serialized = JSON.stringify(record);
+    await writeFile(path.join(meta, "meta", `${record.item.kind}-${record.item.id}.json`), serialized);
+    resultManifest.push({ kind: record.item.kind, id: record.item.id, recordHash: createHash("sha256").update(serialized).digest("hex") });
+  }
+  const run = { schemaVersion: 1, startedAt: "x", sample, skipped: [], resultManifest, judged: { dir: judged, judgeModels: ["judge-model"], generatorModel: "gen-model" }, reviewer: metaRecords[0].reviewer };
   await writeFile(path.join(meta, "run.json"), JSON.stringify(run));
   const report = qe.buildMetaReport(run, metaRecords, NOW);
   await writeFile(path.join(meta, "meta-review.json"), JSON.stringify(report));
@@ -245,4 +259,76 @@ test("command-line arguments accept --meta and --agreed-sample", () => {
   assert.throws(() => qe.parseSummaryReviewArgs(["--meta", "/m", "--agreed-sample", "x", "--out", "/o"]), /--agreed-sample/);
   assert.throws(() => qe.parseSummaryReviewArgs(["--meta", "/m", "--judgments", "/j", "--extra", "/x", "--out", "/o"]), /--meta/);
   assert.throws(() => qe.parseSummaryReviewArgs(["--agreed-sample", "2", "--judgments", "/j", "--out", "/o"]), /--agreed-sample/);
+});
+
+
+test("a dispute page computes its calibration totals from the current manifest instead of a stale report file", async () => {
+  const state = await fixture();
+  const runFile = path.join(state.meta, "run.json");
+  const run = JSON.parse(await readFile(runFile, "utf8"));
+  run.sample.notes = [];
+  run.resultManifest = run.resultManifest.filter(entry => entry.kind === "daily");
+  await writeFile(runFile, JSON.stringify(run));
+  const outDir = await temp("review");
+  await qe.runSummaryReview({ metaDir: state.meta, seed: "s", agreedSample: 20, outDir }, { now: () => NOW });
+  const page = JSON.parse(await readFile(path.join(outDir, "review.json"), "utf8"));
+  assert.equal(page.metaAggregate.issues, 7);
+  assert.ok(page.cards.every(card => card.kind === "daily"));
+  assert.equal(page.metaAggregate.aggregate.byKind.note.agree + page.metaAggregate.aggregate.byKind.note.disagree + page.metaAggregate.aggregate.byKind.note.unsure, 0);
+});
+
+
+test("a dispute page refuses a new judgment's summary, source or issue list for an old meta-review", async () => {
+  for (const change of ["summary", "summary-text-only", "source", "issues"]) {
+    const state = await fixture();
+    const file = path.join(state.judged, "judgments", "daily-2608.00001.json");
+    const original = JSON.parse(await readFile(file, "utf8"));
+    if (change.startsWith("summary")) {
+      original.summary.locations.find(location => location.key === "mainResult").text = "新一轮评审看到的不同摘要。";
+      if (change === "summary") original.summaryHash = createHash("sha256").update(original.summary.locations.map(location => `[${location.key}] ${location.text}`).join("\n")).digest("hex");
+    }
+    if (change === "source") original.item.source.contentHash = "new-source";
+    if (change === "issues") original.judgment.issues[0].explanation = "新一轮评审的不同判定。";
+    await writeFile(file, JSON.stringify(original));
+    await assert.rejects(build(state), /original judgment.*match|原评审.*不匹配/i, change);
+  }
+});
+
+test("a dispute page requires verifiable original judgment text, while the stored meta report remains usable", async () => {
+  for (const missing of ["record", "summary-hash", "summary-text"]) {
+    const state = await fixture();
+    const file = path.join(state.judged, "judgments", "daily-2608.00001.json");
+    const original = JSON.parse(await readFile(file, "utf8"));
+    if (missing === "record") await rm(file);
+    else {
+      if (missing === "summary-hash") delete original.summaryHash;
+      if (missing === "summary-text") delete original.summary;
+      await writeFile(file, JSON.stringify(original));
+    }
+    await qe.runMetaReportOnly({ outDir: state.meta }, { now: () => NOW });
+    const report = JSON.parse(await readFile(path.join(state.meta, "meta-review.json"), "utf8"));
+    assert.equal(report.counts.reviewed, 5);
+    await assert.rejects(build(state), /original judgment.*(missing|verif|match)|原评审/i, missing);
+  }
+});
+
+
+test("a changed source cache never supplies new context for an old judge or reviewer quote", async () => {
+  const state = await fixture();
+  const file = path.join(state.sources, "2608.00001.json");
+  const source = JSON.parse(await readFile(file, "utf8"));
+  source.contentHash = "new-source-content-hash";
+  source.content.fullSections = `NEW-REVISION-CONTEXT ${source.content.fullSections}`;
+  await writeFile(file, JSON.stringify(source));
+  const built = await build(state, { agreedSample: 20 });
+  const card = built.cards.find(card => card.id === "2608.00001" && card.meta.verdict === "disagree");
+  assert.equal(card.sourceContext, null);
+  assert.equal(card.meta.evidenceContext, null);
+  assert.equal(card.sourceContextNote, "source-changed");
+  assert.equal(card.sourceQuote, "stack the weak lensing shear profiles of 120 clusters");
+  assert.equal(card.meta.evidenceQuote, "stack the weak lensing shear profiles of 120 clusters");
+  const html = qe.renderReviewPage([card], { pageId: built.pageId, createdAt: NOW.toISOString() });
+  assert.match(html, /缓存原文已变化/);
+  assert.ok(!html.includes("NEW-REVISION-CONTEXT"));
+  assert.ok(html.includes("stack the weak lensing shear profiles of 120 clusters"));
 });

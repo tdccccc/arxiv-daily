@@ -369,10 +369,15 @@ export function describePlan(plan: FetchSourcesPlan): string {
 }
 
 class CapturedMessages extends Error {
-  constructor(readonly messages: Array<{ role: string; content: string }>) { super("captured"); }
+  constructor(readonly messages: Array<{ role: string; content: string }>, readonly options: { temperature?: number }) { super("captured"); }
 }
 
-const capturingLlm = { call: async (messages: Array<{ role: string; content: string }>) => { throw new CapturedMessages(messages); } } as unknown as LlmClient;
+const capturingLlm = { call: async (messages: Array<{ role: string; content: string }>, options: { temperature?: number } = {}) => { throw new CapturedMessages(messages, { temperature: options.temperature }); } } as unknown as LlmClient;
+
+export interface RebuiltSummaryInput {
+  messages: Array<{ role: string; content: string }>;
+  options: { temperature?: number };
+}
 
 export interface InputIdentity { title: string; authors: string; summaryLanguage?: "zh" | "en" }
 
@@ -391,7 +396,7 @@ export function dailyPaperFromRecord(record: SourceRecord, identity: InputIdenti
 /** The paper and the settings the pipeline hands the detail summarizer (everything but the model client), from a cached record. */
 export function detailCallFromRecord(
   record: SourceRecord,
-  identity: InputIdentity & { topic: string; topics?: readonly Topic[] },
+  identity: InputIdentity & { topic: string; topics?: ReadonlyArray<Pick<Topic, "tag" | "name">> },
 ): { paper: DetailPaperArg; deps: Omit<DetailDeps, "llm"> } {
   return {
     paper: {
@@ -412,11 +417,11 @@ export function detailCallFromRecord(
  * is not enough to summarize from, which the pipeline treats as a fallback. The report keeps only the first author
  * ("A. Author et al."), so the authors line is as faithful as the caller's `authors`.
  */
-export async function rebuildDailyInput(record: SourceRecord, identity: InputIdentity): Promise<{ messages: Array<{ role: string; content: string }> } | null> {
+export async function rebuildDailyInput(record: SourceRecord, identity: InputIdentity): Promise<RebuiltSummaryInput | null> {
   try {
     await summarizeDailyPaper(dailyPaperFromRecord(record, identity), { llm: capturingLlm, summaryLanguage: identity.summaryLanguage });
   } catch (error) {
-    if (error instanceof CapturedMessages) return { messages: error.messages };
+    if (error instanceof CapturedMessages) return { messages: error.messages, options: error.options };
     if (/no source text/.test((error as Error).message)) return null;
     throw error;
   }
@@ -426,14 +431,14 @@ export async function rebuildDailyInput(record: SourceRecord, identity: InputIde
 /** The messages the detail summarizer would send for a cached paper; null when there is no full text to send. */
 export async function rebuildDetailInput(
   record: SourceRecord,
-  identity: InputIdentity & { topic: string; topics?: readonly Topic[] },
-): Promise<{ messages: Array<{ role: string; content: string }> } | null> {
+  identity: InputIdentity & { topic: string; topics?: ReadonlyArray<Pick<Topic, "tag" | "name">> },
+): Promise<RebuiltSummaryInput | null> {
   if (!record.content.fullSections) return null;
   try {
     const { paper, deps } = detailCallFromRecord(record, identity);
     await summarizePaperDetail(paper, { ...deps, llm: capturingLlm });
   } catch (error) {
-    if (error instanceof CapturedMessages) return { messages: error.messages };
+    if (error instanceof CapturedMessages) return { messages: error.messages, options: error.options };
     throw error;
   }
   return null;

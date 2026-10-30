@@ -40,7 +40,10 @@ const record = (kind, id, issues, extra = {}) => ({
 const writeJudgeDir = async (records, run = {}) => {
   const dir = await temp("judge");
   await mkdir(path.join(dir, "judgments"), { recursive: true });
-  await writeFile(path.join(dir, "run.json"), JSON.stringify({ schemaVersion: 1, startedAt: "x", seed: "s", sample: { daily: [], notes: [] }, ...run }));
+  await writeFile(path.join(dir, "run.json"), JSON.stringify({ schemaVersion: 1, startedAt: "x", seed: "s", judge: records[0]?.judge ?? { provider: "openai", model: "judge-model" }, skipped: [], sample: {
+    daily: records.filter(item => item.item.kind === "daily").map(item => item.item.id),
+    notes: records.filter(item => item.item.kind === "note").map(item => item.item.id),
+  }, ...run }));
   for (const item of records) await writeFile(path.join(dir, "judgments", `${item.item.kind}-${item.item.id}.json`), JSON.stringify(item));
   return dir;
 };

@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
 import { readFile, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { DEFAULT_SETTINGS, modernArxivResources, type Settings } from "@arxiv-daily/core";
+import { DEFAULT_SETTINGS, modernArxivResources, type PluginSettings } from "@arxiv-daily/core";
 import dailyPromptZh from "../../packages/core/src/prompts/daily-paper-summary.system.md";
 import detailPromptZh from "../../packages/core/src/prompts/paper-detail.system.md";
 import { loadCliConfig } from "../../apps/cli/src/config";
@@ -140,7 +140,7 @@ export interface VaultLayoutOptions {
  * directories win over the config's output layout, and the built-in defaults fill the rest. `settings`
  * are the config's when one was read, the defaults otherwise.
  */
-export async function resolveVaultLayout(options: VaultLayoutOptions): Promise<{ vaultRoot: string; dailyDir: string; papersDir: string; settings: Settings }> {
+export async function resolveVaultLayout(options: VaultLayoutOptions): Promise<{ vaultRoot: string; dailyDir: string; papersDir: string; settings: PluginSettings }> {
   const config = options.configPath || !options.vaultRoot
     ? await loadCliConfig({ configPath: options.configPath })
     : undefined;

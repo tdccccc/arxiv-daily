@@ -220,6 +220,72 @@ test("a fallback result also counts as done on the next run", async () => {
   assert.equal(again.result.counts.reused, 1);
 });
 
+test("generation reruns when thinking mode, effective effort or endpoint changes", async () => {
+  for (const [before, after] of [
+    [{ thinkingMode: false }, { thinkingMode: true }],
+    [{ thinkingMode: true, reasoningEffort: "medium" }, { thinkingMode: true, reasoningEffort: "high" }],
+    [{}, { baseUrl: "https://another-generator.example.invalid/v1" }],
+  ]) {
+    const state = await setup();
+    const generator = llm => ({ ...GENERATOR, llm: { ...GENERATOR.llm, ...llm } });
+    await execute(state, { generator: generator(before) }, { yes: true });
+    const changed = await execute(state, { generator: generator(after) }, { yes: true });
+    assert.equal(changed.llm.calls.length, 4, JSON.stringify({ before, after }));
+    assert.equal(changed.result.counts.reused, 0);
+    assert.equal((await execute(state, { generator: generator(after) }, { yes: true })).llm.calls.length, 0);
+  }
+});
+
+test("generation reuses results after a key rotation or an inactive effort change", async () => {
+  const state = await setup();
+  await execute(state, {}, { yes: true });
+  const generator = { ...GENERATOR, llm: { ...GENERATOR.llm, apiKey: "rotated-secret", reasoningEffort: "high" } };
+  const again = await execute(state, { generator }, { yes: true });
+  assert.equal(again.llm.calls.length, 0);
+  assert.equal(again.result.counts.reused, 4);
+});
+
+test("generation ignores GLM effort that is not sent to the provider", async () => {
+  const state = await setup();
+  const generator = { ...GENERATOR, llm: { ...GENERATOR.llm, provider: "zhipu", thinkingMode: true } };
+  await execute(state, { generator }, { yes: true });
+  const changed = { ...generator, llm: { ...generator.llm, reasoningEffort: "high" } };
+  assert.equal((await execute(state, { generator: changed }, { yes: true })).llm.calls.length, 0);
+});
+
+test("duplicate daily papers are rejected before generating into the same result file", async () => {
+  const state = await setup({ daily: 10 });
+  const directory = path.join(state.vault, "arxiv-daily", "daily");
+  await writeFile(path.join(directory, "2026-10-16.md"), (await readFile(path.join(directory, "2026-10-15.md"), "utf8")).replaceAll("2026-10-15", "2026-10-16"));
+  const llm = fakeLlm();
+  await assert.rejects(execute(state, { llm }, { yes: true }), /multiple summaries.*same paper/);
+  assert.equal(llm.calls.length, 0);
+  assert.equal(existsSync(state.outDir), false);
+});
+
+test("generation includes the full request in its cache identity", async () => {
+  const state = await setup();
+  await execute(state, {}, { yes: true });
+  const daily = path.join(state.vault, "arxiv-daily", "daily", "2026-10-15.md");
+  await writeFile(daily, (await readFile(daily, "utf8")).replace("### Paper 2610.00001", "### Corrected paper title"));
+  const changed = await execute(state, {}, { yes: true });
+  assert.equal(changed.llm.calls.length, 1);
+  assert.match(changed.llm.calls[0].messages[1].content, /Corrected paper title/);
+});
+
+test("a legacy generation record without request identity is planned again before paid calls", async () => {
+  const state = await setup();
+  await execute(state, {}, { yes: true });
+  const file = path.join(state.outDir, "summaries", "daily-2610.00001.json");
+  const record = JSON.parse(await readFile(file, "utf8"));
+  delete record.cacheIdentity;
+  await writeFile(file, JSON.stringify(record));
+  const preview = await execute(state);
+  assert.equal(preview.result.plan.toGenerate, 1);
+  assert.equal(preview.llm.calls.length, 0);
+  assert.equal((await execute(state, {}, { yes: true })).llm.calls.length, 1);
+});
+
 test("an errored item is retried next run, and three errors in a row stop the run", async () => {
   const state = await setup();
   const llm = fakeLlm(() => new Error(`HTTP 500 from https://${SENTINEL_HOST}/v1 with ${SENTINEL_KEY}`));

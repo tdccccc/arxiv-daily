@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -54,7 +55,11 @@ const RUN = {
 async function fixtureOut(extraRecords = [], run = RUN) {
   const out = await temp("out");
   await mkdir(path.join(out, "judgments"), { recursive: true });
-  await writeFile(path.join(out, "run.json"), JSON.stringify(run));
+  const sampledRun = { ...run, sample: {
+    daily: [...run.sample.daily, ...extraRecords.filter(item => item.item.kind === "daily").map(item => item.item.id)],
+    notes: [...run.sample.notes, ...extraRecords.filter(item => item.item.kind === "note").map(item => item.item.id)],
+  } };
+  await writeFile(path.join(out, "run.json"), JSON.stringify(sampledRun));
   const records = [
     record("daily", "2608.00001", "2026-08-10"),
     record("daily", "2608.00002", "2026-08-12", {
@@ -263,4 +268,102 @@ test("a judge run writes the report itself; a preview does not", async () => {
   assert.ok(!md.includes("k-1") && !md.includes("judge.example.invalid"));
   const { json } = await readReport(outDir);
   assert.equal(json.aggregate.verdicts.daily.judged, 1);
+});
+
+
+const writeRun = async (out, run) => writeFile(path.join(out, "run.json"), JSON.stringify(run));
+const manifestFor = async (out, items) => Promise.all(items.map(async ({ kind, id }) => ({
+  kind, id, recordHash: createHash("sha256").update(await readFile(path.join(out, "judgments", `${kind}-${id}.json`))).digest("hex"),
+})));
+
+test("a smaller current sample excludes old judgments from reports and review cards", async () => {
+  const out = await fixtureOut();
+  const selected = { kind: "daily", id: "2608.00002" };
+  await writeRun(out, { ...RUN, sample: { daily: [selected.id], notes: [] }, skipped: [] });
+  await qe.runJudgeReportOnly({ outDir: out }, { now: () => NOW });
+  const { json } = await readReport(out);
+  assert.deepEqual(json.records.map(item => [item.item.kind, item.item.id]), [[selected.kind, selected.id]]);
+  assert.equal(json.aggregate.quality.counts.total, 1);
+  const cards = await qe.buildReviewCards({ judgmentsDir: out, count: 10, seed: "s" });
+  assert.ok(cards.cards.length > 0);
+  assert.ok(cards.cards.every(card => card.id === selected.id));
+});
+
+test("legacy reports exclude skipped papers and judgments made with another model or settings", async () => {
+  const out = await fixtureOut();
+  const outdated = record("daily", "2608.00001", "2026-08-10", { judge: { ...RUN.judge, model: "old-model" } });
+  await writeFile(path.join(out, "judgments", "daily-2608.00001.json"), JSON.stringify(outdated));
+  const changedSettings = record("note", "2607.00001", "2026-07-10", { judge: { ...RUN.judge, thinkingMode: true } });
+  await writeFile(path.join(out, "judgments", "note-2607.00001.json"), JSON.stringify(changedSettings));
+  await writeRun(out, { ...RUN, skipped: [...RUN.skipped, { kind: "daily", id: "2608.00002", reason: "source-changed", detail: "changed" }] });
+  await qe.writeJudgeReport(out, { now: () => NOW });
+  const { json, md } = await readReport(out);
+  assert.deepEqual(json.records.map(item => item.item.id), ["2609.00001", "2609.00002"]);
+  assert.match(md, /旧格式.*结果清单|结果清单.*旧格式/);
+});
+
+test("a result manifest includes reused records but leaves uncommitted old results out of a partial rerun", async () => {
+  const out = await fixtureOut();
+  const resultManifest = await manifestFor(out, [{ kind: "daily", id: "2608.00001" }]);
+  await writeRun(out, { ...RUN, finishedAt: null, counts: null, resultManifest });
+  await qe.runJudgeReportOnly({ outDir: out }, { now: () => NOW });
+  const { json, md } = await readReport(out);
+  assert.deepEqual(json.records.map(item => item.item.id), ["2608.00001"]);
+  assert.equal(json.aggregate.quality.counts.total, 1);
+  assert.match(md, /尚未完成|未完成/);
+});
+
+test("an empty result manifest is an empty new run even if the directory contains successful old judgments", async () => {
+  const out = await fixtureOut();
+  await writeRun(out, { ...RUN, finishedAt: null, counts: null, resultManifest: [] });
+  await qe.writeJudgeReport(out, { now: () => NOW });
+  const { json } = await readReport(out);
+  assert.equal(json.records.length, 0);
+  assert.equal(json.aggregate.quality.counts.total, 0);
+});
+
+test("report-only rejects a changed or missing result named by the manifest instead of mixing experiments", async () => {
+  for (const damage of ["changed", "missing"]) {
+    const out = await fixtureOut();
+    const resultManifest = await manifestFor(out, [{ kind: "daily", id: "2608.00001" }]);
+    await writeRun(out, { ...RUN, resultManifest });
+    const file = path.join(out, "judgments", "daily-2608.00001.json");
+    if (damage === "changed") await writeFile(file, JSON.stringify(record("daily", "2608.00001", "2026-08-10", { judge: { ...RUN.judge, model: "new-model" } })));
+    else await rm(file);
+    await assert.rejects(qe.runJudgeReportOnly({ outDir: out }), /manifest|结果清单/i, damage);
+    assert.equal(existsSync(path.join(out, "report.md")), false);
+  }
+});
+
+test("manifest entries must be unique members of the current sample, never skipped or another paper", async () => {
+  for (const conflict of ["duplicate", "outside-sample", "skipped", "mismatched-item"]) {
+    const out = await fixtureOut();
+    const entry = (await manifestFor(out, [{ kind: "daily", id: "2608.00001" }]))[0];
+    const run = { ...RUN, resultManifest: [entry] };
+    if (conflict === "duplicate") run.resultManifest.push(entry);
+    if (conflict === "outside-sample") run.sample = { daily: [], notes: [] };
+    if (conflict === "skipped") run.skipped = [{ kind: "daily", id: entry.id, reason: "no-source", detail: "missing" }];
+    if (conflict === "mismatched-item") {
+      await writeFile(path.join(out, "judgments", "daily-2608.00001.json"), JSON.stringify(record("daily", "2608.00002", "2026-08-12")));
+      run.resultManifest = await manifestFor(out, [{ kind: "daily", id: entry.id }]);
+    }
+    await writeRun(out, run);
+    await assert.rejects(qe.loadJudgments(out), /manifest|结果清单/i, conflict);
+  }
+});
+
+
+test("a review page retains the limitation of judgments from a legacy run", async () => {
+  const out = await fixtureOut();
+  const reviewDir = await temp("review");
+  await qe.runSummaryReview({ judgmentsDir: out, count: 2, seed: "legacy", outDir: reviewDir }, { now: () => NOW });
+  const html = await readFile(path.join(reviewDir, "review.html"), "utf8");
+  const review = JSON.parse(await readFile(path.join(reviewDir, "review.json"), "utf8"));
+  assert.match(html, /旧格式运行没有结果清单/);
+  assert.equal(review.integrityWarnings.length, 1);
+  const answersPath = path.join(reviewDir, "answers.json");
+  await writeFile(answersPath, JSON.stringify({ pageId: review.pageId, results: review.cards.map(card => ({ cardId: card.cardId, decision: "agree" })) }));
+  const { calibration } = await qe.runReviewImport({ resultsPath: answersPath, outDir: reviewDir }, { now: () => NOW });
+  assert.deepEqual(calibration.integrityWarnings, review.integrityWarnings);
+  assert.match(await readFile(path.join(reviewDir, "calibration.md"), "utf8"), /旧格式运行没有结果清单/);
 });

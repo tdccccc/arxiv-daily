@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -32,11 +33,14 @@ const SPEC = [
 ];
 const idOf = paper => `2611.${String(SPEC.findIndex(entry => entry.paper === paper) + 1).padStart(5, "0")}`;
 const paperOf = id => SPEC[Number(id.slice(5)) - 1].paper;
+const hash = text => createHash("sha256").update(text).digest("hex");
 
 async function fixture() {
   const judged = await temp("judged");
   await mkdir(path.join(judged, "judgments"), { recursive: true });
-  await writeFile(path.join(judged, "run.json"), JSON.stringify({ schemaVersion: 1, startedAt: "x", seed: "s", sample: { daily: [], notes: [] }, generatorModel: "gen" }));
+  const sample = { daily: SPEC.map(entry => idOf(entry.paper)), notes: [] };
+  const judge = { provider: "openai", model: "judge-model" };
+  const judgeManifest = [];
   const meta = await temp("meta");
   await mkdir(path.join(meta, "meta"), { recursive: true });
   const metaRecords = [];
@@ -44,16 +48,25 @@ async function fixture() {
     const id = idOf(entry.paper);
     const issues = entry.issues.map(([dimension, severity]) => ({ dimension, severity, location: LOCATION[dimension], summaryQuote: "某句话", sourceQuote: null, explanation: `${entry.paper} 的说明，原文未提及。` }));
     const item = { kind: "daily", id, title: `Title ${entry.paper}`, date: "2026-08-10", topic: "Photo-z", source: { sourcePath: "html", arxivVersion: "v1", fetchedAt: "x", contentHash: `h-${id}` } };
-    const judgeRecord = { schemaVersion: 1, status: "judged", invalid: false, item, judge: { provider: "openai", model: "judge-model" }, judgePromptHash: "p".repeat(64), attempts: [], judgment: { verdicts: { accuracy: "ok", completeness: "ok", clarity: "ok" }, issues }, summary: { locations: Object.values(LOCATION).map(key => ({ key, text: `某句话 在 ${entry.paper} 里。` })) } };
-    await writeFile(path.join(judged, "judgments", `daily-${id}.json`), JSON.stringify(judgeRecord));
+    const judgeRecord = { schemaVersion: 1, status: "judged", invalid: false, item, judge, judgePromptHash: "p".repeat(64), attempts: [], judgment: { verdicts: { accuracy: "ok", completeness: "ok", clarity: "ok" }, issues }, summary: { locations: Object.values(LOCATION).map(key => ({ key, text: `某句话 在 ${entry.paper} 里。` })) } };
+    judgeRecord.summaryHash = hash(judgeRecord.summary.locations.map(location => `[${location.key}] ${location.text}`).join("\n"));
+    const serializedJudge = JSON.stringify(judgeRecord);
+    await writeFile(path.join(judged, "judgments", `daily-${id}.json`), serializedJudge);
+    judgeManifest.push({ kind: "daily", id, recordHash: hash(serializedJudge) });
     metaRecords.push({
       schemaVersion: 1, status: "reviewed", item: { ...item, origin: { kind: "historical", vault: "/v", date: item.date } }, judge: judgeRecord.judge, issues,
-      reviewer: { provider: "openai", model: "reviewer-model", thinkingMode: true, reasoningEffort: "xhigh" }, reviewerPromptHash: "r".repeat(64), judgmentHash: "j".repeat(64), attempts: [],
+      reviewer: { provider: "openai", model: "reviewer-model", thinkingMode: true, reasoningEffort: "xhigh" }, reviewerPromptHash: "r".repeat(64), judgmentHash: hash(JSON.stringify({ summaryHash: judgeRecord.summaryHash, source: item.source.contentHash, issues })), attempts: [],
       reviews: entry.issues.map(([, , verdict], index) => ({ index, verdict, severity: "ok", reason: "复核的理由。", evidenceQuote: null })), startedAt: "x", finishedAt: "x", elapsedMs: 1,
     });
   }
-  for (const record of metaRecords) await writeFile(path.join(meta, "meta", `daily-${record.item.id}.json`), JSON.stringify(record));
-  const run = { schemaVersion: 1, startedAt: "x", judged: { dir: judged, judgeModels: ["judge-model"], generatorModel: "gen" }, reviewer: metaRecords[0].reviewer };
+  await writeFile(path.join(judged, "run.json"), JSON.stringify({ schemaVersion: 1, startedAt: "x", seed: "s", sample, judge, skipped: [], resultManifest: judgeManifest, generatorModel: "gen" }));
+  const resultManifest = [];
+  for (const record of metaRecords) {
+    const serialized = JSON.stringify(record);
+    await writeFile(path.join(meta, "meta", `daily-${record.item.id}.json`), serialized);
+    resultManifest.push({ kind: "daily", id: record.item.id, recordHash: hash(serialized) });
+  }
+  const run = { schemaVersion: 1, startedAt: "x", sample, skipped: [], resultManifest, judged: { dir: judged, judgeModels: ["judge-model"], generatorModel: "gen" }, reviewer: metaRecords[0].reviewer };
   await writeFile(path.join(meta, "run.json"), JSON.stringify(run));
   await writeFile(path.join(meta, "meta-review.json"), JSON.stringify(qe.buildMetaReport(run, metaRecords, NOW)));
   return { meta };
