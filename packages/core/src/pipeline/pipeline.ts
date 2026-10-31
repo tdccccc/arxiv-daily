@@ -40,6 +40,7 @@ import {
   type FilteredPaper,
 } from "./paper-filter";
 import {
+  normalizeGenerationConcurrency,
   summarizeDaily,
   summarizePaperDetail,
   type DailySummaryCheckpointPort,
@@ -97,6 +98,13 @@ export type PipelineResult =
     outcome?: RunOutcome;
     /** Present whenever candidates were listed (count may be 0); absent on empty days and repairs. */
     titleOnlyCandidates?: TitleOnlyCandidates;
+    /**
+     * Present when paper notes were expected but none could be chosen: the
+     * selector's model call failed, or its answers kept failing validation.
+     * The report itself is complete; hosts show this so a day without notes
+     * is explained rather than silent.
+     */
+    detailSelectionSkipped?: string;
   }
   | { kind: "pending"; reason: string; outcome?: RunOutcome }
   | { kind: "cancelled"; reason: string }
@@ -208,6 +216,9 @@ export class ArxivPipeline {
     const { logger } = this.deps;
     const t0 = Date.now();
     const runMetrics = new GenerationMetricsCollector();
+    const generationConcurrency = normalizeGenerationConcurrency(
+      this.deps.advanced.generationConcurrency,
+    );
     const stageStart = (label: string) => {
       const elapsed = Date.now() - t0;
       logger.info(`pipeline: [${elapsed}ms] enter stage: ${label}`);
@@ -234,6 +245,16 @@ export class ArxivPipeline {
     const [y, m, d] = dateStr.split("-").map(Number);
     if (this.sourceAdapter.sourceId === "arxiv" && isWeekendDate({ y: y!, m: m!, d: d! })) {
       return { kind: "completed", papersWritten: 0, outcome: "no_updates" };
+    }
+
+    // The report is assembled around the topic list. One it cannot be assembled
+    // around would otherwise fail after the listing was fetched and the filter
+    // and detail model calls were paid for, and as a transient failure that is
+    // retried until it turns permanent: say what to fix instead, before the
+    // first request.
+    const topicProblems = validateTopicsForReport(this.deps.arxiv.topics ?? []);
+    if (topicProblems.length > 0) {
+      return { kind: "failed_permanent", reason: `invalid topic settings: ${topicProblems.join("; ")}` };
     }
 
     // 1-2. Discover papers via SourceAdapter (arXiv /recent + abstract enrich).
@@ -267,15 +288,6 @@ export class ArxivPipeline {
     stageStart("enrich-abstract");
     this.progress.setStage("enrich-abstract");
     stageEnd("enrich-abstract");
-
-    // The report is assembled around the topic list. One it cannot be assembled
-    // around would otherwise fail after the filter and detail model calls were
-    // paid for, and as a transient failure that is retried until it turns
-    // permanent: say what to fix instead, before the first call.
-    const topicProblems = validateTopicsForReport(this.deps.arxiv.topics ?? []);
-    if (topicProblems.length > 0) {
-      return { kind: "failed_permanent", reason: `invalid topic settings: ${topicProblems.join("; ")}` };
-    }
 
     // 5. LLM filter
     stageStart("filter");
@@ -382,13 +394,18 @@ export class ArxivPipeline {
     // 6. Fetch content for each filtered paper
     stageStart("fetch-content");
     let completedFetches = 0;
+    // Counted once a fetch has settled, so 6/20 means six papers are done
+    // rather than six have started.
+    const countFetched = () => {
+      completedFetches += 1;
+      this.progress.setStage("fetch-content", completedFetches, visiblePapers.length);
+    };
+    this.progress.setStage("fetch-content", 0, visiblePapers.length);
     let enriched = await mapConcurrent(
       visiblePapers,
       CONTENT_FETCH_CONCURRENCY,
       async (p) => {
         throwIfCancelled(signal);
-        completedFetches += 1;
-        this.progress.setStage("fetch-content", completedFetches, visiblePapers.length);
         try {
           // Daily summaries should use any high-value sections we can extract.
           // The detail flag still only controls whether a separate paper note is written.
@@ -399,6 +416,7 @@ export class ArxivPipeline {
             signal,
           });
           const c = legacyContentFromNormalized(normalized);
+          countFetched();
           return {
             ...p,
             abstractConclusion: c.abstractConclusion,
@@ -415,6 +433,7 @@ export class ArxivPipeline {
         } catch (e) {
           if (isCancellationError(e)) throw e;
           logger.error(`pipeline: content fetch failed for ${p.id}`, e);
+          countFetched();
           return {
             ...p,
             abstractConclusion: contentFetchFailedText(p.id),
@@ -470,6 +489,10 @@ export class ArxivPipeline {
       },
     );
     const selectedIds = new Set(selection.selected.map(({ id }) => id));
+    const detailSelectionSkipped = selection.skipped?.reason;
+    if (detailSelectionSkipped) {
+      logger.warn(`pipeline: no paper notes this run; ${detailSelectionSkipped}`);
+    }
 
     // 7. Detail reports. Only confirm isDetail/paperPath after a note exists,
     // so a failed selected detail cannot inflate or leave a dangling daily link.
@@ -477,61 +500,75 @@ export class ArxivPipeline {
     const detailCandidates = enriched.filter(
       (paper) => selectedIds.has(paper.id) && paper.fullSections,
     );
-    for (let i = 0; i < detailCandidates.length; i++) {
-      throwIfCancelled(signal);
-      const paper = detailCandidates[i];
-      if (!paper) continue;
-      this.progress.setStage("write-detail", i + 1, detailCandidates.length);
-      logger.info(`pipeline: detail report for ${paper.id}`);
-      let confirmedPath: string | null = null;
-      try {
-        const detailStartedAt = Date.now();
-        const detailMetrics = new GenerationMetricsCollector();
-        const detail = await summarizePaperDetail(paper, {
-          llm: this.deps.llm,
-          llmSettings: this.deps.llmSettings,
-          logger,
-          arxivSettings: this.deps.arxiv,
-          advanced: this.deps.advanced,
-          summaryLanguage: this.deps.output.summaryLanguage,
-          signal,
-          onMetrics: (metrics) => {
-            detailMetrics.record(metrics);
-            runMetrics.record(metrics);
-          },
-        });
-        throwIfCancelled(signal);
-        detailMetrics.setPipelineElapsedMs(Date.now() - detailStartedAt);
-        confirmedPath = await this.deps.writer.writePaperDetail(
-          paper,
-          dateStr,
-          detail,
-          paper.indexEntry,
-          { metrics: detailMetrics.snapshot() },
-        );
-      } catch (e) {
-        if (isCancellationError(e)) throw e;
-        logger.error(`pipeline: detail failed for ${paper.id}`, e);
-        // Handle a note created between the initial existence check and write.
-        confirmedPath = await this.verifiedDetailPath(paper.id, signal);
-      }
-      if (!confirmedPath) continue;
-      await this.repairPaperPath(paper.id, confirmedPath, signal);
-      enriched = enriched.map((candidate) =>
-        candidate.id === paper.id
-          ? {
-              ...candidate,
-              isDetail: true,
-              paperPath: confirmedPath,
-              detailLink: this.deps.writer.paperDetailLink(
-                candidate.id,
-                dateStr,
-                confirmedPath,
-              ),
-            }
-          : candidate,
-      );
+    let detailsWritten = 0;
+    if (detailCandidates.length > 0) {
+      this.progress.setStage("write-detail", 0, detailCandidates.length);
     }
+    // A few notes at a time, under the same bound as the daily summaries; each
+    // still confirms its own path before the report may link to it.
+    const confirmedDetails = await mapConcurrent(
+      detailCandidates,
+      generationConcurrency,
+      async (paper) => {
+        throwIfCancelled(signal);
+        logger.info(`pipeline: detail report for ${paper.id}`);
+        let confirmedPath: string | null = null;
+        try {
+          const detailStartedAt = Date.now();
+          const detailMetrics = new GenerationMetricsCollector();
+          const detail = await summarizePaperDetail(paper, {
+            llm: this.deps.llm,
+            llmSettings: this.deps.llmSettings,
+            logger,
+            arxivSettings: this.deps.arxiv,
+            advanced: this.deps.advanced,
+            summaryLanguage: this.deps.output.summaryLanguage,
+            signal,
+            onMetrics: (metrics) => {
+              detailMetrics.record(metrics);
+              runMetrics.record(metrics);
+            },
+          });
+          throwIfCancelled(signal);
+          detailMetrics.setPipelineElapsedMs(Date.now() - detailStartedAt);
+          confirmedPath = await this.deps.writer.writePaperDetail(
+            paper,
+            dateStr,
+            detail,
+            paper.indexEntry,
+            { metrics: detailMetrics.snapshot() },
+          );
+        } catch (e) {
+          if (isCancellationError(e)) throw e;
+          logger.error(`pipeline: detail failed for ${paper.id}`, e);
+          // Handle a note created between the initial existence check and write.
+          confirmedPath = await this.verifiedDetailPath(paper.id, signal);
+        }
+        detailsWritten += 1;
+        this.progress.setStage("write-detail", detailsWritten, detailCandidates.length);
+        if (confirmedPath) await this.repairPaperPath(paper.id, confirmedPath, signal);
+        return { id: paper.id, confirmedPath };
+      },
+    );
+    const confirmedPaths = new Map(
+      confirmedDetails.flatMap(({ id, confirmedPath }) =>
+        confirmedPath ? [[id, confirmedPath] as const] : []),
+    );
+    enriched = enriched.map((candidate) => {
+      const confirmedPath = confirmedPaths.get(candidate.id);
+      return confirmedPath
+        ? {
+            ...candidate,
+            isDetail: true,
+            paperPath: confirmedPath,
+            detailLink: this.deps.writer.paperDetailLink(
+              candidate.id,
+              dateStr,
+              confirmedPath,
+            ),
+          }
+        : candidate;
+    });
     stageEnd("write-detail", ` (${detailCandidates.length} selected papers)`);
 
     // 8. Daily summary, after detail attempts have established which links are real.
@@ -558,6 +595,7 @@ export class ArxivPipeline {
           omittedByTopic,
           titleOnlyCandidates,
           failOnTransportExhausted: options.retryTransportFallbacks === true,
+          concurrency: generationConcurrency,
           onDailyPaperProgress: (completed, total) =>
             this.progress.setStage("summarize-daily", completed, total),
         },
@@ -637,6 +675,7 @@ export class ArxivPipeline {
       outcome: "papers_written",
       digest,
       titleOnlyCandidates,
+      ...(detailSelectionSkipped ? { detailSelectionSkipped } : {}),
     };
   }
 

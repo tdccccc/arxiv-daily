@@ -129,8 +129,8 @@ describe("summarizeDaily", () => {
     expect(llm.call).not.toHaveBeenCalled();
   });
 
-  it("calls every paper exactly once in input order with maximum concurrency one", async () => {
-    const ids = ["2607.00003", "2607.00001", "2607.00002"];
+  it("starts papers in input order with at most the default three in flight", async () => {
+    const ids = ["2607.00003", "2607.00001", "2607.00002", "2607.00004"];
     const callOrder: string[] = [];
     let inFlight = 0;
     let maxInFlight = 0;
@@ -141,17 +141,88 @@ describe("summarizeDaily", () => {
         callOrder.push(id);
         inFlight += 1;
         maxInFlight = Math.max(maxInFlight, inFlight);
+        await new Promise((resolve) => setTimeout(resolve, 5));
+        inFlight -= 1;
+        return structured(id);
+      }),
+    };
+
+    const result = await summarizeDaily(ids.map((id) => paper(id)), "2026-07-22", deps(llm));
+
+    expect(llm.call).toHaveBeenCalledTimes(ids.length);
+    expect(callOrder).toEqual(ids);
+    expect(maxInFlight).toBe(3);
+    expect(result.slots.map(({ paper }) => paper.id)).toEqual(ids);
+  });
+
+  it("runs papers one at a time when the concurrency is set to one", async () => {
+    const ids = ["2607.00003", "2607.00001", "2607.00002"];
+    const callOrder: string[] = [];
+    let inFlight = 0;
+    let maxInFlight = 0;
+    const llm = {
+      call: vi.fn(async (messages: any[]) => {
+        const id = /ID: (\d{4}\.\d{5})/.exec(messages[1].content)![1]!;
+        callOrder.push(id);
+        inFlight += 1;
+        maxInFlight = Math.max(maxInFlight, inFlight);
         await new Promise((resolve) => setTimeout(resolve, 2));
         inFlight -= 1;
         return structured(id);
       }),
     };
 
-    await summarizeDaily(ids.map((id) => paper(id)), "2026-07-22", deps(llm));
+    await summarizeDaily(ids.map((id) => paper(id)), "2026-07-22", deps(llm, { concurrency: 1 }));
 
-    expect(llm.call).toHaveBeenCalledTimes(ids.length);
     expect(callOrder).toEqual(ids);
     expect(maxInFlight).toBe(1);
+  });
+
+  it("keeps the slots in input order when later papers finish first", async () => {
+    const delays: Record<string, number> = { "2607.00001": 25, "2607.00002": 2, "2607.00003": 2 };
+    const llm = {
+      call: vi.fn(async (messages: any[]) => {
+        const id = /ID: (\d{4}\.\d{5})/.exec(messages[1].content)![1]!;
+        await new Promise((resolve) => setTimeout(resolve, delays[id]));
+        return structured(id);
+      }),
+    };
+    const progress = vi.fn();
+
+    const result = await summarizeDaily(
+      [paper("2607.00001"), paper("2607.00002"), paper("2607.00003")],
+      "2026-07-22",
+      deps(llm, { onDailyPaperProgress: progress }),
+    );
+
+    expect(result.slots.map(({ paper }) => paper.id)).toEqual(["2607.00001", "2607.00002", "2607.00003"]);
+    expect(progress.mock.calls).toEqual([[1, 3], [2, 3], [3, 3]]);
+  });
+
+  it("stops the other in-flight papers once one fails for good", async () => {
+    const aborted: string[] = [];
+    const llm = {
+      call: vi.fn((messages: any[], options: { signal?: AbortSignal }) => {
+        const id = /ID: (\d{4}\.\d{5})/.exec(messages[1].content)![1]!;
+        if (id === "2607.00001") {
+          return new Promise<string>((_resolve, reject) =>
+            setTimeout(() => reject(Object.assign(new Error("Unauthorized"), { status: 401 })), 5));
+        }
+        return new Promise<string>((_resolve, reject) => {
+          options.signal?.addEventListener("abort", () => {
+            aborted.push(id);
+            reject(new RunCancelledError("stopped"));
+          }, { once: true });
+        });
+      }),
+    };
+
+    await expect(summarizeDaily(
+      [paper("2607.00001"), paper("2607.00002"), paper("2607.00003")],
+      "2026-07-22",
+      deps(llm),
+    )).rejects.toThrow("Unauthorized");
+    expect(aborted.sort()).toEqual(["2607.00002", "2607.00003"]);
   });
 
   it("assembles every trusted ID and metadata into parseable fields", async () => {
@@ -385,7 +456,7 @@ describe("summarizeDaily", () => {
     const summarizing = summarizeDaily(
       [paper("2607.00001"), paper("2607.00002")],
       "2026-07-22",
-      deps(llm, { checkpointStore, onDailyPaperProgress: progress }),
+      deps(llm, { checkpointStore, onDailyPaperProgress: progress, concurrency: 1 }),
     );
     await vi.waitFor(() => expect(checkpointStore.upsert).toHaveBeenCalledTimes(1));
     expect(llm.call).toHaveBeenCalledTimes(1);
@@ -436,6 +507,7 @@ describe("summarizeDaily", () => {
         checkpointStore: upsertStore,
         signal: afterUpsert.signal,
         onDailyPaperProgress: progress,
+        concurrency: 1,
       }),
     )).rejects.toThrow("cancelled after durable upsert");
     expect(upsertLlm.call).toHaveBeenCalledTimes(1);
@@ -480,6 +552,7 @@ describe("summarizeDaily", () => {
         deps(llm, {
           signal: controller.signal,
           onDailyPaperProgress: progress,
+          concurrency: 1,
         }),
       ),
     ).rejects.toThrow("stop between papers");
@@ -517,6 +590,7 @@ describe("summarizeDaily", () => {
         advanced: { ...DEFAULT_SETTINGS.advanced, dailyCharLimit: 1 },
         onDailyPaperProgress: progress,
         onMetrics,
+        concurrency: 1,
         logger: { info: vi.fn(), warn, error: vi.fn(), debug: vi.fn() },
       }),
     );
@@ -586,7 +660,7 @@ describe("summarizeDaily", () => {
     const dailyResult = await summarizeDaily(
       [paper("2607.00001"), paper("2607.00002"), paper("2607.00003")],
       "2026-07-22",
-      deps(llm),
+      deps(llm, { concurrency: 1 }),
     );
     const output = dailyResult.markdown;
 

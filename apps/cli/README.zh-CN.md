@@ -115,7 +115,7 @@ arxiv-daily ui --no-open         # 只打印地址，不自动打开浏览器
 arxiv-daily schedule install
 ```
 
-`schedule install`/`uninstall` 会在 Linux/macOS/WSL 上写入受管理的 crontab 条目。条目使用执行 `install` 时的 Node 可执行文件运行 `<node> <脚本> run --today`，输出追加到配置文件旁的 `schedule.log`；升级或切换 Node 后请重新运行 `schedule install`。cron 不会读取 shell 启动文件，所以配置位于自定义 `XDG_CONFIG_HOME` 下时，条目会自带这个变量（移动配置后请重新运行 `schedule install`）。原生 Windows 的任务计划程序不支持；请使用 WSL，或改用 Obsidian 插件/工作台自带的定时功能。
+`schedule install`/`uninstall` 会在 Linux/macOS/WSL 上写入受管理的 crontab 条目。条目使用执行 `install` 时的 Node 可执行文件运行 `<node> <脚本> run --today`，输出追加到配置文件旁的 `schedule.log`；升级或切换 Node 后请重新运行 `schedule install`。cron 不会读取 shell 启动文件，所以配置位于自定义 `XDG_CONFIG_HOME` 下时，条目会自带这个变量（移动配置后请重新运行 `schedule install`）。条目只生成当天的日报：机器关机错过的工作日不会事后补跑，请对那一天运行 `arxiv-daily run --date YYYY-MM-DD`（CLI 有意不做多日回看，见 ADR 0003）。原生 Windows 的任务计划程序不支持；请使用 WSL，或改用 Obsidian 插件/工作台自带的定时功能。
 
 ## 可选的个人文献库
 

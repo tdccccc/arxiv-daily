@@ -507,6 +507,9 @@ function writeRunResult(io: CliIo, date: string, result: CliRunResult): number {
       io.stdout,
       `run ${date}: completed (${result.papersWritten} papers written${titleOnly ? `; ${titleOnly}` : ""})${result.outcome ? ` [${result.outcome}]` : ""}`,
     );
+    if (result.detailSelectionSkipped) {
+      writeLine(io.stderr, `run ${date}: paper notes skipped — ${result.detailSelectionSkipped}`);
+    }
     return 0;
   }
   if (result.kind === "skipped") {

@@ -486,7 +486,7 @@ describe("filter decision record on commit", () => {
 
   it("writes nothing when the filter or the daily summary fails", async () => {
     const badFilter = harness([decision(1, 90)]);
-    badFilter.llm.call.mockResolvedValueOnce("not json");
+    badFilter.llm.call.mockResolvedValueOnce("not json").mockResolvedValueOnce("still not json");
     await expect(badFilter.makePipeline().runForDate(date)).resolves
       .toMatchObject({ kind: "failed_transient" });
     expect(badFilter.files[recordPath]).toBeUndefined();

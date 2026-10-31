@@ -55,6 +55,19 @@ function validateSharedWizardField(field: "llm.baseUrl" | "arxiv.timezone", valu
 
 const BACK = "__back__" as const;
 
+/** The wizard's former default description; a direction is what the filter judges against, so this must not become one. */
+const PLACEHOLDER_DIRECTION = /describe in natural language what papers belong/i;
+
+function validateTopicDirection(value: string): string | undefined {
+  const text = value.trim();
+  if (!text) return "Required — one sentence describing the papers this topic should keep";
+  if (PLACEHOLDER_DIRECTION.test(text)) return "Replace the example with your own research direction";
+  if (text.length > DIRECTION_TEXT_MAX_LENGTH) {
+    return `A topic description can have at most ${DIRECTION_TEXT_MAX_LENGTH} characters`;
+  }
+  return undefined;
+}
+
 type StepId =
   | "vault"
   | "provider"
@@ -248,10 +261,9 @@ export async function runInit(opts: InitOptions = {}): Promise<number> {
     categories: [...DEFAULT_SETTINGS.arxiv.categories],
     timezone: DEFAULT_SETTINGS.arxiv.timezone,
     summaryLanguage: "zh",
-    topicName: "My research (edit me)",
+    topicName: "My research",
     topicTag: "my-research",
-    topicDescription:
-      "Describe in natural language what papers belong in this topic (problems, methods, objects; what to exclude).",
+    topicDescription: "",
     topicDetail: false,
     linkStyle: "wikilink",
     logLevel: "info",
@@ -334,7 +346,7 @@ export async function runInit(opts: InitOptions = {}): Promise<number> {
     "",
     "Next:",
     "  arxiv-daily run --today",
-    "  Optional: refine [[arxiv.topics]] in the config",
+    "  Add more topics or directions under [[arxiv.topics]] in the config when you need them",
     "  Optional: arxiv-daily email test  then set email.enabled = true",
     "  Optional: [schedule] enabled = true → arxiv-daily schedule install",
     "",
@@ -754,7 +766,12 @@ async function runStep(
     case "topic": {
       if (useClack) {
         p.note(
-          "Topics control filtering. Add more later under [[arxiv.topics]] in the config.",
+          [
+            "Topics control filtering: a paper reaches the daily report only when it",
+            "matches a research direction, so write one real sentence about the papers",
+            "you want (problems, methods, objects; what to exclude).",
+            "Add more topics and directions later under [[arxiv.topics]] in the config.",
+          ].join("\n"),
           "Research topic",
         );
       }
@@ -764,7 +781,7 @@ async function runStep(
         allowBack: canBack,
       });
       if (name.nav !== "next") return name.nav;
-      state.topicName = name.value.trim() || "My research (edit me)";
+      state.topicName = name.value.trim() || "My research";
       const tag = await askText(opts, {
         message: `Topic tag slug (default: ${state.topicTag})`,
         initialValue: state.topicTag,
@@ -776,17 +793,14 @@ async function runStep(
       if (tag.nav !== "next") return tag.nav;
       state.topicTag = tag.value.trim() || "my-research";
       const desc = await askText(opts, {
-        message: "Topic description (default placeholder is fine to edit later)",
+        message: "Topic description (one sentence the daily filter judges papers against)",
+        placeholder: "e.g. photometric redshift estimation for galaxy surveys; not instrumentation",
         initialValue: state.topicDescription,
         allowBack: true,
-        validate: (s) => s.trim().length > DIRECTION_TEXT_MAX_LENGTH
-          ? `A topic description can have at most ${DIRECTION_TEXT_MAX_LENGTH} characters`
-          : undefined,
+        validate: validateTopicDirection,
       });
       if (desc.nav !== "next") return desc.nav;
-      state.topicDescription =
-        desc.value.trim() ||
-        "Describe in natural language what papers belong in this topic.";
+      state.topicDescription = desc.value.trim();
       return "next";
     }
     case "defaults": {
@@ -1294,6 +1308,8 @@ weekdays_only = ${input.schedule.weekdaysOnly}
 [advanced]
 # debug | info | warn | error
 log_level = ${tomlString(input.logLevel)}
+# Papers summarized at once (1-8, default 3); lower it if the provider rate-limits you
+# generation_concurrency = 3
 
 # Do not change unless a release note tells you to.
 # Used only for future config format migrations.

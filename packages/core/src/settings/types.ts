@@ -104,8 +104,13 @@ export interface AdvancedSettings {
   cacheExpiryDays: number;
   sectionCharLimit: number;
   paperCharLimit: number;
-  /** Retained for settings compatibility; sequential daily summarization does not batch by this limit. */
+  /** Retained for settings compatibility; daily summarization does not batch by this limit. */
   dailyCharLimit: number;
+  /**
+   * Per-paper model calls (daily summaries, paper notes) in flight at once.
+   * Unset means the core default; hosts that expose it cap it at the core maximum.
+   */
+  generationConcurrency?: number;
   logLevel: "debug" | "info" | "warn" | "error";
 }
 

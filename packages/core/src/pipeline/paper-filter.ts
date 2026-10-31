@@ -1,4 +1,4 @@
-import { isLlmContentBlockedError, type LlmClient } from "../llm/client";
+import { isLlmContentBlockedError, type ChatMessage, type LlmClient } from "../llm/client";
 import type { Logger } from "../services/logger";
 import {
   buildCheckpointGenerationIdentity,
@@ -370,10 +370,18 @@ interface RefusedPapers {
 const FILTER_MAX_REFUSED_PAPERS = 8;
 
 /**
+ * How many times one filter request is put to the model before a malformed
+ * answer fails the run: the first answer, then one re-ask that names the rule
+ * it broke. A re-ask repeats the whole request, so the count stays small.
+ */
+export const FILTER_ANSWER_ATTEMPTS = 2;
+
+/**
  * The model's validated records for `papers`. When the provider's content-safety
  * filter refuses the request, the papers are halved until the refused ones stand
  * alone; those go into `refused` and are left out of the result like papers the
- * model left out, and the rest are classified as usual.
+ * model left out, and the rest are classified as usual. An answer that fails
+ * validation is asked for once more with the broken rule spelled out.
  */
 async function classifyRefusingProvider(
   papers: PaperMeta[],
@@ -381,42 +389,84 @@ async function classifyRefusingProvider(
   deps: PaperFilterDeps,
   refused: RefusedPapers,
 ): Promise<FilterRecord[]> {
-  let raw: string;
-  try {
-    raw = await deps.llm.call(request.messages, {
-      ...request.options,
-      signal: deps.signal,
-      onMetrics: deps.onMetrics,
-    });
-  } catch (e) {
-    if (isCancellationError(e)) throw e;
-    if (!isLlmContentBlockedError(e)) {
-      deps.logger.error("paper-filter: LLM call failed", e);
-      throw e;
-    }
-    refused.first ??= e;
-    if (papers.length === 1) {
-      refused.papers.push(papers[0]!);
-      if (refused.papers.length > FILTER_MAX_REFUSED_PAPERS) {
-        deps.logger.error("paper-filter: LLM call failed", refused.first);
-        throw refused.first;
+  let messages = request.messages;
+  for (let attempt = 1; ; attempt += 1) {
+    let raw: string;
+    try {
+      raw = await deps.llm.call(messages, {
+        ...request.options,
+        signal: deps.signal,
+        onMetrics: deps.onMetrics,
+      });
+    } catch (e) {
+      if (isCancellationError(e)) throw e;
+      if (!isLlmContentBlockedError(e)) {
+        deps.logger.error("paper-filter: LLM call failed", e);
+        throw e;
       }
-      return [];
+      refused.first ??= e;
+      if (papers.length === 1) {
+        refused.papers.push(papers[0]!);
+        if (refused.papers.length > FILTER_MAX_REFUSED_PAPERS) {
+          deps.logger.error("paper-filter: LLM call failed", refused.first);
+          throw refused.first;
+        }
+        return [];
+      }
+      deps.logger.warn(
+        `paper-filter: the model provider refused a request of ${papers.length} papers; narrowing down the cause`,
+      );
+      const middle = Math.ceil(papers.length / 2);
+      const records: FilterRecord[] = [];
+      for (const half of [papers.slice(0, middle), papers.slice(middle)]) {
+        records.push(...await classifyRefusingProvider(
+          half, buildPaperFilterRequest(half, deps.arxivSettings), deps, refused,
+        ));
+      }
+      return records;
     }
-    deps.logger.warn(
-      `paper-filter: the model provider refused a request of ${papers.length} papers; narrowing down the cause`,
-    );
-    const middle = Math.ceil(papers.length / 2);
-    const records: FilterRecord[] = [];
-    for (const half of [papers.slice(0, middle), papers.slice(middle)]) {
-      records.push(...await classifyRefusingProvider(
-        half, buildPaperFilterRequest(half, deps.arxivSettings), deps, refused,
-      ));
+    throwIfCancelled(deps.signal);
+    try {
+      return decodePaperFilterResponse(raw, request);
+    } catch (error) {
+      if (!isPaperFilterResponseValidationError(error) || attempt >= FILTER_ANSWER_ATTEMPTS) {
+        throw error;
+      }
+      deps.logger.warn(
+        `paper-filter: answer ${attempt} failed validation (${error.reasonCode}); asking once more with the rule it broke`,
+      );
+      messages = withCorrectionGuidance(request.messages, error);
     }
-    return records;
   }
-  throwIfCancelled(deps.signal);
-  return decodePaperFilterResponse(raw, request);
+}
+
+/**
+ * The request again, with what was wrong with the last answer appended to its
+ * user turn (one turn, so providers that merge or reject consecutive same-role
+ * turns see the same request shape). Only this module's own words go in:
+ * nothing of the model's answer is echoed back.
+ */
+function withCorrectionGuidance(
+  messages: readonly ChatMessage[],
+  error: PaperFilterResponseValidationError,
+): ChatMessage[] {
+  const guidance = filterCorrectionGuidance(error);
+  const last = messages[messages.length - 1];
+  if (!last || last.role !== "user") return [...messages, { role: "user", content: guidance }];
+  return [...messages.slice(0, -1), { role: "user", content: `${last.content}\n\n${guidance}` }];
+}
+
+function filterCorrectionGuidance(error: PaperFilterResponseValidationError): string {
+  const reason = error.reasonCode === "invalid-json"
+    ? "回复不是严格 JSON"
+    : `回复违反了输出格式（${error.message.replace(/^response violates the filter contract: /, "")}）`;
+  return [
+    `上一次回复未通过校验：${reason}。`,
+    "请重新输出，并且只输出一个 JSON 对象：不要用 Markdown 代码块包裹，不要附加任何其他文本；",
+    "根对象只有 papers 数组；每条记录恰好包含 id、category、directions、relevanceScore；",
+    "id 必须来自输入论文且不重复；relevanceScore 是 0 到 100 的数值；",
+    "不相关的论文 category 填 \"skip\"、directions 为空数组、relevanceScore 为 0。",
+  ].join("\n");
 }
 
 function reportClassification(
@@ -480,7 +530,7 @@ export function decodePaperFilterResponse(raw: string, request: PaperFilterReque
  * that shape; anything else (prose around it, several fences) is returned
  * unchanged so strict parsing still rejects it.
  */
-function unwrapSingleCodeFence(raw: string): string {
+export function unwrapSingleCodeFence(raw: string): string {
   const inner = /^\s*```[A-Za-z]*[ \t]*\r?\n([\s\S]*?)\r?\n```\s*$/.exec(raw)?.[1];
   if (inner === undefined || inner.includes("```")) return raw;
   return inner;

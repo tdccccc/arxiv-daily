@@ -234,12 +234,45 @@ describe("selectDetailPapers", () => {
     ["high score", response([{ id: "a", score: 101, reason: "ok" }, { id: "b", score: 70, reason: "ok" }])],
     ["empty reason", response([{ id: "a", score: 80, reason: "  " }, { id: "b", score: 70, reason: "ok" }])],
     ["long reason", response([{ id: "a", score: 80, reason: "x".repeat(DETAIL_SELECTOR_REASON_CHAR_LIMIT + 1) }, { id: "b", score: 70, reason: "ok" }])],
-  ])("rejects %s conservatively", async (_label, raw) => {
+  ])("rejects %s conservatively, after asking once more", async (_label, raw) => {
     const setup = deps(raw);
     const warn = vi.spyOn(setup.logger, "warn").mockImplementation(() => undefined);
     const result = await selectDetailPapers([paper("a"), paper("b")], topics, policy, setup.value);
-    expect(result).toEqual({ evaluations: [], selected: [] });
+    expect(result).toEqual({
+      evaluations: [],
+      selected: [],
+      skipped: { reason: expect.stringContaining("failed validation 2 times") },
+    });
+    expect(setup.llm.call).toHaveBeenCalledTimes(2);
     expect(warn).toHaveBeenCalledWith(expect.stringContaining("selecting no papers"));
+  });
+
+  it("accepts a valid answer wrapped in one JSON code fence", async () => {
+    const setup = deps("```json\n" + response([{ id: "a", score: 95, reason: "central" }]) + "\n```");
+    const result = await selectDetailPapers([paper("a")], topics, policy, setup.value);
+    expect(result.selected.map(({ id }) => id)).toEqual(["a"]);
+    expect(result).not.toHaveProperty("skipped");
+    expect(setup.llm.call).toHaveBeenCalledTimes(1);
+  });
+
+  it("asks once more with the broken rule and keeps the second answer", async () => {
+    const llm = {
+      call: vi.fn()
+        .mockResolvedValueOnce("garbage output")
+        .mockResolvedValueOnce(response([{ id: "a", score: 95, reason: "central" }])),
+    };
+    const logger = new Logger("error");
+    vi.spyOn(logger, "warn").mockImplementation(() => undefined);
+    const result = await selectDetailPapers([paper("a")], topics, policy, { llm: llm as any, logger });
+    expect(result.selected.map(({ id }) => id)).toEqual(["a"]);
+    expect(result).not.toHaveProperty("skipped");
+    expect(llm.call).toHaveBeenCalledTimes(2);
+    const first = llm.call.mock.calls[0]![0] as Array<{ role: string; content: string }>;
+    const second = llm.call.mock.calls[1]![0] as Array<{ role: string; content: string }>;
+    expect(second[0]).toEqual(first[0]);
+    expect(second[1]!.content.startsWith(first[1]!.content)).toBe(true);
+    expect(second[1]!.content).toContain("The previous reply failed validation: response is not strict JSON");
+    expect(second[1]!.content).not.toContain("garbage output");
   });
 
   it("accepts finite numeric scores including threshold boundaries", async () => {
@@ -259,13 +292,18 @@ describe("selectDetailPapers", () => {
     expect(result.selected.map(({ id }) => id)).toEqual(["hundred", "exceptional"]);
   });
 
-  it("returns empty and warns on ordinary LLM transport failure", async () => {
+  it("returns a visible skip reason and warns on ordinary LLM transport failure", async () => {
     const llm = { call: vi.fn().mockRejectedValue(new Error("network unavailable")) };
     const logger = new Logger("error");
     const warn = vi.spyOn(logger, "warn").mockImplementation(() => undefined);
     await expect(
       selectDetailPapers([paper("a")], topics, policy, { llm: llm as any, logger }),
-    ).resolves.toEqual({ evaluations: [], selected: [] });
+    ).resolves.toEqual({
+      evaluations: [],
+      selected: [],
+      skipped: { reason: "the model could not be reached for the note selection (network unavailable)" },
+    });
+    expect(llm.call).toHaveBeenCalledTimes(1);
     expect(warn).toHaveBeenCalledWith(
       expect.stringContaining("LLM call failed"),
       expect.any(Error),
