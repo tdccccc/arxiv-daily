@@ -1,6 +1,6 @@
 # "加载模型列表"对 Anthropic 原生端点永远失败：请求头用了 Bearer 而不是 x-api-key
 
-状态：未修复
+状态：已修复（分支 `fix/2026-10-31-review`）
 
 > 来源：2026-10-31 main `e0498c94` 代码审查（会话内直接审查，静态推断，未运行）
 > 严重程度：中 · 置信度：代码推断
@@ -30,3 +30,9 @@ Anthropic 对缺少 `x-api-key` 的请求返回 401，用户看到 "Failed to fe
 
 - `packages/core/tests/llm/`：provider anthropic + api.anthropic.com 时，模型列表请求头含 `x-api-key` 与 `anthropic-version`、不含 `Authorization`；OpenAI 兼容配置的请求头不变。
 - 解析 Anthropic 形状的模型列表响应。
+
+## 修复情况
+
+模型列表请求改用与聊天请求相同的凭据头：Anthropic 原生端点发 `x-api-key` + `anthropic-version`，OpenAI 兼容端点仍发 `Authorization: Bearer`。插件设置页、CLI init、工作台设置三处都走这段代码，无需各自改动；Anthropic 返回的 `{data:[{id}]}` 由原有解析处理。
+
+测试：`packages/core/tests/llm/model-listing.test.ts` 新增两条——原生 Anthropic 端点带正确的头且不带 Bearer、OpenAI 兼容端点仍用 Bearer。

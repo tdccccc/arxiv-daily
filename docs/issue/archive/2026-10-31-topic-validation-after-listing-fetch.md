@@ -1,6 +1,6 @@
 # 主题设置校验在抓完 arXiv 列表之后才做，配置错误时白费一次抓取
 
-状态：未修复
+状态：已修复（分支 `fix/2026-10-31-review`）
 
 > 来源：2026-10-31 main `e0498c94` 代码审查（会话内直接审查，静态推断，未运行）
 > 严重程度：低 · 置信度：代码推断
@@ -16,3 +16,7 @@
 ## 修复后应补的测试
 
 pipeline 测试：主题设置非法时 `listForDate` 未被调用，结果仍为 `failed_permanent`。
+
+## 修复情况
+
+主题设置校验移到抓取 arXiv 列表之前（仍在"日报已存在则修复索引"和周末短路之后）。测试：`packages/core/tests/pipeline-preflight-and-progress.test.ts`——重复 tag 时结果为永久失败，且没有向 arXiv 发过请求、没有调用模型。
