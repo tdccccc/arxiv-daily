@@ -7,11 +7,14 @@ import { isCancellationError, throwIfCancelled } from "../services/cancellation"
 import type { Logger } from "../services/logger";
 import type { Topic } from "../settings/types";
 import type { DailyPaperWithContent } from "./summarizer";
+import { unwrapSingleCodeFence } from "./paper-filter";
 import { escapePaperDataFence } from "./prompt-safety";
 import { normalizeTopicDirectionHits } from "./topic-direction-hits";
 
 export const DETAIL_SELECTOR_FULL_TEXT_CHAR_LIMIT = 12_000;
 export const DETAIL_SELECTOR_REASON_CHAR_LIMIT = 500;
+/** The first answer plus one re-ask that names the broken rule; a third would repeat the whole request yet again. */
+export const DETAIL_SELECTOR_ANSWER_ATTEMPTS = 2;
 
 export interface DetailSelectionPolicy {
   normalThreshold: number;
@@ -37,6 +40,13 @@ export interface DetailSelectionResult {
   evaluations: DetailSelectionEvaluation[];
   /** Deterministically selected evaluations, ordered by score descending then ID. */
   selected: DetailSelectionEvaluation[];
+  /**
+   * Why nothing was selected although there were candidates: the model could
+   * not be reached, or its answers kept failing validation. Absent when the
+   * answer was simply that no candidate qualifies, so a host can tell "no
+   * notes today" from "notes could not be chosen today".
+   */
+  skipped?: { reason: string };
 }
 
 interface DetailCandidate {
@@ -104,31 +114,53 @@ export async function selectDetailPapers(
     `detail-selector: sending ${candidates.length} candidates to LLM for scoring`,
   );
 
-  let raw: string;
-  try {
-    raw = await deps.llm.call(
-      [
-        { role: "system", content: buildDetailSelectorSystemPrompt() },
-        { role: "user", content: userContent },
-      ],
-      { temperature: 0, signal: deps.signal, onMetrics: deps.onMetrics },
-    );
-  } catch (error) {
-    if (isCancellationError(error)) throw error;
-    deps.logger.warn("detail-selector: LLM call failed; selecting no papers", error);
-    return emptyResult();
-  }
-  throwIfCancelled(deps.signal);
+  const systemPrompt = buildDetailSelectorSystemPrompt();
+  let userTurn = userContent;
+  for (let attempt = 1; ; attempt += 1) {
+    let raw: string;
+    try {
+      raw = await deps.llm.call(
+        [
+          { role: "system", content: systemPrompt },
+          { role: "user", content: userTurn },
+        ],
+        { temperature: 0, signal: deps.signal, onMetrics: deps.onMetrics },
+      );
+    } catch (error) {
+      if (isCancellationError(error)) throw error;
+      deps.logger.warn("detail-selector: LLM call failed; selecting no papers", error);
+      return skippedResult(
+        `the model could not be reached for the note selection (${errorMessage(error)})`,
+      );
+    }
+    throwIfCancelled(deps.signal);
 
-  const evaluations = parseEvaluations(raw, candidateIds);
-  if (!evaluations.ok) {
+    const evaluations = parseEvaluations(unwrapSingleCodeFence(raw), candidateIds);
+    if (evaluations.ok) return chooseSelected(evaluations.value, candidates, policy, deps.logger);
+    if (attempt >= DETAIL_SELECTOR_ANSWER_ATTEMPTS) {
+      deps.logger.warn(
+        `detail-selector: invalid LLM response (${evaluations.reason}); selecting no papers`,
+      );
+      return skippedResult(
+        `the model's note-selection answer failed validation ${attempt} times (${evaluations.reason})`,
+      );
+    }
     deps.logger.warn(
-      `detail-selector: invalid LLM response (${evaluations.reason}); selecting no papers`,
+      `detail-selector: invalid LLM response (${evaluations.reason}); asking once more`,
     );
-    return emptyResult();
+    // Same request with the broken rule appended to the user turn; nothing of
+    // the model's own answer is echoed back.
+    userTurn = `${userContent}\n\n${correctionGuidance(evaluations.reason)}`;
   }
+}
 
-  const byId = new Map(evaluations.value.map((evaluation) => [evaluation.id, evaluation]));
+function chooseSelected(
+  evaluations: readonly DetailSelectionEvaluation[],
+  candidates: readonly DetailCandidate[],
+  policy: DetailSelectionPolicy,
+  logger: Logger,
+): DetailSelectionResult {
+  const byId = new Map(evaluations.map((evaluation) => [evaluation.id, evaluation]));
   const inputOrdered = candidates.map(({ paper }) => byId.get(paper.id)!);
   const eligible = inputOrdered
     .filter((evaluation) => evaluation.score >= policy.normalThreshold)
@@ -138,10 +170,20 @@ export async function selectDetailPapers(
       index < policy.softLimit || evaluation.score >= policy.exceptionalThreshold,
   );
 
-  deps.logger.info(
+  logger.info(
     `detail-selector: selected ${selected.length}/${candidates.length} candidates`,
   );
   return { evaluations: inputOrdered, selected };
+}
+
+function correctionGuidance(reason: string): string {
+  return `The previous reply failed validation: ${reason}. Reply again with exactly one JSON object `
+    + `{"papers":[{"id":"…","score":0,"reason":"…"}]} that has one record per candidate ID, integer `
+    + "scores from 0 to 100, no markdown fences and no text outside the JSON object.";
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error && error.message ? error.message : String(error);
 }
 
 function buildCandidateContent(candidates: readonly DetailCandidate[]): string {
@@ -270,4 +312,8 @@ function hasExactKeys(value: Record<string, unknown>, expected: readonly string[
 
 function emptyResult(): DetailSelectionResult {
   return { ...EMPTY_RESULT, evaluations: [], selected: [] };
+}
+
+function skippedResult(reason: string): DetailSelectionResult {
+  return { ...emptyResult(), skipped: { reason } };
 }

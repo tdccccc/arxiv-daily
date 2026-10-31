@@ -12,7 +12,10 @@ export function describeResult(result: RunResult | null | undefined): string {
     if (result.outcome === "no_matches") {
       return `no matching papers${titleOnly ? ` (${titleOnly})` : ""}`;
     }
-    return `done (${result.papersWritten} papers${titleOnly ? `; ${titleOnly}` : ""})`;
+    const skippedNotes = result.detailSelectionSkipped
+      ? `; paper notes skipped: ${result.detailSelectionSkipped}`
+      : "";
+    return `done (${result.papersWritten} papers${titleOnly ? `; ${titleOnly}` : ""})${skippedNotes}`;
   }
   if (result.kind === "pending") {
     return `${result.outcome === "awaiting_announcement" ? "awaiting announcement" : "pending"}: ${result.reason}`;
