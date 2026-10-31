@@ -137,7 +137,9 @@ function setup(options: {
     llm,
     logger,
     arxiv,
-    advanced: DEFAULT_SETTINGS.advanced,
+    // One summary request at a time, so a permanent failure can be shown to
+    // stop the day before any further request is made.
+    advanced: { ...DEFAULT_SETTINGS.advanced, generationConcurrency: 1 },
     output: DEFAULT_SETTINGS.output,
     llmSettings: DEFAULT_SETTINGS.llm,
     detailSelection: { normalThreshold: 70, exceptionalThreshold: 90, softLimit: 2 },

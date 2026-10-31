@@ -94,10 +94,23 @@ export interface SummarizerDeps {
    * report. Papers finished so far stay in the checkpoint store.
    */
   failOnTransportExhausted?: boolean;
+  /** Papers summarized at once; see {@link DAILY_GENERATION_CONCURRENCY}. */
+  concurrency?: number;
   /** Lower-level renderer injected behind the production assembler preflight boundary. */
   dailyRenderer?: (input: DailySummaryAssemblyInput) => string;
   rescueDaily?: typeof rescueDailySummary;
   assembleEmergencyDaily?: (input: DailySummaryAssemblyInput) => string;
+}
+
+/** Per-paper model calls (daily summaries, paper notes) in flight at once by default. */
+export const DAILY_GENERATION_CONCURRENCY = 3;
+/** The most a host may configure; beyond this a provider's rate limit turns into fallbacks. */
+export const MAX_GENERATION_CONCURRENCY = 8;
+
+/** The bound to run with for a configured value; unset or invalid means the default. */
+export function normalizeGenerationConcurrency(value: number | undefined): number {
+  if (!Number.isSafeInteger(value) || (value as number) < 1) return DAILY_GENERATION_CONCURRENCY;
+  return Math.min(value as number, MAX_GENERATION_CONCURRENCY);
 }
 
 /** The model endpoint was unreachable for a paper; the run should be retried, not committed. */
@@ -138,11 +151,13 @@ export async function summarizeDaily(
   // Fail before spending model calls on a report that cannot be assembled.
   validateDailyTitleOnlyCandidates(deps);
 
-  const slots: DailyPaperSlot[] = [];
+  const limit = normalizeGenerationConcurrency(deps.concurrency);
+  const results = new Array<DailyPaperResult>(papers.length);
+  let completed = 0;
   let fallbackCount = 0;
-  for (let i = 0; i < papers.length; i += 1) {
-    throwIfCancelled(deps.signal);
-    const paper = papers[i]!;
+  const summarizeOne = async (index: number, signal: AbortSignal | undefined): Promise<void> => {
+    throwIfCancelled(signal);
+    const paper = papers[index]!;
     const checkpointInput: DailySummaryCheckpointCompatibilityInput = {
       paper,
       summaryLanguage: deps.summaryLanguage,
@@ -155,10 +170,10 @@ export async function summarizeDaily(
         checkpointInput,
       );
     } catch (error) {
-      throwIfCancelled(deps.signal);
+      throwIfCancelled(signal);
       throw error;
     }
-    throwIfCancelled(deps.signal);
+    throwIfCancelled(signal);
 
     let result: DailyPaperResult;
     let recovered = false;
@@ -178,20 +193,20 @@ export async function summarizeDaily(
       result = await summarizeDailyPaperWithValidationRetry(paper, {
         llm: deps.llm,
         summaryLanguage: deps.summaryLanguage,
-        signal: deps.signal,
+        signal,
         onMetrics: deps.onMetrics,
         onValidationFailure: (error) => {
           lastValidationFailure = describeValidationFailureForLog(error);
         },
       });
-      throwIfCancelled(deps.signal);
+      throwIfCancelled(signal);
       try {
         await deps.checkpointStore?.upsert(dateStr, checkpointInput, result);
       } catch (error) {
-        throwIfCancelled(deps.signal);
+        throwIfCancelled(signal);
         throw error;
       }
-      throwIfCancelled(deps.signal);
+      throwIfCancelled(signal);
       if (deps.checkpointStore) {
         deps.logger.info(
           `summarizeDaily: checkpoint persisted date=${dateStr} paper=${paper.id}`,
@@ -204,7 +219,7 @@ export async function summarizeDaily(
       deps.failOnTransportExhausted
     ) {
       deps.logger.warn(
-        `summarizeDaily: model endpoint unreachable for ${paper.id}; keeping ${slots.length} finished papers for a retry`,
+        `summarizeDaily: model endpoint unreachable for ${paper.id}; keeping ${completed} finished papers for a retry`,
       );
       throw new DailySummaryIncompleteError(paper.id);
     }
@@ -218,12 +233,18 @@ export async function summarizeDaily(
           (recovered ? " recovered=true" : ""),
       );
     }
-    slots.push({
-      paper: assemblyPapers[i]!,
-      result,
-    });
-    deps.onDailyPaperProgress?.(i + 1, papers.length);
-  }
+    results[index] = result;
+    completed += 1;
+    deps.onDailyPaperProgress?.(completed, papers.length);
+  };
+  // A few papers at a time; the report keeps their input order regardless of
+  // which finishes first.
+  await runWithConcurrency(papers.length, limit, summarizeOne, deps.signal);
+  throwIfCancelled(deps.signal);
+  const slots: DailyPaperSlot[] = papers.map((_, index) => ({
+    paper: assemblyPapers[index]!,
+    result: results[index]!,
+  }));
 
   throwIfCancelled(deps.signal);
   const assemblyInput: DailySummaryAssemblyInput = {
@@ -331,4 +352,60 @@ export async function summarizePaperDetail(
     `summarizePaperDetail: ${paper.id} → ${summary.length} chars`,
   );
   return summary;
+}
+
+/**
+ * Runs `task` for every index with at most `limit` in flight. The first
+ * failure is the run's failure: it stops the remaining workers through the
+ * shared signal, and the cancellations that causes in them are not reported.
+ */
+async function runWithConcurrency(
+  count: number,
+  limit: number,
+  task: (index: number, signal: AbortSignal | undefined) => Promise<void>,
+  signal?: AbortSignal,
+): Promise<void> {
+  if (count === 0) return;
+  const pool = linkedAbortController(signal);
+  let next = 0;
+  let failure: { error: unknown } | undefined;
+  const workers = Array.from(
+    { length: Math.min(Math.max(1, limit), count) },
+    async () => {
+      while (next < count && !failure) {
+        const index = next;
+        next += 1;
+        try {
+          await task(index, pool.signal);
+        } catch (error) {
+          failure ??= { error };
+          pool.abort();
+          return;
+        }
+      }
+    },
+  );
+  try {
+    await Promise.all(workers);
+  } finally {
+    pool.cleanup();
+  }
+  if (failure) throw failure.error;
+}
+
+/** A signal that follows `signal` and can also be aborted by the pool itself. */
+function linkedAbortController(signal?: AbortSignal): {
+  signal: AbortSignal;
+  abort(): void;
+  cleanup(): void;
+} {
+  const controller = new AbortController();
+  const follow = () => controller.abort(signal?.reason);
+  signal?.addEventListener("abort", follow, { once: true });
+  if (signal?.aborted) follow();
+  return {
+    signal: controller.signal,
+    abort: () => controller.abort(new Error("stopped after another paper failed")),
+    cleanup: () => signal?.removeEventListener("abort", follow),
+  };
 }

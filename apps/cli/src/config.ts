@@ -11,6 +11,7 @@ import {
   normalizeTopic,
   sanitizeDetailSelection,
   isDetailSelectionProfile,
+  MAX_GENERATION_CONCURRENCY,
   validateScheduleConfig,
   validateLocalPdfParserSidecarConfig,
   sha256Hex,
@@ -307,6 +308,19 @@ function mapTomlToSettings(root: Record<string, unknown>): PluginSettings {
     }
     if (typeof advanced.daily_char_limit === "number") {
       base.advanced.dailyCharLimit = advanced.daily_char_limit;
+    }
+    if (advanced.generation_concurrency !== undefined) {
+      const value = advanced.generation_concurrency;
+      if (
+        !Number.isSafeInteger(value) ||
+        (value as number) < 1 ||
+        (value as number) > MAX_GENERATION_CONCURRENCY
+      ) {
+        throw new CliConfigError(
+          `invalid advanced.generation_concurrency: expected an integer from 1 to ${MAX_GENERATION_CONCURRENCY}`,
+        );
+      }
+      base.advanced.generationConcurrency = value as number;
     }
   }
 

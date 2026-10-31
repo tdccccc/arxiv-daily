@@ -137,6 +137,31 @@ describe("CLI init template", () => {
     expect(body).toContain('tag = "photo-z"');
     expect(body).toContain("photo-z methods");
   });
+  it("requires a real research direction instead of the former placeholder", async () => {
+    const descriptions = ["", "Describe in natural language what papers belong in this topic", "photo-z methods"];
+    let body = ""; const errors: string[] = []; const out: string[] = [];
+    const code = await runInit({
+      configPath:"/tmp/init-direction-required.toml", isTTY:true,
+      ask: async prompt => {
+        if (prompt.startsWith("API base URL")) return "https://model.test/v1";
+        if (prompt.startsWith("LLM API key")) return "test-key";
+        if (prompt.startsWith("Topic description")) return descriptions.shift() ?? "photo-z methods";
+        if (/fetch|connect|thinking|schedule/i.test(prompt)) return "n";
+        return "";
+      },
+      fetchModels: async () => [],
+      readFile: async () => {throw Object.assign(new Error("missing"),{code:"ENOENT"});},
+      mkdir:async()=>{}, writeFile:async(_path,text)=>{body=text;},
+      stdout:{write:text=>out.push(String(text))}, stderr:{write:text=>errors.push(String(text))},
+    });
+    expect(code).toBe(0); expect(descriptions).toEqual([]);
+    expect(errors.join(" ")).toContain("Required — one sentence");
+    expect(errors.join(" ")).toContain("Replace the example with your own research direction");
+    expect(body).toContain('name = "My research"');
+    expect(body).toContain('description = "photo-z methods"');
+    expect(body).not.toContain("Describe in natural language");
+    expect(out.join("")).not.toContain("Optional: refine");
+  });
   it("re-prompts custom endpoints and timezones using shared settings validation", async () => {
     const urls = ["file:///tmp/model", "https://user:secret@model.test/v1", "https://model.test/v1?api_key=secret", "https://model.test/v1"];
     const zones = ["invalid/timezone", "Pacific/Auckland"];
@@ -148,6 +173,7 @@ describe("CLI init template", () => {
         if (prompt.startsWith("LLM API key")) return "test-key";
         if (prompt.startsWith("Timezone for")) return "__other__";
         if (prompt.startsWith("IANA timezone")) return zones.shift() ?? "Pacific/Auckland";
+        if (prompt.startsWith("Topic description")) return "photo-z methods";
         if (/fetch|connect|thinking|schedule/i.test(prompt)) return "n";
         return "";
       },

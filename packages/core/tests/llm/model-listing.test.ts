@@ -128,6 +128,57 @@ describe("Model listing", () => {
     expect(request).toHaveBeenCalledTimes(1);
   });
 
+  it("lists models from the native Anthropic endpoint with its own headers", async () => {
+    const request = vi.fn(async () => ({
+      status: 200,
+      headers: {},
+      bodyText: JSON.stringify({ data: [{ id: "claude-sonnet-4-6" }, { id: "claude-opus-4-7" }] }),
+    }));
+    const client = new LlmClient(
+      {
+        apiKey: "sk-ant-test",
+        provider: "anthropic",
+        baseUrl: "https://api.anthropic.com/v1",
+        model: "claude-sonnet-4-6",
+        thinkingMode: false,
+        reasoningEffort: "high",
+      },
+      { warn: vi.fn() } as any,
+      { request },
+    );
+
+    await expect(client.fetchModels()).resolves.toEqual(["claude-sonnet-4-6", "claude-opus-4-7"]);
+    const sent = request.mock.calls[0]![0] as { url: string; headers: Record<string, string> };
+    expect(sent.url).toBe("https://api.anthropic.com/v1/models");
+    expect(sent.headers).toMatchObject({ "x-api-key": "sk-ant-test", "anthropic-version": "2023-06-01" });
+    expect(sent.headers).not.toHaveProperty("Authorization");
+  });
+
+  it("keeps Bearer auth for OpenAI-compatible model lists", async () => {
+    const request = vi.fn(async () => ({
+      status: 200,
+      headers: {},
+      bodyText: JSON.stringify({ data: [{ id: "gpt-test" }] }),
+    }));
+    const client = new LlmClient(
+      {
+        apiKey: "sk-test",
+        provider: "custom",
+        baseUrl: "https://llm.example.com/v1",
+        model: "gpt-test",
+        thinkingMode: false,
+        reasoningEffort: "high",
+      },
+      { warn: vi.fn() } as any,
+      { request },
+    );
+
+    await expect(client.fetchModels()).resolves.toEqual(["gpt-test"]);
+    const sent = request.mock.calls[0]![0] as { headers: Record<string, string> };
+    expect(sent.headers).toMatchObject({ Authorization: "Bearer sk-test" });
+    expect(sent.headers).not.toHaveProperty("x-api-key");
+  });
+
   it("collects OpenAI-compatible SSE chat completion chunks", async () => {
     const request = vi.fn(async () => ({
       status: 200,

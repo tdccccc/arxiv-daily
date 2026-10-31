@@ -1010,9 +1010,12 @@ export class SchedulerDriver {
       }
     }
 
+    const skippedNotes = pending.result.detailSelectionSkipped;
     this.safeEffect(() =>
       this.deps.logger.notice(
-        `arXiv ${date}: ${pending.papersWritten} papers written`,
+        `arXiv ${date}: ${pending.papersWritten} papers written`
+          + (skippedNotes ? `; paper notes skipped: ${skippedNotes}` : ""),
+        skippedNotes ? 10_000 : undefined,
       ),
     );
     this.safeEffect(() =>

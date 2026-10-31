@@ -112,6 +112,60 @@ describe("decodePaperFilterResponse", () => {
   });
 });
 
+describe("filterPapers re-asks after a malformed answer", () => {
+  const validAnswer = JSON.stringify({ papers: [{
+    id: samplePaper.id, category: "photo-z", directions: ["photo-z#1"], relevanceScore: 80,
+  }] });
+  const scoreAsString = JSON.stringify({ papers: [{
+    id: samplePaper.id, category: "photo-z", directions: ["photo-z#1"], relevanceScore: "80",
+  }] });
+  const deps = (llm: { call: unknown }) => ({
+    llm: llm as any, logger: new Logger("error"),
+    arxivSettings: makeArxiv(makeTopics()), ...checkpointScope,
+  });
+
+  it("asks once more with the broken rule and keeps the second answer", async () => {
+    const llm = { call: vi.fn().mockResolvedValueOnce("not json").mockResolvedValueOnce(validAnswer) };
+    const result = await filterPapers([samplePaper], deps(llm));
+    expect(result.map(({ id, relevanceScore }) => ({ id, relevanceScore }))).toEqual([{ id: samplePaper.id, relevanceScore: 80 }]);
+    expect(llm.call).toHaveBeenCalledTimes(2);
+    const first = llm.call.mock.calls[0]![0] as Array<{ role: string; content: string }>;
+    const second = llm.call.mock.calls[1]![0] as Array<{ role: string; content: string }>;
+    expect(second).toHaveLength(first.length);
+    expect(second[0]).toEqual(first[0]);
+    expect(second[1]!.role).toBe("user");
+    expect(second[1]!.content.startsWith(first[1]!.content)).toBe(true);
+    expect(second[1]!.content).toContain("上一次回复未通过校验：回复不是严格 JSON");
+    expect(second[1]!.content).not.toContain("not json");
+  });
+
+  it("names the contract rule a second attempt must follow", async () => {
+    const llm = { call: vi.fn().mockResolvedValueOnce(scoreAsString).mockResolvedValueOnce(validAnswer) };
+    await filterPapers([samplePaper], deps(llm));
+    const second = llm.call.mock.calls[1]![0] as Array<{ role: string; content: string }>;
+    expect(second[1]!.content).toContain("has an invalid relevance score");
+  });
+
+  it("fails the run after the second malformed answer", async () => {
+    const llm = { call: vi.fn().mockResolvedValue(scoreAsString) };
+    await expect(filterPapers([samplePaper], deps(llm))).rejects.toMatchObject({ reasonCode: "invalid-contract" });
+    expect(llm.call).toHaveBeenCalledTimes(2);
+  });
+
+  it("persists the checkpoint from the accepted second answer under the original request", async () => {
+    const { storage } = memoryStorage();
+    const store = new DailyFilterCheckpointStore(storage, DEFAULT_SETTINGS.output);
+    const llm = { call: vi.fn().mockResolvedValueOnce("not json").mockResolvedValueOnce(validAnswer) };
+    await filterPapers([samplePaper], { ...deps(llm), checkpointStore: store });
+    const prepared = prepareDailyFilterCheckpoint({
+      papers: [samplePaper], arxivSettings: makeArxiv(makeTopics()), llm: DEFAULT_SETTINGS.llm,
+    });
+    await expect(store.lookupReusable(checkpointScope.reportDate, prepared)).resolves.toEqual([
+      { id: samplePaper.id, category: "photo-z", directions: ["photo-z#1"], relevanceScore: 80 },
+    ]);
+  });
+});
+
 describe("filterPapers", () => {
   it("carries relevance scores from validated model decisions to selected papers", async () => {
     const llm = { call: vi.fn().mockResolvedValue(JSON.stringify({ papers: [{
@@ -523,7 +577,8 @@ describe("filterPapers", () => {
     await expect(filtering).resolves.toHaveLength(1);
 
     checkpointStore.save.mockClear();
-    llm.call.mockResolvedValueOnce("not json");
+    // Both attempts fail: the re-ask does not get to persist anything either.
+    llm.call.mockResolvedValueOnce("not json").mockResolvedValueOnce("still not json");
     await expect(filterPapers([samplePaper], {
       llm: llm as any,
       logger: new Logger("error"),

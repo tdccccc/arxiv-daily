@@ -295,13 +295,12 @@ export class LlmClient {
 
     for (const url of candidates) {
       try {
+        // The same credentials header as chat: Anthropic's own endpoint takes
+        // x-api-key plus anthropic-version, not a Bearer token.
         const res = await this.http.request({
           url,
           method: "GET",
-          headers: {
-            "Authorization": `Bearer ${apiKey}`,
-            "Content-Type": "application/json",
-          },
+          headers: this.chatHeaders(),
         });
         if (res.status >= 200 && res.status < 300) {
           return this.parseModelList(JSON.parse(res.bodyText));
