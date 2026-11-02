@@ -51,7 +51,7 @@
     "vsix:package": "vsce package"
   },
   "devDependencies": {
-    "@vscode/vsce": "3.9.2"
+    "@vscode/vsce": "4.1.0"
   },
   "overrides": {
     "@azure/msal-node": "^7.1.1",
