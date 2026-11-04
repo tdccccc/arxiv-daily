@@ -1,6 +1,6 @@
 # 被服务商内容安全拒绝的论文在筛选决策记录里被记成"模型跳过"
 
-状态：未修复
+状态：已修复（分支 `fix/2026-10-31-low-findings`）
 
 > 来源：2026-10-31 main `e0498c94` 代码审查（会话内直接审查，静态推断，未运行）
 > 严重程度：低 · 置信度：代码推断
@@ -25,3 +25,7 @@
 - `paper-filter-refusal` 测试：`onClassified` 收到被拒 id。
 - `pipeline-filter-decision-record` 测试：被拒论文的 outcome 为 `refused_by_provider`。
 - quality-eval 评分测试：该 outcome 不计入正负例。
+
+## 修复情况
+
+`FilterClassification` 新增 `refusedIds`，筛选检查点把它一并持久化（文档新增可选 `refusedIds` 字段，旧文档按空数组读取，检查点复用也能恢复被拒信息）；筛选决策记录的 outcome 新增 `refused_by_provider`，被拒论文不再记成 `skipped_by_model`（category 仍是 `skip`，因为确实没有模型决定）。quality-eval 导出把这类候选排除在抽样和 `skippedAvailable` 之外，`labels.meta.json` 的 counts 增加 `refusedByProvider` 计数。测试：`paper-filter-refusal`（`onClassified` 收到被拒 id；检查点保存 5 个参数、复用后仍带 refusedIds）、`pipeline-filter-decision-record`（含检查点复用路径的 refused_by_provider）、`scripts/tests/quality-eval-export.test.mjs`（被拒论文不上表、计数单列）。

@@ -271,10 +271,14 @@ export class LlmClient {
 
   async testConnection(): Promise<{ success: boolean; error?: string }> {
     try {
+      // The same generation parameters a real call sends (thinking, reasoning
+      // effort, token budget), so a provider that rejects any of them fails
+      // here instead of on the first report. With thinking on, the provider's
+      // own budget defaults apply; without it a tiny cap is enough for a probe.
       await this.postChatJson({
+        ...generationParameters(this.settings, {}, this.settings.thinkingMode ? undefined : 64),
         model: this.settings.model,
         messages: [{ role: "user", content: "Hello" }],
-        max_tokens: 5,
       });
       return { success: true };
     } catch (e) {

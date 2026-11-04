@@ -55,6 +55,16 @@ export type FilterRecordDecodeResult =
   | { ok: true; value: FilterRecord[] }
   | { ok: false; reason: string };
 
+/**
+ * What a reusable filter checkpoint holds: the validated records, and the
+ * candidates the provider's content-safety filter refused when they were
+ * produced (never classified, so absent from `records`).
+ */
+export interface ReusableFilterClassification {
+  records: FilterRecord[];
+  refusedIds: string[];
+}
+
 export interface DailyFilterCheckpointCompatibilityInput {
   papers: PaperMeta[];
   arxivSettings: ArxivSettings;

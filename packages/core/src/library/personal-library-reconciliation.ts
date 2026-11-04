@@ -127,7 +127,8 @@ export interface PersonalLibraryFolderChange {
  * under the catalog's identification strategy) matches the stored record, and a
  * truncated listing cannot show removals. A renamed or moved file is a removal
  * plus an addition. Files a scan could not resolve or fetch metadata for are
- * "unchanged" while the folder is: retrying them is an explicit scan's job.
+ * "unchanged" while the folder is: an explicit scan retries them, and the
+ * workflow retries a failed metadata lookup on its own before indexing.
  */
 export function detectPersonalLibraryFolderChange(input: {
   catalog: PersonalLibraryCatalog;

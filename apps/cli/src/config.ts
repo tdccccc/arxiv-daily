@@ -61,6 +61,8 @@ export interface CliRuntimeConfig {
   libraryConnectionError?: string;
   /** Fingerprint of the exact loaded bytes, used to reject stale config writes. */
   configRevision?: string;
+  /** Load-time adjustments worth telling the user about (e.g. a raised request delay). */
+  configWarnings?: string[];
 }
 
 export interface LoadCliConfigOptions {
@@ -110,7 +112,8 @@ export async function loadCliConfig(
     throw new CliConfigError(`failed to parse CLI config: ${configPath}`, e);
   }
 
-  const settings = mapTomlToSettings(parsed);
+  const configWarnings: string[] = [];
+  const settings = mapTomlToSettings(parsed, configWarnings);
 
   const home = opts.homedir?.() ?? os.homedir();
   const vaultRoot = resolveUserPath(
@@ -164,6 +167,7 @@ export async function loadCliConfig(
     scheduleIntent: mapScheduleIntent(parsed.schedule),
     workbenchSchedule: mapWorkbenchSchedule(parsed.workbench_schedule),
     configRevision: `sha256:${sha256Hex(raw)}`,
+    ...(configWarnings.length ? { configWarnings } : {}),
     ...(libraryConnection ? { libraryConnection } : {}),
     ...(libraryConnectionError ? { libraryConnectionError } : {}),
   };
@@ -173,53 +177,47 @@ function detailSelectionPresetBalanced(): PluginSettings["detailSelection"] {
   return sanitizeDetailSelection({ profile: "balanced" });
 }
 
-function mapTomlToSettings(root: Record<string, unknown>): PluginSettings {
+function mapTomlToSettings(root: Record<string, unknown>, warnings: string[]): PluginSettings {
   const base = structuredClone(DEFAULT_SETTINGS);
   base.detailSelection = detailSelectionPresetBalanced();
 
   const llm = asTable(root.llm);
   if (llm) {
-    base.llm.apiKey = stringField(llm, "api_key", base.llm.apiKey);
-    base.llm.provider = stringField(llm, "provider", base.llm.provider);
-    base.llm.baseUrl = stringField(llm, "base_url", base.llm.baseUrl);
-    base.llm.model = stringField(llm, "model", base.llm.model);
-    if (typeof llm.thinking_mode === "boolean") {
-      base.llm.thinkingMode = llm.thinking_mode;
-    }
-    base.llm.reasoningEffort = stringField(
-      llm,
-      "reasoning_effort",
-      base.llm.reasoningEffort,
-    );
+    base.llm.apiKey = stringField(llm, "llm", "api_key", base.llm.apiKey);
+    base.llm.provider = stringField(llm, "llm", "provider", base.llm.provider);
+    base.llm.baseUrl = stringField(llm, "llm", "base_url", base.llm.baseUrl);
+    base.llm.model = stringField(llm, "llm", "model", base.llm.model);
+    base.llm.thinkingMode = booleanField(llm, "llm", "thinking_mode", base.llm.thinkingMode);
+    base.llm.reasoningEffort = stringField(llm, "llm", "reasoning_effort", base.llm.reasoningEffort);
   }
 
   const embedding = asTable(root.embedding);
   if (embedding) {
-    const mode = stringField(embedding, "mode", base.embedding.mode);
+    const mode = stringField(embedding, "embedding", "mode", base.embedding.mode);
     base.embedding.mode = mode === "remote" ? "remote" : "local";
-    base.embedding.provider = stringField(embedding, "provider", base.embedding.provider);
-    base.embedding.baseUrl = stringField(embedding, "base_url", base.embedding.baseUrl);
-    base.embedding.apiKey = stringField(embedding, "api_key", base.embedding.apiKey);
-    base.embedding.model = stringField(embedding, "model", base.embedding.model);
+    base.embedding.provider = stringField(embedding, "embedding", "provider", base.embedding.provider);
+    base.embedding.baseUrl = stringField(embedding, "embedding", "base_url", base.embedding.baseUrl);
+    base.embedding.apiKey = stringField(embedding, "embedding", "api_key", base.embedding.apiKey);
+    base.embedding.model = stringField(embedding, "embedding", "model", base.embedding.model);
     const dimension = embedding.dimension;
-    if (typeof dimension === "number" && Number.isInteger(dimension) && dimension > 0) {
+    if (dimension !== undefined) {
+      if (typeof dimension !== "number" || !Number.isSafeInteger(dimension) || dimension <= 0) {
+        throw typeMismatch("embedding", "dimension", "a positive integer", dimension);
+      }
       base.embedding.dimension = dimension;
     }
   }
 
   const arxiv = asTable(root.arxiv);
   if (arxiv) {
-    if (Array.isArray(arxiv.categories)) {
-      base.arxiv.categories = normalizeCategoryList(
-        arxiv.categories,
-        [],
-      );
+    const categories = arrayField(arxiv, "arxiv", "categories");
+    if (categories) {
+      base.arxiv.categories = normalizeCategoryList(categories, []);
     }
-    base.arxiv.timezone = stringField(arxiv, "timezone", base.arxiv.timezone);
-    if (Array.isArray(arxiv.topics)) {
-      base.arxiv.topics = arxiv.topics.map((item, index) =>
-        mapTopic(item, index),
-      );
+    base.arxiv.timezone = stringField(arxiv, "arxiv", "timezone", base.arxiv.timezone);
+    const topics = arrayField(arxiv, "arxiv", "topics");
+    if (topics) {
+      base.arxiv.topics = topics.map((item, index) => mapTopic(item, index));
     }
   }
   base.arxiv.category =
@@ -233,40 +231,43 @@ function mapTomlToSettings(root: Record<string, unknown>): PluginSettings {
       }
       base.output.maxDailyPapers = output.max_daily_papers;
     }
-    base.output.dailyDir = stringField(output, "daily_dir", base.output.dailyDir);
+    base.output.dailyDir = stringField(output, "output", "daily_dir", base.output.dailyDir);
     base.output.papersDir = stringField(
       output,
+      "output",
       "papers_dir",
       base.output.papersDir,
     );
-    const link = stringField(output, "link_style", base.output.linkStyle ?? "wikilink");
+    const link = stringField(output, "output", "link_style", base.output.linkStyle ?? "wikilink");
     if (link !== "wikilink" && link !== "relative") {
       throw new CliConfigError(`invalid link_style: ${link}`);
     }
     base.output.linkStyle = link;
     base.output.summaryLanguage = normalizeSummaryLanguage(
-      stringField(output, "summary_language", base.output.summaryLanguage ?? "zh"),
+      stringField(output, "output", "summary_language", base.output.summaryLanguage ?? "zh"),
     );
   }
 
   const email = asTable(root.email);
   if (email) {
-    if (typeof email.enabled === "boolean") base.email.enabled = email.enabled;
-    const mode = stringField(email, "mode", base.email.mode);
+    base.email.enabled = booleanField(email, "email", "enabled", base.email.enabled);
+    const mode = stringField(email, "email", "mode", base.email.mode);
     if (mode !== "self" && mode !== "hosted") {
       throw new CliConfigError(`invalid email.mode: ${mode}`);
     }
     base.email.mode = mode;
-    base.email.to = stringField(email, "to", base.email.to);
-    base.email.fromEmail = stringField(email, "from_email", base.email.fromEmail);
+    base.email.to = stringField(email, "email", "to", base.email.to);
+    base.email.fromEmail = stringField(email, "email", "from_email", base.email.fromEmail);
     base.email.fromName = stringField(
       email,
+      "email",
       "from_name",
       base.email.fromName ?? "arXiv Daily",
     );
-    base.email.apiKey = stringField(email, "api_key", base.email.apiKey ?? "");
+    base.email.apiKey = stringField(email, "email", "api_key", base.email.apiKey ?? "");
     base.email.hostedToken = stringField(
       email,
+      "email",
       "hosted_token",
       base.email.hostedToken ?? "",
     );
@@ -275,7 +276,7 @@ function mapTomlToSettings(root: Record<string, unknown>): PluginSettings {
 
   const advanced = asTable(root.advanced);
   if (advanced) {
-    const level = stringField(advanced, "log_level", base.advanced.logLevel);
+    const level = stringField(advanced, "advanced", "log_level", base.advanced.logLevel);
     if (
       level !== "debug" &&
       level !== "info" &&
@@ -286,29 +287,28 @@ function mapTomlToSettings(root: Record<string, unknown>): PluginSettings {
     }
     base.advanced.logLevel = level;
     if (advanced.request_delay_ms !== undefined) {
+      const value = advanced.request_delay_ms;
       if (
-        typeof advanced.request_delay_ms !== "number" ||
-        !Number.isFinite(advanced.request_delay_ms) ||
-        advanced.request_delay_ms < 0
+        typeof value !== "number" ||
+        !Number.isFinite(value) ||
+        value < 0
       ) {
         throw new CliConfigError(
           "invalid advanced.request_delay_ms: expected a non-negative finite number",
         );
       }
-      base.advanced.requestDelayMs = Math.max(3_000, advanced.request_delay_ms);
+      const raised = Math.max(3_000, value);
+      if (raised !== value) {
+        warnings.push(
+          `advanced.request_delay_ms=${value} is below the 3000 ms floor that keeps arXiv requests gentle; ${raised} is used instead`,
+        );
+      }
+      base.advanced.requestDelayMs = raised;
     }
-    if (typeof advanced.cache_expiry_days === "number") {
-      base.advanced.cacheExpiryDays = advanced.cache_expiry_days;
-    }
-    if (typeof advanced.section_char_limit === "number") {
-      base.advanced.sectionCharLimit = advanced.section_char_limit;
-    }
-    if (typeof advanced.paper_char_limit === "number") {
-      base.advanced.paperCharLimit = advanced.paper_char_limit;
-    }
-    if (typeof advanced.daily_char_limit === "number") {
-      base.advanced.dailyCharLimit = advanced.daily_char_limit;
-    }
+    base.advanced.cacheExpiryDays = numberField(advanced, "advanced", "cache_expiry_days", base.advanced.cacheExpiryDays);
+    base.advanced.sectionCharLimit = numberField(advanced, "advanced", "section_char_limit", base.advanced.sectionCharLimit);
+    base.advanced.paperCharLimit = numberField(advanced, "advanced", "paper_char_limit", base.advanced.paperCharLimit);
+    base.advanced.dailyCharLimit = numberField(advanced, "advanced", "daily_char_limit", base.advanced.dailyCharLimit);
     if (advanced.generation_concurrency !== undefined) {
       const value = advanced.generation_concurrency;
       if (
@@ -331,9 +331,9 @@ function mapTomlToSettings(root: Record<string, unknown>): PluginSettings {
   }
   const sidecar = asTable(root.pdf_parser_sidecar);
   if (sidecar) {
-    if (typeof sidecar.enabled === "boolean") base.pdfParserSidecar.enabled = sidecar.enabled;
-    base.pdfParserSidecar.capabilitiesUrl = stringField(sidecar, "capabilities_url", base.pdfParserSidecar.capabilitiesUrl);
-    base.pdfParserSidecar.parseUrl = stringField(sidecar, "parse_url", base.pdfParserSidecar.parseUrl);
+    base.pdfParserSidecar.enabled = booleanField(sidecar, "pdf_parser_sidecar", "enabled", base.pdfParserSidecar.enabled);
+    base.pdfParserSidecar.capabilitiesUrl = stringField(sidecar, "pdf_parser_sidecar", "capabilities_url", base.pdfParserSidecar.capabilitiesUrl);
+    base.pdfParserSidecar.parseUrl = stringField(sidecar, "pdf_parser_sidecar", "parse_url", base.pdfParserSidecar.parseUrl);
     const validation = validateLocalPdfParserSidecarConfig(base);
     if (!validation.ok) throw new CliConfigError(validation.reasons.join("; "));
   }
@@ -345,18 +345,15 @@ function mapTomlToSettings(root: Record<string, unknown>): PluginSettings {
 }
 
 function mapTopic(raw: unknown, index: number): Topic {
+  const scope = `arxiv.topics[${index}]`;
   if (!isRecord(raw)) {
-    throw new CliConfigError(`arxiv.topics[${index}] must be a table`);
+    throw new CliConfigError(`${scope} must be a table`);
   }
-  const name = stringField(raw, "name", "");
-  const tag = stringField(raw, "tag", "");
-  const description = stringField(raw, "description", "");
-  const detail =
-    typeof raw.detail === "boolean" ? raw.detail : true;
-  const id =
-    typeof raw.id === "string" && raw.id.trim()
-      ? raw.id.trim()
-      : `topic-${index + 1}`;
+  const name = stringField(raw, scope, "name", "");
+  const tag = stringField(raw, scope, "tag", "");
+  const description = stringField(raw, scope, "description", "");
+  const detail = booleanField(raw, scope, "detail", true);
+  const id = stringField(raw, scope, "id", "").trim() || `topic-${index + 1}`;
   // `detail` keeps the CLI's own default (true) rather than the shared one;
   // everything else goes through normalizeTopic so the plugin and the CLI
   // derive the description shadow the same way (ADR 0012).
@@ -364,7 +361,7 @@ function mapTopic(raw: unknown, index: number): Topic {
   // `Array.isArray` is typed `(arg: any) => arg is any[]` in lib.es5, so an
   // explicit `unknown[]` annotation (rather than relying on the narrowed
   // type) keeps the elements honestly unknown instead of silently `any`.
-  const rawDirections: unknown[] | undefined = Array.isArray(raw.directions) ? raw.directions : undefined;
+  const rawDirections: unknown[] | undefined = arrayField(raw, scope, "directions");
   const directions = rawDirections
     ? rawDirections.map((direction, directionIndex) => isRecord(direction)
       ? { ...direction, id: typeof direction.id === "string" && direction.id.trim()
@@ -378,12 +375,9 @@ function mapWorkbenchSchedule(raw: unknown): PluginSettings["schedule"] {
   const schedule = { ...DEFAULT_SETTINGS.schedule, enabled: false };
   if (raw === undefined) return schedule;
   if (!isRecord(raw)) throw new CliConfigError("Invalid workbench_schedule table");
-  if (raw.enabled !== undefined) {
-    if (typeof raw.enabled !== "boolean") throw new CliConfigError("Invalid workbench_schedule.enabled");
-    schedule.enabled = raw.enabled;
-  }
-  schedule.runAtLocal = stringField(raw, "run_at_local", schedule.runAtLocal);
-  schedule.runUntilLocal = stringField(raw, "run_until_local", schedule.runUntilLocal);
+  schedule.enabled = booleanField(raw, "workbench_schedule", "enabled", schedule.enabled);
+  schedule.runAtLocal = stringField(raw, "workbench_schedule", "run_at_local", schedule.runAtLocal);
+  schedule.runUntilLocal = stringField(raw, "workbench_schedule", "run_until_local", schedule.runUntilLocal);
   if (raw.tick_interval_min !== undefined) {
     if (typeof raw.tick_interval_min !== "number" || !Number.isInteger(raw.tick_interval_min) || raw.tick_interval_min < 1 || raw.tick_interval_min > 1440) throw new CliConfigError("Invalid workbench_schedule.tick_interval_min (1..1440)");
     schedule.tickIntervalMin = raw.tick_interval_min;
@@ -396,13 +390,11 @@ function mapWorkbenchSchedule(raw: unknown): PluginSettings["schedule"] {
 function mapScheduleIntent(raw: unknown): CliScheduleIntent {
   const d = { ...DEFAULT_CLI_SCHEDULE };
   if (!isRecord(raw)) return d;
-  if (typeof raw.enabled === "boolean") d.enabled = raw.enabled;
-  d.on = stringField(raw, "on", d.on);
-  if (typeof raw.interval_hours === "number" && Number.isFinite(raw.interval_hours)) {
-    d.intervalHours = Math.max(0, Math.floor(raw.interval_hours));
-  }
-  d.until = stringField(raw, "until", d.until);
-  if (typeof raw.weekdays_only === "boolean") d.weekdaysOnly = raw.weekdays_only;
+  d.enabled = booleanField(raw, "schedule", "enabled", d.enabled);
+  d.on = stringField(raw, "schedule", "on", d.on);
+  d.intervalHours = Math.max(0, Math.floor(numberField(raw, "schedule", "interval_hours", d.intervalHours)));
+  d.until = stringField(raw, "schedule", "until", d.until);
+  d.weekdaysOnly = booleanField(raw, "schedule", "weekdays_only", d.weekdaysOnly);
   if (!/^\d{1,2}:\d{2}$/.test(d.on)) {
     throw new CliConfigError(`invalid schedule.on: ${d.on} (use HH:MM)`);
   }
@@ -444,14 +436,76 @@ function requireString(value: unknown, key: string): string {
   return value.trim();
 }
 
+/** How a wrongly typed TOML value reads back in an error message. */
+function describeTomlValue(value: unknown): string {
+  if (typeof value === "string") {
+    const text = value.length > 40 ? `${value.slice(0, 37)}…` : value;
+    return `string ${JSON.stringify(text)}`;
+  }
+  if (typeof value === "number" || typeof value === "boolean") return `${typeof value} ${String(value)}`;
+  if (Array.isArray(value)) return "array";
+  return value && typeof value === "object" ? "table" : typeof value;
+}
+
+function typeMismatch(scope: string, key: string, expected: string, value: unknown): CliConfigError {
+  return new CliConfigError(
+    `invalid ${scope}.${key}: expected ${expected}, found ${describeTomlValue(value)}`,
+  );
+}
+
+/**
+ * `scope.key` as a string, or `fallback` when the key is absent. A present key
+ * with the wrong type is an error, the same as a bad `max_daily_papers` — a
+ * silently ignored value would quietly reset the feature to its default.
+ */
 function stringField(
   table: Record<string, unknown>,
+  scope: string,
   key: string,
   fallback: string,
 ): string {
   const value = table[key];
-  if (typeof value === "string") return value;
-  return fallback;
+  if (value === undefined) return fallback;
+  if (typeof value !== "string") throw typeMismatch(scope, key, "a string", value);
+  return value;
+}
+
+function booleanField(
+  table: Record<string, unknown>,
+  scope: string,
+  key: string,
+  fallback: boolean,
+): boolean {
+  const value = table[key];
+  if (value === undefined) return fallback;
+  if (typeof value !== "boolean") throw typeMismatch(scope, key, "a boolean", value);
+  return value;
+}
+
+function numberField(
+  table: Record<string, unknown>,
+  scope: string,
+  key: string,
+  fallback: number,
+): number {
+  const value = table[key];
+  if (value === undefined) return fallback;
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    throw typeMismatch(scope, key, "a finite number", value);
+  }
+  return value;
+}
+
+/** `scope.key` as an array, or undefined when absent; anything else is an error. */
+function arrayField(
+  table: Record<string, unknown>,
+  scope: string,
+  key: string,
+): unknown[] | undefined {
+  const value = table[key];
+  if (value === undefined) return undefined;
+  if (!Array.isArray(value)) throw typeMismatch(scope, key, "an array", value);
+  return value;
 }
 
 function asTable(value: unknown): Record<string, unknown> | null {

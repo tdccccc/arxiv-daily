@@ -115,8 +115,10 @@ describe("filterPapers when the provider refuses a request", () => {
       ...scope,
     });
 
-    const { records } = classified.mock.calls[0]![0];
+    const { records, refusedIds } = classified.mock.calls[0]![0];
     expect(records.map((record: { id: string }) => record.id)).toEqual(["2608.00001", "2608.00003"]);
+    // Refused is not skipped: the caller can tell the two apart.
+    expect(refusedIds).toEqual(["2608.00002"]);
   });
 
   it("keeps the narrowed-down result as the batch checkpoint, so a resume asks nothing", async () => {
@@ -132,11 +134,15 @@ describe("filterPapers when the provider refuses a request", () => {
     expect(checkpoint.save).toHaveBeenCalledTimes(1);
     expect(checkpoint.save.mock.calls[0]![2].map((record: { id: string }) => record.id))
       .toEqual(["2608.00001", "2608.00002", "2608.00003", "2608.00005", "2608.00006"]);
+    expect(checkpoint.save.mock.calls[0]![4]).toEqual(["2608.00004"]);
 
     const second = { call: vi.fn() };
-    const again = await filterPapers(papers, { ...deps, llm: second as any });
+    const classified = vi.fn();
+    const again = await filterPapers(papers, { ...deps, llm: second as any, onClassified: classified });
     expect(second.call).not.toHaveBeenCalled();
     expect(again.map(({ id }) => id)).toEqual(kept.map(({ id }) => id));
+    // The checkpoint remembers the refusal, so a resumed day still reports it.
+    expect(classified.mock.calls[0]![0].refusedIds).toEqual(["2608.00004"]);
   });
 
   it("narrows down several refused papers", async () => {

@@ -285,6 +285,29 @@ describe("shared LibraryWorkflow", () => {
     expect(Object.values((await kb.loadManifest()).papers).filter((p) => p.status === "failed")).toHaveLength(1);
   });
 
+  it("retries the arXiv lookup for files it failed for, on the next index run of an unchanged folder", async () => {
+    const f = fixture();
+    const lookup = vi.mocked(f.options.arxivFetcher.fetchMetadataByIds);
+    lookup.mockRejectedValueOnce(new Error("arXiv unavailable"));
+    const first = await f.workflow.scan();
+    expect(first.files["2610.00001.pdf"]).toMatchObject({ status: "failed", reason: "metadata-fetch-failed" });
+    expect(Object.keys(first.papers)).toEqual([]);
+
+    await f.workflow.index();
+
+    // The folder did not change, yet the failed lookup was asked again and the papers are ready now.
+    expect(lookup).toHaveBeenCalledTimes(2);
+    expect([...lookup.mock.calls[1]![0]].sort()).toEqual([...lookup.mock.calls[0]![0]].sort());
+    const retried = await f.workflow.scan();
+    expect(retried.files["2610.00001.pdf"]).toMatchObject({ status: "ready", arxivId: "2610.00001" });
+    expect(Object.keys(retried.papers)).toHaveLength(6);
+    expect(lookup).toHaveBeenCalledTimes(2);
+
+    // Nothing is waiting any more: indexing again asks arXiv nothing.
+    await f.workflow.index();
+    expect(lookup).toHaveBeenCalledTimes(2);
+  });
+
   it("identifies a renamed large PDF with bounded reads and the independent title witness", async () => {
     const f = fixture();
     f.documents.clear();

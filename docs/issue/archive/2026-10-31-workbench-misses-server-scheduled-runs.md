@@ -1,6 +1,6 @@
 # 工作台页面看不到服务端自动调度启动的日报任务，跑完也不刷新
 
-状态：未修复
+状态：已修复（分支 `fix/2026-10-31-low-findings`）
 
 > 来源：2026-10-31 main `e0498c94` 代码审查（会话内直接审查，静态推断，未运行）
 > 严重程度：低 · 置信度：代码推断
@@ -23,3 +23,7 @@
 ## 修复后应补的测试
 
 `apps/cli/tests` 的工作台 DOM 测试：页面无交互、服务端 run 从 null → running → completed，托盘出现并在完成后刷新列表/日历。
+
+## 修复情况
+
+未采用 SSE，改为低频空闲轮询：页面在无任务时每 30 秒（`idlePollIntervalMs` 可配置，0 关闭）查询一次 `api/runs/current`，有任务在执行时维持原有的 1.2 秒快轮询；轮询到的新任务沿用现有托盘与完成刷新逻辑。相同状态的重复轮询不再重渲染，避免把用户展开的"查看运行详情"收起、或让已手动关闭的托盘重新出现。测试：`apps/cli/tests/workbench-ui.test.ts` 新增"shows a run the server started on its own on an idle page…"——无任何点击，托盘出现 running、完成后自动重新读取当前打开的文档，手动关闭后不再弹出。

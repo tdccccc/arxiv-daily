@@ -230,8 +230,9 @@ describe("Pipeline index 0 papers handling", () => {
     };
     const logger = new Logger("error");
 
-    // Create a paper index that returns all papers as ignored
+    // Create a paper index that reports the paper as already ignored
     const paperIndex = {
+      getMany: vi.fn(async (ids: string[]) => new Map(ids.map((paperId) => [paperId, { status: "ignored" }]))),
       upsertManyFromDailyPapers: vi.fn().mockResolvedValue([
         {
           entry: { status: "ignored" },
@@ -326,6 +327,7 @@ describe("Pipeline partial failure consistency", () => {
       ...overrides.writer,
     };
     const paperIndex = {
+      getMany: vi.fn(async () => new Map()),
       upsertManyFromDailyPapers: vi.fn(async (papers: any[]) =>
         papers.map((paper) => ({
           entry: {
@@ -596,7 +598,7 @@ describe("Pipeline partial failure consistency", () => {
   it("replaces a corrupt filter miss once and hits it on the next zero-result run", async () => {
     let records: any[] | null = null;
     const filterStore = {
-      lookupReusable: vi.fn(async () => records),
+      lookupReusable: vi.fn(async () => (records ? { records, refusedIds: [] } : null)),
       save: vi.fn(async (_date: string, _prepared: unknown, saved: any[]) => {
         records = saved;
       }),
@@ -641,6 +643,8 @@ describe("Pipeline partial failure consistency", () => {
       "2026-05-11",
       expect.any(Object),
       [],
+      0,
+      [],
     );
     expect(filterStore.removeAll).not.toHaveBeenCalled();
     expect(writer.writeDaily).not.toHaveBeenCalled();
@@ -648,7 +652,7 @@ describe("Pipeline partial failure consistency", () => {
 
   it("passes filter and summary checkpoint scopes to their orchestration seams", async () => {
     const filterStore = {
-      lookupReusable: vi.fn(async () => [{ relevanceScore: 80, id: "2605.08080", category: "test", directions: ["test#1"] }]),
+      lookupReusable: vi.fn(async () => ({ records: [{ relevanceScore: 80, id: "2605.08080", category: "test", directions: ["test#1"] }], refusedIds: [] })),
       save: vi.fn(),
       removeAll: vi.fn(async () => undefined),
     };
@@ -822,6 +826,7 @@ describe("Pipeline partial failure consistency", () => {
     const controller = new AbortController();
     const { pipeline, paperIndex } = makeOnePaperPipeline({
       paperIndex: {
+        getMany: vi.fn(async () => new Map()),
         addDailyReports: vi.fn(),
       },
       writer: {
@@ -851,6 +856,7 @@ describe("Pipeline partial failure consistency", () => {
         paperDetailExists: vi.fn(async () => true),
       },
       paperIndex: {
+        getMany: vi.fn(async () => new Map()),
         upsertManyFromDailyPapers: vi.fn(async (papers: any[]) =>
           papers.map((paper) => ({
             entry: {

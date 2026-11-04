@@ -270,6 +270,7 @@ describe("ArxivPipeline", () => {
       JSON.stringify({ papers: [{ id, category: "photo-z", directions: ["photo-z#1"], relevanceScore: 80 }] }),
     );
     const paperIndex = {
+      getMany: vi.fn(async () => new Map()),
       upsertManyFromDailyPapers: vi.fn(async () => {
         throw error();
       }),
@@ -755,6 +756,7 @@ describe("ArxivPipeline", () => {
     d.writer.dailyExists.mockResolvedValue(true);
     d.writer.readDaily.mockResolvedValue(markdown);
     const paperIndex = {
+      getMany: vi.fn(async () => new Map()),
       reconcilePaperDetails: vi.fn(async () => 0),
       addDailyReports: vi.fn(async () => undefined),
       setSummaries: vi.fn(async () => 1),
@@ -798,6 +800,7 @@ describe("ArxivPipeline", () => {
       `- **arXiv**: [${id}](https://arxiv.org/abs/${id})`,
     ].join("\n"));
     const paperIndex = {
+      getMany: vi.fn(async () => new Map()),
       reconcilePaperDetails: vi.fn(async () => 0),
       addDailyReports: vi.fn(async () => undefined),
       reconcileDailyReportOccurrenceProvenance: vi.fn(async () => 1),
@@ -828,6 +831,7 @@ describe("ArxivPipeline", () => {
       `- **arXiv**: [${id}](https://arxiv.org/abs/${id})`,
     ].join("\n"));
     const paperIndex = {
+      getMany: vi.fn(async () => new Map()),
       reconcilePaperDetails: vi.fn(async () => 0), addDailyReports: vi.fn(async () => undefined),
       reconcileDailyReportOccurrenceProvenance: vi.fn(async () => 0), setSummaries: vi.fn(async () => 0),
     };
@@ -853,6 +857,7 @@ describe("ArxivPipeline", () => {
     d.writer.dailyExists.mockResolvedValue(true);
     d.writer.readDaily.mockResolvedValue(legacyReport);
     const paperIndex = {
+      getMany: vi.fn(async () => new Map()),
       reconcilePaperDetails: vi.fn(async () => 0),
       addDailyReports: vi.fn(async () => undefined),
       reconcileDailyReportOccurrenceProvenance: vi.fn(async () => 0),
@@ -894,6 +899,7 @@ describe("ArxivPipeline", () => {
     );
     let failDailyLink = true;
     const paperIndex = {
+      getMany: vi.fn(async () => new Map()),
       upsertManyFromDailyPapers: vi.fn(async (inputs: any[]) =>
         inputs.map((input) => ({
           wasNew: true,
@@ -959,6 +965,7 @@ describe("ArxivPipeline", () => {
       `- **Research problem**: inline fake <!-- arxiv-daily:${fakeId}:watch -->`,
     ].join("\r\n"));
     const paperIndex = {
+      getMany: vi.fn(async () => new Map()),
       reconcilePaperDetails: vi.fn(async () => 0),
       addDailyReports: vi.fn(async () => undefined),
       setSummaries: vi.fn(async () => 0),
@@ -1007,6 +1014,7 @@ describe("ArxivPipeline", () => {
       "- **原始摘要**: Must not become a generated summary.",
     ].join("\n"));
     const paperIndex = {
+      getMany: vi.fn(async () => new Map()),
       reconcilePaperDetails: vi.fn(async () => 0),
       addDailyReports: vi.fn(async () => undefined),
       setSummaries: vi.fn(async () => 1),
@@ -1094,6 +1102,7 @@ describe("ArxivPipeline", () => {
     d.writer.dailyExists.mockResolvedValue(true);
     d.writer.readDaily.mockResolvedValue(markdown);
     const paperIndex = {
+      getMany: vi.fn(async () => new Map()),
       reconcilePaperDetails: vi.fn(async () => 0),
       addDailyReports: vi.fn(async () => undefined),
       setSummaries: vi.fn(async () => 1),
@@ -1216,6 +1225,7 @@ describe("ArxivPipeline", () => {
     d.writer.paperDetailExists.mockResolvedValue(true);
     d.writer.readPaperDetail.mockRejectedValue(new Error("permission denied"));
     const paperIndex = {
+      getMany: vi.fn(async () => new Map()),
       reconcilePaperDetails: vi.fn(), addDailyReports: vi.fn(), setSummaries: vi.fn(),
     };
     const pipeline = new ArxivPipeline({
@@ -1282,6 +1292,7 @@ describe("ArxivPipeline", () => {
     d.writer.paperDetailExists.mockResolvedValue(true);
     let failWrite = true;
     const paperIndex = {
+      getMany: vi.fn(async () => new Map()),
       reconcilePaperDetails: vi.fn(async () => {
         if (failWrite) {
           failWrite = false;
@@ -1335,6 +1346,7 @@ describe("ArxivPipeline", () => {
       );
       let fail = true;
       const paperIndex = {
+      getMany: vi.fn(async () => new Map()),
         reconcilePaperDetails: vi.fn(async () => 0),
         addDailyReports: vi.fn(async () => {
           if (failedMethod === "addDailyReports" && fail) {
@@ -1574,6 +1586,7 @@ describe("ArxivPipeline", () => {
       removeAll: vi.fn(async () => undefined),
     };
     const paperIndex = {
+      getMany: vi.fn(async () => new Map()),
       reconcilePaperDetails: vi.fn(async () => { controller.abort("cancelled after detail repair"); }),
       addDailyReports: vi.fn(),
       setSummaries: vi.fn(),
@@ -1613,6 +1626,7 @@ describe("ArxivPipeline", () => {
     d.writer.paperDetailExists = vi.fn(async (id: string) => id === arxivId);
     d.writer.readPaperDetail.mockResolvedValue(verifiedDetailMarkdown(arxivId));
     const paperIndex = {
+      getMany: vi.fn(async () => new Map()),
       upsertManyFromDailyPapers: vi.fn(async () => [{
         entry: { status: "inbox", detail: true, paperPath: existingPath },
         wasNew: false,
@@ -1675,6 +1689,7 @@ describe("ArxivPipeline", () => {
       .map((paper) => paper.id);
     const canonicalPath = `papers/${existingId}.md`;
     const paperIndex = {
+      getMany: vi.fn(async () => new Map()),
       upsertManyFromDailyPapers: vi.fn(async (papers: any[]) =>
         papers.map((paper) => ({
           entry: { status: "inbox", detail: false, paperPath: null },
@@ -1746,6 +1761,7 @@ describe("ArxivPipeline", () => {
       JSON.stringify({ papers: [{ relevanceScore: 80, id, category: "photo-z", directions: ["photo-z#1"] }] }),
     );
     const paperIndex = {
+      getMany: vi.fn(async () => new Map()),
       upsertManyFromDailyPapers: vi.fn(async (inputs: any[]) =>
         inputs.map((input) => ({
           wasNew: true,
@@ -1804,6 +1820,7 @@ describe("ArxivPipeline", () => {
     );
     let failDailyLink = true;
     const paperIndex = {
+      getMany: vi.fn(async () => new Map()),
       upsertManyFromDailyPapers: vi.fn(async (inputs: any[]) =>
         inputs.map((input) => ({
           wasNew: true,
@@ -1883,6 +1900,7 @@ describe("ArxivPipeline", () => {
       });
       let failIndex = options.failIndexOnce;
       const paperIndex = {
+      getMany: vi.fn(async () => new Map()),
         upsertManyFromDailyPapers: vi.fn(async (inputs: any[]) =>
           inputs.map((input) => ({ wasNew: true, entry: { status: "inbox", paperPath: null, ...input } })),
         ),
@@ -2022,6 +2040,7 @@ describe("ArxivPipeline", () => {
       d.writer.dailyExists = vi.fn(async () => true);
       d.writer.readDaily = vi.fn(async () => markdown);
       const paperIndex = {
+      getMany: vi.fn(async () => new Map()),
         reconcilePaperDetails: vi.fn(async () => 0),
         addDailyReports: vi.fn(async () => undefined),
         setSummaries: vi.fn(async () => 0),
@@ -2100,6 +2119,7 @@ describe("ArxivPipeline", () => {
       return summary;
     });
     const paperIndex = {
+      getMany: vi.fn(async () => new Map()),
       upsertManyFromDailyPapers: vi.fn(async (inputs: any[]) =>
         inputs.map((input) => ({
           wasNew: true,

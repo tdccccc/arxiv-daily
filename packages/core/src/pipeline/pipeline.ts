@@ -349,32 +349,37 @@ export class ArxivPipeline {
     }
 
     throwIfCancelled(signal);
-    const indexed = await this.indexFilteredPapers(filtered, dateStr);
-    if (indexed.kind !== "ok") return indexed.result;
-    const eligiblePapers = indexed.papers.filter(
-      (p) => p.indexEntry?.status !== "ignored",
-    );
+    const known = await this.lookupIndexEntries(filtered);
+    if (known.kind !== "ok") return known.result;
     const ignoredIds = new Set(
-      indexed.papers.filter((p) => p.indexEntry?.status === "ignored").map(({ id }) => id),
+      filtered.filter((p) => known.entries.get(p.id)?.status === "ignored").map(({ id }) => id),
     );
+    const eligiblePapers = filtered.filter((p) => !ignoredIds.has(p.id));
     // Rank globally after ignored papers are removed, before any body fetch,
     // detail selection, or summary cost. All later consumers (including report
     // index links) use this same bounded set; the filter cache keeps all scores.
     const dailyLimit = normalizeMaxDailyPapers(this.deps.output.maxDailyPapers);
-    const visiblePapers = eligiblePapers
+    const ranked = [...eligiblePapers]
       .sort((left, right) => right.relevanceScore - left.relevanceScore
-        || (left.id < right.id ? -1 : left.id > right.id ? 1 : 0))
-      .slice(0, dailyLimit);
+        || (left.id < right.id ? -1 : left.id > right.id ? 1 : 0));
+    const selectedPapers = ranked.slice(0, dailyLimit);
     const omittedCounts = new Map<string, number>();
-    for (const paper of eligiblePapers.slice(dailyLimit)) {
+    for (const paper of ranked.slice(dailyLimit)) {
       omittedCounts.set(paper.category, (omittedCounts.get(paper.category) ?? 0) + 1);
     }
     const omittedByTopic = Object.fromEntries(omittedCounts);
-    if (visiblePapers.length < eligiblePapers.length) {
-      logger.info(`pipeline: daily paper limit=${dailyLimit} kept=${visiblePapers.length}/${eligiblePapers.length} omitted=${eligiblePapers.length - visiblePapers.length}`);
+    if (selectedPapers.length < eligiblePapers.length) {
+      logger.info(`pipeline: daily paper limit=${dailyLimit} kept=${selectedPapers.length}/${eligiblePapers.length} omitted=${eligiblePapers.length - selectedPapers.length}`);
     }
-    if (visiblePapers.length === 0) {
+    if (selectedPapers.length === 0) {
       throwIfCancelled(signal);
+      // Papers the index already holds are still marked as seen again today,
+      // even when none of them reaches a report.
+      const marked = await this.indexFilteredPapers(
+        filtered.filter((p) => known.entries.has(p.id)),
+        dateStr,
+      );
+      if (marked.kind !== "ok") return marked.result;
       if (classified.value) {
         await this.recordFilterDecisions(dateStr, classified.value, sourcePapers, {
           visibleIds: new Set(),
@@ -390,6 +395,22 @@ export class ArxivPipeline {
         titleOnlyCandidates,
       };
     }
+
+    // A paper enters the index only when it reaches the report: one cut by the
+    // daily limit has nothing a reader could open, so it stays out of the
+    // Dashboard, the workbench inbox and the week's "new" count (its filter
+    // decision is still recorded as cut_by_limit, so the evaluation sees it).
+    // A paper the index already holds, ignored or not, is still marked as seen
+    // again today.
+    throwIfCancelled(signal);
+    const reportIds = new Set(selectedPapers.map(({ id }) => id));
+    const indexed = await this.indexFilteredPapers(
+      filtered.filter((p) => reportIds.has(p.id) || known.entries.has(p.id)),
+      dateStr,
+    );
+    if (indexed.kind !== "ok") return indexed.result;
+    const indexedById = new Map(indexed.papers.map((p) => [p.id, p] as const));
+    const visiblePapers = selectedPapers.map((p) => indexedById.get(p.id)!);
 
     // 6. Fetch content for each filtered paper
     stageStart("fetch-content");
@@ -733,8 +754,10 @@ export class ArxivPipeline {
     const store = this.deps.filterDecisionStore;
     if (!store) return;
     const decided = new Map(classification.records.map((record) => [record.id, record] as const));
+    const refusedIds = new Set(classification.refusedIds);
     const directionsByRef = new Map(classification.directions.map((d) => [d.ref, d] as const));
     const outcomeOf = (record: FilterRecord): FilterDecisionOutcome => {
+      if (refusedIds.has(record.id)) return "refused_by_provider";
       if (record.category === "skip") return "skipped_by_model";
       if (outcomes.visibleIds.has(record.id)) return "in_report";
       return outcomes.ignoredIds.has(record.id) ? "excluded_ignored" : "cut_by_limit";
@@ -747,7 +770,9 @@ export class ArxivPipeline {
         resultContractVersion: classification.resultContractVersion,
         generation: classification.generation,
         // Every paper offered to the classifier, in source order. The prompt lets
-        // the model leave out papers that are not relevant, so omission counts as skip.
+        // the model leave out papers that are not relevant, so omission counts as
+        // skip; a paper the provider refused was never shown to the model and is
+        // marked apart.
         candidates: papers.map((paper) => {
           const record = decided.get(paper.id) ?? omittedByModel(paper.id);
           return {
@@ -883,6 +908,29 @@ export class ArxivPipeline {
     } catch (e) {
       this.deps.logger.warn(`pipeline: could not rebuild the email digest of ${dateStr} from its report`, e);
       return {};
+    }
+  }
+
+  /** The index entries `papers` already have, read once and without creating any. */
+  private async lookupIndexEntries(
+    papers: readonly FilteredPaper[],
+  ): Promise<
+    | { kind: "ok"; entries: ReadonlyMap<string, PaperIndexEntry> }
+    | { kind: "error"; result: PipelineResult }
+  > {
+    const paperIndex = this.deps.paperIndex;
+    if (!paperIndex) return { kind: "ok", entries: new Map() };
+    try {
+      return { kind: "ok", entries: await paperIndex.getMany(papers.map(({ id }) => id)) };
+    } catch (e) {
+      if (isCancellationError(e)) throw e;
+      return {
+        kind: "error",
+        result: {
+          kind: "failed_transient",
+          reason: `paper index read failed: ${(e as Error).message}`,
+        },
+      };
     }
   }
 

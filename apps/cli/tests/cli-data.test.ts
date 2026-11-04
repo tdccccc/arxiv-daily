@@ -211,7 +211,7 @@ async function exportAndImportCheckpoint(output = DEFAULT_SETTINGS.output) {
     destinationConfig.settings.output,
   );
   await expect(restoredFilterStore.lookupReusable(reportDate, preparedFilterCompatibility))
-    .resolves.toEqual(filterResult);
+    .resolves.toEqual({ records: filterResult, refusedIds: [] });
   await expect(restoredSummaryStore.lookupReusable(reportDate, compatibility))
     .resolves.toEqual(result);
 
@@ -300,7 +300,7 @@ describe("CLI data portability", () => {
     await dataImport(destinationConfig, captureIo().io, archivePath, { yes: true });
     const destinationStorage = new NodeStorageAdapter(destinationRoot);
     await expect(new DailyFilterCheckpointStore(destinationStorage, output)
-      .lookupReusable(reportDate, preparedFilterCompatibility)).resolves.toEqual(filterResult);
+      .lookupReusable(reportDate, preparedFilterCompatibility)).resolves.toEqual({ records: filterResult, refusedIds: [] });
     await expect(new DailySummaryCheckpointStore(destinationStorage, output)
       .lookupReusable(reportDate, compatibility)).resolves.toEqual(result);
     await expect(fs.readFile(path.join(destinationRoot, staleRelative), "utf8"))

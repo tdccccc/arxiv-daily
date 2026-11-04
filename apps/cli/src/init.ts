@@ -17,6 +17,7 @@ import {
   TOPIC_TAG_MAX_LENGTH,
   normalizeSettingsEdits,
   startHostedEmailVerification,
+  type LlmSettings,
 } from "@arxiv-daily/core";
 import { buildNodeHostAdapters, NodeFileLock, NodeStorageAdapter } from "@arxiv-daily/node-runtime";
 import { defaultCliVaultRoot, resolveCliConfigPath } from "./config-path";
@@ -39,6 +40,11 @@ export interface InitOptions {
     apiKey: string;
     baseUrl: string;
   }) => Promise<string[]>;
+  /**
+   * The wizard's connection test once a model, a thinking mode and an effort
+   * have been chosen. Real one by default; tests inject a stub.
+   */
+  testChat?: (settings: LlmSettings) => Promise<{ success: boolean; error?: string }>;
 }
 
 function wizardOptions(id: "reasoningEffort" | "emailMode" | "summaryLanguage") {
@@ -76,6 +82,7 @@ type StepId =
   | "fetchModels"
   | "model"
   | "thinking"
+  | "chatTest"
   | "email"
   | "categories"
   | "timezone"
@@ -92,6 +99,7 @@ const STEP_ORDER: StepId[] = [
   "fetchModels",
   "model",
   "thinking",
+  "chatTest",
   "email",
   "categories",
   "timezone",
@@ -250,7 +258,8 @@ export async function runInit(opts: InitOptions = {}): Promise<number> {
     tryFetch: true,
     remoteModels: [],
     model: DEFAULT_SETTINGS.llm.model,
-    thinkingMode: true,
+    // Follows the preset's own default; a custom endpoint starts with thinking off.
+    thinkingMode: (PROVIDER_PRESETS[DEFAULT_SETTINGS.llm.provider] ?? PROVIDER_PRESETS.custom!).thinkingMode,
     reasoningEffort: DEFAULT_SETTINGS.llm.reasoningEffort || "high",
     emailChoice: "skip",
     emailEnabled: false,
@@ -398,6 +407,9 @@ async function runStep(
       if (pick.nav !== "next") return pick.nav;
       state.providerId = pick.value;
       const preset = PROVIDER_PRESETS[state.providerId] ?? PROVIDER_PRESETS.custom!;
+      // The preset decides the thinking default: providers whose API accepts
+      // the parameters start on, a custom OpenAI-compatible gateway on off.
+      state.thinkingMode = preset.thinkingMode;
       // Use the preset URL as default (Custom → empty string on purpose).
       state.baseUrl = preset.baseUrl ?? "";
       state.remoteModels = [];
@@ -538,18 +550,19 @@ async function runStep(
       return "next";
     }
     case "thinking": {
+      const preset = PROVIDER_PRESETS[state.providerId] ?? PROVIDER_PRESETS.custom!;
       if (useClack) {
         p.note(
           [
             "Thinking mode asks the model to reason more carefully before answering.",
             "Recommended for better filtering and summaries. Uses more tokens/latency.",
-            "Default: ON, effort high.",
+            `Default for ${preset.name}: ${state.thinkingMode ? "ON" : "OFF"}, effort ${state.reasoningEffort}.`,
           ].join("\n"),
           "Thinking",
         );
       }
       const on = await askConfirm(opts, {
-        message: "Enable thinking mode? (default: Yes)",
+        message: `Enable thinking mode? (default: ${state.thinkingMode ? "Yes" : "No"})`,
         initialValue: state.thinkingMode,
         allowBack: canBack,
       });
@@ -574,6 +587,44 @@ async function runStep(
       if (effort.nav !== "next") return effort.nav;
       state.reasoningEffort = effort.value;
       return "next";
+    }
+    case "chatTest": {
+      // Only after a connection test was wanted: a real (tiny) chat request
+      // with the chosen model and thinking parameters. Listing models does not
+      // prove the provider accepts `reasoning_effort`; this does, before the
+      // first report fails permanently over it.
+      if (!state.tryFetch) return "next";
+      const spin = useClack ? p.spinner() : null;
+      spin?.start("Sending a short test message to the model …");
+      const settings: LlmSettings = {
+        ...DEFAULT_SETTINGS.llm,
+        provider: state.providerId,
+        baseUrl: state.baseUrl,
+        apiKey: state.apiKey,
+        model: state.model,
+        thinkingMode: state.thinkingMode,
+        reasoningEffort: state.reasoningEffort,
+      };
+      const result = await (opts.testChat ? opts.testChat(settings) : defaultTestChat(settings));
+      if (result.success) {
+        spin?.stop("Chat OK — the model answered with these settings");
+        if (!useClack) writeLine(stdout, "Chat OK — the model answered with these settings");
+        return "next";
+      }
+      spin?.stop(`Chat test failed: ${result.error}`);
+      if (!useClack) writeLine(stderr, `Chat test failed: ${result.error}`);
+      const hint = state.thinkingMode
+        ? "If the provider rejected the thinking or reasoning parameters, go back and turn thinking mode off."
+        : "Check the model id and the API base URL.";
+      if (useClack) p.log.warn(hint);
+      else writeLine(stderr, hint);
+      const keep = await askConfirm(opts, {
+        message: "Keep these settings anyway? (default: No — go back to thinking settings)",
+        initialValue: false,
+        allowBack: true,
+      });
+      if (keep.nav !== "next") return keep.nav;
+      return keep.value ? "next" : "back";
     }
     case "email": {
       const choice = await askSelect(opts, {
@@ -918,6 +969,14 @@ async function defaultFetchModels(
     host.http,
   );
   return client.fetchModels();
+}
+
+async function defaultTestChat(
+  settings: LlmSettings,
+): Promise<{ success: boolean; error?: string }> {
+  const logger = new Logger("warn");
+  const host = buildNodeHostAdapters({ rootDir: process.cwd() });
+  return new LlmClient(settings, logger, host.http).testConnection();
 }
 
 type AskResult<T> =

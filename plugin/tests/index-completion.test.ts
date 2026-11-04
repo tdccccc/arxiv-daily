@@ -183,6 +183,28 @@ describe("describeFullTextIndexCompletion", () => {
       });
       expect(text).toContain("Some arXiv lookups failed");
       expect(text).toContain("offline during the scan");
+      expect(text).toContain("the next index run retries them");
+    });
+
+    it("says how many PDFs wait on a failed arXiv lookup, and that indexing again retries them", () => {
+      const partial = summary({
+        indexed: 3,
+        reused: 2,
+        outcomes: [{ paperKey: "arxiv:2610.00001", status: "indexed", chunkCount: 2 }],
+      });
+      const text = describeFullTextIndexCompletion(partial, {
+        libraryContext: libraryContext({
+          totalFiles: 5,
+          readyPapers: 3,
+          unresolvedFallbackFiles: 2,
+          scannedBeforeIndexing: false,
+          metadataFetchFailures: 2,
+        }),
+      });
+      expect(text).toContain("3 indexed, 2 reused");
+      expect(text).toContain("2 PDF(s) could not be matched on arXiv because the lookup failed");
+      expect(text).toContain("the next index run retries them");
+      expect(text).not.toContain("offline");
     });
 
     it("does not overclaim an offline scan when files are merely unresolved (not a known metadata-fetch failure)", () => {

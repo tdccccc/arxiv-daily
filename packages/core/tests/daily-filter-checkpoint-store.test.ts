@@ -268,7 +268,7 @@ describe("scored daily filter checkpoints", () => {
     expect(JSON.parse(files[documentPath]!).result).toEqual(records);
     const reconstructed = makeStore(storage);
     expect(await reconstructed.load(reportDate)).toMatchObject({ result: records });
-    expect(await reconstructed.lookupReusable(reportDate, prepared())).toEqual(records);
+    expect(await reconstructed.lookupReusable(reportDate, prepared())).toEqual({ records, refusedIds: [] });
   });
 
   // Keep each old contract at literal 2 independently. Valid current records
@@ -318,7 +318,7 @@ describe("DailyFilterCheckpointStore", () => {
     const plain = prepared({ llm });
     await store.save(reportDate, plain, result);
     const reconstructed = makeStore(storage);
-    expect(await reconstructed.lookupReusable(reportDate, plain)).toEqual(result);
+    expect(await reconstructed.lookupReusable(reportDate, plain)).toEqual({ records: result, refusedIds: [] });
   });
 
   it("does not reuse filter results from the old provider request contract", async () => {
@@ -365,7 +365,7 @@ describe("DailyFilterCheckpointStore", () => {
     });
     expect(files[documentPath]).not.toContain("never-persist");
     expect(files[documentPath]).not.toContain("example.test");
-    expect(await makeStore(storage).lookupReusable(reportDate, prepared())).toEqual(records);
+    expect(await makeStore(storage).lookupReusable(reportDate, prepared())).toEqual({ records, refusedIds: [] });
   });
 
   it("round-trips after reconstruction when a valid tag contains a pipe", async () => {
@@ -400,7 +400,7 @@ describe("DailyFilterCheckpointStore", () => {
     expect(persisted.fingerprintInput.request.messages[0].content)
       .toContain("nlp|llm|skip");
     expect(await makeStore(storage).load(reportDate)).toMatchObject({ result: records });
-    expect(await makeStore(storage).lookupReusable(reportDate, prepareDailyFilterCheckpoint(input))).toEqual(records);
+    expect(await makeStore(storage).lookupReusable(reportDate, prepareDailyFilterCheckpoint(input))).toEqual({ records, refusedIds: [] });
   });
 
   /**
@@ -507,7 +507,7 @@ describe("DailyFilterCheckpointStore", () => {
     await store.save(reportDate, prepared(), result);
     files[backupPath] = files[documentPath]!;
     files[documentPath] = "corrupt";
-    expect(await makeStore(storage).lookupReusable(reportDate, prepared())).toEqual(result);
+    expect(await makeStore(storage).lookupReusable(reportDate, prepared())).toEqual({ records: result, refusedIds: [] });
     delete files[backupPath];
     expect(await makeStore(storage).lookupReusable(reportDate, prepared())).toBeNull();
   });
@@ -525,7 +525,7 @@ describe("DailyFilterCheckpointStore", () => {
     expect(await store.lookupReusable(reportDate, prepared())).toBeNull();
     await store.save(reportDate, prepared(), result);
 
-    expect(await store.lookupReusable(reportDate, prepared())).toEqual(result);
+    expect(await store.lookupReusable(reportDate, prepared())).toEqual({ records: result, refusedIds: [] });
     expect(files[documentPath]).not.toContain("bad-primary");
     if (files[backupPath]) expect(files[backupPath]).not.toContain("bad-backup");
     expect(files[`${documentPath}.tmp`]).toBeUndefined();
@@ -564,7 +564,7 @@ describe("DailyFilterCheckpointStore", () => {
     files[backupPath] = files[documentPath]!;
     files[documentPath] = "corrupt";
     await store.save(reportDate, prepared(), []);
-    expect(await store.lookupReusable(reportDate, prepared())).toEqual([]);
+    expect(await store.lookupReusable(reportDate, prepared())).toEqual({ records: [], refusedIds: [] });
   });
 
   it("rotates backups and cleans temp artifacts", async () => {
@@ -597,7 +597,7 @@ describe("DailyFilterCheckpointStore", () => {
       makeStore(storage).save(reportDate, prepared(), result),
       makeStore(storage).save(reportDate, prepared(), []),
     ]);
-    expect(await makeStore(storage).lookupReusable(reportDate, prepared())).toEqual([]);
+    expect(await makeStore(storage).lookupReusable(reportDate, prepared())).toEqual({ records: [], refusedIds: [] });
   });
 
   it("restores the previous primary after promotion failure", async () => {
