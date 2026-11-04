@@ -160,9 +160,10 @@ describe("filterPapers re-asks after a malformed answer", () => {
     const prepared = prepareDailyFilterCheckpoint({
       papers: [samplePaper], arxivSettings: makeArxiv(makeTopics()), llm: DEFAULT_SETTINGS.llm,
     });
-    await expect(store.lookupReusable(checkpointScope.reportDate, prepared)).resolves.toEqual([
-      { id: samplePaper.id, category: "photo-z", directions: ["photo-z#1"], relevanceScore: 80 },
-    ]);
+    await expect(store.lookupReusable(checkpointScope.reportDate, prepared)).resolves.toEqual({
+      records: [{ id: samplePaper.id, category: "photo-z", directions: ["photo-z#1"], relevanceScore: 80 }],
+      refusedIds: [],
+    });
   });
 });
 
@@ -430,10 +431,13 @@ describe("filterPapers", () => {
     const onMetrics = vi.fn();
     const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() };
     const checkpointStore = {
-      lookupReusable: vi.fn(async () => [
-        { relevanceScore: 80, id: "2601.54321", category: "galaxy-cluster", directions: ["galaxy-cluster#1"] },
-        { relevanceScore: 80, id: samplePaper.id, category: "photo-z", directions: ["photo-z#1"] },
-      ]),
+      lookupReusable: vi.fn(async () => ({
+        records: [
+          { relevanceScore: 80, id: "2601.54321", category: "galaxy-cluster", directions: ["galaxy-cluster#1"] },
+          { relevanceScore: 80, id: samplePaper.id, category: "photo-z", directions: ["photo-z#1"] },
+        ],
+        refusedIds: [],
+      })),
       save: vi.fn(),
     };
     const llm = { call: vi.fn() };
@@ -512,8 +516,10 @@ describe("filterPapers", () => {
     const originalFingerprint = createDailyFilterCompatibilityFingerprint(original);
     const saved = new Map<string, FilterRecord[]>();
     const checkpointStore = {
-      lookupReusable: vi.fn(async (_date: string, snapshot: PreparedDailyFilterCheckpoint) =>
-        saved.get(createDailyFilterCompatibilityFingerprint(snapshot)) ?? null),
+      lookupReusable: vi.fn(async (_date: string, snapshot: PreparedDailyFilterCheckpoint) => {
+        const records = saved.get(createDailyFilterCompatibilityFingerprint(snapshot));
+        return records ? { records, refusedIds: [] } : null;
+      }),
       save: vi.fn(async (_date: string, snapshot: PreparedDailyFilterCheckpoint, records: FilterRecord[]) => {
         saved.set(createDailyFilterCompatibilityFingerprint(snapshot), records);
       }),
@@ -548,9 +554,10 @@ describe("filterPapers", () => {
     });
     expect(createDailyFilterCompatibilityFingerprint(changed)).not.toBe(originalFingerprint);
     expect(await checkpointStore.lookupReusable(checkpointScope.reportDate, changed)).toBeNull();
-    expect(await checkpointStore.lookupReusable(checkpointScope.reportDate, original)).toEqual([
-      { relevanceScore: 80, id: samplePaper.id, category: "photo-z", directions: ["photo-z#1"] },
-    ]);
+    expect(await checkpointStore.lookupReusable(checkpointScope.reportDate, original)).toEqual({
+      records: [{ relevanceScore: 80, id: samplePaper.id, category: "photo-z", directions: ["photo-z#1"] }],
+      refusedIds: [],
+    });
   });
 
   it("awaits durable persistence of strict records and never caches invalid responses", async () => {
@@ -603,7 +610,7 @@ describe("filterPapers", () => {
       checkpointStore: {
         lookupReusable: vi.fn(async () => {
           hitController.abort("cancel after lookup");
-          return [{ relevanceScore: 80, id: samplePaper.id, category: "photo-z", directions: ["photo-z#1"] }];
+          return { records: [{ relevanceScore: 80, id: samplePaper.id, category: "photo-z", directions: ["photo-z#1"] }], refusedIds: [] };
         }),
         save: vi.fn(),
       },
@@ -822,7 +829,7 @@ describe("matched directions reach the report", () => {
   it("resolves refs from a reused checkpoint the same way as from a live call", async () => {
     const records = [{ relevanceScore: 80, id: samplePaper.id, category: "photo-z", directions: ["photo-z#1"] }];
     const checkpointStore = {
-      lookupReusable: vi.fn(async () => records),
+      lookupReusable: vi.fn(async () => ({ records, refusedIds: [] })),
       save: vi.fn(),
     };
     const llm = { call: vi.fn() };

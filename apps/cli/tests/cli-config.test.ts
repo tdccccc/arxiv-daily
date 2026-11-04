@@ -52,6 +52,36 @@ weekdays_only = true
 log_level = "info"
 `;
 
+describe("CLI config type errors", () => {
+  const load = (toml: string) => loadCliConfig({ configPath: "/x/config.toml", readText: async () => toml });
+
+  it("rejects a known key with the wrong type instead of quietly using the default", async () => {
+    await expect(load(minimalToml.replace("[email]\nenabled = false", '[email]\nenabled = "true"')))
+      .rejects.toThrow('invalid email.enabled: expected a boolean, found string "true"');
+    await expect(load(minimalToml.replace('model = "m1"', 'model = "m1"\nthinking_mode = "true"')))
+      .rejects.toThrow('invalid llm.thinking_mode: expected a boolean, found string "true"');
+    await expect(load(minimalToml.replace('model = "m1"', 'model = "m1"\nreasoning_effort = 1')))
+      .rejects.toThrow("invalid llm.reasoning_effort: expected a string, found number 1");
+    await expect(load(minimalToml.replace("interval_hours = 0", 'interval_hours = "2"')))
+      .rejects.toThrow('invalid schedule.interval_hours: expected a finite number, found string "2"');
+    await expect(load(minimalToml.replace("dimension = 1536", "dimension = 1536.5")))
+      .rejects.toThrow("invalid embedding.dimension: expected a positive integer, found number 1536.5");
+  });
+
+  it("rejects a plain value where the loader expects a list", async () => {
+    await expect(load(minimalToml.replace('categories = ["cs.LG"]', 'categories = "cs.LG"')))
+      .rejects.toThrow('invalid arxiv.categories: expected an array, found string "cs.LG"');
+  });
+
+  it("warns once when request_delay_ms is raised to the politeness floor", async () => {
+    const cfg = await load(`${minimalToml}\nrequest_delay_ms = 1000\n`);
+    expect(cfg.settings.advanced.requestDelayMs).toBe(3000);
+    expect(cfg.configWarnings).toEqual([expect.stringContaining("advanced.request_delay_ms=1000")]);
+    const quiet = await load(minimalToml);
+    expect(quiet.configWarnings).toBeUndefined();
+  });
+});
+
 describe("CLI config loader (TOML / XDG)", () => {
   it("errors when config file is missing", async () => {
     await expect(

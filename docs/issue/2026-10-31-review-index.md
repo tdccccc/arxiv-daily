@@ -2,7 +2,7 @@
 
 > 审查对象：main `e0498c94`（2026-10-31）· 范围：core 日报流水线、运行状态与调度、文献库核心、CLI（init / 配置 / 定时 / 工作台服务端与前端）、插件主入口；**未含**插件设置页与 Dashboard、邮件投递与中继、DSH / VS Code 扩展、node-runtime、scripts
 > 方式：会话内直接通读（未用 subagent），每条对照周边代码与现有测试；发现时全部为代码推断，其中 PIPE-02、PIPE-03、STATE-01、CLI-01 随后用离线测试复现
-> 结果：14 条（中 6、低 8），其中功能 bug 3、逻辑优化 4、体验 7；已修复 7、按既有 ADR 不改行为只补文档 1、未修复 6（分支 `fix/2026-10-31-review`）
+> 结果：14 条（中 6、低 8），其中功能 bug 3、逻辑优化 4、体验 7；已修复 13、按既有 ADR 不改行为只补文档 1、未修复 0（分支 `fix/2026-10-31-review` 与 `fix/2026-10-31-low-findings`）
 
 每条问题一个文件，结构与 `archive/` 相同：问题与依据 / 原因 / 建议和验收 / 修复后应补的测试。修复后按惯例移入 `archive/`，并在文件末尾补"修复情况"。
 
@@ -23,19 +23,19 @@
 
 | 编号 | 类型 | 状态 | 置信度 | 问题 | 文件 |
 |---|---|---|---|---|---|
-| PIPE-04 | 体验 | 未修复 | 代码推断 | 被每日上限截掉的论文也进了索引：Dashboard "All" 页和工作台 inbox 里当普通条目出现，无摘要、无日报链接、无标记，还算进"本周新增" | [cut-by-daily-limit-papers-in-index](2026-10-31-cut-by-daily-limit-papers-in-index.md) |
-| PIPE-05 | 逻辑 | 未修复 | 代码推断 | 被服务商内容安全拒绝的论文在筛选决策记录里记成"模型跳过"，污染筛选质量评估的样本 | [refused-papers-recorded-as-model-skips](2026-10-31-refused-papers-recorded-as-model-skips.md) |
+| PIPE-04 | 体验 | 已修复 | 代码推断 | 被每日上限截掉的论文也进了索引：Dashboard "All" 页和工作台 inbox 里当普通条目出现，无摘要、无日报链接、无标记，还算进"本周新增" | [cut-by-daily-limit-papers-in-index](archive/2026-10-31-cut-by-daily-limit-papers-in-index.md) |
+| PIPE-05 | 逻辑 | 已修复 | 代码推断 | 被服务商内容安全拒绝的论文在筛选决策记录里记成"模型跳过"，污染筛选质量评估的样本 | [refused-papers-recorded-as-model-skips](archive/2026-10-31-refused-papers-recorded-as-model-skips.md) |
 | PIPE-06 | 体验 | 已修复 | 代码推断 | "抓取正文"进度在请求开始时就计数，6 路并发下一开始就显示 6/N | [content-fetch-progress-counts-starts](archive/2026-10-31-content-fetch-progress-counts-starts.md) |
 | PIPE-07 | 逻辑 | 已修复 | 代码推断 | 主题设置校验在抓完 arXiv 列表之后才做，配置错误时白费一次抓取 | [topic-validation-after-listing-fetch](archive/2026-10-31-topic-validation-after-listing-fetch.md) |
-| LIB-01 | 体验 | 未修复 | 代码推断 | 元数据拉取失败的 PDF 不会被"索引 / Retry preparation"重试，部分失败时也不提示；恢复路径（重新扫描）没人指 | [metadata-failed-pdfs-not-retried-by-index](2026-10-31-metadata-failed-pdfs-not-retried-by-index.md) |
-| CLI-03 | 体验 | 未修复 | 代码推断 | 工作台页面只在"已知有任务在跑"时轮询，服务端自动调度启动的任务在空闲页面上看不到，跑完也不刷新 | [workbench-misses-server-scheduled-runs](2026-10-31-workbench-misses-server-scheduled-runs.md) |
-| CLI-04 | 体验 | 未修复 | 代码推断 | config.toml 里类型写错的值（如 `enabled = "true"`）被静默忽略，功能悄悄回到默认 | [config-type-mismatches-silently-ignored](2026-10-31-config-type-mismatches-silently-ignored.md) |
-| CLI-05 | 体验 | 未修复 | 代码推断 | init 对所有服务商默认开启思考模式，而连接测试只请求 /models，参数不兼容到第一次日报才以永久失败暴露 | [init-defaults-thinking-without-chat-test](2026-10-31-init-defaults-thinking-without-chat-test.md) |
+| LIB-01 | 体验 | 已修复 | 代码推断 | 元数据拉取失败的 PDF 不会被"索引 / Retry preparation"重试，部分失败时也不提示；恢复路径（重新扫描）没人指 | [metadata-failed-pdfs-not-retried-by-index](archive/2026-10-31-metadata-failed-pdfs-not-retried-by-index.md) |
+| CLI-03 | 体验 | 已修复 | 代码推断 | 工作台页面只在"已知有任务在跑"时轮询，服务端自动调度启动的任务在空闲页面上看不到，跑完也不刷新 | [workbench-misses-server-scheduled-runs](archive/2026-10-31-workbench-misses-server-scheduled-runs.md) |
+| CLI-04 | 体验 | 已修复 | 代码推断 | config.toml 里类型写错的值（如 `enabled = "true"`）被静默忽略，功能悄悄回到默认 | [config-type-mismatches-silently-ignored](archive/2026-10-31-config-type-mismatches-silently-ignored.md) |
+| CLI-05 | 体验 | 已修复 | 代码推断 | init 对所有服务商默认开启思考模式，而连接测试只请求 /models，参数不兼容到第一次日报才以永久失败暴露 | [init-defaults-thinking-without-chat-test](archive/2026-10-31-init-defaults-thinking-without-chat-test.md) |
 
 ## 相互关联
 
 - PIPE-02、PIPE-03 与摘要路径是同一类问题（"模型输出格式不对怎么办"）的三种不同处理，本次统一成"容忍单层围栏 + 一次纠错重问 + 失败可见"。
-- STATE-01、CLI-01、CLI-05 都落在新用户的首次配置路径上；前两条已修，CLI-05 待办。
+- STATE-01、CLI-01、CLI-05 都落在新用户的首次配置路径上；三条均已修复（CLI-05：思考模式默认值跟随预设，向导内置一次真实聊天测试）。
 - CLI-02 与 CLI-03 都涉及 CLI / 工作台的定时运行；若将来修订 ADR 0003 让 CLI 补跑，可一并处理。
 - PIPE-06 是 PIPE-01 并行化后更明显的问题，已一起修。
 

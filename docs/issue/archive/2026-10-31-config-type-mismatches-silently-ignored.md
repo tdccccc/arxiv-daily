@@ -1,6 +1,6 @@
 # config.toml 里类型写错的值被静默忽略，功能悄悄回到默认
 
-状态：未修复
+状态：已修复（分支 `fix/2026-10-31-low-findings`）
 
 > 来源：2026-10-31 main `e0498c94` 代码审查（会话内直接审查，静态推断，未运行）
 > 严重程度：低 · 置信度：代码推断
@@ -27,3 +27,7 @@
 ## 修复后应补的测试
 
 config 测试覆盖每个受影响键的类型错误：带引号的布尔、数字写成字符串、字符串写成数字。
+
+## 修复情况
+
+已知键类型不符现在与 `max_daily_papers` 一致直接报 `CliConfigError`，信息指出键名、期望类型和实际值（如 `invalid email.enabled: expected a boolean, found string "true"`）；覆盖 `llm`、`embedding`、`arxiv`（categories/topics/directions）、`output`、`email`、`advanced`、`pdf_parser_sidecar`、`schedule`、`workbench_schedule` 的布尔/数字/字符串/数组字段，未列出的未知键仍不校验。`request_delay_ms` 被抬到 3000 ms 下限时不再静默，启动时向 stderr 打一条 `warning:` 说明（`CliRuntimeConfig.configWarnings`）。测试：`apps/cli/tests/cli-config.test.ts` 新增三组用例（类型错误、非数组的列表字段、抬升提示只出现一次）。

@@ -180,6 +180,9 @@ export async function runCli(opts: RunCliOptions = {}): Promise<number> {
       config.settings.email.hostedToken,
       config.settings.embedding.apiKey,
     ].filter((value): value is string => Boolean(value));
+    for (const warning of config.configWarnings ?? []) {
+      writeLine(io.stderr, `warning: ${warning}`);
+    }
 
     if (parsed.name === "status") {
       writeLine(rawIo.stdout, diagnosticJson(await inspectProduct(config), secrets));

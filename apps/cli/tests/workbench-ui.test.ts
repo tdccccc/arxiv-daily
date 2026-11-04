@@ -11,7 +11,7 @@ const json = (value: unknown, code = 200) => new Response(JSON.stringify(value),
 const disposers: Array<() => void> = [];
 afterEach(() => { disposers.splice(0).forEach(dispose => dispose()); document.body.innerHTML = ""; vi.restoreAllMocks(); });
 
-function setup(override?: (url: URL, init?: RequestInit) => Response | Promise<Response> | undefined, pollIntervalMs = 10) {
+function setup(override?: (url: URL, init?: RequestInit) => Response | Promise<Response> | undefined, pollIntervalMs = 10, idlePollIntervalMs?: number) {
   window.history.replaceState({}, "", `/capability/?document=${encodeURIComponent(daily.path)}`);
   const root = document.createElement("div");
   document.body.append(root);
@@ -32,7 +32,7 @@ function setup(override?: (url: URL, init?: RequestInit) => Response | Promise<R
     }
     throw new Error(`Unexpected fetch: ${url}`);
   });
-  disposers.push(mountWorkbench(root, { fetch: fetcher, searchDelayMs: 0, pollIntervalMs }));
+  disposers.push(mountWorkbench(root, { fetch: fetcher, searchDelayMs: 0, pollIntervalMs, ...(idlePollIntervalMs === undefined ? {} : { idlePollIntervalMs }) }));
   return { root, fetcher };
 }
 const button = (root: HTMLElement, label: string) => Array.from(root.querySelectorAll<HTMLButtonElement>("button")).find(item => item.textContent?.includes(label) || item.getAttribute("aria-label") === label)!;
@@ -222,4 +222,36 @@ it("keeps the offer available when starting the earlier day fails", async () => 
   root.querySelector<HTMLButtonElement>('[data-action="generate-announced"]')!.click();
   await vi.waitFor(() => expect(root.querySelector(".connection-banner")?.textContent).toContain("已有任务正在运行"));
   expect(root.querySelector<HTMLButtonElement>('[data-action="generate-announced"]')!.hasAttribute("disabled")).toBe(false);
+});
+
+it("shows a run the server started on its own on an idle page, refreshes when it finishes, and stays dismissed afterwards", async () => {
+  let polls = 0;
+  let documentReads = 0;
+  const run = { id: "job-scheduled", label: "Automatic daily report check", status: "running", output: "Checking", exitCode: null, startedAt: "2026-10-01", finishedAt: null };
+  const { root } = setup(url => {
+    if (url.pathname.endsWith("api/preferences")) return json({ appearance: { language: "zh", theme: "light" } });
+    if (url.pathname.endsWith("api/document")) { documentReads += 1; return undefined; }
+    if (url.pathname.endsWith("api/runs/current")) {
+      polls += 1;
+      if (polls < 3) return json({ run: null });
+      if (polls < 25) return json({ run });
+      return json({ run: { ...run, status: "completed", output: "Saved", exitCode: 0, finishedAt: "2026-10-01" } });
+    }
+  }, 20, 20);
+  await vi.waitFor(() => expect(root.querySelector("article")?.textContent).toContain("Saved research"));
+  const readsBefore = documentReads;
+  // No click anywhere: the idle poll picks the run up and the tray appears.
+  await vi.waitFor(() => expect(root.querySelector(".run-tray")?.hidden).toBe(false));
+  expect(root.querySelector(".run-state")?.classList.contains("running")).toBe(true);
+  await vi.waitFor(() => expect(root.querySelector(".run-state")?.classList.contains("completed")).toBe(true));
+  // Finishing re-reads the open document, as a run started from the page would.
+  await vi.waitFor(() => expect(documentReads).toBeGreaterThan(readsBefore));
+  expect(root.querySelector('[data-action="dismiss-run"]')).toBeTruthy();
+
+  root.querySelector<HTMLButtonElement>('[data-action="dismiss-run"]')!.click();
+  expect(root.querySelector(".run-tray")?.hidden).toBe(true);
+  const pollsAtDismiss = polls;
+  await vi.waitFor(() => expect(polls).toBeGreaterThan(pollsAtDismiss + 1));
+  // Later idle polls return the same finished run and do not bring the tray back.
+  expect(root.querySelector(".run-tray")?.hidden).toBe(true);
 });

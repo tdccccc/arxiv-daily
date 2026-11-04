@@ -53,7 +53,7 @@ async function writeRecord(vault, reportDate, candidates, options = {}) {
   });
 }
 
-/** A vault with two days: day A has 2 selected and 6 skipped, day B has 1 selected and 4 skipped. */
+/** A vault with two days: day A has 2 selected and 6 skipped, day B has 1 selected, 4 skipped and 1 the provider refused. */
 async function fixtureVault() {
   const vault = await temp("vault");
   await writeRecord(vault, "2026-10-13", [
@@ -64,6 +64,7 @@ async function fixtureVault() {
   await writeRecord(vault, "2026-10-14", [
     candidate(idOf("11", 1), "cluster", { title: "中文标题 with\nnewline" }),
     ...[2, 3, 4, 5].map(index => candidate(idOf("11", index), "skip")),
+    candidate(idOf("11", 6), "skip", { outcome: "refused_by_provider" }),
   ]);
   return vault;
 }
@@ -200,6 +201,8 @@ test("export writes the label sheet, guide and metadata from a vault's decision 
   assert.equal(byId[idOf("11", 1)][2], "中文标题 with\nnewline");
   const skippedRow = rows.find(row => row[5] === "skip");
   assert.deepEqual([skippedRow[6], skippedRow[7], skippedRow[8]], ["", "0", "skipped_by_model"]);
+  // A paper the provider refused was never judged: it is not on the sheet and not part of the skipped population.
+  assert.ok(!rows.some(row => row[1] === idOf("11", 6) || row[8] === "refused_by_provider"));
 
   // Only the sampled rows are looked up, in one batch, and nothing else is contacted.
   assert.equal(http.calls.length, 1);
@@ -224,7 +227,7 @@ test("export writes the label sheet, guide and metadata from a vault's decision 
   assert.deepEqual(meta.records.map(record => [record.reportDate, record.promptContractVersion, record.resultContractVersion, record.generation.model, record.generation.provider]), [
     ["2026-10-13", 4, 3, "model-a", "deepseek"], ["2026-10-14", 4, 3, "model-a", "deepseek"],
   ]);
-  assert.deepEqual(meta.counts, { rows: 7, selected: 3, skippedSampled: 4, skippedAvailable: 10, withoutAbstract: 0, hadAbstractAtFilter: 1 });
+  assert.deepEqual(meta.counts, { rows: 7, selected: 3, skippedSampled: 4, skippedAvailable: 10, refusedByProvider: 1, withoutAbstract: 0, hadAbstractAtFilter: 1 });
   assert.equal(meta.skippedSample, 4);
   assert.ok(!JSON.stringify(meta).includes("https://"), "no endpoint is recorded");
 });

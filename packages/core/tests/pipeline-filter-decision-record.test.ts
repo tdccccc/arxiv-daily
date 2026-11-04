@@ -13,6 +13,7 @@ import { DEFAULT_SETTINGS } from "../src/settings/defaults";
 import { normalizeTopic } from "../src/settings/topics";
 import { ArxivSourceAdapter, type SourceAdapter } from "../src/sources";
 import { ArxivHttpError } from "../src/pipeline/arxiv-fetcher";
+import { LlmContentBlockedError } from "../src/llm/client";
 import { summarizeDaily } from "../src/pipeline/summarizer";
 import { markupParser } from "./markup-parser";
 
@@ -250,6 +251,36 @@ describe("filter decision record on commit", () => {
     expect(h.llm.call.mock.calls.filter(([m]) => m[0]!.content.includes("relevanceScore"))).toHaveLength(1);
     expect(readRecord(h.files).candidates.map((c: { outcome: string }) => c.outcome).sort())
       .toEqual(["in_report", "skipped_by_model"]);
+  });
+
+  it("marks a paper the provider refused as refused_by_provider rather than a model skip, also from a reused checkpoint", async () => {
+    const h = harness([decision(1, 90), decision(2, 80), decision(3, 70)]);
+    const refusedAbstract = "SECRET-ABSTRACT " + id(2);
+    h.llm.call.mockImplementation(async (messages: Array<{ content: string }>) => {
+      if (!messages[0]!.content.includes("relevanceScore")) return JSON.stringify({ papers: [] });
+      const text = messages.map((message) => message.content).join("\n");
+      if (text.includes(refusedAbstract)) throw new LlmContentBlockedError("Content Exists Risk", 400);
+      const offered = new Set([...text.matchAll(/^ID: (\S+)$/gm)].map((match) => match[1]));
+      return JSON.stringify({ papers: [decision(1, 90), decision(3, 70)].filter((record) => offered.has(record.id)) });
+    });
+    const filterCalls = () => h.llm.call.mock.calls.filter(([m]) => m[0]!.content.includes("relevanceScore")).length;
+    h.summarize.mockRejectedValueOnce(new Error("interrupted before the report was committed"));
+    await expect(h.makePipeline({ checkpoint: true }).runForDate(date)).resolves
+      .toMatchObject({ kind: "failed_transient" });
+    const searched = filterCalls();
+    expect(searched).toBeGreaterThan(1);
+
+    const result = await h.makePipeline({ checkpoint: true }).runForDate(date);
+
+    expect(result).toMatchObject({ kind: "completed", papersWritten: 2 });
+    // The checkpoint carried the refusal: nothing was asked again.
+    expect(filterCalls()).toBe(searched);
+    expect(readRecord(h.files).candidates.map((c: { id: string; category: string; outcome: string; relevanceScore: number }) =>
+      [c.id, c.category, c.outcome, c.relevanceScore])).toEqual([
+      [id(1), "topic-a", "in_report", 90],
+      [id(2), "skip", "refused_by_provider", 0],
+      [id(3), "topic-a", "in_report", 70],
+    ]);
   });
 
   it("only warns when the record cannot be written, leaving the report committed", async () => {

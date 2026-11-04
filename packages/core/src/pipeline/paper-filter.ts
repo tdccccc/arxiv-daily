@@ -20,6 +20,7 @@ import {
   type FilterRecord,
   type PaperFilterRequest,
   type PreparedDailyFilterCheckpoint,
+  type ReusableFilterClassification,
 } from "./paper-filter-contract";
 import type { TopicDirectionHit } from "./topic-direction-hits";
 
@@ -32,6 +33,7 @@ export {
   type FilterRecordDecodeResult,
   type PaperFilterRequest,
   type PreparedDailyFilterCheckpoint,
+  type ReusableFilterClassification,
 } from "./paper-filter-contract";
 
 export interface FilteredPaper extends PaperMeta {
@@ -61,6 +63,12 @@ export interface FilteredPaper extends PaperMeta {
  */
 export interface FilterClassification {
   records: FilterRecord[];
+  /**
+   * Candidates the provider's content-safety filter refused, so the model never
+   * judged them. They are neither kept nor skipped; a decision record lists
+   * them apart from the papers the model left out.
+   */
+  refusedIds: string[];
   /** Directions the classifier was offered, from the frozen request. */
   directions: FilterDirectionRef[];
   generation: CheckpointGenerationIdentity;
@@ -74,12 +82,13 @@ export interface DailyFilterCheckpointPort {
     reportDate: string,
     prepared: PreparedDailyFilterCheckpoint,
     batch?: number,
-  ): Promise<FilterRecord[] | null>;
+  ): Promise<ReusableFilterClassification | null>;
   save(
     reportDate: string,
     prepared: PreparedDailyFilterCheckpoint,
     result: FilterRecord[],
     batch?: number,
+    refusedIds?: readonly string[],
   ): Promise<unknown>;
 }
 
@@ -217,8 +226,9 @@ export async function filterPapers(
   const request = first.request;
   const prepared = first.prepared;
   const validatedRecords = classified.flatMap((entry) => entry.records);
+  const refusedIds = classified.flatMap((entry) => entry.refusedIds);
 
-  reportClassification(deps, request.options.temperature, prepared, request.identity.directions, validatedRecords);
+  reportClassification(deps, request.options.temperature, prepared, request.identity.directions, validatedRecords, refusedIds);
 
   const idMap = new Map(papers.map((p) => [p.id, p] as const));
   const out: FilteredPaper[] = [];
@@ -258,6 +268,8 @@ interface BatchClassification {
   request: PaperFilterRequest;
   prepared: PreparedDailyFilterCheckpoint | undefined;
   records: FilterRecord[];
+  /** Papers of this batch the provider refused; see `FilterClassification.refusedIds`. */
+  refusedIds: string[];
 }
 
 /** One validated classification for `batch`: reused from its checkpoint or generated and persisted. */
@@ -285,7 +297,7 @@ async function classifyBatch(
     );
   }
   const request = prepared?.request ?? buildPaperFilterRequest(batch, arxivSettings);
-  let reusable: FilterRecord[] | null | undefined;
+  let reusable: ReusableFilterClassification | null | undefined;
   try {
     reusable = await deps.checkpointStore?.lookupReusable(
       deps.reportDate,
@@ -303,9 +315,9 @@ async function classifyBatch(
   throwIfCancelled(deps.signal);
   if (reusable) {
     logger.info(
-      `paper-filter: checkpoint hit date=${deps.reportDate} count=${reusable.length}${label}`,
+      `paper-filter: checkpoint hit date=${deps.reportDate} count=${reusable.records.length}${label}`,
     );
-    return { request, prepared, records: reusable };
+    return { request, prepared, records: reusable.records, refusedIds: reusable.refusedIds };
   }
   if (deps.checkpointStore) {
     logger.info(
@@ -331,13 +343,9 @@ async function classifyBatch(
       }${label}`,
     );
   }
+  const refusedIds = refused.papers.map(({ id }) => id);
   try {
-    await deps.checkpointStore?.save(
-      deps.reportDate,
-      prepared!,
-      records,
-      ...(index > 0 ? [index] : []),
-    );
+    await deps.checkpointStore?.save(deps.reportDate, prepared!, records, index, refusedIds);
   } catch (error) {
     if (isCancellationError(error)) throw error;
     throwIfCancelled(deps.signal);
@@ -352,7 +360,7 @@ async function classifyBatch(
       `paper-filter: checkpoint persisted date=${deps.reportDate} count=${records.length}${label}`,
     );
   }
-  return { request, prepared, records };
+  return { request, prepared, records, refusedIds };
 }
 
 /** Single papers the provider's content-safety filter refused while a batch was being narrowed down. */
@@ -475,11 +483,13 @@ function reportClassification(
   prepared: PreparedDailyFilterCheckpoint | undefined,
   directions: FilterDirectionRef[],
   records: FilterRecord[],
+  refusedIds: readonly string[],
 ): void {
   if (!deps.onClassified) return;
   try {
     deps.onClassified({
       records: records.map((record) => ({ ...record, directions: [...record.directions] })),
+      refusedIds: [...refusedIds],
       directions: directions.map((direction) => ({ ...direction })),
       generation: prepared?.fingerprintInput.generation
         ?? buildCheckpointGenerationIdentity(deps.llmSettings, temperature),

@@ -550,6 +550,17 @@ export class PaperIndexStore {
     return findEntry(inbox, id);
   }
 
+  /** The entries `ids` already have, read once; an id without an entry is absent from the map. */
+  async getMany(ids: readonly string[]): Promise<Map<string, PaperIndexEntry>> {
+    const inbox = await this.load();
+    const entries = new Map<string, PaperIndexEntry>();
+    for (const id of ids) {
+      const entry = findEntry(inbox, id);
+      if (entry) entries.set(id, entry);
+    }
+    return entries;
+  }
+
   async listByStatus(status: PaperStatus): Promise<PaperIndexEntry[]> {
     const inbox = await this.load();
     return Object.values(inbox.papers)

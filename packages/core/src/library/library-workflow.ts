@@ -165,27 +165,40 @@ export class LibraryWorkflow {
 
   /**
    * Scan first when the library folder differs from the last scan, judged from a
-   * local listing alone. An unchanged folder costs the listing and nothing else:
-   * no scan, no network. A listing that fails (other than by cancellation) leaves
-   * the stored catalog in use, as indexing did before it looked at the folder.
+   * local listing alone, or when files are still waiting on an arXiv lookup that
+   * failed last time (arXiv down, rate-limited, offline): that failure was no
+   * verdict on the paper, so it is asked again. An unchanged folder with no such
+   * file costs the listing and nothing else: no scan, no network. A listing that
+   * fails (other than by cancellation) leaves the stored catalog in use, as
+   * indexing did before it looked at the folder.
    */
   private async scanIfFolderChanged(
     run: LibraryWorkflowRunOptions & { onFolderChange?: (change: PersonalLibraryFolderChange) => void },
   ): Promise<void> {
     let inventory: LibraryInventory;
     let change: PersonalLibraryFolderChange;
+    let retry: string[];
     try {
       inventory = await this.options.source.inventory({ signal: run.signal });
+      const catalog = await this.loadCatalog();
       change = detectPersonalLibraryFolderChange({
-        catalog: await this.loadCatalog(), inventory, eligibleExtensions: this.options.connection.eligibleExtensions,
+        catalog, inventory, eligibleExtensions: this.options.connection.eligibleExtensions,
       });
+      retry = metadataLookupRetries(catalog, inventory);
     } catch (error) {
       throwIfCancelled(run.signal);
       this.options.logger?.warn("library: could not check the folder for changes before indexing", error);
       return;
     }
-    if (!change.changed) return;
-    run.onFolderChange?.(change);
+    if (change.changed) {
+      run.onFolderChange?.(change);
+    } else if (retry.length > 0) {
+      this.options.logger?.info(
+        `library: retrying the arXiv lookup for ${retry.length} file(s) it failed for last time. First: ${retry.slice(0, 3).join(", ")}`,
+      );
+    } else {
+      return;
+    }
     await this.scanFolder(run, inventory);
   }
 
@@ -505,4 +518,17 @@ export class LibraryWorkflow {
     this.busy = true;
     try { return await operation(); } finally { this.busy = false; }
   }
+}
+
+/**
+ * Files still in the folder whose arXiv metadata lookup failed outright, as
+ * opposed to files arXiv has answered about (`metadata-unavailable`), which
+ * only an explicit scan asks again.
+ */
+function metadataLookupRetries(catalog: PersonalLibraryCatalog, inventory: LibraryInventory): string[] {
+  const listed = new Set(inventory.entries.filter((entry) => entry.type === "file").map((entry) => entry.path));
+  return Object.values(catalog.files)
+    .filter((record) => record.status === "failed" && record.reason === "metadata-fetch-failed" && listed.has(record.path))
+    .map((record) => record.path)
+    .sort();
 }

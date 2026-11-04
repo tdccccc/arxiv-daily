@@ -226,7 +226,12 @@ export async function runExport(options: ExportOptions, deps: ExportDeps = {}): 
     throw new Error(`no filter decision records found under ${vaultRoot} for ${options.from ?? "the first day"} to ${options.to ?? "the last day"}`);
   }
 
-  const items = records.flatMap((record) => record.candidates.map((candidate) => ({ date: record.reportDate, candidate })));
+  const offered = records.flatMap((record) => record.candidates.map((candidate) => ({ date: record.reportDate, candidate })));
+  // A paper the provider refused was never judged by the model: it is neither a
+  // kept paper nor a skipped one, so it stays out of the sheet and out of the
+  // skipped population it would otherwise dilute.
+  const items = offered.filter((item) => item.candidate.outcome !== "refused_by_provider");
+  const refusedByProvider = offered.length - items.length;
   const sampled = sampleCandidates(items, { skippedSample, seed });
   const legend = buildLegend(records);
 
@@ -258,6 +263,7 @@ export async function runExport(options: ExportOptions, deps: ExportDeps = {}): 
     selected,
     skippedSampled: rows.length - selected,
     skippedAvailable: items.filter((item) => item.candidate.category === "skip").length,
+    refusedByProvider,
     withoutAbstract,
     hadAbstractAtFilter: sampled.filter((item) => item.candidate.hadAbstract).length,
   };

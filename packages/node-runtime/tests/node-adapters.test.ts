@@ -1067,7 +1067,7 @@ describe("NodeStorageAdapter", () => {
     await writeFile(join(root, paths.documentPath), "corrupt", "utf8");
 
     await expect(new DailyFilterCheckpointStore(storage, DEFAULT_SETTINGS.output)
-      .lookupReusable("2026-08-01", prepared)).resolves.toEqual(first);
+      .lookupReusable("2026-08-01", prepared)).resolves.toEqual({ records: first, refusedIds: [] });
     expect(JSON.parse(await readFile(join(root, paths.backupPath), "utf8")))
       .toMatchObject({ result: first });
     expect(await fileMode(join(root, paths.documentPath))).toBe(0o600);

@@ -81,8 +81,14 @@ export function describeFullTextIndexCompletion(
     base += " Search and research directions use the titles and abstracts extracted from these PDFs, "
       + "even when arXiv metadata is unavailable.";
     if (context.metadataFetchFailures > 0) {
-      base += " Some arXiv lookups failed, possibly because this device was offline during the scan.";
+      base += " Some arXiv lookups failed, possibly because this device was offline during the scan; "
+        + "the next index run retries them.";
     }
+  } else if (context && context.metadataFetchFailures > 0) {
+    // A failed lookup is not "not on arXiv": say how many are waiting and that
+    // indexing again (or Scan library) asks arXiv about them once more.
+    base += ` ${context.metadataFetchFailures} PDF(s) could not be matched on arXiv because the lookup failed; `
+      + "the next index run retries them.";
   }
   return base;
 }

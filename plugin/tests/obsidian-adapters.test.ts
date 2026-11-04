@@ -764,7 +764,7 @@ describe("Obsidian host adapters", () => {
     files[paths.documentPath] = "corrupt";
 
     await expect(new DailyFilterCheckpointStore(host.storage, DEFAULT_SETTINGS.output)
-      .lookupReusable("2026-08-01", prepared)).resolves.toEqual(first);
+      .lookupReusable("2026-08-01", prepared)).resolves.toEqual({ records: first, refusedIds: [] });
     expect(JSON.parse(files[paths.backupPath]!)).toMatchObject({ result: first });
 
     await new DailyFilterCheckpointStore(host.storage, DEFAULT_SETTINGS.output)

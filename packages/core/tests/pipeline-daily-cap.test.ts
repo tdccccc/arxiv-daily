@@ -137,9 +137,22 @@ describe("daily paper cap", () => {
     const index = JSON.parse(h.files["arxiv-daily/.index/papers.json"]!);
     expect(index.papers["arxiv:" + id(1)].status).toBe("ignored");
     expect(index.papers["arxiv:" + id(1)].dailyReports).toEqual([]);
-    expect(index.papers["arxiv:" + id(3)].dailyReports).toEqual([]);
+    // Cut by the limit: not in the report, so not in the index either.
+    expect(index.papers["arxiv:" + id(3)]).toBeUndefined();
     expect(index.papers["arxiv:" + id(2)].dailyReports).toEqual([`arxiv-daily/daily/${date}.md`]);
     expect(h.source.fetchContent).toHaveBeenCalledTimes(1);
+    expect(h.summarize.mock.calls[0]![2].omittedByTopic).toEqual({ "topic-a": 1 });
+  });
+
+  it("indexes only the papers that reach the report, so a paper cut by the limit never appears as an entry", async () => {
+    const h = harness([decision(1, 10), decision(2, 80), decision(3, 95, "topic-b")]);
+    const result = await h.makePipeline(2, true).runForDate(date);
+    expect(result).toMatchObject({ kind: "completed", papersWritten: 2 });
+    const index = JSON.parse(h.files["arxiv-daily/.index/papers.json"]!);
+    expect(Object.keys(index.papers).sort()).toEqual(["arxiv:" + id(2), "arxiv:" + id(3)]);
+    for (const paperId of [id(2), id(3)]) {
+      expect(index.papers["arxiv:" + paperId]).toMatchObject({ status: "inbox", seenDates: [date], dailyReports: [`arxiv-daily/daily/${date}.md`] });
+    }
     expect(h.summarize.mock.calls[0]![2].omittedByTopic).toEqual({ "topic-a": 1 });
   });
 

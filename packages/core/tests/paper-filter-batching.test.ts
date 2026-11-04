@@ -108,7 +108,8 @@ describe("filterPapers batching", () => {
     expect(llm.call).toHaveBeenCalledTimes(1);
     expect(kept.map((p) => p.id)).toEqual(["2608.00001", "2608.00003"]);
     expect(store.lookupReusable.mock.calls[0]).toHaveLength(2);
-    expect(store.save.mock.calls[0]).toHaveLength(3);
+    // An ordinary day is batch 0 with nothing refused.
+    expect(store.save.mock.calls[0]!.slice(3)).toEqual([0, []]);
   });
 
   it("classifies a very large day in several requests and merges results in paper order", async () => {

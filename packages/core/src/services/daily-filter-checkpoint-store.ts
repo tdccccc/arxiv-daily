@@ -13,6 +13,7 @@ import {
   type FilterDirectionRef,
   type FilterRecord,
   type PreparedDailyFilterCheckpoint,
+  type ReusableFilterClassification,
 } from "../pipeline/paper-filter-contract";
 import type { OutputSettings } from "../settings/types";
 import { derivePaperInboxPaths } from "./paper-index";
@@ -35,6 +36,11 @@ export interface DailyFilterCheckpointDocument {
   fingerprintInput: DailyFilterCheckpointFingerprintInput;
   completedAt: string;
   result: FilterRecord[];
+  /**
+   * Known ids the provider refused to classify; empty for an ordinary day and
+   * for documents written before the field existed.
+   */
+  refusedIds: string[];
 }
 
 export interface DailyFilterCheckpointPaths {
@@ -178,12 +184,12 @@ export class DailyFilterCheckpointStore {
     reportDate: string,
     prepared: PreparedDailyFilterCheckpoint,
     batch = 0,
-  ): Promise<FilterRecord[] | null> {
+  ): Promise<ReusableFilterClassification | null> {
     requirePrepared(prepared);
     const document = await this.load(reportDate, batch);
     if (!document) return null;
     if (document.fingerprint !== createDailyFilterCompatibilityFingerprint(prepared)) return null;
-    return clone(document.result);
+    return { records: clone(document.result), refusedIds: [...document.refusedIds] };
   }
 
   save(
@@ -191,6 +197,7 @@ export class DailyFilterCheckpointStore {
     prepared: PreparedDailyFilterCheckpoint,
     result: unknown,
     batch = 0,
+    refusedIds: readonly string[] = [],
   ): Promise<DailyFilterCheckpointDocument> {
     const paths = this.pathsFor(reportDate, batch);
     return this.enqueue(paths.documentPath, async () => {
@@ -205,15 +212,22 @@ export class DailyFilterCheckpointStore {
           "cannot persist unsupported daily filter contract versions",
         );
       }
+      const knownIds = new Set(fingerprintInput.request.identity.knownIds);
       const decoded = decodePaperFilterRecords(
         { papers: result },
-        new Set(fingerprintInput.request.identity.knownIds),
+        knownIds,
         new Set(fingerprintInput.request.identity.validTags),
         fingerprintInput.request.identity.directions,
       );
       if (!decoded.ok) {
         throw new DailyFilterCheckpointStoreError(
           `invalid daily filter checkpoint result: ${decoded.reason}`,
+        );
+      }
+      const refused = decodeRefusedIds(refusedIds, knownIds, decoded.value);
+      if (!refused.ok) {
+        throw new DailyFilterCheckpointStoreError(
+          `invalid daily filter checkpoint refusals: ${refused.reason}`,
         );
       }
       const document: DailyFilterCheckpointDocument = {
@@ -223,6 +237,7 @@ export class DailyFilterCheckpointStore {
         fingerprintInput,
         completedAt: this.now().toISOString(),
         result: decoded.value,
+        refusedIds: refused.value,
       };
       await this.persist(paths, document);
       return clone(document);
@@ -381,9 +396,9 @@ export class DailyFilterCheckpointStore {
 }
 
 function decodeDocument(value: unknown, reportDate: string): DailyFilterCheckpointDocument | null {
-  if (!isExactObject(value, [
-    "schemaVersion", "reportDate", "fingerprint", "fingerprintInput", "completedAt", "result",
-  ])) return null;
+  const keys = ["schemaVersion", "reportDate", "fingerprint", "fingerprintInput", "completedAt", "result"];
+  // `refusedIds` arrived later; a document without it was written on a day nothing was refused.
+  if (!isExactObject(value, keys) && !isExactObject(value, [...keys, "refusedIds"])) return null;
   if (
     value.schemaVersion !== DAILY_FILTER_CHECKPOINT_SCHEMA_VERSION ||
     value.reportDate !== reportDate ||
@@ -393,13 +408,16 @@ function decodeDocument(value: unknown, reportDate: string): DailyFilterCheckpoi
   ) return null;
   const fingerprintInput = decodeFingerprintInput(value.fingerprintInput);
   if (!fingerprintInput || fingerprint(fingerprintInput) !== value.fingerprint) return null;
+  const knownIds = new Set(fingerprintInput.request.identity.knownIds);
   const decoded = decodePaperFilterRecords(
     { papers: value.result },
-    new Set(fingerprintInput.request.identity.knownIds),
+    knownIds,
     new Set(fingerprintInput.request.identity.validTags),
     fingerprintInput.request.identity.directions,
   );
   if (!decoded.ok) return null;
+  const refused = decodeRefusedIds(value.refusedIds ?? [], knownIds, decoded.value);
+  if (!refused.ok) return null;
   return {
     schemaVersion: DAILY_FILTER_CHECKPOINT_SCHEMA_VERSION,
     reportDate,
@@ -407,7 +425,26 @@ function decodeDocument(value: unknown, reportDate: string): DailyFilterCheckpoi
     fingerprintInput,
     completedAt: value.completedAt,
     result: decoded.value,
+    refusedIds: refused.value,
   };
+}
+
+/** Refused ids are known candidates, listed once, and never among the classified records. */
+function decodeRefusedIds(
+  value: unknown,
+  knownIds: ReadonlySet<string>,
+  records: readonly FilterRecord[],
+): { ok: true; value: string[] } | { ok: false; reason: string } {
+  if (!isStringArray(value)) return { ok: false, reason: "refusedIds must be a string array" };
+  const classified = new Set(records.map((record) => record.id));
+  const seen = new Set<string>();
+  for (const id of value) {
+    if (!knownIds.has(id)) return { ok: false, reason: `unknown refused id ${id}` };
+    if (classified.has(id)) return { ok: false, reason: `refused id ${id} is also classified` };
+    if (seen.has(id)) return { ok: false, reason: `duplicate refused id ${id}` };
+    seen.add(id);
+  }
+  return { ok: true, value: [...value] };
 }
 
 function decodeFingerprintInput(value: unknown): DailyFilterCheckpointFingerprintInput | null {

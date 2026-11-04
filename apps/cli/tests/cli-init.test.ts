@@ -80,6 +80,7 @@ describe("CLI init template", () => {
         return v;
       },
       fetchModels: async () => ["model-a", "model-b"],
+      testChat: async () => ({ success: true }),
       writeFile: async (filePath, body) => {
         written.push({ path: filePath, body });
       },
@@ -186,6 +187,71 @@ describe("CLI init template", () => {
     expect(body).toContain('timezone = "Pacific/Auckland"');
     expect(errors.join(" ")).toContain("llm.baseUrl");
     expect(errors.join(" ")).toContain("arxiv.timezone");
+  });
+
+  it("defaults thinking mode off for a custom endpoint, following the preset", async () => {
+    let body = ""; let thinkingPrompt = "";
+    const code = await runInit({
+      configPath: "/tmp/init-custom-thinking.toml", isTTY: true,
+      ask: async prompt => {
+        if (prompt.startsWith("Vault root")) return "/tmp/vault-test";
+        if (prompt.startsWith("LLM provider")) return "5"; // custom
+        if (prompt.startsWith("API base URL")) return "https://gateway.example/v1";
+        if (prompt.startsWith("LLM API key")) return "test-key";
+        if (prompt.startsWith("Model id")) return "my-model";
+        if (prompt.startsWith("Enable thinking mode?")) { thinkingPrompt = prompt; return ""; }
+        if (prompt.startsWith("Topic name")) return "My research";
+        if (prompt.startsWith("Topic tag")) return "my-research";
+        if (prompt.startsWith("Topic description")) return "photo-z methods";
+        if (/fetch|connect|test chat|schedule/i.test(prompt)) return "n";
+        return "";
+      },
+      readFile: async () => { throw Object.assign(new Error("missing"), { code: "ENOENT" }); },
+      mkdir: async () => {}, writeFile: async (_path, text) => { body = text; },
+      stdout: { write: () => {} }, stderr: { write: () => {} },
+    });
+    expect(code).toBe(0);
+    expect(thinkingPrompt).toContain("(default: No)");
+    expect(body).toContain("thinking_mode = false");
+    expect(body).toContain('base_url = "https://gateway.example/v1"');
+  });
+
+  it("re-runs the chat test after going back and turning thinking off when the provider rejects the parameters", async () => {
+    let body = ""; const errors: string[] = []; const out: string[] = []; const chats: boolean[] = [];
+    let thinkingPrompts = 0;
+    const code = await runInit({
+      configPath: "/tmp/init-chat-test.toml", isTTY: true,
+      ask: async prompt => {
+        if (prompt.startsWith("Vault root")) return "/tmp/vault-test";
+        if (prompt.startsWith("API base URL")) return "https://model.test/v1";
+        if (prompt.startsWith("LLM API key")) return "test-key";
+        if (prompt.startsWith("Test connection and load model list?")) return "y";
+        if (prompt.startsWith("Model id")) return "gpt-x";
+        if (prompt.startsWith("Enable thinking mode?")) { thinkingPrompts += 1; return thinkingPrompts === 1 ? "y" : "n"; }
+        if (prompt.startsWith("Reasoning effort")) return "3";
+        if (prompt.startsWith("Keep these settings anyway?")) return "n";
+        if (prompt.startsWith("Topic name")) return "My research";
+        if (prompt.startsWith("Topic tag")) return "my-research";
+        if (prompt.startsWith("Topic description")) return "photo-z methods";
+        return "";
+      },
+      fetchModels: async () => [],
+      testChat: async (settings) => {
+        chats.push(settings.thinkingMode);
+        return settings.thinkingMode
+          ? { success: false, error: "Unsupported parameter: reasoning_effort" }
+          : { success: true };
+      },
+      readFile: async () => { throw Object.assign(new Error("missing"), { code: "ENOENT" }); },
+      mkdir: async () => {}, writeFile: async (_path, text) => { body = text; },
+      stdout: { write: t => out.push(String(t)) }, stderr: { write: t => errors.push(String(t)) },
+    });
+    expect(code).toBe(0);
+    expect(chats).toEqual([true, false]);
+    expect(errors.join(" ")).toContain("Chat test failed: Unsupported parameter: reasoning_effort");
+    expect(errors.join(" ")).toContain("turn thinking mode off");
+    expect(out.join(" ")).toContain("Chat OK");
+    expect(body).toContain("thinking_mode = false");
   });
 
 });

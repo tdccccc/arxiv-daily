@@ -8,12 +8,15 @@ export const FILTER_DECISION_RECORD_SCHEMA_VERSION = 2 as const;
 /** Records older than this many days (by report date) are pruned on each write. */
 export const FILTER_DECISION_RETENTION_DAYS = 180;
 
-const OUTCOMES = ["in_report", "cut_by_limit", "excluded_ignored", "skipped_by_model"] as const;
+const OUTCOMES = ["in_report", "cut_by_limit", "excluded_ignored", "skipped_by_model", "refused_by_provider"] as const;
 
 /**
  * What happened to a candidate after the model classified it: it reached the
  * report, fell below the daily paper limit, was dropped because the reader
- * had marked it ignored, or the model judged it irrelevant (`skip`).
+ * had marked it ignored, or the model judged it irrelevant (`skip`). A
+ * candidate the provider's content-safety filter refused was never judged at
+ * all; it is `refused_by_provider` so an evaluation can leave it out instead
+ * of counting it as a model skip.
  */
 export type FilterDecisionOutcome = (typeof OUTCOMES)[number];
 

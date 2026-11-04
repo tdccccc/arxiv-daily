@@ -86,6 +86,7 @@ function setup(listingAbstract: string) {
     removeAll: vi.fn(async () => undefined),
   };
   const paperIndex = {
+    getMany: vi.fn(async () => new Map()),
     upsertManyFromDailyPapers: vi.fn(async (papers: Array<{ arxivId: string }>) =>
       papers.map((paper) => ({
         entry: { arxivId: paper.arxivId, status: "inbox", paperPath: null },

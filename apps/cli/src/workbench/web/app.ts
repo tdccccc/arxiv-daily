@@ -19,6 +19,8 @@ export interface WorkbenchClientOptions {
   fetch?: typeof fetch;
   searchDelayMs?: number;
   pollIntervalMs?: number;
+  /** How often an idle page asks whether the server started a run on its own; 0 disables. */
+  idlePollIntervalMs?: number;
   appearance?: UiAppearancePreferences;
 }
 
@@ -695,18 +697,36 @@ function mountWorkbenchContent(root: HTMLElement, options: WorkbenchClientOption
     pre.textContent = t(currentRun.output) || t("等待运行输出…");
   }
 
+  /** Whether two polls describe the same run in the same state, so re-rendering would change nothing. */
+  function sameRun(left: WorkbenchRun | null, right: WorkbenchRun | null): boolean {
+    if (!left || !right) return left === right;
+    return left.id === right.id && left.status === right.status && left.output === right.output
+      && left.exitCode === right.exitCode && left.date === right.date && left.finishedAt === right.finishedAt;
+  }
+
+  /**
+   * Polls quickly while a run is in progress and slowly otherwise, so a run the
+   * server starts on its own (the workbench schedule) still shows up on an idle
+   * page and its finish still refreshes the list and calendar.
+   */
+  function scheduleRunPoll(running: boolean): void {
+    window.clearTimeout(pollTimer);
+    const delay = running ? options.pollIntervalMs ?? 1200 : options.idlePollIntervalMs ?? 30_000;
+    if (delay > 0) pollTimer = window.setTimeout(() => { void pollRun(); }, delay);
+  }
+
   function acceptRun(run: WorkbenchRun | null): void {
     if (disposed) return;
     runVersion += 1;
-    if (run && currentRun?.id === run.id && currentRun.status !== "running" && run.status === "running") return;
+    if (run && currentRun?.id === run.id && currentRun.status !== "running" && run.status === "running") { scheduleRunPoll(false); return; }
+    if (sameRun(run, currentRun)) { scheduleRunPoll(run?.status === "running"); return; }
     const previous = currentRun;
     currentRun = run;
     root.querySelector(".settings-form")?.dispatchEvent(new CustomEvent("workbench-run", { detail: run }));
     renderRun();
     if (run) void reviewView?.handleRun(run);
     if (run?.id !== previous?.id || run?.status !== previous?.status || run?.date !== previous?.date) void calendar.refresh();
-    window.clearTimeout(pollTimer);
-    if (run?.status === "running") pollTimer = window.setTimeout(() => { void pollRun(); }, options.pollIntervalMs ?? 1200);
+    scheduleRunPoll(run?.status === "running");
     if (run && run.status !== "running" && previous?.id === run.id && previous.status === "running") {
       if (selectedView === "library") void showLibrary(false);
       if (root.dataset.view === "list") { listScroll = reading.scrollTop; void loadList(true); }
