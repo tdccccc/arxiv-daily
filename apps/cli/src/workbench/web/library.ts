@@ -75,6 +75,7 @@ export function mountLibrary(root: HTMLElement, options: LibraryViewOptions): ()
       h("div", { class: "library-result-summary" },
         h("strong", null, label(searching ? "检索结果 · {0} 篇论文" : "目录 · {0} 篇论文", page.total)),
         summary ? h("span", null, label("待识别 {0} · 处理失败 {1}", summary.unresolved, summary.failed)) : null,
+        summary && summary.failed > 0 ? h("span", { class: "muted" }, label("arXiv 查询失败的论文会在下次建立索引时重试。")) : null,
         summary?.truncated ? h("p", null, label("扫描达到数量上限，目录可能不完整。")) : null,
       ),
       ...(rows.length ? rows : [searching || appliedQuery ? empty("没有匹配的文献", "尝试其他关键词，或在连接与索引中检查扫描和索引状态。") : empty("文献库尚无论文", "在连接与索引中扫描目录，建立可浏览的论文目录。")]),

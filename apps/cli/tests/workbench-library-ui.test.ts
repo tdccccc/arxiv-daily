@@ -133,3 +133,15 @@ it("supports indexed local files without inventing arXiv metadata", async () => 
   expect(root.querySelector("a")?.getAttribute("href")).toBe("api/library/pdf?key=file%3Aabcdef");
   expect(root.querySelector(".paper-row-meta")?.textContent).not.toContain("·");
 });
+
+it("shows the retry hint beside the failure count only when a scan left failures", async () => {
+  const summary = { ready: 3, unresolved: 1, unrelated: 0, failed: 2, papers: 6, truncated: false };
+  const root = setup(vi.fn().mockResolvedValue(page([paper], { summary }))); await settle();
+  expect(root.textContent).toContain("待识别 1 · 处理失败 2");
+  expect(root.textContent).toContain("arXiv 查询失败的论文会在下次建立索引时重试。");
+  const clean = setup(vi.fn().mockResolvedValue(page([paper], { summary: { ...summary, failed: 0 } }))); await settle();
+  expect(clean.textContent).not.toContain("下次建立索引");
+  setUiLanguage("en");
+  const english = setup(vi.fn().mockResolvedValue(page([paper], { summary }))); await settle();
+  expect(english.textContent).toContain("Papers whose arXiv lookup failed are retried the next time the index is built.");
+});
