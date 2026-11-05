@@ -31,4 +31,4 @@
 
 ## 修复情况
 
-采用"索引前顺带重试"方案：`index()` 在目录未变但目录里还有 `metadata-fetch-failed` 记录时，照常扫描一次——重扫只会对 arXiv 查询失败过、且仍未被回答的 id 重新发起请求（`metadata-unavailable`，即 arXiv 已明确回答过的，不在自动重试之列，仍由显式扫描重试）。完成提示在存在部分 arXiv 查询失败时补一句失败数量和"下次索引会重试"。工作台文献库页仍是只显示"处理失败 N"计数，未加提示语；该页的"重新准备 / Retry preparation"按钮现在会真正重试这些文件。测试：`library-workflow` 新增"retries the arXiv lookup for files it failed for, on the next index run of an unchanged folder"（首次扫描失败 → `index()` 发起第二次查询 → 记录变 ready → 再索引不再查询）；`plugin/tests/index-completion.test.ts` 新增部分失败文案用例。
+采用"索引前顺带重试"方案：`index()` 在目录未变但目录里还有 `metadata-fetch-failed` 记录时，照常扫描一次——重扫只会对 arXiv 查询失败过、且仍未被回答的 id 重新发起请求（`metadata-unavailable`，即 arXiv 已明确回答过的，不在自动重试之列，仍由显式扫描重试）。完成提示在存在部分 arXiv 查询失败时补一句失败数量和"下次索引会重试"。工作台文献库页在"处理失败 N"计数旁补了一句提示（仅当失败数大于 0）：arXiv 查询失败的论文会在下次建立索引时重试；该页的"重新准备 / Retry preparation"按钮现在会真正重试这些文件。测试：`library-workflow` 新增"retries the arXiv lookup for files it failed for, on the next index run of an unchanged folder"（首次扫描失败 → `index()` 发起第二次查询 → 记录变 ready → 再索引不再查询）；`plugin/tests/index-completion.test.ts` 新增部分失败文案用例。

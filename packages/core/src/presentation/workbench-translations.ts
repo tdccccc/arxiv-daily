@@ -155,6 +155,7 @@ export const workbenchMessages: ReadonlyArray<readonly [string, string]> = [
   ["检索结果 · {0} 篇论文", "Search results · {0} papers"],
   ["请输入检索内容", "Enter a search query"],
   ["待识别 {0} · 处理失败 {1}", "Unresolved {0} · Failed {1}"],
+  ["arXiv 查询失败的论文会在下次建立索引时重试。", "Papers whose arXiv lookup failed are retried the next time the index is built."],
   ["扫描达到数量上限，目录可能不完整。", "The scan limit was reached; the catalog may be incomplete."],
   ["本地 PDF 不可用", "Local PDF unavailable"],
   ["暂无摘要", "No abstract available"],

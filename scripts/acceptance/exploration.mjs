@@ -396,9 +396,17 @@ export async function runExplorationLoop({ driver, model, tasks, artifactDir, ma
             taskSteps: Math.max(0, taskStepsLimit - taskSteps + 1), taskApiCalls: Math.max(0, taskApiCallsLimit - apiCallsUsedSoFar),
           },
         };
+        // The model call's deadline is min(its own modelCallTimeoutMs, what is left of the run-wide
+        // duration budget); when the run is nearly out of time the two land on the same instant, so a
+        // timeout that fires there is the run running out of time, not a slow model. Which bound won is
+        // decided from the two bounds here rather than by comparing clocks again once the timer fires —
+        // that comparison sat on the instant itself and flipped the run-wide case of the "timeout retries
+        // obey per-task and run-wide budgets" test on a loaded runner.
+        const remainingBudgetMs = deadline - Date.now();
+        const modelCallCappedByRunBudget = remainingBudgetMs <= callTimeout;
         let action;
         try {
-          const reply = await withDeadline(childSignal => callModel({ ...request, signal: childSignal }), Math.min(callTimeout, deadline - Date.now()), "Model API call", signal);
+          const reply = await withDeadline(childSignal => callModel({ ...request, signal: childSignal }), Math.min(callTimeout, remainingBudgetMs), "Model API call", signal);
           consecutiveModelTimeouts = 0;
           event.modelReply = typeof reply === "string" ? reply.slice(0, 16000) : "[Non-string model response]";
           try { action = parseExplorationAction(reply, observation); }
@@ -465,6 +473,16 @@ export async function runExplorationLoop({ driver, model, tasks, artifactDir, ma
             // not a per-task one, so it ends the whole run like the step/duration budgets do.
             scenario.status = "blocked";
             scenario.error = "Exploration model API-call budget exhausted; the run cannot continue";
+            scenario.steps.push(safe({ step: event.step, action: null, error: event.error, observationId: observation.id }));
+            await record(event);
+            throw budgetExhausted(scenario.error);
+          }
+          if (error.name === "ExplorationTimeoutError" && modelCallCappedByRunBudget && !signal?.aborted) {
+            // The run's own remaining duration budget ended this call (see where the flag above is set),
+            // so there is no room for the single retry a model timeout earns: end the run the way the
+            // loop-top duration check does instead of spending a second call the budget cannot fit.
+            scenario.status = "blocked";
+            scenario.error = "Exploration duration budget exhausted; unfinished tasks are not verified";
             scenario.steps.push(safe({ step: event.step, action: null, error: event.error, observationId: observation.id }));
             await record(event);
             throw budgetExhausted(scenario.error);
