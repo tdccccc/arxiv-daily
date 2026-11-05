@@ -23,8 +23,8 @@ test("CodeQL workflow is PR, main, scheduled, and manually runnable", async () =
     actions: "read",
   });
   const steps = workflow.jobs.analyze.steps;
-  assert.equal(steps[1].uses, "github/codeql-action/init@6f2ac81f5cd81fe351a197ba0b00d91d03cd2aee");
-  assert.equal(steps[2].uses, "github/codeql-action/analyze@6f2ac81f5cd81fe351a197ba0b00d91d03cd2aee");
+  assert.equal(steps[1].uses, "github/codeql-action/init@9b3254085494b55a0f7c4c2b3d2d52cc712ce370");
+  assert.equal(steps[2].uses, "github/codeql-action/analyze@9b3254085494b55a0f7c4c2b3d2d52cc712ce370");
   assert.equal(steps[1].with.languages, "javascript-typescript");
   for (const step of steps) {
     if ("uses" in step) assert.match(step.uses, /^[^@\s]+@[0-9a-f]{40}$/);
