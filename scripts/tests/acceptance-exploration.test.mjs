@@ -1238,13 +1238,28 @@ test("two consecutive model timeouts block without a third attempt", async t => 
 });
 
 test("timeout retries obey per-task and run-wide budgets", async t => {
-  for (const budget of [{ taskMaxSteps: 1 }, { taskMaxApiCalls: 1 }, { maxSteps: 1 }, { maxDurationMs: 30 }]) {
+  // The duration case's call timeout sits well above its run budget, so the call's deadline is the
+  // run's remaining budget and the budget (not a slow model) is what ends the call; that budget is in
+  // turn well above what a cold temp dir and a fixture observation cost, so a loaded runner cannot
+  // spend it before the first call and leave zero calls instead of one (the flake this case had).
+  for (const { expectation, ...budget } of [
+    { taskMaxSteps: 1, modelCallTimeoutMs: 15, expectation: /Task budget exhausted \(steps, 1\)/ },
+    { taskMaxApiCalls: 1, modelCallTimeoutMs: 15, expectation: /Task budget exhausted \(model API calls, 1\)/ },
+    // A run-wide step cap is enforced through each task's own step budget (which is clamped to it),
+    // so a single-task run reports it as that task's budget; the run-wide wording is for later tasks.
+    { maxSteps: 1, modelCallTimeoutMs: 15, expectation: /Task budget exhausted \(steps, 1\)/ },
+    { maxDurationMs: 200, modelCallTimeoutMs: 600, expectation: /Exploration duration budget exhausted/ },
+  ]) {
+    const { modelCallTimeoutMs, ...limits } = budget;
     let calls = 0;
     const model = usageModel(() => { calls++; return new Promise(() => {}); });
     const result = await runExplorationLoop({ driver: fixtureDriver(), model, tasks: [task()], artifactDir: await temporary(t),
-      modelCallTimeoutMs: budget.maxDurationMs ? 100 : 15, ...budget });
+      modelCallTimeoutMs, ...limits });
     assert.equal(result.status, "blocked", JSON.stringify(budget));
     assert.equal(calls, 1, JSON.stringify(budget));
+    // Which budget ended the run is part of the contract: the duration case must be ended by the
+    // run-wide duration budget itself, not by a model timeout whose retry the budget then swallows.
+    assert.match(result.scenarios[0].error, expectation, JSON.stringify(budget));
   }
 });
 
