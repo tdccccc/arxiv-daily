@@ -23,6 +23,6 @@
     "test": "node ../../scripts/run-core-tests.mjs"
   },
   "dependencies": {
-    "pako": "^3.0.2"
+    "pako": "^2.1.0"
   }
 }
