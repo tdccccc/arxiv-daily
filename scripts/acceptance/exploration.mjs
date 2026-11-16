@@ -37,11 +37,43 @@ export class ExplorationActionError extends Error {
   constructor(message) { super(message); this.name = "ExplorationActionError"; }
 }
 
+/**
+ * The single JSON object a reply starts with, as text; undefined when the reply does not start with a
+ * complete one. Some models keep writing after their answer (the same object again, a code fence, an
+ * invented tool call or warning). The action is the first object and is unambiguous, so whatever follows
+ * is dropped instead of failing the step. A reply with text BEFORE its object is not rescued: that text
+ * may hold example objects, and which one is meant is no longer clear.
+ */
+function leadingJsonObject(text) {
+  if (text[0] !== "{") return undefined;
+  let depth = 0, inString = false, escaped = false;
+  for (let index = 0; index < text.length; index += 1) {
+    const character = text[index];
+    if (inString) {
+      if (escaped) escaped = false;
+      else if (character === "\\") escaped = true;
+      else if (character === '"') inString = false;
+    } else if (character === '"') inString = true;
+    else if (character === "{") depth += 1;
+    else if (character === "}" && --depth === 0) return text.slice(0, index + 1);
+  }
+  return undefined;
+}
+
+/** How many characters after its action object a reply carried, and parseExplorationAction dropped. */
+export function ignoredReplyCharacters(raw) {
+  if (typeof raw !== "string") return 0;
+  const text = raw.trim();
+  const leading = leadingJsonObject(text);
+  return leading ? text.length - leading.length : 0;
+}
+
 /** Every element reference belongs to one observation. Selectors and code are never model inputs. */
 export function parseExplorationAction(raw, observation) {
   if (typeof raw !== "string" || raw.length > 16000) throw new ExplorationActionError("Model reply must be a JSON object below 16000 characters");
+  const text = raw.trim();
   let value;
-  try { value = JSON.parse(raw.trim()); }
+  try { value = JSON.parse(leadingJsonObject(text) ?? text); }
   catch { throw new ExplorationActionError("Model reply is not valid JSON; return exactly one action object without Markdown fences"); }
   if (!value || Array.isArray(value) || typeof value !== "object" || !Object.hasOwn(actionKeys, value.type)) {
     throw new ExplorationActionError("Unknown action; only the documented browser operations are allowed");
@@ -416,6 +448,10 @@ export async function runExplorationLoop({ driver, model, tasks, artifactDir, ma
           }
           if (action) {
             event.action = action;
+            // The reply went on after its action object and the rest was dropped (see leadingJsonObject).
+            // Recorded so a report reader can tell a clean run from one that leaned on this tolerance.
+            const ignored = ignoredReplyCharacters(reply);
+            if (ignored > 0) { event.replyOverflow = ignored; metrics.repliesWithExtraText = (metrics.repliesWithExtraText ?? 0) + 1; }
             if (browserActions.has(action.type)) {
               try {
                 const result = await withDeadline(childSignal => driver.execute(action, observation, { signal: childSignal }), Math.min(10000, deadline - Date.now()), "Browser action", signal);
@@ -510,6 +546,7 @@ export async function runExplorationLoop({ driver, model, tasks, artifactDir, ma
         }
         scenario.steps.push(safe({ step: event.step, action: event.action ?? null, ...(event.error ? { error: event.error } : {}),
           ...(event.navigationRecovered ? { navigationRecovered: event.navigationRecovered } : {}), ...(event.captureError ? { captureError: event.captureError } : {}),
+          ...(event.replyOverflow ? { replyOverflow: event.replyOverflow } : {}),
           observationId: observation.id }));
         await record(event);
         history.push(safe({ step: event.step, taskId: task.id, action: event.action, result: event.error ? { error: event.error } : event.result }));

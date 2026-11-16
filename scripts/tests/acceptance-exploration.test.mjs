@@ -8,7 +8,7 @@ import vm from "node:vm";
 import { Window } from "happy-dom";
 import { classifyControlRestriction, createExplorationDriver } from "../acceptance/exploration-browser.mjs";
 import { goalTasks as createDefaultExplorationTasks } from "../acceptance/exploration-tasks/workbench.mjs";
-import { collapseOptionSets, loadExplorationModel, parseExplorationAction, runExplorationLoop, selectExplorationTasks } from "../acceptance/exploration.mjs";
+import { collapseOptionSets, ignoredReplyCharacters, loadExplorationModel, parseExplorationAction, runExplorationLoop, selectExplorationTasks } from "../acceptance/exploration.mjs";
 import { ACCEPTANCE_DATE, PAPERS } from "../acceptance/fixtures.mjs";
 
 const observation = (version = 1) => ({
@@ -512,6 +512,65 @@ test("action validation only accepts current refs and bounded browser operations
     { type: "fill", ref: "s1-4", value: "/real-vault" }, { type: "wait", milliseconds: 600000 },
     { type: "click", ref: "s1-1", unexpected: true }, { type: "fill", ref: "s1-1", value: "text" },
   ]) assert.throws(() => parseExplorationAction(JSON.stringify(command), current));
+});
+
+// Replies a real thinking model sent on 2026-11-15: the action first, then text the prompt never asked for.
+test("a reply that keeps writing after its action object is read as that first object", () => {
+  const current = observation();
+  const click = { type: "click", ref: "s1-1" };
+  const first = JSON.stringify(click);
+  for (const tail of [
+    "\n\n<system_warning>Warning: The target may be hidden or not in view.</system_warning>",
+    "\n\n```json\n" + first + "\n```",
+    "}",
+    first,
+    "\n\nActually the format is one action. So the answer should be:\n" + JSON.stringify({ type: "reload" }),
+    '\n\n<｜｜DSML｜｜ invoke name="get_observation"></｜｜DSML｜｜ parameter>',
+  ]) {
+    assert.deepEqual(parseExplorationAction(first + tail, current), click, JSON.stringify(tail));
+    assert.equal(ignoredReplyCharacters(first + tail), tail.length, JSON.stringify(tail));
+  }
+  assert.equal(ignoredReplyCharacters(`  ${first}\n`), 0);
+  // Braces and quotes inside a string value do not end the object early.
+  const tricky = { type: "finding", summary: 'a "}" in {text}', evidence: "back\\slash }" };
+  assert.deepEqual(parseExplorationAction(JSON.stringify(tricky) + " trailing", current), tricky);
+});
+
+test("a reply is still refused when its action is not the first thing in it, or what follows cannot rescue it", () => {
+  const current = observation();
+  const click = JSON.stringify({ type: "click", ref: "s1-1" });
+  for (const reply of [
+    `Let me click it.\n${click}`,
+    "```json\n" + click + "\n```",
+    `[${click}]`,
+    '{"type":"click","ref":"s1-1"',
+    "not json",
+  ]) {
+    assert.throws(() => parseExplorationAction(reply, current), /not valid JSON|Unknown action/, reply);
+    assert.equal(ignoredReplyCharacters(reply), 0, reply);
+  }
+  // The leading object is still validated in full: extra text never widens what an action may do.
+  assert.throws(() => parseExplorationAction('{"type":"click","ref":"s0-1"} then more', current), /stale ref/);
+  assert.throws(() => parseExplorationAction('{"type":"evaluate","code":"x"} then more', current), /Unknown action/);
+  assert.throws(() => parseExplorationAction('{"type":"fill","ref":"s1-3","value":"k"} then more', current), /restricted/);
+});
+
+test("the loop acts on a reply's first object and records that the rest was dropped", async t => {
+  const passAfterOneAction = () => task(({ actions }) => ({ passed: actions.length === 1, checks: [{ label: "clicked", passed: actions.length === 1 }] }));
+  const tail = "\n\n<system_warning>ignored</system_warning>";
+  const driver = fixtureDriver();
+  const result = await runExplorationLoop({ driver,
+    model: async request => JSON.stringify({ type: "click", ref: request.observation.controls[0].ref }) + tail,
+    tasks: [passAfterOneAction()], artifactDir: await temporary(t) });
+  assert.equal(result.status, "passed");
+  assert.equal(driver.executed.length, 1);
+  assert.equal(result.scenarios[0].steps[0].replyOverflow, tail.length);
+  assert.equal(result.metrics.repliesWithExtraText, 1);
+  const clean = await runExplorationLoop({ driver: fixtureDriver(),
+    model: async request => JSON.stringify({ type: "click", ref: request.observation.controls[0].ref }),
+    tasks: [passAfterOneAction()], artifactDir: await temporary(t) });
+  assert.equal(clean.metrics.repliesWithExtraText, undefined);
+  assert.equal(clean.scenarios[0].steps[0].replyOverflow, undefined);
 });
 
 test("a host-agnostic keyboard press is allowed only from a strict allowlist and never carries a ref", () => {
