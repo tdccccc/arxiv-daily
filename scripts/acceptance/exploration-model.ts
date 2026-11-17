@@ -106,6 +106,10 @@ export async function createConfiguredExplorationModel(options: ModelOptions = {
   const configPath = options.configPath ?? resolveCliConfigPath();
   const settings = await readModelSettings(configPath);
   const maxApiCalls = options.maxApiCalls ?? 100;
+  // Providers that count thinking tokens against the completion limit (DeepSeek does) spend most of
+  // 4096 on reasoning over a large observation and cut the one-line action off; a thinking model gets
+  // room for both. The action itself stays small either way (maxOutputCodeUnits below).
+  const maxCompletionTokens = settings.thinkingMode ? 16384 : 4096;
   if (!Number.isInteger(maxApiCalls) || maxApiCalls < 1 || maxApiCalls > 1000) throw new Error("Exploration maxApiCalls must be between 1 and 1000");
   const endpoint = new URL(settings.baseUrl);
   const secrets = [settings.apiKey, endpoint.username, endpoint.password, ...endpoint.searchParams.values()].filter(Boolean);
@@ -133,7 +137,7 @@ export async function createConfiguredExplorationModel(options: ModelOptions = {
   logger.setSensitiveValues(secrets);
   endpoint.username = ""; endpoint.password = ""; endpoint.search = ""; endpoint.hash = "";
   return {
-    describe: { provider: settings.provider, model: settings.model, baseUrl: endpoint.toString(), source: "workbench-cli-llm", maxApiCalls, maxCompletionTokens: 4096 },
+    describe: { provider: settings.provider, model: settings.model, baseUrl: endpoint.toString(), source: "workbench-cli-llm", maxApiCalls, maxCompletionTokens },
     redact,
     metrics: () => ({ ...usage }),
     async next(request: ModelRequest): Promise<string> {
@@ -143,7 +147,7 @@ export async function createConfiguredExplorationModel(options: ModelOptions = {
         return await client.call([{ role: "system", content: SYSTEM_PROMPT }, { role: "user", content: redact(payload) }], {
           signal: request.signal,
           temperature: 0,
-          maxCompletionTokens: 4096,
+          maxCompletionTokens,
           maxOutputCodeUnits: 16000,
           onMetrics(metrics) {
             usage.logicalCalls += metrics.logicalCalls;

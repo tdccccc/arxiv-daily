@@ -687,6 +687,16 @@ async function modelConfig(t, url, extra = "") {
   return configPath;
 }
 
+test("a thinking model gets a completion budget with room for its reasoning", async t => {
+  const server = await localModel(t);
+  const configPath = (await modelConfig(t, server.url));
+  await writeFile(configPath, (await readFile(configPath, "utf8")).replace("thinking_mode = false", "thinking_mode = true"));
+  const model = await loadExplorationModel({ configPath, maxApiCalls: 2 });
+  await model.next({ task: { id: "test", title: "Test", goal: "Check controls" }, observation: observation(), history: [], checks: [] });
+  assert.equal(server.requests[0].body.max_tokens, 16384);
+  assert.equal(model.describe.maxCompletionTokens, 16384);
+});
+
 test("configured exploration uses the real model client while reading only CLI llm fields", async t => {
   const server = await localModel(t);
   const configPath = await modelConfig(t, server.url);
