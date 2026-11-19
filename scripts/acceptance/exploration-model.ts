@@ -100,16 +100,96 @@ export async function readModelSettings(
   };
 }
 
+/** The complete JSON object `text` starts with, if any (same rule as exploration.mjs's reply parser). */
+function leadingJsonObject(text: string): string | undefined {
+  if (text[0] !== "{") return undefined;
+  let depth = 0, inString = false, escaped = false;
+  for (let index = 0; index < text.length; index += 1) {
+    const character = text[index];
+    if (inString) {
+      if (escaped) escaped = false;
+      else if (character === "\\") escaped = true;
+      else if (character === '"') inString = false;
+    } else if (character === '"') inString = true;
+    else if (character === "{") depth += 1;
+    else if (character === "}" && --depth === 0) return text.slice(0, index + 1);
+  }
+  return undefined;
+}
+
+/** Answer text carried by one OpenAI-style SSE event; other formats yield "" and pass through untouched. */
+function eventAnswerText(event: string): string {
+  let text = "";
+  for (const line of event.split(/\r?\n/)) {
+    if (!line.startsWith("data:")) continue;
+    try {
+      const content = (JSON.parse(line.slice(5)) as { choices?: Array<{ delta?: { content?: unknown } }> }).choices?.[0]?.delta?.content;
+      if (typeof content === "string") text += content;
+    } catch { /* [DONE] and non-JSON data lines carry no answer text */ }
+  }
+  return text;
+}
+
+const SYNTHETIC_END = `data: ${JSON.stringify({ choices: [{ delta: {}, finish_reason: "stop" }] })}\n\ndata: [DONE]\n\n`;
+
+/**
+ * Some models answer a step correctly and then keep going: they invent the next turn (a fake system
+ * message, a copy of the whole page, more actions) until a token or length cap stops them, which took
+ * 20-60 s and failed the step in the 2026-11 release runs. The action is the first JSON object, so the
+ * stream is closed as soon as anything but whitespace follows it; a reply that stops on its own is left
+ * alone and keeps its usage report. A reply that does not start with an object is passed through whole.
+ */
+export function endAfterFirstAction(source: AsyncIterable<string>, onEarlyEnd: () => void = () => {}): AsyncIterable<string> {
+  return {
+    [Symbol.asyncIterator]() {
+      const iterator = source[Symbol.asyncIterator]();
+      const queue: string[] = [];
+      let pending = "", answer = "", finished = false, actionComplete = false;
+      const close = async (): Promise<void> => { await iterator.return?.().catch(() => undefined); };
+      return {
+        async next(): Promise<IteratorResult<string>> {
+          while (true) {
+            if (queue.length) return { done: false, value: queue.shift() as string };
+            if (finished) return { done: true, value: undefined };
+            const chunk = await iterator.next();
+            if (chunk.done) { finished = true; if (pending) queue.push(pending); pending = ""; continue; }
+            pending += chunk.value;
+            for (let match = /\r?\n\r?\n/.exec(pending); match; match = /\r?\n\r?\n/.exec(pending)) {
+              const event = pending.slice(0, match.index + match[0].length);
+              pending = pending.slice(event.length);
+              answer += eventAnswerText(event);
+              const trimmed = answer.trimStart();
+              const action = leadingJsonObject(trimmed);
+              const ranOn = action !== undefined && trimmed.slice(action.length).trim() !== "";
+              // An event that only adds text after an already complete action is dropped, not delivered.
+              if (!(ranOn && actionComplete)) queue.push(event);
+              if (ranOn) {
+                queue.push(SYNTHETIC_END);
+                finished = true; pending = "";
+                onEarlyEnd();
+                await close();
+                break;
+              }
+              actionComplete = action !== undefined;
+            }
+          }
+        },
+        async return(): Promise<IteratorResult<string>> {
+          finished = true; queue.length = 0;
+          await close();
+          return { done: true, value: undefined };
+        },
+      };
+    },
+  };
+}
+
 /** Never constructs a product runtime or opens a user's vault/cache. */
 export async function createConfiguredExplorationModel(options: ModelOptions = {}) {
   // Use the user's environment, not the disposable workbench's XDG_CONFIG_HOME.
   const configPath = options.configPath ?? resolveCliConfigPath();
   const settings = await readModelSettings(configPath);
   const maxApiCalls = options.maxApiCalls ?? 100;
-  // Providers that count thinking tokens against the completion limit (DeepSeek does) spend most of
-  // 4096 on reasoning over a large observation and cut the one-line action off; a thinking model gets
-  // room for both. The action itself stays small either way (maxOutputCodeUnits below).
-  const maxCompletionTokens = settings.thinkingMode ? 16384 : 4096;
   if (!Number.isInteger(maxApiCalls) || maxApiCalls < 1 || maxApiCalls > 1000) throw new Error("Exploration maxApiCalls must be between 1 and 1000");
   const endpoint = new URL(settings.baseUrl);
   const secrets = [settings.apiKey, endpoint.username, endpoint.password, ...endpoint.searchParams.values()].filter(Boolean);
@@ -121,23 +201,29 @@ export async function createConfiguredExplorationModel(options: ModelOptions = {
   };
   const logger = new Logger("error");
   const transport = new NodeHttpClient();
-  const usage = { apiCalls: 0, logicalCalls: 0, inputTokens: 0, outputTokens: 0, totalTokens: 0, usageComplete: true };
+  const usage = { apiCalls: 0, logicalCalls: 0, inputTokens: 0, outputTokens: 0, totalTokens: 0, usageComplete: true, repliesEndedEarly: 0 };
+  const countCall = (): void => {
+    if (usage.apiCalls >= maxApiCalls) {
+      // Permanent locally: the core client's automatic retry cannot bypass this limit.
+      throw Object.assign(new Error(`Exploration model API call budget exhausted (${maxApiCalls})`), { name: "ExplorationBudgetError", status: 400 });
+    }
+    usage.apiCalls += 1;
+  };
   const http: HttpClient = {
-    request(request) {
-      if (usage.apiCalls >= maxApiCalls) {
-        // Permanent locally: the core client's automatic retry cannot bypass this limit.
-        const error = Object.assign(new Error(`Exploration model API call budget exhausted (${maxApiCalls})`), { name: "ExplorationBudgetError", status: 400 });
-        throw error;
-      }
-      usage.apiCalls += 1;
-      return transport.request(request);
+    request(request) { countCall(); return transport.request(request); },
+    // Streamed so a reply can be ended the moment it runs past its action (see endAfterFirstAction).
+    async requestStream(request) {
+      countCall();
+      const response = await transport.requestStream(request);
+      if (response.status < 200 || response.status >= 300) return response;
+      return { ...response, body: endAfterFirstAction(response.body, () => { usage.repliesEndedEarly += 1; }) };
     },
   };
   const client = new LlmClient(settings, logger, http);
   logger.setSensitiveValues(secrets);
   endpoint.username = ""; endpoint.password = ""; endpoint.search = ""; endpoint.hash = "";
   return {
-    describe: { provider: settings.provider, model: settings.model, baseUrl: endpoint.toString(), source: "workbench-cli-llm", maxApiCalls, maxCompletionTokens },
+    describe: { provider: settings.provider, model: settings.model, baseUrl: endpoint.toString(), source: "workbench-cli-llm", maxApiCalls, maxCompletionTokens: 4096 },
     redact,
     metrics: () => ({ ...usage }),
     async next(request: ModelRequest): Promise<string> {
@@ -147,7 +233,7 @@ export async function createConfiguredExplorationModel(options: ModelOptions = {
         return await client.call([{ role: "system", content: SYSTEM_PROMPT }, { role: "user", content: redact(payload) }], {
           signal: request.signal,
           temperature: 0,
-          maxCompletionTokens,
+          maxCompletionTokens: 4096,
           maxOutputCodeUnits: 16000,
           onMetrics(metrics) {
             usage.logicalCalls += metrics.logicalCalls;

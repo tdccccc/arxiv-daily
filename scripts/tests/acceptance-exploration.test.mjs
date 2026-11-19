@@ -687,14 +687,27 @@ async function modelConfig(t, url, extra = "") {
   return configPath;
 }
 
-test("a thinking model gets a completion budget with room for its reasoning", async t => {
-  const server = await localModel(t);
-  const configPath = (await modelConfig(t, server.url));
-  await writeFile(configPath, (await readFile(configPath, "utf8")).replace("thinking_mode = false", "thinking_mode = true"));
-  const model = await loadExplorationModel({ configPath, maxApiCalls: 2 });
-  await model.next({ task: { id: "test", title: "Test", goal: "Check controls" }, observation: observation(), history: [], checks: [] });
-  assert.equal(server.requests[0].body.max_tokens, 16384);
-  assert.equal(model.describe.maxCompletionTokens, 16384);
+test("a reply that runs on after its action is ended early; one that stops by itself is left alone", async t => {
+  const event = content => `data: ${JSON.stringify({ choices: [{ delta: { content } }] })}\n\n`;
+  let closed = false;
+  const runaway = await localModel(t, (_body, response) => {
+    response.writeHead(200, { "content-type": "text/event-stream" });
+    response.write(event('{"type":"wait",') + event('"milliseconds":500}'));
+    const timer = setInterval(() => response.write(event("\n\n<system>Observation: invented page text</system>")), 15);
+    response.on("close", () => { closed = true; clearInterval(timer); });
+  });
+  const model = await loadExplorationModel({ configPath: await modelConfig(t, runaway.url), maxApiCalls: 2 });
+  const answer = await model.next({ task: { id: "test", title: "Test", goal: "Check controls" }, observation: observation(), history: [], checks: [] });
+  assert.equal(answer, '{"type":"wait","milliseconds":500}');
+  assert.equal(model.metrics().repliesEndedEarly, 1);
+  assert.equal(model.metrics().apiCalls, 1);
+  for (let waited = 0; !closed && waited < 2000; waited += 20) await new Promise(resolve => setTimeout(resolve, 20));
+  assert.equal(closed, true, "the connection to the model is closed instead of reading the invented turn");
+
+  const clean = await localModel(t);
+  const cleanModel = await loadExplorationModel({ configPath: await modelConfig(t, clean.url), maxApiCalls: 2 });
+  assert.equal(await cleanModel.next({ task: { id: "test", title: "Test", goal: "Check controls" }, observation: observation(), history: [], checks: [] }), '{"type":"done"}');
+  assert.deepEqual([cleanModel.metrics().repliesEndedEarly, cleanModel.metrics().inputTokens, cleanModel.metrics().usageComplete], [0, 12, true]);
 });
 
 test("configured exploration uses the real model client while reading only CLI llm fields", async t => {
