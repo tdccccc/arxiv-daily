@@ -576,7 +576,10 @@ export function classifyControlRestriction(control, allowedUrl) {
  * from silently drifting out of sync with the shared allowlist.
  */
 const PRESS_KEY_CODES = {
-  Enter: { key: "Enter", code: "Enter", windowsVirtualKeyCode: 13 },
+  // `text` makes Chromium follow keydown with a keypress, which is what activates a focused button or
+  // link. Without it Enter and Space reached the page but did nothing (a real keyboard works: checked by
+  // hand on 2026-11-20 after a keyboard-only persona reported a dead "Summarize by ID" button).
+  Enter: { key: "Enter", code: "Enter", windowsVirtualKeyCode: 13, text: "\r" },
   Escape: { key: "Escape", code: "Escape", windowsVirtualKeyCode: 27 },
   Tab: { key: "Tab", code: "Tab", windowsVirtualKeyCode: 9 },
   "Shift+Tab": { key: "Tab", code: "Tab", windowsVirtualKeyCode: 9, modifiers: 8 },
@@ -584,7 +587,7 @@ const PRESS_KEY_CODES = {
   ArrowDown: { key: "ArrowDown", code: "ArrowDown", windowsVirtualKeyCode: 40 },
   ArrowLeft: { key: "ArrowLeft", code: "ArrowLeft", windowsVirtualKeyCode: 37 },
   ArrowRight: { key: "ArrowRight", code: "ArrowRight", windowsVirtualKeyCode: 39 },
-  Space: { key: " ", code: "Space", windowsVirtualKeyCode: 32 },
+  Space: { key: " ", code: "Space", windowsVirtualKeyCode: 32, text: " " },
   Home: { key: "Home", code: "Home", windowsVirtualKeyCode: 36 },
   End: { key: "End", code: "End", windowsVirtualKeyCode: 35 },
   PageUp: { key: "PageUp", code: "PageUp", windowsVirtualKeyCode: 33 },
@@ -617,7 +620,7 @@ export function createObsidianActionExecutor({ client, evaluate, redact = value 
   async function dispatchKey(name) {
     const spec = PRESS_KEY_CODES[name];
     const params = { key: spec.key, code: spec.code, windowsVirtualKeyCode: spec.windowsVirtualKeyCode, nativeVirtualKeyCode: spec.windowsVirtualKeyCode, modifiers: spec.modifiers ?? 0 };
-    await client.send("Input.dispatchKeyEvent", { type: "keyDown", ...params });
+    await client.send("Input.dispatchKeyEvent", { type: "keyDown", ...params, ...(spec.text ? { text: spec.text } : {}) });
     await client.send("Input.dispatchKeyEvent", { type: "keyUp", ...params });
   }
 

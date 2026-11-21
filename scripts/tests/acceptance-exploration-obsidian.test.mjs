@@ -811,6 +811,23 @@ test("press sends a real keyDown/keyUp pair for an allowed key when focus is ins
   assert.equal(calls[0].params.key, "ArrowDown");
 });
 
+// A keyDown without `text` never becomes a keypress in Chromium, so Enter/Space did not activate the
+// focused button in a real Obsidian (found by a keyboard-only persona on 2026-11-19).
+test("press gives Enter and Space the text that makes them activate the focused control", async () => {
+  for (const [key, text] of [["Enter", "\r"], ["Space", " "]]) {
+    const { window, calls, observe, execute } = buildSession('<div class="arxiv-daily-dashboard"><button type="button">Generate</button></div>');
+    const snapshot = observe();
+    window.document.querySelector(".arxiv-daily-dashboard button").focus();
+    assert.equal((await execute({ type: "press", key }, snapshot)).ok, true);
+    assert.deepEqual(calls.map(c => [c.params.type, c.params.text]), [["keyDown", text], ["keyUp", undefined]], key);
+  }
+  const { window, calls, observe, execute } = buildSession('<div class="arxiv-daily-dashboard"><button type="button">Generate</button></div>');
+  const snapshot = observe();
+  window.document.querySelector(".arxiv-daily-dashboard button").focus();
+  await execute({ type: "press", key: "Tab" }, snapshot);
+  assert.ok(calls.every(c => c.params.text === undefined), "navigation keys type nothing");
+});
+
 test("press sends the Shift modifier bit for Shift+Tab", async () => {
   const { window, calls, observe, execute } = buildSession('<div class="arxiv-daily-dashboard"><button type="button">Generate</button></div>');
   const snapshot = observe();

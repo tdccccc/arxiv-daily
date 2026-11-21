@@ -155,6 +155,7 @@ obsidian 目标任务（`--host obsidian --task ...`，共 21 个）：
 - **只跑角色、不跑任何目标任务时退出码仍是 0**（因为没有失败/阻塞的场景）——这不代表任何功能被验证过，只代表角色探索顺利跑完；`report.html` 在这种“全是 explored、没有任何 passed”的情况下会额外提示一行，但看退出码或 `report.json` 里的 `counts` 时要自己确认 `passed` 不是 0。
 - 模型提出的疑点列在 `report.html` 的“待复核的交互观察”里，和报告里每项，附复现步骤摘要、`evidence` 文字和对应截图链接；这些是“待复核”，不是已证实的产品故障，需要人工看证据和截图后再下结论（见下一小节）。
 - `exploration/exploration.json` 是逐任务机器可读明细（状态、断言、`modelUsage`/`usage` 的调用数与 token、`durationMs`）；`exploration/exploration-events.jsonl` 是逐步事件流（观察、动作、错误），配合同目录下的截图可以完整复盘某一步发生了什么。
+- 有些模型（实测：开启思考的 `deepseek-flash`）会在动作对象后面继续输出，比如重复一遍、加代码围栏、编一段工具调用。回复以一个完整 JSON 对象开头时，只取这第一个对象并照常校验，后面的内容丢弃；被丢弃的字符数记在该步的 `replyOverflow`，整次运行有多少步这样处理记在 `metrics.repliesWithExtraText`（没有则不出现）。对象前面有文字、或整体包在围栏里的回复仍判为无效。
 
 ### 实测成本与耗时
 
