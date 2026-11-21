@@ -261,6 +261,9 @@ export function anthropicAdaptiveEffort(effort: string): string {
 }
 
 export class LlmClient {
+  /** Optional request fields this provider rejected; see `sendDroppingRejected`. */
+  private readonly droppedParameters = new Set<string>();
+
   constructor(
     private settings: LlmSettings,
     private logger: Logger,
@@ -275,11 +278,13 @@ export class LlmClient {
       // effort, token budget), so a provider that rejects any of them fails
       // here instead of on the first report. With thinking on, the provider's
       // own budget defaults apply; without it a tiny cap is enough for a probe.
-      await this.postChatJson({
+      // A field the provider rejects by name is dropped exactly as a real call
+      // drops it, so the probe passes whenever a report would.
+      await this.sendDroppingRejected({
         ...generationParameters(this.settings, {}, this.settings.thinkingMode ? undefined : 64),
         model: this.settings.model,
         messages: [{ role: "user", content: "Hello" }],
-      });
+      }, (body) => this.postChatJson(body));
       return { success: true };
     } catch (e) {
       return { success: false, error: this.safeError(e).message };
@@ -380,8 +385,12 @@ export class LlmClient {
             };
             const abort = createAttemptAbortController(opts.signal);
             try {
-              const result = await this.postChatStream(
-                params, abort.controller, opts.signal, limits.maxOutputCodeUnits,
+              const result = await this.sendDroppingRejected(
+                params,
+                (body) => this.postChatStream(
+                  body, abort.controller, opts.signal, limits.maxOutputCodeUnits,
+                ),
+                () => { attempts += 1; },
               );
               finalUsage = result.usage;
               throwIfCancelled(opts.signal);
@@ -389,22 +398,7 @@ export class LlmClient {
               return result.content;
             } catch (error) {
               if (isCancellationError(error) || isDeterministicOutputFailure(error)) throw error;
-              if (!isUnsupportedStreamOptionsError(error)) throw this.safeError(error);
-              attempts += 1;
-              const fallback = { ...params };
-              delete fallback.stream_options;
-              try {
-                const result = await this.postChatStream(
-                  fallback, abort.controller, opts.signal, limits.maxOutputCodeUnits,
-                );
-                finalUsage = result.usage;
-                this.assertCompleted(result);
-                return result.content;
-              } catch (fallbackError) {
-                if (isCancellationError(fallbackError)
-                  || isDeterministicOutputFailure(fallbackError)) throw fallbackError;
-                throw this.safeError(fallbackError);
-              }
+              throw this.safeError(error);
             } finally {
               abort.cleanup();
             }
@@ -441,6 +435,49 @@ export class LlmClient {
       };
       opts.onMetrics?.(metrics);
     }
+  }
+
+  /**
+   * Sends `params`; when the provider or a gateway in front of it rejects one
+   * of the optional fields by name, sends it again without that field. This is
+   * how a preset pointed at another service still works: the DeepSeek preset
+   * adds `thinking`, which an OpenAI-style endpoint answers with
+   * "Unknown parameter: 'thinking'". A dropped field stays out of this
+   * client's later requests, so a run pays for the rejection once.
+   */
+  private async sendDroppingRejected<T>(
+    params: Record<string, unknown>,
+    send: (body: Record<string, unknown>) => Promise<T>,
+    onResend?: () => void,
+  ): Promise<T> {
+    let body = this.withoutDroppedParameters(params);
+    for (;;) {
+      try {
+        return await send(body);
+      } catch (error) {
+        if (isCancellationError(error) || isDeterministicOutputFailure(error)) throw error;
+        const rejected = rejectedOptionalParameter(error, body, this.settings);
+        if (!rejected) throw error;
+        const firstTime = !this.droppedParameters.has(rejected);
+        this.droppedParameters.add(rejected);
+        // stream_options only asks for usage numbers; the others change what
+        // the model does, which the log should say once.
+        if (firstTime && rejected !== "stream_options") {
+          this.logger.warn(
+            `LLM provider rejected the "${rejected}" request field; sending requests without it`,
+          );
+        }
+        // Each pass removes a field that was present, so this ends.
+        body = this.withoutDroppedParameters(body);
+        onResend?.();
+      }
+    }
+  }
+
+  private withoutDroppedParameters(params: Record<string, unknown>): Record<string, unknown> {
+    const body = { ...params };
+    for (const key of this.droppedParameters) delete body[key];
+    return body;
   }
 
   private async postChatJson(
@@ -722,6 +759,40 @@ export function isUnsupportedStreamOptionsError(err: unknown): boolean {
   const message = err instanceof Error ? err.message : String(err);
   return /stream[_ -]?options|include[_ -]?usage/i.test(message) &&
     /unsupported|unknown|unrecognized|not (?:allowed|supported)|extra fields?|invalid/i.test(message);
+}
+
+/**
+ * Generation fields a provider may not know, which a request still works
+ * without. Native Anthropic is left alone: its `thinking` errors are about the
+ * thinking configuration itself, and dropping it there would quietly turn
+ * thinking off on a model that supports it.
+ */
+const DROPPABLE_GENERATION_PARAMETERS = ["thinking", "reasoning_effort", "temperature"] as const;
+
+const REJECTED_WORDING =
+  "(?:unknown|unrecognized|unsupported|unexpected|not (?:allowed|permitted|supported)|extra (?:fields?|inputs?)|additional propert(?:y|ies))";
+
+/**
+ * The optional field a 400/422 rejects by name, if `body` carries it. Matches
+ * the usual shapes: OpenAI's "Unknown parameter: 'thinking'." and "Unsupported
+ * value: 'temperature' does not support 0.2", "Unrecognized request argument
+ * supplied: reasoning_effort", and validation errors that list the field next
+ * to "Extra inputs are not permitted".
+ */
+export function rejectedOptionalParameter(
+  err: unknown,
+  body: Record<string, unknown>,
+  settings: Pick<LlmSettings, "provider">,
+): string | undefined {
+  if ("stream_options" in body && isUnsupportedStreamOptionsError(err)) return "stream_options";
+  const status = (err as LlmStatusError | undefined)?.status;
+  if (status !== 400 && status !== 422) return undefined;
+  if (settings.provider === "anthropic") return undefined;
+  const message = err instanceof Error ? err.message : String(err);
+  return DROPPABLE_GENERATION_PARAMETERS.find((key) => key in body && new RegExp(
+    `${REJECTED_WORDING}[^.\\n]{0,40}\\b${key}\\b|\\b${key}\\b[^.\\n]{0,40}${REJECTED_WORDING}`,
+    "i",
+  ).test(message));
 }
 
 /** Client-error statuses a later attempt can legitimately succeed on. */
