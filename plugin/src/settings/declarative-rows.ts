@@ -177,8 +177,6 @@ export function renderModelRow(tab: ArxivDailySettingTab, setting: Setting): voi
   });
   input.value = tab.plugin.settings.llm.model;
 
-  const cacheKey = modelFetchCacheKey(tab.plugin.settings.llm);
-
   const commitModel = (next: string): void => {
     if (next === tab.plugin.settings.llm.model) {
       input.value = next;
@@ -206,11 +204,22 @@ export function renderModelRow(tab: ArxivDailySettingTab, setting: Setting): voi
   // left open or attached underneath the new one.
   const suggest = new ModelInputSuggest(tab.app, input, commitModel);
   tab.setModelInputSuggest(suggest);
-  input.addEventListener("focus", () => suggest.showAll());
+  // The endpoint (provider/base URL/API key) can change after this row was
+  // rendered without re-rendering it, so consult the live key on focus.
+  input.addEventListener("focus", () => {
+    suggest.setModels(
+      tab.getFetchedModelOptions(modelFetchCacheKey(tab.plugin.settings.llm)) ?? [],
+      input.value,
+    );
+    suggest.showAll();
+  });
   // A re-render reuses this same Setting but rebuilds its children, so
   // restore a previous fetch — but only if it's still for the endpoint
   // currently configured.
-  suggest.setModels(tab.getFetchedModelOptions(cacheKey) ?? [], input.value);
+  suggest.setModels(
+    tab.getFetchedModelOptions(modelFetchCacheKey(tab.plugin.settings.llm)) ?? [],
+    input.value,
+  );
 
   input.addEventListener("change", () => commitModel(input.value.trim()));
 
@@ -222,6 +231,12 @@ export function renderModelRow(tab: ArxivDailySettingTab, setting: Setting): voi
     void (async () => {
     button.textContent = "Fetching…";
     button.disabled = true;
+    // Snapshot the endpoint when the request starts, not when the row was
+    // rendered: editing the API key or base URL does not re-render this row,
+    // and that edit is exactly how a first-time setup reaches this button.
+    // The snapshot still rejects a result if the endpoint changes while the
+    // fetch is in flight.
+    const requestCacheKey = modelFetchCacheKey(tab.plugin.settings.llm);
     try {
       const client = new LlmClient(
         tab.plugin.settings.llm,
@@ -229,14 +244,14 @@ export function renderModelRow(tab: ArxivDailySettingTab, setting: Setting): voi
         tab.plugin.getHttpClient(),
       );
       const models = await client.fetchModels();
-      tab.setFetchedModelOptions(cacheKey, models);
+      tab.setFetchedModelOptions(requestCacheKey, models);
       // Looked up fresh instead of reusing the closed-over `suggest`: a
       // redraw that happened while the fetch was in flight registered a
       // new instance for the new input, and updating this one would be
       // invisible. If the endpoint settings changed since the fetch
       // started, this result is for a provider the row no longer
       // reflects, so skip applying it.
-      if (modelFetchCacheKey(tab.plugin.settings.llm) === cacheKey) {
+      if (modelFetchCacheKey(tab.plugin.settings.llm) === requestCacheKey) {
         const liveSuggest = tab.getModelInputSuggest();
         liveSuggest?.setModels(models, tab.plugin.settings.llm.model);
         liveSuggest?.showAll();

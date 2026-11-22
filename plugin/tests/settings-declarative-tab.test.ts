@@ -2243,6 +2243,112 @@ describe("model field", () => {
     fetchModels.mockRestore();
   });
 
+  it("applies models fetched after the API key was edited without re-rendering the row", async () => {
+    const { tab, plugin, settings } = makeTab();
+    expect(settings.llm.apiKey).toBe("");
+    (plugin as unknown as { getHttpClient: () => unknown }).getHttpClient = () => ({});
+    const fetchModels = vi
+      .spyOn(LlmClient.prototype, "fetchModels")
+      .mockResolvedValue(["provider-a", "provider-b"]);
+    const setting = new Setting(tab.containerEl);
+    renderModelRow(tab, setting);
+
+    // The API key row saves into settings without re-rendering the model row.
+    settings.llm.apiKey = "fresh-key";
+
+    const button = Array.from(setting.controlEl.querySelectorAll("button"))
+      .find((candidate) => candidate.textContent === "Get models")!;
+    button.click();
+    const suggest = tab.getModelInputSuggest()!;
+    await vi.waitFor(() => expect(suggest.hasModels()).toBe(true));
+
+    expect(suggest.previewSuggestions("")).toEqual(["provider-a", "provider-b"]);
+    expect(tab.getFetchedModelOptions(
+      [settings.llm.provider, settings.llm.baseUrl, "fresh-key"].join("\u0000"),
+    )).toEqual(["provider-a", "provider-b"]);
+    fetchModels.mockRestore();
+  });
+
+  it("applies models fetched after the base URL was edited without re-rendering the row", async () => {
+    const { tab, plugin, settings } = makeTab();
+    (plugin as unknown as { getHttpClient: () => unknown }).getHttpClient = () => ({});
+    const fetchModels = vi
+      .spyOn(LlmClient.prototype, "fetchModels")
+      .mockResolvedValue(["provider-a"]);
+    const setting = new Setting(tab.containerEl);
+    renderModelRow(tab, setting);
+
+    settings.llm.baseUrl = "https://a-new-provider.example.com/v1";
+
+    const button = Array.from(setting.controlEl.querySelectorAll("button"))
+      .find((candidate) => candidate.textContent === "Get models")!;
+    button.click();
+    const suggest = tab.getModelInputSuggest()!;
+    await vi.waitFor(() => expect(suggest.hasModels()).toBe(true));
+    expect(suggest.previewSuggestions("")).toEqual(["provider-a"]);
+    expect(tab.getFetchedModelOptions(
+      [settings.llm.provider, settings.llm.baseUrl, settings.llm.apiKey].join("\u0000"),
+    )).toEqual(["provider-a"]);
+    fetchModels.mockRestore();
+  });
+
+  it("discards a fetch whose endpoint changes while the request is in flight", async () => {
+    const { tab, plugin, settings } = makeTab();
+    (plugin as unknown as { getHttpClient: () => unknown }).getHttpClient = () => ({});
+    let resolveFetch: ((models: string[]) => void) | undefined;
+    const fetchModels = vi
+      .spyOn(LlmClient.prototype, "fetchModels")
+      .mockImplementation(() => new Promise((resolve) => { resolveFetch = resolve; }));
+    const setting = new Setting(tab.containerEl);
+    renderModelRow(tab, setting);
+    settings.llm.apiKey = "request-key";
+    const button = Array.from(setting.controlEl.querySelectorAll("button"))
+      .find((candidate) => candidate.textContent === "Get models")!;
+
+    button.click();
+    await vi.waitFor(() => expect(fetchModels).toHaveBeenCalled());
+    settings.llm.apiKey = "changed-key";
+    resolveFetch!(["provider-a"]);
+
+    await vi.waitFor(() => expect(tab.getFetchedModelOptions(
+      [settings.llm.provider, settings.llm.baseUrl, "request-key"].join("\u0000"),
+    )).toEqual(["provider-a"]));
+    expect(tab.getModelInputSuggest()!.hasModels()).toBe(false);
+    expect(tab.getFetchedModelOptions(
+      [settings.llm.provider, settings.llm.baseUrl, "changed-key"].join("\u0000"),
+    )).toBeUndefined();
+    fetchModels.mockRestore();
+  });
+
+  it("consults the live endpoint cache when the input gains focus", async () => {
+    const { tab, plugin, settings } = makeTab();
+    (plugin as unknown as { getHttpClient: () => unknown }).getHttpClient = () => ({});
+    const fetchModels = vi
+      .spyOn(LlmClient.prototype, "fetchModels")
+      .mockResolvedValue(["provider-a"]);
+    const setting = new Setting(tab.containerEl);
+    renderModelRow(tab, setting);
+    const input = setting.controlEl.querySelector<HTMLInputElement>(
+      "input.arxiv-daily-settings__model-input",
+    )!;
+    const button = Array.from(setting.controlEl.querySelectorAll("button"))
+      .find((candidate) => candidate.textContent === "Get models")!;
+    button.click();
+    const suggest = tab.getModelInputSuggest()!;
+    await vi.waitFor(() => expect(suggest.hasModels()).toBe(true));
+
+    // A key edit makes the fetched list stale; focusing must not keep showing it.
+    settings.llm.apiKey = "different-key";
+    input.dispatchEvent(new Event("focus"));
+    expect(suggest.hasModels()).toBe(false);
+
+    // Reverting the endpoint restores the same cached list.
+    settings.llm.apiKey = "";
+    input.dispatchEvent(new Event("focus"));
+    expect(suggest.previewSuggestions("")).toEqual(["provider-a"]);
+    fetchModels.mockRestore();
+  });
+
   it("still shows fetched models after the row redraws while the fetch is in flight", async () => {
     const { tab, plugin } = makeTab();
     (plugin as unknown as { getHttpClient: () => unknown }).getHttpClient = () => ({});
