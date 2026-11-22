@@ -20,7 +20,7 @@ import type { ArxivFetcher } from "./arxiv-fetcher";
 import type { PaperContentFetcher } from "./paper-content";
 import type { MarkdownWriter } from "./markdown-writer";
 import { isPermanentLlmError, type LlmClient } from "../llm/client";
-import type { PaperIndexEntry, PaperIndexStore, PaperSummary } from "../services/paper-index";
+import type { PaperIndexEntry, PaperIndexStore, PaperIndexUpsert, PaperSummary } from "../services/paper-index";
 import type {
   FilterDecisionOutcome,
   FilterDecisionRecordPort,
@@ -338,6 +338,9 @@ export class ArxivPipeline {
           ignoredIds: new Set(),
         });
       }
+      // A completed zero-match day will not run again on its own; old
+      // checkpoints for the date are dead state and must not linger in .index.
+      await this.cleanupCommittedCheckpoints(dateStr);
       // Don't write empty file - show "0" in calendar
       return {
         kind: "completed",
@@ -386,6 +389,9 @@ export class ArxivPipeline {
           ignoredIds,
         });
       }
+      // Same terminal state as the filter-empty branch: nothing is left that a
+      // rerun would reuse, so remove any checkpoints from earlier attempts.
+      await this.cleanupCommittedCheckpoints(dateStr);
       // Don't write empty file - show "0" in calendar
       return {
         kind: "completed",
@@ -407,6 +413,9 @@ export class ArxivPipeline {
     const indexed = await this.indexFilteredPapers(
       filtered.filter((p) => reportIds.has(p.id) || known.entries.has(p.id)),
       dateStr,
+      // Persist only once the report is committed: a failure while fetching,
+      // summarizing, or writing must not leave summary-less entries behind.
+      { persist: false },
     );
     if (indexed.kind !== "ok") return indexed.result;
     const indexedById = new Map(indexed.papers.map((p) => [p.id, p] as const));
@@ -649,6 +658,26 @@ export class ArxivPipeline {
     await this.cleanupCommittedCheckpoints(dateStr);
     if (this.deps.paperIndex) {
       try {
+        throwIfCancelled(signal);
+        // The report is durable: commit the selected candidates' index entries
+        // in the same pass that records the report, provenance, and summaries.
+        const detailPaths = new Map<string, string>(confirmedPaths);
+        for (const paper of enriched) {
+          if (paper.paperPath && !detailPaths.has(paper.id)) {
+            detailPaths.set(paper.id, paper.paperPath);
+          }
+        }
+        await this.deps.paperIndex.upsertManyFromDailyPapers(
+          filtered
+            .filter((p) => reportIds.has(p.id) || known.entries.has(p.id))
+            .map((paper) => {
+              const input = this.paperIndexInput(paper, dateStr);
+              const detailPath = detailPaths.get(paper.id);
+              return detailPath
+                ? { ...input, detail: true, paperPath: detailPath }
+                : input;
+            }),
+        );
         throwIfCancelled(signal);
         await this.deps.paperIndex.addDailyReports(
           visiblePapers.map((p) => p.id),
@@ -982,6 +1011,7 @@ export class ArxivPipeline {
   private async indexFilteredPapers(
     filtered: FilteredPaper[],
     dateStr: string,
+    options: { persist?: boolean } = {},
   ): Promise<
     | {
         kind: "ok";
@@ -1004,23 +1034,12 @@ export class ArxivPipeline {
     }
 
     try {
-      const results = await paperIndex.upsertManyFromDailyPapers(
-        filtered.map((p) => ({
-          arxivId: p.id,
-          title: p.title,
-          authors: p.authors,
-          date: dateStr,
-          published: dateStr,
-          updated: paperUpdatedDate(p),
-          arxivCategory: sourceCategories(p)[0] ?? this.deps.arxiv.category,
-          arxivCategories: sourceCategories(p),
-          abstract: p.abstract,
-          primaryTopic: p.category,
-          // Selection is only a candidate decision. The index becomes detail=true
-          // after a real paper path is confirmed by setPaperPath.
-          detail: false,
-        })),
-      );
+      const inputs = filtered.map((p) => this.paperIndexInput(p, dateStr));
+      // A run that has not committed a report yet computes candidate entries
+      // only. Test doubles without the preview seam keep the old behavior.
+      const results = options.persist === false && paperIndex.previewDailyMatches
+        ? await paperIndex.previewDailyMatches(inputs)
+        : await paperIndex.upsertManyFromDailyPapers(inputs);
       return {
         kind: "ok",
         papers: filtered.map((p, i) => {
@@ -1048,6 +1067,27 @@ export class ArxivPipeline {
         },
       };
     }
+  }
+
+  private paperIndexInput(
+    paper: FilteredPaper,
+    dateStr: string,
+  ): PaperIndexUpsert {
+    return {
+      arxivId: paper.id,
+      title: paper.title,
+      authors: paper.authors,
+      date: dateStr,
+      published: dateStr,
+      updated: paperUpdatedDate(paper),
+      arxivCategory: sourceCategories(paper)[0] ?? this.deps.arxiv.category,
+      arxivCategories: sourceCategories(paper),
+      abstract: paper.abstract,
+      primaryTopic: paper.category,
+      // Selection is only a candidate decision. The index becomes detail=true
+      // after a real paper path is confirmed.
+      detail: false,
+    };
   }
 
   private async fetchPapersForDate(

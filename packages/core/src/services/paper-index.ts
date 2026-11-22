@@ -308,6 +308,22 @@ export class PaperIndexStore {
   }
 
   /**
+   * The entries `upsertManyFromDailyPapers` would write, computed against the
+   * current index without saving. The daily pipeline shows these candidate
+   * views to note generation and only commits the real upsert after the report
+   * is durable, so a failed or cancelled run leaves no summary-less entries.
+   */
+  async previewDailyMatches(
+    inputs: PaperIndexUpsert[],
+  ): Promise<Array<{ entry: PaperIndexEntry; wasNew: boolean }>> {
+    const inbox = await this.load();
+    return inputs.map((input) => {
+      const { entry, wasNew } = upsertEntry(inbox, input);
+      return { entry: structuredClone(entry), wasNew };
+    });
+  }
+
+  /**
    * Atomically creates or repairs the complete index projection for a verified
    * manual detail note. Existing user status is preserved; only an entry first
    * created by this mutation receives the requested initial status.

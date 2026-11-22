@@ -656,7 +656,7 @@ describe("Pipeline partial failure consistency", () => {
     expect(writer.writeDaily).not.toHaveBeenCalled();
   });
 
-  it("retains a strict zero-result filter checkpoint when no daily report is committed", async () => {
+  it("clears a strict zero-result filter checkpoint once the zero-match run completes", async () => {
     const filterStore = {
       lookupReusable: vi.fn(async () => null),
       save: vi.fn(async () => undefined),
@@ -678,7 +678,9 @@ describe("Pipeline partial failure consistency", () => {
       0,
       [],
     );
-    expect(filterStore.removeAll).not.toHaveBeenCalled();
+    // The zero-match day is terminal; the checkpoint from this (or an earlier,
+    // wider-topic) attempt is dead state and is removed like a committed day's.
+    expect(filterStore.removeAll).toHaveBeenCalledWith("2026-05-11");
     expect(writer.writeDaily).not.toHaveBeenCalled();
   });
 

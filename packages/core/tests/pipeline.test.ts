@@ -753,6 +753,84 @@ describe("ArxivPipeline", () => {
     expect(d.writer.refreshPaperNoteFrontmatter).not.toHaveBeenCalled();
   });
 
+  it("does not persist paper index entries when daily summarization fails", async () => {
+    const d = makeDeps();
+    const { files, store } = makePaperIndex();
+    const arxivId = /arXiv:(\d{4}\.\d{4,5})/.exec(recentHtml)![1]!;
+    const date = firstDateFromFixture();
+    d.llm.call = vi.fn(async (msgs: any[]) => {
+      if ((msgs[0]?.content ?? "").includes("判断它命中了哪些方向")) {
+        return JSON.stringify({
+          papers: [{ relevanceScore: 80, id: arxivId, category: "photo-z", directions: ["photo-z#1"] }],
+        });
+      }
+      throw new Error("summarizer should not be called");
+    });
+    const pipeline = new ArxivPipeline({
+      markupParser,
+      fetcher: d.fetcher as any,
+      paperFetcher: d.paperFetcher as any,
+      writer: d.writer as any,
+      paperIndex: store,
+      llm: d.llm as any,
+      logger: d.logger,
+      arxiv: testArxiv,
+      advanced: DEFAULT_SETTINGS.advanced,
+      output: DEFAULT_SETTINGS.output,
+      llmSettings: DEFAULT_SETTINGS.llm,
+      detailSelection: testDetailSelection,
+      summarizeDaily: vi.fn(async () => {
+        throw new TypeError("assembler broke");
+      }),
+    });
+
+    expect(await pipeline.runForDate(date)).toEqual({
+      kind: "failed_transient",
+      reason: "daily summary failed: assembler broke",
+    });
+    expect(files["arxiv-daily/.index/papers.json"]).toBeUndefined();
+    expect((await store.getMany([arxivId])).size).toBe(0);
+  });
+
+  it("does not persist paper index entries when the run is cancelled before the report", async () => {
+    const d = makeDeps();
+    const { files, store } = makePaperIndex();
+    const arxivId = /arXiv:(\d{4}\.\d{4,5})/.exec(recentHtml)![1]!;
+    const date = firstDateFromFixture();
+    d.llm.call = vi.fn(async (msgs: any[]) => {
+      if ((msgs[0]?.content ?? "").includes("判断它命中了哪些方向")) {
+        return JSON.stringify({
+          papers: [{ relevanceScore: 80, id: arxivId, category: "photo-z", directions: ["photo-z#1"] }],
+        });
+      }
+      throw new Error("summarizer should not be called");
+    });
+    const pipeline = new ArxivPipeline({
+      markupParser,
+      fetcher: d.fetcher as any,
+      paperFetcher: d.paperFetcher as any,
+      writer: d.writer as any,
+      paperIndex: store,
+      llm: d.llm as any,
+      logger: d.logger,
+      arxiv: testArxiv,
+      advanced: DEFAULT_SETTINGS.advanced,
+      output: DEFAULT_SETTINGS.output,
+      llmSettings: DEFAULT_SETTINGS.llm,
+      detailSelection: testDetailSelection,
+      summarizeDaily: vi.fn(async () => {
+        throw new RunCancelledError("stop before report");
+      }),
+    });
+
+    expect(await pipeline.runForDate(date)).toEqual({
+      kind: "cancelled",
+      reason: "stop before report",
+    });
+    expect(files["arxiv-daily/.index/papers.json"]).toBeUndefined();
+    expect((await store.getMany([arxivId])).size).toBe(0);
+  });
+
   it("fetches multiple categories and deduplicates papers before filtering", async () => {
     const d = makeDeps();
     const { files, store } = makePaperIndex();
@@ -895,6 +973,61 @@ describe("ArxivPipeline", () => {
     const json = JSON.parse(files["arxiv-daily/.index/papers.json"]);
     expect(json.papers[`arxiv:${arxivId}`].status).toBe("ignored");
     expect(json.papers[`arxiv:${arxivId}`].seenDates).toContain(date);
+  });
+
+  it("clears date-scoped checkpoints when every match is ignored", async () => {
+    const d = makeDeps();
+    const { store } = makePaperIndex();
+    const arxivId = /arXiv:(\d{4}\.\d{4,5})/.exec(recentHtml)![1]!;
+    const date = firstDateFromFixture();
+    await store.upsertFromDailyPaper({
+      arxivId,
+      title: "Old",
+      authors: "A",
+      date: "2026-05-01",
+      arxivCategory: "astro-ph",
+      primaryTopic: "photo-z",
+      detail: false,
+    });
+    await store.setStatus(arxivId, "ignored");
+    d.llm.call = vi.fn(async (msgs: any[]) =>
+      (msgs[0]?.content ?? "").includes("判断它命中了哪些方向")
+        ? JSON.stringify({
+            papers: [{ relevanceScore: 80, id: arxivId, category: "photo-z", directions: ["photo-z#1"] }],
+          })
+        : "");
+    const filter = {
+      lookupReusable: vi.fn(async () => null),
+      save: vi.fn(async () => undefined),
+      removeAll: vi.fn(async () => undefined),
+    };
+    const summary = {
+      lookupReusable: vi.fn(),
+      upsert: vi.fn(),
+      removeAll: vi.fn(async () => undefined),
+    };
+    const pipeline = new ArxivPipeline({
+      markupParser,
+      fetcher: d.fetcher as any,
+      paperFetcher: d.paperFetcher as any,
+      writer: d.writer as any,
+      paperIndex: store,
+      checkpointStores: { filter, summary },
+      llm: d.llm as any,
+      logger: d.logger,
+      arxiv: testArxiv,
+      advanced: DEFAULT_SETTINGS.advanced,
+      output: DEFAULT_SETTINGS.output,
+      llmSettings: DEFAULT_SETTINGS.llm,
+      detailSelection: testDetailSelection,
+    });
+
+    expect(await pipeline.runForDate(date)).toMatchObject({
+      kind: "completed",
+      papersWritten: 0,
+    });
+    expect(filter.removeAll).toHaveBeenCalledWith(date);
+    expect(summary.removeAll).toHaveBeenCalledWith(date);
   });
 
   it("repairs daily-report links and summaries when a daily file already exists", async () => {
