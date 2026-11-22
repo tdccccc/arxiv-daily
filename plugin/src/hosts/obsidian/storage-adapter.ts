@@ -146,7 +146,27 @@ export class ObsidianStorageAdapter implements StorageAdapter {
   }
 
   async remove(path: string): Promise<void> {
-    await this.vault.adapter.remove(this.normalizePath(path));
+    // StorageAdapter.remove is recursive and idempotent, but DataAdapter.remove
+    // removes single existing files only: it throws ENOENT for missing paths and
+    // EISDIR/EPERM for directories. Probe first so directories go through rmdir.
+    const target = this.normalizePath(path);
+    const adapter = this.vault.adapter;
+    if (typeof adapter.stat === "function") {
+      const stat = await adapter.stat(target).catch(() => null);
+      if (!stat) return;
+      if (stat.type === "folder") {
+        await adapter.rmdir(target, true);
+        return;
+      }
+      await adapter.remove(target);
+      return;
+    }
+    try {
+      await adapter.remove(target);
+    } catch (error) {
+      if (isMissingPathError(error)) return;
+      throw error;
+    }
   }
 
   async rename(from: string, to: string): Promise<void> {
@@ -174,4 +194,10 @@ export class ObsidianStorageAdapter implements StorageAdapter {
   async writeBinary(path: string, content: ArrayBuffer): Promise<void> {
     await this.vault.adapter.writeBinary(this.normalizePath(path), content);
   }
+}
+
+function isMissingPathError(error: unknown): boolean {
+  return (
+    error instanceof Error && /ENOENT|no such file/i.test(error.message)
+  );
 }

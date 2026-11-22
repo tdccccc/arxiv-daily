@@ -144,6 +144,13 @@ export interface StorageAdapter {
   appendText?(path: string, content: string): Promise<void>;
   exists(path: string): Promise<boolean>;
   mkdir(path: string): Promise<void>;
+  /**
+   * Removes the file or directory at `path`, recursively for directories.
+   * Idempotent: a path that is already absent must not raise. Callers may pass
+   * a directory to discard its whole subtree, so every host must implement
+   * directory removal even where the underlying primitive only removes single
+   * files (e.g. Obsidian's `DataAdapter.remove` needs `rmdir(path, true)`).
+   */
   remove(path: string): Promise<void>;
   rename(from: string, to: string): Promise<void>;
   /**

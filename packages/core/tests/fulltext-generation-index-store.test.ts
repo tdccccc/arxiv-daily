@@ -1860,8 +1860,48 @@ describe("host-authorized generation maintenance", () => {
     expect(report.promotionClaim).toBe("absent");
   });
 
-  it("repairs a promotion claim only after proving that its candidate is committed", async () => {
+  it("removes a non-empty orphan generation when the host refuses non-empty directory removal", async () => {
     const memory = memoryStorage();
+    const index = store(memory.storage);
+    const first = await publish(index, "gen-strict-first", 1);
+    await first.close();
+    const second = await publish(index, "gen-strict-second", 2, {
+      generationId: "gen-strict-first", sourceRevision: 1,
+    });
+    await second.close();
+    const third = await publish(index, "gen-strict-third", 3, {
+      generationId: "gen-strict-second", sourceRevision: 2,
+    });
+    await third.close();
+    const directory = generationPath("gen-strict-first", "").replace(/\/$/, "");
+    expect(memory.text.has(`${directory}/descriptor.json`)).toBe(true);
+    expect([...memory.binary.keys()].some((path) => path.startsWith(`${directory}/objects/`))).toBe(true);
+
+    // Obsidian's DataAdapter.remove rejects directories (EISDIR); only an empty
+    // directory can be removed here, so the store must delete children first.
+    memory.setRemoveHook(async (path) => {
+      if (!memory.dirs.has(path)) return;
+      const nonEmpty = [...memory.text.keys(), ...memory.binary.keys(), ...memory.dirs]
+        .some((key) => key.startsWith(`${path}/`));
+      if (nonEmpty) {
+        throw Object.assign(
+          new Error(`EISDIR: illegal operation on a directory, remove '${path}'`),
+          { code: "EISDIR" },
+        );
+      }
+    });
+
+    const session = await index.beginHostAuthorizedMaintenance();
+    const report = await session.run();
+    session.release();
+
+    expect(report.removedGenerationIds).toContain("gen-strict-first");
+    expect(memory.dirs.has(directory)).toBe(false);
+    expect([...memory.text.keys()].some((path) => path.startsWith(`${directory}/`))).toBe(false);
+    expect([...memory.binary.keys()].some((path) => path.startsWith(`${directory}/`))).toBe(false);
+  });
+
+  it("repairs a promotion claim only after proving that its candidate is committed", async () => {    const memory = memoryStorage();
     const index = store(memory.storage);
     const first = await publish(index, "gen-claim-repair-first", 1);
     await first.close();
