@@ -13,6 +13,8 @@ export interface TransformersEmbeddingTensor {
 
 export interface TransformersFeatureExtractor {
   (input: string | string[], options: { pooling: "mean"; normalize: true }): Promise<TransformersEmbeddingTensor>;
+  /** Optional engine hook to release the loaded model (transformers.js pipelines have one). */
+  dispose?(): Promise<void>;
 }
 
 export interface ModelPreparationProgress {
@@ -82,6 +84,13 @@ export function createTransformersEmbeddingModelFromLoader(
           message: "Loading local model files; first use may download about 130 MB.",
         });
         const loading = pipelinePromise ?? (pipelinePromise = load());
+        // A failed load is not a permanent property of this model: clear the
+        // cached promise so a later embed retries (a transient network failure
+        // must not poison every future search). Only the load's own rejection
+        // clears it — a caller abort leaves the load running for reuse.
+        loading.catch(() => {
+          if (pipelinePromise === loading) pipelinePromise = null;
+        });
         extractor = await raceWithAbort(loading, signal);
         report({ phase: "ready", message: "Local model ready; extracting and embedding titles and abstracts." });
       } finally {
@@ -98,6 +107,19 @@ export function createTransformersEmbeddingModelFromLoader(
         await options.yieldBetweenBatches?.();
       }
       return vectors;
+    },
+    /** Release the loaded engine so a host that stops using it can free it. */
+    async dispose(): Promise<void> {
+      const loading = pipelinePromise;
+      pipelinePromise = null;
+      ready = false;
+      if (!loading) return;
+      try {
+        const extractor = await loading;
+        await extractor.dispose?.();
+      } catch {
+        // A load that never completed holds nothing to release.
+      }
     },
   };
 }

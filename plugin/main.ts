@@ -164,7 +164,10 @@ import {
   resolveLibraryPdfOpenTarget,
 } from "./src/library/pdf-opener";
 import { LibraryIndexStatusStore } from "./src/library/index-status";
-import type { TransformersEmbeddingModelOptions } from "./src/hosts/obsidian/embedding-model";
+import type {
+  ModelPreparationProgress,
+  TransformersEmbeddingModelOptions,
+} from "./src/hosts/obsidian/embedding-model";
 import type { FullTextIndexLibraryContext } from "./src/library/index-completion";
 import { buildLibraryChangeNudgeFragment } from "./src/library/change-nudge";
 import { decodeProposalAcceptanceReceipts } from "./src/library/proposal-acceptance-state";
@@ -404,6 +407,16 @@ export default class ArxivDailyPlugin extends Plugin {
   private libraryProposalAcceptanceRaw: unknown;
   private libraryProposalAcceptanceLoadError: string | null = null;
   private libraryProposalLoadError: PersonalLibraryReviewLoadError | null = null;
+  /**
+   * One local embedding model per plugin instance. The first embed downloads
+   * and loads the ~130 MB ONNX pipeline and reuses the session; building a new
+   * model for every search, index run or diagnostic repeated that load and
+   * leaked the old sessions. Released on unload and when settings leave the
+   * local mode (ADR 0008).
+   */
+  private localEmbeddingModelInstance?: EmbeddingModel;
+  /** Per-run preparation progress for the shared local model; index runs set it. */
+  private localEmbeddingProgress?: (progress: ModelPreparationProgress) => void;
 
   getHttpClient(): HttpClient {
     if (!this.host) throw new Error("Obsidian host adapters are not initialized");
@@ -567,6 +580,11 @@ export default class ArxivDailyPlugin extends Plugin {
             this.cancelPersonalLibraryDirectionGeneration("model endpoint changed");
           }
         }
+        if (changedKeys.includes("embedding.mode") && candidate.embedding.mode !== "local") {
+          // Leaving the local mode releases the ONNX session now rather than
+          // keeping it until unload; a later return to local mode rebuilds it.
+          void this.disposeLocalEmbeddingModel();
+        }
         return rollback;
       },
     });
@@ -610,6 +628,7 @@ export default class ArxivDailyPlugin extends Plugin {
     this.operations.close("plugin unloaded");
     this.operations.cancelAll("plugin unloaded");
     this.libraryInventoryController?.abort("plugin unloaded");
+    void this.disposeLocalEmbeddingModel();
     this.unsubscribeOperations?.();
     this.unsubscribeOperations = undefined;
     if (this.progress instanceof StatusBarController) this.progress.dispose();
@@ -1609,11 +1628,14 @@ export default class ArxivDailyPlugin extends Plugin {
   /**
    * Embedding backend for the full-text knowledge base (ADR 0008): the local
    * transformers.js model by default (downloaded from Hugging Face on first
-   * use, then cached), or the remote OpenAI-compatible model when the
-   * embedding mode is `remote`.
+   * use, then kept as one shared instance), or the remote OpenAI-compatible
+   * model when the embedding mode is `remote`.
    */
   private buildEmbeddingModel(options?: TransformersEmbeddingModelOptions): EmbeddingModel {
     if (this.settings.embedding.mode === "remote") {
+      // The local model is no longer in use: release its session right away
+      // rather than holding ~130 MB until the plugin unloads.
+      if (this.localEmbeddingModelInstance) void this.disposeLocalEmbeddingModel();
       return createRemoteEmbeddingModel({
         baseUrl: this.settings.embedding.baseUrl,
         apiKey: this.settings.embedding.apiKey,
@@ -1622,7 +1644,26 @@ export default class ArxivDailyPlugin extends Plugin {
         http: this.host.http,
       });
     }
-    return createTransformersEmbeddingModel(options);
+    if (!this.localEmbeddingModelInstance) {
+      this.localEmbeddingModelInstance = createTransformersEmbeddingModel({
+        // Progress is per run, not per model: the current index run installs
+        // its reporter here so a shared model can keep reporting preparation.
+        onProgress: (progress) => this.localEmbeddingProgress?.(progress),
+      });
+    }
+    if (options?.onProgress) this.localEmbeddingProgress = options.onProgress;
+    return this.localEmbeddingModelInstance;
+  }
+
+  private async disposeLocalEmbeddingModel(): Promise<void> {
+    const model = this.localEmbeddingModelInstance;
+    this.localEmbeddingModelInstance = undefined;
+    this.localEmbeddingProgress = undefined;
+    try {
+      await model?.dispose?.();
+    } catch (error) {
+      this.logger?.warn?.("fulltext: could not release the local embedding model", error);
+    }
   }
 
   /**
@@ -1713,6 +1754,7 @@ export default class ArxivDailyPlugin extends Plugin {
     // the status bar when a person starts the run from it.
     this.libraryIndexStatus.beginRun(operation.id, "reading the library catalog");
     let legacyMigrationLease: FullTextLegacyMigrationLease | undefined;
+    let embeddingProgress: ((progress: ModelPreparationProgress) => void) | undefined;
     try {
       // Remote embedding needs authorization before any work happens: failing
       // here is cheap, where failing after a folder scan or a full extraction
@@ -1798,17 +1840,15 @@ export default class ArxivDailyPlugin extends Plugin {
       await loadPdfJs();
       const extractor = this.buildFullTextExtractor();
       let paperProgress: { completed?: number; total?: number } = {};
-      const embedding = this.buildEmbeddingModel({
-        signal: operation.signal,
-        onProgress: (progress) => {
-          if (operation.signal.aborted || this.libraryIndexStatus.snapshot().activity?.operationId !== operation.id) return;
-          const phase = progress.phase === "ready"
-            ? "extracting and embedding titles and abstracts"
-            : `${progress.message}${progress.progress === undefined ? "" : ` (${Math.round(progress.progress)}%)`}`;
-          this.libraryIndexStatus.report({ phase, ...(progress.phase === "ready" ? paperProgress : {}) });
-          if (updateProgress) this.progress?.setTask("Preparing personal library", phase);
-        },
-      });
+      embeddingProgress = (progress) => {
+        if (operation.signal.aborted || this.libraryIndexStatus.snapshot().activity?.operationId !== operation.id) return;
+        const phase = progress.phase === "ready"
+          ? "extracting and embedding titles and abstracts"
+          : `${progress.message}${progress.progress === undefined ? "" : ` (${Math.round(progress.progress)}%)`}`;
+        this.libraryIndexStatus.report({ phase, ...(progress.phase === "ready" ? paperProgress : {}) });
+        if (updateProgress) this.progress?.setTask("Preparing personal library", phase);
+      };
+      const embedding = this.buildEmbeddingModel({ onProgress: embeddingProgress });
       const store = this.buildFullTextKnowledgeBaseStore(connection);
       const generationStore = this.buildFullTextGenerationIndexStore(connection);
       const generationWriterToken = createFullTextGenerationWriterToken();
@@ -1970,6 +2010,7 @@ export default class ArxivDailyPlugin extends Plugin {
           }
         }
       } finally {
+        if (this.localEmbeddingProgress === embeddingProgress) this.localEmbeddingProgress = undefined;
         operation.finish();
         this.libraryIndexStatus.endRun();
       }
