@@ -3007,6 +3007,12 @@ export default class ArxivDailyPlugin extends Plugin {
           if (reloaded.status === "fulfilled") {
             this.libraryProposal = reloaded.value;
             this.libraryProposalLoadError = null;
+            // Which indexed papers count as new is derived from the proposal,
+            // so the count has to follow the revision now on disk rather than
+            // keep describing the stale one.
+            await this.recomputeLibraryNewPaperKeys();
+          } else {
+            this.libraryProposalLoadError = this.safeProfileLoadError("proposal", reloaded.reason);
           }
         }
         throw error;

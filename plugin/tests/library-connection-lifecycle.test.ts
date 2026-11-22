@@ -419,6 +419,76 @@ describe("personal library plugin lifecycle", () => {
     // actually on disk, so the next attempt does not conflict again.
     expect(plugin.getPersonalLibraryProfileSnapshot().proposal?.revision).toBe(2);
   });
+
+  it("recomputes new-paper keys after a stale write conflict reloads the proposal", async () => {
+    const { plugin, internals } = makePlugin();
+    internals.libraryConnection = createLibraryConnection("/papers", "1:2");
+    internals.libraryConnectionRevision = 0;
+    internals.libraryOutputRevision = 0;
+    const oldProposal = proposalAtRevision(1);
+    const reloadedProposal = proposalAtRevision(2);
+    let loads = 0;
+    const store = {
+      load: vi.fn(async () => (loads++ === 0 ? oldProposal : reloadedProposal)),
+      replace: vi.fn(async () => {
+        throw Object.assign(new Error("stale proposal"), { code: "stale" });
+      }),
+    };
+    internals.buildPersonalLibraryProfileStores = vi.fn(() => ({ proposal: store }));
+    internals.libraryProposal = oldProposal;
+    internals.libraryCatalog = { papers: {} };
+    internals.buildFullTextKnowledgeBaseStore = vi.fn(() => ({
+      loadManifest: vi.fn(async () => ({
+        papers: {
+          "arxiv:2608.00001": { status: "ready", chunkCount: 1, title: "Already proposed" },
+          "arxiv:2608.00002": { status: "ready", chunkCount: 1, title: "Newly indexed" },
+        },
+      })),
+    }));
+
+    await expect(plugin.renamePersonalLibraryProposedTopic({
+      topicId: "topic-1",
+      suggestedName: "Renamed topic",
+    })).rejects.toMatchObject({ code: "stale" });
+
+    // The count is derived from the proposal, so it follows the revision now
+    // on disk instead of keeping the stale one.
+    expect(plugin.getPersonalLibraryProfileSnapshot().newPaperKeys).toEqual([
+      "arxiv:2608.00002",
+    ]);
+  });
+
+  it("records a proposal load error when a stale conflict reload is rejected", async () => {
+    const { plugin, internals } = makePlugin();
+    internals.libraryConnection = createLibraryConnection("/papers", "1:2");
+    internals.libraryConnectionRevision = 0;
+    internals.libraryOutputRevision = 0;
+    const oldProposal = proposalAtRevision(1);
+    const store = {
+      load: vi.fn()
+        .mockResolvedValueOnce(oldProposal)
+        .mockRejectedValueOnce(Object.assign(new Error("proposal unreadable"), { code: "unreadable" })),
+      replace: vi.fn(async () => {
+        throw Object.assign(new Error("stale proposal"), { code: "stale" });
+      }),
+    };
+    internals.buildPersonalLibraryProfileStores = vi.fn(() => ({ proposal: store }));
+    internals.libraryProposal = oldProposal;
+    internals.libraryCatalog = { papers: {} };
+
+    await expect(plugin.renamePersonalLibraryProposedTopic({
+      topicId: "topic-1",
+      suggestedName: "Renamed topic",
+    })).rejects.toMatchObject({ code: "stale" });
+
+    // A failed reload is visible to the review instead of silently keeping the
+    // in-memory proposal with no error.
+    expect(plugin.getPersonalLibraryProfileSnapshot().proposalLoadError).toMatchObject({
+      kind: "proposal",
+      code: "unreadable",
+      message: expect.stringContaining("direction proposal"),
+    });
+  });
 });
 
 function proposalAtRevision(revision: number) {
