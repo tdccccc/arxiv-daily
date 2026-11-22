@@ -154,11 +154,17 @@ export class ObsidianStorageAdapter implements StorageAdapter {
     if (typeof adapter.stat === "function") {
       const stat = await adapter.stat(target).catch(() => null);
       if (!stat) return;
-      if (stat.type === "folder") {
-        await adapter.rmdir(target, true);
-        return;
+      try {
+        if (stat.type === "folder") {
+          await adapter.rmdir(target, true);
+        } else {
+          await adapter.remove(target);
+        }
+      } catch (error) {
+        // Idempotent contract: a path that vanished between stat and removal
+        // (or that stat saw but the adapter no longer has) is already gone.
+        if (!isMissingPathError(error)) throw error;
       }
-      await adapter.remove(target);
       return;
     }
     try {
