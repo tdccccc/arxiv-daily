@@ -738,13 +738,21 @@ function generationParameters(
     return params;
   }
   if (nativeAnthropic) {
+    const budgets: Record<string, number> = { low: 2048, medium: 8192, high: 16384 };
+    const requested = budgets[settings.reasoningEffort] ?? 8192;
     if (usesAdaptiveAnthropicThinking(settings.model)) {
       params.thinking = { type: "adaptive" };
       params.output_config = { effort: anthropicAdaptiveEffort(settings.reasoningEffort) };
+      if (maxCompletionTokens !== undefined) {
+        // Adaptive thinking still counts against `max_tokens`; do not lock the
+        // visible answer to the caller's budget alone.
+        params.max_tokens = Math.min(
+          maxCompletionTokens + requested,
+          ANTHROPIC_THINKING_MAX_TOKENS,
+        );
+      }
       return params;
     }
-    const budgets: Record<string, number> = { low: 2048, medium: 8192, high: 16384 };
-    const requested = budgets[settings.reasoningEffort] ?? 8192;
     if (maxCompletionTokens === undefined) {
       const cap = Math.min(requested + 16_000, ANTHROPIC_THINKING_MAX_TOKENS);
       params.max_tokens = cap;

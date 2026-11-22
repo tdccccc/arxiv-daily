@@ -60,9 +60,11 @@ describe("provider request contract", () => {
       headers: { "x-api-key": "test-key", "anthropic-version": "2023-06-01" },
     });
     expect(body()).toMatchObject({
-      system: "Be concise.", messages: prompt, max_tokens: 4096,
+      system: "Be concise.", messages: prompt, max_tokens: 20480,
       thinking: { type: "adaptive" }, output_config: { effort: "high" },
     });
+    // Thinking counts against max_tokens; keep the caller's full visible budget.
+    expect(body().max_tokens - 4096).toBeGreaterThanOrEqual(4096);
     expect(body()).not.toHaveProperty("stream_options");
     expect(body().thinking).not.toHaveProperty("budget_tokens");
     expect(metrics).toHaveBeenCalledWith(expect.objectContaining({ inputTokens: 8, outputTokens: 2 }));
@@ -166,6 +168,15 @@ describe("provider request contract", () => {
     await client.call(prompt);
     expect(body().thinking.budget_tokens).toBe(16384);
     expect(body().max_tokens).toBeGreaterThan(16384);
+  });
+
+  it("keeps a visible-answer budget for adaptive thinking at medium effort", async () => {
+    const { client, body } = fixture("anthropic", true, {
+      baseUrl: "https://api.anthropic.com/v1", model: "claude-opus-4-7", reasoningEffort: "medium",
+    });
+    await client.call(prompt, { maxCompletionTokens: 4096 });
+    expect(body().thinking).toEqual({ type: "adaptive" });
+    expect(body().max_tokens).toBe(12288);
   });
 
   it("does not cap Anthropic adaptive thinking answers at 4096 tokens by default", async () => {
