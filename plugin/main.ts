@@ -125,6 +125,9 @@ import {
 } from "./src/hosts/obsidian";
 import {
   createRemoteEmbeddingModel,
+  LOCAL_EMBEDDING_DIMENSION,
+  LOCAL_EMBEDDING_MODEL_ID,
+  remoteEmbeddingModelId,
   validateEmbeddingConfig,
   type EmbeddingModel,
 } from "@arxiv-daily/core";
@@ -169,6 +172,7 @@ import { decodeProposalAcceptanceReceipts } from "./src/library/proposal-accepta
 const LIBRARY_MODEL_PREPARATION_REQUIRED = "The embedding model changed. Retry preparation to rebuild this library safely.";
 const LIBRARY_SEARCH_PREPARATION_REQUIRED = "The search index is not ready. Retry preparation to finish rebuilding it.";
 const LIBRARY_INDEX_READ_FAILED = "Could not read the library index. Retry preparation to repair it.";
+const LIBRARY_EMBEDDING_CONFIG_INCOMPLETE = "Remote embedding settings are incomplete. Finish the embedding configuration to use the library index.";
 
 interface PersistedData {
   settings: PluginSettings;
@@ -1622,6 +1626,20 @@ export default class ArxivDailyPlugin extends Plugin {
   }
 
   /**
+   * The model identity the committed manifest must carry for search to work,
+   * derived from settings alone. Reading the index trace must not construct a
+   * remote HTTP client (an unfinished configuration throws) or start loading
+   * the local model; callers validate the configuration first.
+   */
+  private expectedEmbeddingModelIdentity(): { modelId: string; dimension: number } {
+    if (this.settings.embedding.mode === "remote") {
+      const { model, dimension } = this.settings.embedding;
+      return { modelId: remoteEmbeddingModelId(model, dimension), dimension };
+    }
+    return { modelId: LOCAL_EMBEDDING_MODEL_ID, dimension: LOCAL_EMBEDDING_DIMENSION };
+  }
+
+  /**
    * Build the PDF text extractor the index runs on.
    *
    * The index covers each paper's title and abstract (ADR 0013), which need
@@ -1902,7 +1920,8 @@ export default class ArxivDailyPlugin extends Plugin {
       if (generationFailed) throw generationFailure;
       const readinessError = this.libraryIndexStatus.snapshot().preparationError;
       if (readinessError !== LIBRARY_MODEL_PREPARATION_REQUIRED && readinessError !== LIBRARY_INDEX_READ_FAILED
-        && readinessError !== LIBRARY_SEARCH_PREPARATION_REQUIRED) {
+        && readinessError !== LIBRARY_SEARCH_PREPARATION_REQUIRED
+        && readinessError !== LIBRARY_EMBEDDING_CONFIG_INCOMPLETE) {
         this.libraryIndexStatus.setPreparationError(undefined);
       }
       if (updateProgress) {
@@ -2005,11 +2024,26 @@ export default class ArxivDailyPlugin extends Plugin {
       // checks below can return: the count says what the library holds, not
       // whether search is ready.
       await this.recomputeLibraryNewPaperKeys(manifest);
-      const expected = this.buildEmbeddingModel();
       const readyPapers = Object.values(manifest.papers).filter((paper) => paper.status === "ready");
+      // Only papers the index had to name itself: an arXiv paper's title lives
+      // in the catalog and stays the one source for it.
+      const indexedPapers = readyPapers
+        .filter((paper) => paper.title !== undefined && paper.title.length > 0)
+        .map((paper) => ({ paperKey: paper.paperKey, title: paper.title! }))
+        .sort((left, right) => (left.paperKey < right.paperKey ? -1 : left.paperKey > right.paperKey ? 1 : 0));
       this.libraryIndexStatus.setLastRun(
         manifest.revision > 0 ? { updatedAt: manifest.updatedAt, papers: readyPapers.length } : undefined,
       );
+      // An embedding configuration still being filled in is not an unreadable
+      // index: the manifest read succeeded. Say what is actually missing and
+      // keep the manifest-derived review metadata; constructing the remote
+      // client here used to turn a blank API key into LIBRARY_INDEX_READ_FAILED.
+      if (!validateEmbeddingConfig(this.settings).ok) {
+        this.libraryIndexStatus.setPreparationError(LIBRARY_EMBEDDING_CONFIG_INCOMPLETE);
+        this.libraryIndexedPapers = indexedPapers;
+        return;
+      }
+      const expected = this.expectedEmbeddingModelIdentity();
       if (Object.keys(manifest.papers).length > 0
         && (manifest.modelId !== expected.modelId || manifest.dimension !== expected.dimension)) {
         this.libraryIndexStatus.setPreparationError(LIBRARY_MODEL_PREPARATION_REQUIRED);
@@ -2036,15 +2070,11 @@ export default class ArxivDailyPlugin extends Plugin {
       }
       const previousError = this.libraryIndexStatus.snapshot().preparationError;
       if (previousError === LIBRARY_MODEL_PREPARATION_REQUIRED || previousError === LIBRARY_INDEX_READ_FAILED
+        || previousError === LIBRARY_EMBEDDING_CONFIG_INCOMPLETE
         || (generationVerified && previousError === LIBRARY_SEARCH_PREPARATION_REQUIRED)) {
         this.libraryIndexStatus.setPreparationError(undefined);
       }
-      // Only papers the index had to name itself: an arXiv paper's title lives
-      // in the catalog and stays the one source for it.
-      this.libraryIndexedPapers = readyPapers
-        .filter((paper) => paper.title !== undefined && paper.title.length > 0)
-        .map((paper) => ({ paperKey: paper.paperKey, title: paper.title! }))
-        .sort((left, right) => (left.paperKey < right.paperKey ? -1 : left.paperKey > right.paperKey ? 1 : 0));
+      this.libraryIndexedPapers = indexedPapers;
     } catch (error) {
       if (this.libraryConnection !== connection || this.libraryConnectionRevision !== connectionRevision) return;
       this.libraryIndexStatus.setPreparationError(LIBRARY_INDEX_READ_FAILED);

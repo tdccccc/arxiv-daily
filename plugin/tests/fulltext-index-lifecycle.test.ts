@@ -5,6 +5,8 @@ import {
   FullTextGenerationIndexStore,
   GENERATION_DESCRIPTOR_FORMAT_VERSION,
   GENERATION_DESCRIPTOR_SCHEMA_VERSION,
+  LOCAL_EMBEDDING_DIMENSION,
+  LOCAL_EMBEDDING_MODEL_ID,
   OperationRegistry,
   createEmptyPersonalLibraryCatalog,
   createLibraryFileObservationFingerprint,
@@ -277,9 +279,14 @@ describe("personal library full-text index lifecycle", () => {
   it("keeps retry available after restarting with an unfinished search generation", async () => {
     const runtime = fixture(memoryStorage().storage);
     const manifest = await runtime.legacy.loadManifest();
-    Object.assign(manifest, { revision: 2, modelId: "fixture-model", dimension: 2 });
+    // The trace derives the expected identity from settings (local mode here),
+    // not from the indexing fixture's model stub.
+    Object.assign(manifest, {
+      revision: 2, modelId: LOCAL_EMBEDDING_MODEL_ID, dimension: LOCAL_EMBEDDING_DIMENSION,
+    });
     manifest.papers["arxiv:2601.00001"] = {
-      paperKey: "arxiv:2601.00001", status: "ready", modelId: "fixture-model", dimension: 2,
+      paperKey: "arxiv:2601.00001", status: "ready",
+      modelId: LOCAL_EMBEDDING_MODEL_ID, dimension: LOCAL_EMBEDDING_DIMENSION,
       title: "Existing paper", textHash: "sha256:old", chunkCount: 1,
       filePaths: ["paper.pdf"], observationFingerprints: ["fingerprint"],
       updatedAt: "2026-08-18T00:00:00.000Z",
@@ -295,6 +302,81 @@ describe("personal library full-text index lifecycle", () => {
     expect(runtime.plugin.libraryIndexStatus.snapshot().preparationError).toMatch(/search index.*retry preparation/i);
     expect(close).toHaveBeenCalledOnce();
     expect(runtime.internals.libraryIndexedPapers).toEqual([]);
+  });
+
+  /**
+   * An unfinished remote embedding configuration used to reach
+   * `buildEmbeddingModel()` inside the refresh `try`, so its "API key is
+   * required" error was reported as an unreadable index and wiped the review
+   * metadata. Config state is not index state.
+   */
+  it("reports incomplete remote embedding settings as configuration, not a read failure", async () => {
+    const runtime = fixture(memoryStorage().storage);
+    runtime.internals.settings.embedding = {
+      ...DEFAULT_SETTINGS.embedding,
+      mode: "remote",
+      baseUrl: "https://api.openai.com/v1",
+      apiKey: "",
+      model: "text-embedding-3-small",
+      dimension: 1536,
+    };
+    const manifest = await runtime.legacy.loadManifest();
+    Object.assign(manifest, {
+      revision: 2,
+      modelId: "remote:text-embedding-3-small:1536",
+      dimension: 1536,
+    });
+    manifest.papers["arxiv:2601.00001"] = {
+      paperKey: "arxiv:2601.00001",
+      status: "ready",
+      modelId: "remote:text-embedding-3-small:1536",
+      dimension: 1536,
+      title: "Existing paper",
+      textHash: "sha256:old",
+      chunkCount: 1,
+      filePaths: ["paper.pdf"],
+      observationFingerprints: ["fingerprint"],
+      updatedAt: "2026-08-18T00:00:00.000Z",
+    };
+    runtime.legacy.loadManifest.mockResolvedValue(manifest);
+    runtime.internals.libraryProposal = {
+      revision: 1,
+      proposalId: "proposal.1",
+      scopeFingerprint: runtime.scopeFingerprint,
+      catalogInputPapers: [],
+    };
+    const buildEmbeddingModel = vi.fn();
+    runtime.internals.buildEmbeddingModel = buildEmbeddingModel;
+
+    await runtime.plugin.refreshLibraryIndexTrace();
+
+    const status = runtime.plugin.libraryIndexStatus.snapshot();
+    expect(status.preparationError).toMatch(/embedding settings are incomplete/i);
+    expect(status.preparationError).not.toMatch(/could not read the library index/i);
+    // The manifest was readable: its run count and review metadata survive.
+    expect(status.lastRun?.papers).toBe(1);
+    expect(runtime.plugin.getPersonalLibraryProfileSnapshot().indexedPapers).toEqual([
+      { paperKey: "arxiv:2601.00001", title: "Existing paper" },
+    ]);
+    expect(runtime.plugin.getPersonalLibraryProfileSnapshot().newPaperKeys).toEqual([
+      "arxiv:2601.00001",
+    ]);
+    // Building the model would have thrown here; the trace derives the
+    // expected identity from settings instead.
+    expect(buildEmbeddingModel).not.toHaveBeenCalled();
+
+    // Completing the configuration clears the configuration state on the next
+    // refresh; an empty manifest keeps this about the error transition.
+    runtime.internals.settings.embedding.apiKey = "sk-embed";
+    runtime.legacy.loadManifest.mockResolvedValue({
+      ...(await runtime.legacy.loadManifest()),
+      revision: 0,
+      modelId: "",
+      dimension: 0,
+      papers: {},
+    });
+    await runtime.plugin.refreshLibraryIndexTrace();
+    expect(runtime.plugin.libraryIndexStatus.snapshot().preparationError).toBeUndefined();
   });
 
   it("keeps a read failure visible without deleting the old index", async () => {
