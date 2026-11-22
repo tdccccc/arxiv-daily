@@ -8,7 +8,9 @@ import { LlmOutputTruncatedError, LlmTransientExhaustedError } from "../../src/l
 import type { PipelineResult } from "../../src/pipeline/pipeline";
 import { ArxivPipeline } from "../../src/pipeline/pipeline";
 import { Logger } from "../../src/services/logger";
+import { DailySummaryCheckpointStore } from "../../src/services/daily-summary-checkpoint-store";
 import { DEFAULT_SETTINGS } from "../../src/settings/defaults";
+import type { StorageAdapter } from "../../src/core/adapters";
 
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -56,6 +58,36 @@ const emptyPapersHtml = `<html><body>
   <h3>Mon, 22 Jun 2026</h3>
 </dl>
 </body></html>`;
+
+function memoryStorage(files: Record<string, string>): StorageAdapter {
+  const dirs = new Set<string>();
+  return {
+    normalizePath: (path) =>
+      path.replace(/\\/g, "/").replace(/\/+/g, "/").replace(/^\/+|\/+$/g, ""),
+    async readText(path) {
+      if (!(path in files)) throw new Error(`missing ${path}`);
+      return files[path]!;
+    },
+    async writeText(path, content) {
+      files[path] = content;
+    },
+    async exists(path) {
+      return path in files || dirs.has(path);
+    },
+    async mkdir(path) {
+      dirs.add(path);
+    },
+    async rename(from, to) {
+      if (!(from in files)) throw new Error(`missing ${from}`);
+      files[to] = files[from]!;
+      delete files[from];
+    },
+    async remove(path) {
+      delete files[path];
+      dirs.delete(path);
+    },
+  };
+}
 
 describe("PipelineResult types", () => {
   it("should support pending result kind", () => {
@@ -709,6 +741,30 @@ describe("Pipeline partial failure consistency", () => {
       papersWritten: 1,
     });
     expect(summarizeDaily).toHaveBeenCalledTimes(1);
+  });
+
+  it("rebuilds a corrupt summary checkpoint instead of failing the date repeatedly", async () => {
+    const corruptPath =
+      "arxiv-daily/.index/daily-summary-checkpoints/2026-05-11.json";
+    const files: Record<string, string> = { [corruptPath]: "{ not valid json" };
+    const summary = new DailySummaryCheckpointStore(
+      memoryStorage(files),
+      DEFAULT_SETTINGS.output,
+    );
+    const { pipeline, writer, llm } = makeOnePaperPipeline({
+      checkpointStores: { summary },
+    });
+
+    const result = await pipeline.runForDate("2026-05-11");
+
+    expect(result).toMatchObject({ kind: "completed", papersWritten: 1 });
+    expect(writer.writeDaily).toHaveBeenCalledTimes(1);
+    // filter + one daily summary (detail selection is skipped without full
+    // text): the corrupt checkpoint is rebuilt on the first write and the date
+    // does not repeat the LLM work.
+    expect(llm.call).toHaveBeenCalledTimes(2);
+    // The committed run removes its checkpoints, including the rebuilt one.
+    expect(files[corruptPath]).toBeUndefined();
   });
 
   it("writes a fallback daily report after three strict structured-validation failures", async () => {

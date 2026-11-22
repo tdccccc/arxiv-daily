@@ -366,17 +366,21 @@ export class DailySummaryCheckpointStore {
       this.warn(`daily summary checkpoint recovered from backup: ${paths.backupPath}`);
       return backup.document;
     }
-    if (primary.kind === "missing" && backup.kind === "missing") {
-      return emptyDocument(reportDate, this.now());
+    if (backup.kind === "unreadable") {
+      throw new DailySummaryCheckpointStoreError(
+        `cannot mutate unreadable daily summary checkpoint: ${paths.backupPath}`,
+        backup.error,
+      );
     }
-    throw new DailySummaryCheckpointStoreError(
-      `cannot mutate unreadable daily summary checkpoint: ${paths.documentPath}`,
-      backup.kind === "unreadable" || backup.kind === "corrupt"
-        ? backup.error
-        : primary.kind === "corrupt"
-          ? primary.error
-          : undefined,
-    );
+    // Missing or readable-corrupt documents carry no durable state: a strict
+    // parse failure is a definitively corrupt file, so rebuilding it as an
+    // empty document lets the date recover instead of burning LLM calls on
+    // every retry. In-memory I/O failures above still refuse to overwrite
+    // bytes that could not be read. Mirrors DailyFilterCheckpointStore.
+    if (primary.kind === "corrupt" || backup.kind === "corrupt") {
+      this.warn(`corrupt daily summary checkpoint rebuilt: ${paths.documentPath}`);
+    }
+    return emptyDocument(reportDate, this.now());
   }
 
   private async readDocument(
