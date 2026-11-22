@@ -785,6 +785,87 @@ describe("personal library full-text index lifecycle", () => {
     expect(runtime.legacy.replaceManifest).not.toHaveBeenCalled();
   });
 
+  it("refuses the manifest commit when embedding settings changed and cancellation could not reach the run", async () => {
+    const runtime = remoteLibrary();
+    await runtime.plugin.authorizeLibraryProcessing();
+    // Simulate a host where cancellation cannot abort the running task: the
+    // run finishes every paper, so only the commit guard can stop a manifest
+    // that no longer matches settings from being published.
+    const registry = runtime.internals.operations as OperationRegistry;
+    runtime.internals.operations = new Proxy(registry, {
+      get(target, property) {
+        if (property === "cancel") return () => false;
+        const value = Reflect.get(target, property, target) as unknown;
+        return typeof value === "function" ? value.bind(target) : value;
+      },
+    }) as OperationRegistry;
+    const embed = vi.fn(async (texts: readonly string[]) => {
+      if (embed.mock.calls.length === 1) {
+        runtime.internals.settings.embedding = structuredClone(DEFAULT_SETTINGS.embedding);
+      }
+      return texts.map(() => new Float32Array([0, 0]));
+    });
+    runtime.internals.buildEmbeddingModel = vi.fn(() => ({
+      modelId: "remote:fixture-model:2",
+      dimension: 2,
+      prefixPolicy: "none",
+      embed,
+    }) satisfies EmbeddingModel);
+
+    await expect(runtime.plugin.indexPersonalLibraryFullText()).rejects.toMatchObject({
+      name: "RunCancelledError",
+      message: "Embedding settings changed during library indexing",
+    });
+
+    expect(embed).toHaveBeenCalledTimes(3);
+    expect(runtime.legacy.replaceManifest).not.toHaveBeenCalled();
+    expect(runtime.plugin.libraryIndexStatus.snapshot()).toEqual({});
+  });
+
+  it("releases the local model only after a running index ends", async () => {
+    const runtime = remoteLibrary();
+    runtime.internals.settings.embedding = structuredClone(DEFAULT_SETTINGS.embedding);
+    let releaseEmbed!: () => void;
+    const embedGate = new Promise<void>((resolve) => { releaseEmbed = resolve; });
+    const model = {
+      modelId: LOCAL_EMBEDDING_MODEL_ID,
+      dimension: LOCAL_EMBEDDING_DIMENSION,
+      prefixPolicy: "e5",
+      embed: vi.fn(async (texts: readonly string[]) => {
+        await embedGate;
+        return texts.map(() => new Float32Array(LOCAL_EMBEDDING_DIMENSION));
+      }),
+      dispose: vi.fn(async () => undefined),
+    } satisfies EmbeddingModel;
+    runtime.internals.buildEmbeddingModel = vi.fn(() => model);
+    runtime.internals.localEmbeddingModelInstance = model;
+
+    const run = runtime.plugin.indexPersonalLibraryFullText();
+    await vi.waitFor(() => expect(model.embed).toHaveBeenCalledTimes(1));
+    // Disposing now would destroy the extractor under the in-flight embed and
+    // make the rest of the run reload a session nothing would release, so the
+    // release waits for the run to finish.
+    runtime.internals.disposeLocalEmbeddingModelWhenIdle();
+    expect(model.dispose).not.toHaveBeenCalled();
+    expect(runtime.internals.localEmbeddingModelInstance).toBe(model);
+
+    // The release waits for the run to end; once it does, the model goes.
+    expect(runtime.plugin.cancelPersonalLibraryIndexing()).toBe(true);
+    releaseEmbed();
+    await expect(run).rejects.toMatchObject({ name: "RunCancelledError" });
+    await vi.waitFor(() => expect(model.dispose).toHaveBeenCalledOnce());
+    expect(model.embed).toHaveBeenCalledTimes(1);
+    expect(runtime.internals.localEmbeddingModelInstance).toBeUndefined();
+
+    // The disposed instance is not rebuilt in place: the next local use gets
+    // a fresh model rather than one that could reload an orphaned session.
+    delete (runtime.internals as Record<string, unknown>).buildEmbeddingModel;
+    const rebuilt = runtime.plugin.buildEmbeddingModel();
+    expect(rebuilt).not.toBe(model);
+    expect(runtime.internals.localEmbeddingModelInstance).toBe(rebuilt);
+    expect(model.embed).toHaveBeenCalledTimes(1);
+  });
+
   it("keeps the legacy migration fallback when the unsupported host has never cut over", async () => {
     const memory = memoryStorage();
     const runtime = fixture(limitedStorage(memory.storage));
