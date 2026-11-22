@@ -75,7 +75,7 @@ beforeAll(() => {
   proto.createSpan ??= function (options = {}) { return this.createEl("span", options); };
 });
 
-function makeLegacyApiKeyTab(
+function makeLegacySettingsTab(
   persistSettings: (candidate: typeof DEFAULT_SETTINGS) => Promise<void>,
 ) {
   const settings = structuredClone(DEFAULT_SETTINGS);
@@ -115,7 +115,7 @@ function makeLegacyApiKeyTab(
 }
 
 it("offers only one library suggestion entry in legacy settings", async () => {
-  const { tab } = makeLegacyApiKeyTab(async () => undefined);
+  const { tab } = makeLegacySettingsTab(async () => undefined);
   tab.plugin.getLibraryConnectionStatus = () => ({ kind: "authorized", rootLabel: "papers", grantedAt: "2026-09-08T00:00:00.000Z" });
   tab.plugin.libraryIndexStatus.setLastRun({ updatedAt: "2026-09-08T00:00:00.000Z", papers: 20 });
   tab.plugin.openPersonalLibraryDirectionReview = vi.fn();
@@ -161,7 +161,7 @@ function componentOf<T>(setting: Setting | undefined, ctor: new (...args: never[
 describe("legacy daily paper limit", () => {
   it("shows 20 and persists a whole-number edit as a number", async () => {
     const persistSettings = vi.fn().mockResolvedValue(undefined);
-    const { tab, settings, installOutputStores } = makeLegacyApiKeyTab(persistSettings);
+    const { tab, settings, installOutputStores } = makeLegacySettingsTab(persistSettings);
     const row = renderLegacySettings(tab).get("Daily paper limit");
     const input = row?.controlEl.querySelector<HTMLInputElement>("input");
     expect(input).toBeDefined();
@@ -179,7 +179,7 @@ describe("legacy daily paper limit", () => {
 
   it.each(["0", "2.5", ""])("rejects the invalid draft %j without persistence", async (draft) => {
     const persistSettings = vi.fn().mockResolvedValue(undefined);
-    const { tab, settings } = makeLegacyApiKeyTab(persistSettings);
+    const { tab, settings } = makeLegacySettingsTab(persistSettings);
     const input = renderLegacySettings(tab).get("Daily paper limit")?.controlEl.querySelector<HTMLInputElement>("input");
     expect(input).toBeDefined();
     input!.value = draft;
@@ -192,7 +192,7 @@ describe("legacy daily paper limit", () => {
 
   it("restores the current limit when persistence fails", async () => {
     const persistSettings = vi.fn().mockRejectedValue(new Error("disk full"));
-    const { tab, settings } = makeLegacyApiKeyTab(persistSettings);
+    const { tab, settings } = makeLegacySettingsTab(persistSettings);
     const input = renderLegacySettings(tab).get("Daily paper limit")?.controlEl.querySelector<HTMLInputElement>("input");
     expect(input).toBeDefined();
     input!.value = "35";
@@ -205,7 +205,7 @@ describe("legacy daily paper limit", () => {
 
 describe("legacy embedding controls", () => {
   function setup(persist = vi.fn().mockResolvedValue(undefined)) {
-    const result = makeLegacyApiKeyTab(persist);
+    const result = makeLegacySettingsTab(persist);
     result.settings.embedding.mode = "remote";
     result.settings.embedding.apiKey = "old-embedding-key";
     const rows = renderLegacySettings(result.tab);
@@ -299,7 +299,7 @@ describe("llmHttpWarning", () => {
 
 describe("legacy section order", () => {
   it("renders Personal library after Output & schedule and before Email delivery", () => {
-    const { tab } = makeLegacyApiKeyTab(vi.fn().mockResolvedValue(undefined));
+    const { tab } = makeLegacySettingsTab(vi.fn().mockResolvedValue(undefined));
     renderLegacySettings(tab);
     const headings = Setting.instances
       .filter((setting) => setting.settingEl.hasAttribute("data-arxiv-daily-section"))
@@ -322,7 +322,7 @@ describe("legacy section order", () => {
 
 describe("legacy personal library guide box", () => {
   it("shows the intro box while no library is connected", () => {
-    const { tab } = makeLegacyApiKeyTab(vi.fn().mockResolvedValue(undefined));
+    const { tab } = makeLegacySettingsTab(vi.fn().mockResolvedValue(undefined));
     vi.mocked(tab.plugin.getLibraryConnectionStatus).mockReturnValue({ kind: "disconnected" });
     renderLegacySettings(tab);
     const boxes = tab.containerEl.querySelectorAll(".arxiv-daily-settings__library-guide");
@@ -331,7 +331,7 @@ describe("legacy personal library guide box", () => {
   });
 
   it("keeps the intro box concise but complete, and honest about the one-time model download", () => {
-    const { tab } = makeLegacyApiKeyTab(vi.fn().mockResolvedValue(undefined));
+    const { tab } = makeLegacySettingsTab(vi.fn().mockResolvedValue(undefined));
     const content = tab.libraryGuideContent();
     expect(content.lines.length).toBeLessThanOrEqual(4);
     const text = content.lines.join(" ");
@@ -358,7 +358,7 @@ describe("legacy personal library guide box", () => {
   });
 
   it("keeps showing the intro box once a folder is chosen (always visible, like the email guide)", () => {
-    const { tab } = makeLegacyApiKeyTab(vi.fn().mockResolvedValue(undefined));
+    const { tab } = makeLegacySettingsTab(vi.fn().mockResolvedValue(undefined));
     vi.mocked(tab.plugin.getLibraryConnectionStatus).mockReturnValue({
       kind: "authorization-required",
       rootLabel: "papers",
@@ -368,7 +368,7 @@ describe("legacy personal library guide box", () => {
   });
 
   it("keeps showing the intro box once authorized (always visible, like the email guide)", () => {
-    const { tab } = makeLegacyApiKeyTab(vi.fn().mockResolvedValue(undefined));
+    const { tab } = makeLegacySettingsTab(vi.fn().mockResolvedValue(undefined));
     vi.mocked(tab.plugin.getLibraryConnectionStatus).mockReturnValue({
       kind: "authorized",
       rootLabel: "papers",
@@ -381,14 +381,14 @@ describe("legacy personal library guide box", () => {
 
 describe("legacy personal library directions row", () => {
   it("is hidden while no library folder is chosen", () => {
-    const { tab } = makeLegacyApiKeyTab(vi.fn().mockResolvedValue(undefined));
+    const { tab } = makeLegacySettingsTab(vi.fn().mockResolvedValue(undefined));
     vi.mocked(tab.plugin.getLibraryConnectionStatus).mockReturnValue({ kind: "disconnected" });
     const rows = renderLegacySettings(tab);
     expect(rows.has("Topics from library")).toBe(false);
   });
 
   it("shows below Library once a folder is chosen", () => {
-    const { tab } = makeLegacyApiKeyTab(vi.fn().mockResolvedValue(undefined));
+    const { tab } = makeLegacySettingsTab(vi.fn().mockResolvedValue(undefined));
     vi.mocked(tab.plugin.getLibraryConnectionStatus).mockReturnValue({
       kind: "authorization-required",
       rootLabel: "papers",
@@ -405,7 +405,7 @@ describe("legacy personal library directions row", () => {
   });
 
   it("opens the direction review modal when its button is clicked", async () => {
-    const { tab } = makeLegacyApiKeyTab(vi.fn().mockResolvedValue(undefined));
+    const { tab } = makeLegacySettingsTab(vi.fn().mockResolvedValue(undefined));
     vi.mocked(tab.plugin.getLibraryConnectionStatus).mockReturnValue({
       kind: "authorized",
       rootLabel: "papers",
@@ -420,7 +420,7 @@ describe("legacy personal library directions row", () => {
   });
 
   it("disables review during preparation even with an older usable index", () => {
-    const { tab } = makeLegacyApiKeyTab(vi.fn().mockResolvedValue(undefined));
+    const { tab } = makeLegacySettingsTab(vi.fn().mockResolvedValue(undefined));
     vi.mocked(tab.plugin.getLibraryConnectionStatus).mockReturnValue({ kind: "authorization-required", rootLabel: "papers" });
     tab.plugin.libraryIndexStatus.setLastRun({ updatedAt: "2026-10-02T00:00:00.000Z", papers: 3 });
     tab.plugin.libraryIndexStatus.beginRun("preparing", "scanning");
@@ -434,7 +434,7 @@ describe("legacy personal library directions row", () => {
 
 describe("legacy embedding rows", () => {
   it("routes the mode dropdown through the same in-place consent as the 1.13+ row", async () => {
-    const { tab, settings } = makeLegacyApiKeyTab(vi.fn().mockResolvedValue(undefined));
+    const { tab, settings } = makeLegacySettingsTab(vi.fn().mockResolvedValue(undefined));
     const apply = vi
       .spyOn(tab, "applyEmbeddingModeChange")
       .mockImplementation(async () => false);
@@ -450,7 +450,7 @@ describe("legacy embedding rows", () => {
   });
 
   it("labels the local option honestly about the one-time model download, not as always-offline", () => {
-    const { tab } = makeLegacyApiKeyTab(vi.fn().mockResolvedValue(undefined));
+    const { tab } = makeLegacySettingsTab(vi.fn().mockResolvedValue(undefined));
     const rows = renderLegacySettings(tab);
     const dropdown = componentOf(rows.get("Embedding"), DropdownComponent as never) as DropdownComponent;
     const local = [...dropdown.selectEl.options].find((option) => option.value === "local");
@@ -459,7 +459,7 @@ describe("legacy embedding rows", () => {
   });
 
   it("describes the local embedding row's one-time download and approximate size, not a bundled model", () => {
-    const { tab } = makeLegacyApiKeyTab(vi.fn().mockResolvedValue(undefined));
+    const { tab } = makeLegacySettingsTab(vi.fn().mockResolvedValue(undefined));
     const rows = renderLegacySettings(tab);
     const desc = rows.get("Embedding")?.descEl?.textContent ?? "";
     expect(desc).toContain("downloads its model once");
@@ -468,7 +468,7 @@ describe("legacy embedding rows", () => {
   });
 
   it("routes the endpoint field through the shared re-ask on change", async () => {
-    const { tab, settings } = makeLegacyApiKeyTab(vi.fn().mockResolvedValue(undefined));
+    const { tab, settings } = makeLegacySettingsTab(vi.fn().mockResolvedValue(undefined));
     settings.embedding.mode = "remote";
     settings.embedding.baseUrl = "https://embed.example.com/v1";
     const save = vi
@@ -494,7 +494,7 @@ describe("legacy embedding rows", () => {
 
 describe("legacy reasoning effort", () => {
   it("shows Thinking mode on after choosing an effort turns it on", async () => {
-    const { tab, settings } = makeLegacyApiKeyTab(vi.fn().mockResolvedValue(undefined));
+    const { tab, settings } = makeLegacySettingsTab(vi.fn().mockResolvedValue(undefined));
     settings.llm.thinkingMode = false;
     const rows = renderLegacySettings(tab);
     const thinking = componentOf(rows.get("Thinking mode"), ToggleComponent as never) as ToggleComponent;
@@ -510,7 +510,7 @@ describe("legacy reasoning effort", () => {
 describe("legacy model field", () => {
   it("saves a typed model on change and restores it when persistence fails", async () => {
     const persistSettings = vi.fn().mockRejectedValue(new Error("disk full"));
-    const { tab, settings } = makeLegacyApiKeyTab(persistSettings);
+    const { tab, settings } = makeLegacySettingsTab(persistSettings);
     const rows = renderLegacySettings(tab);
     const input = rows.get("Model")?.controlEl.querySelector<HTMLInputElement>(
       "input.arxiv-daily-settings__model-input",
@@ -535,7 +535,7 @@ describe("legacy text fields act when editing ends", () => {
   }
 
   it("does not turn each keystroke of a custom category into a category", async () => {
-    const { tab, settings } = makeLegacyApiKeyTab(vi.fn().mockResolvedValue(undefined));
+    const { tab, settings } = makeLegacySettingsTab(vi.fn().mockResolvedValue(undefined));
     const rows = renderLegacySettings(tab);
     const display = vi.spyOn(tab, "display");
     const input = componentOf(rows.get("Category 1"), TextComponent as never) as TextComponent;
@@ -552,7 +552,7 @@ describe("legacy text fields act when editing ends", () => {
     ["Embedding API base URL", "embedding.baseUrl", "https://embed.example.com/v1"],
     ["Embedding model", "embedding.model", "text-embedding-3-large"],
   ])("saves %s once on change, not per keystroke", async (name, key, typed) => {
-    const { tab, settings } = makeLegacyApiKeyTab(vi.fn().mockResolvedValue(undefined));
+    const { tab, settings } = makeLegacySettingsTab(vi.fn().mockResolvedValue(undefined));
     settings.embedding.mode = "remote";
     const save = vi.spyOn(tab, "saveEmbeddingEndpointField").mockImplementation(
       async (_key, next) => next,
@@ -570,7 +570,7 @@ describe("legacy text fields act when editing ends", () => {
   });
 
   it("never renders the retired sidecar controls, even when the setting is enabled", () => {
-    const { tab, settings } = makeLegacyApiKeyTab(vi.fn().mockResolvedValue(undefined));
+    const { tab, settings } = makeLegacySettingsTab(vi.fn().mockResolvedValue(undefined));
     settings.pdfParserSidecar.enabled = true;
 
     const rows = renderLegacySettings(tab);
@@ -598,7 +598,7 @@ describe("legacy pending category draft", () => {
 
   it("adds an unselected draft row without saving when Add category is clicked", () => {
     const persistSettings = vi.fn().mockResolvedValue(undefined);
-    const { tab, settings } = makeLegacyApiKeyTab(persistSettings);
+    const { tab, settings } = makeLegacySettingsTab(persistSettings);
     renderLegacySettings(tab);
 
     clickButton(tab.containerEl, "Add category");
@@ -615,7 +615,7 @@ describe("legacy pending category draft", () => {
 
   it("saves categories plus the picked one when the draft row's dropdown changes", async () => {
     const persistSettings = vi.fn().mockResolvedValue(undefined);
-    const { tab, settings } = makeLegacyApiKeyTab(persistSettings);
+    const { tab, settings } = makeLegacySettingsTab(persistSettings);
     renderLegacySettings(tab);
     clickButton(tab.containerEl, "Add category");
     renderLegacySettings(tab);
@@ -633,7 +633,7 @@ describe("legacy pending category draft", () => {
 
   it("removes the draft row via its Remove button without saving", () => {
     const persistSettings = vi.fn().mockResolvedValue(undefined);
-    const { tab, settings } = makeLegacyApiKeyTab(persistSettings);
+    const { tab, settings } = makeLegacySettingsTab(persistSettings);
     renderLegacySettings(tab);
     clickButton(tab.containerEl, "Add category");
     renderLegacySettings(tab);
@@ -652,7 +652,7 @@ describe("legacy pending category draft", () => {
 
   it("shows no draft row after the tab is hidden and reopened without picking", () => {
     const persistSettings = vi.fn().mockResolvedValue(undefined);
-    const { tab } = makeLegacyApiKeyTab(persistSettings);
+    const { tab } = makeLegacySettingsTab(persistSettings);
     renderLegacySettings(tab);
     clickButton(tab.containerEl, "Add category");
     renderLegacySettings(tab);
@@ -681,7 +681,7 @@ describe("legacy transactional renderers", () => {
     "keeps live and displayed %s unchanged when candidate persistence fails",
     async (name, componentType, next, section, field) => {
       const persistSettings = vi.fn().mockRejectedValue(new Error("disk full"));
-      const { tab, settings } = makeLegacyApiKeyTab(persistSettings);
+      const { tab, settings } = makeLegacySettingsTab(persistSettings);
       const previous = (settings[section] as unknown as Record<string, unknown>)[field];
       const rows = renderLegacySettings(tab);
       const component = componentOf(rows.get(name), componentType as never) as {
@@ -702,7 +702,7 @@ describe("legacy transactional renderers", () => {
 
   it("restores the complete named detail profile when persistence fails", async () => {
     const persistSettings = vi.fn().mockRejectedValue(new Error("disk full"));
-    const { tab, settings } = makeLegacyApiKeyTab(persistSettings);
+    const { tab, settings } = makeLegacySettingsTab(persistSettings);
     const previous = structuredClone(settings.detailSelection);
     const rows = renderLegacySettings(tab);
     const profile = componentOf(
@@ -727,7 +727,7 @@ describe("legacy transactional renderers", () => {
       .mockImplementationOnce(() => new Promise<void>((resolve) => {
         resolveSecond = resolve;
       }));
-    const { tab, settings } = makeLegacyApiKeyTab(persistSettings);
+    const { tab, settings } = makeLegacySettingsTab(persistSettings);
     const rows = renderLegacySettings(tab);
     const input = componentOf(
       rows.get("API base URL"),
@@ -750,7 +750,7 @@ describe("legacy transactional renderers", () => {
 
   it("coalesces change and blur into one rejected tick-interval transaction", async () => {
     const persistSettings = vi.fn().mockRejectedValue(new Error("disk full"));
-    const { tab, settings } = makeLegacyApiKeyTab(persistSettings);
+    const { tab, settings } = makeLegacySettingsTab(persistSettings);
     const input = document.createElement("input");
     input.value = "5";
 
@@ -776,7 +776,7 @@ describe("legacy transactional renderers", () => {
       expect(candidate.llm.apiKey).toBe("new-secret");
       await new Promise<void>((resolve) => { finishSave = resolve; });
     });
-    const { tab, settings, refreshSensitiveValues } = makeLegacyApiKeyTab(
+    const { tab, settings, refreshSensitiveValues } = makeLegacySettingsTab(
       persistSettings,
     );
     const { input } = renderLegacyApiKey(tab);
@@ -806,7 +806,7 @@ describe("legacy transactional renderers", () => {
       .mockImplementationOnce(() => new Promise<void>((resolve) => {
         resolveSecond = resolve;
       }));
-    const { tab, settings } = makeLegacyApiKeyTab(persistSettings);
+    const { tab, settings } = makeLegacySettingsTab(persistSettings);
     const { input } = renderLegacyApiKey(tab);
 
     input.value = "rejected-secret";
@@ -827,7 +827,7 @@ describe("legacy transactional renderers", () => {
 
   it("restores the masked value when candidate persistence fails", async () => {
     const persistSettings = vi.fn().mockRejectedValue(new Error("disk full"));
-    const { tab, settings, refreshSensitiveValues } = makeLegacyApiKeyTab(
+    const { tab, settings, refreshSensitiveValues } = makeLegacySettingsTab(
       persistSettings,
     );
     const { input } = renderLegacyApiKey(tab);
@@ -849,7 +849,7 @@ describe("legacy transactional renderers", () => {
     "restores the masked %s secret when candidate persistence fails",
     async (renderMethod, settingKey) => {
       const persistSettings = vi.fn().mockRejectedValue(new Error("disk full"));
-      const { tab, settings, refreshSensitiveValues } = makeLegacyApiKeyTab(
+      const { tab, settings, refreshSensitiveValues } = makeLegacySettingsTab(
         persistSettings,
       );
       settings.email[settingKey] = "old-email-secret";
@@ -1059,7 +1059,7 @@ describe("output path drafts", () => {
       expect(candidate.output.dailyDir).toBe("reports/daily");
       await new Promise<void>((resolve) => { finishSave = resolve; });
     });
-    const { tab, settings, installOutputStores } = makeLegacyApiKeyTab(
+    const { tab, settings, installOutputStores } = makeLegacySettingsTab(
       persistSettings,
     );
     const input = document.createElement("input");
@@ -1083,7 +1083,7 @@ describe("output path drafts", () => {
 
   it("restores the legacy output input without a second persistence rollback", async () => {
     const persistSettings = vi.fn().mockRejectedValue(new Error("disk full"));
-    const { tab, settings, installOutputStores } = makeLegacyApiKeyTab(
+    const { tab, settings, installOutputStores } = makeLegacySettingsTab(
       persistSettings,
     );
     const input = document.createElement("input");
@@ -1269,7 +1269,7 @@ describe("legacy topic card header", () => {
   }
 
   it("hides the tag chip while collapsed so a long name keeps the header width", () => {
-    const { tab } = makeLegacyApiKeyTab(async () => {});
+    const { tab } = makeLegacySettingsTab(async () => {});
     const container = renderLegacyTopicCard(tab, [{ directions: [{ id: "fixture-direction", text: "Something", origin: "manual" as const }],
       id: "topic-1",
       name: "A very long research topic name that would otherwise get truncated",
@@ -1292,7 +1292,7 @@ describe("legacy topic card header", () => {
 describe("legacy timezone row", () => {
   it("shows a saved custom timezone and syncs the dropdown after a custom commit", async () => {
     const persistSettings = vi.fn().mockResolvedValue(undefined);
-    const { tab, settings } = makeLegacyApiKeyTab(persistSettings);
+    const { tab, settings } = makeLegacySettingsTab(persistSettings);
     settings.arxiv.timezone = "Europe/Berlin";
 
     const row = renderLegacySettings(tab).get("Timezone")!;
