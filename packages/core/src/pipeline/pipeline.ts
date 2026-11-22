@@ -840,12 +840,18 @@ export class ArxivPipeline {
     return links;
   }
 
-  /** The same links rebuilt from a committed report during a repair. */
+  /**
+   * The same links rebuilt from a committed report during a repair. Entries
+   * read back after the repair steps win: they carry the paper's full report
+   * history (and so its original published date), which a view built from this
+   * report alone would lose.
+   */
   private repairedDetailReportLinks(
     dateStr: string,
     dailyPath: string,
     papers: readonly DailyReportPaper[],
     detailPaths: Readonly<Record<string, string | null>>,
+    entries: ReadonlyMap<string, PaperIndexEntry>,
   ): DetailReportLink[] {
     const byId = new Map(papers.map((paper) => [paper.id, paper] as const));
     const links: DetailReportLink[] = [];
@@ -860,6 +866,7 @@ export class ArxivPipeline {
           category: paper ? this.primaryTopicForSection(paper.section) : "",
           published: dateStr,
           paperPath,
+          indexEntry: entries.get(id),
         },
         dailyPath,
         dateStr,
@@ -1084,9 +1091,17 @@ export class ArxivPipeline {
       throwIfCancelled(signal);
       // The run that wrote the report may have stopped before its detail notes
       // learned the report path; rebuild those `published` links too.
+      const repairedEntries = await this.deps.paperIndex.getMany(arxivIds);
+      throwIfCancelled(signal);
       await this.refreshDetailReportLinks(
         dailyPath,
-        this.repairedDetailReportLinks(dateStr, dailyPath, dailyPapers, canonicalDetailPaths),
+        this.repairedDetailReportLinks(
+          dateStr,
+          dailyPath,
+          dailyPapers,
+          canonicalDetailPaths,
+          repairedEntries,
+        ),
         signal,
       );
       throwIfCancelled(signal);
