@@ -61,6 +61,7 @@ function passRuntimeDiagnostics(): FullTextRuntimeDiagnostics {
     },
     embedding: {
       status: "pass",
+      mode: "local",
       modelId: "multilingual-e5-small-q8",
       dimension: 384,
       remoteHost: "https://huggingface.co/",
@@ -102,11 +103,13 @@ function makePlugin() {
     app: {
       workspace: {
         openLinkText: vi.fn(),
+        getLeavesOfType: vi.fn(() => []),
       },
       vault: {
         adapter: {
           exists: vi.fn(async () => false),
         },
+        getAbstractFileByPath: vi.fn(() => null),
       },
     },
     manifest: { id: "arxiv-daily", version: "0.1.0" },
@@ -123,6 +126,16 @@ function makePlugin() {
     progress: { setIdle: vi.fn() },
     logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
     manualFetch: { fetchAndSummarize: vi.fn() },
+    operations: { snapshot: vi.fn(() => []), cancelAll: vi.fn() },
+    withOutputOperation: vi.fn(async (
+      _kind: string,
+      _label: string,
+      _key: string,
+      operation: () => Promise<unknown>,
+    ) => operation()),
+    buildMarkdownWriter: vi.fn(() => ({
+      dailyPath: (date: string) => `${DEFAULT_SETTINGS.output.dailyDir}/${date}.md`,
+    })),
     buildPaperIndex: vi.fn(() => ({
       paths: {
         papersJsonPath: "arxiv-daily/.index/papers.json",
@@ -442,6 +455,92 @@ describe("registerCommands", () => {
     await vi.waitFor(() => expect(refreshFromVault).toHaveBeenCalledOnce());
   });
 
+  it("refreshes open dashboards after the run state is cleared", async () => {
+    Modal.opened = [];
+    const plugin = makePlugin();
+    const refreshFromVault = vi.fn(async () => undefined);
+    Object.assign(plugin.app.workspace, {
+      getLeavesOfType: vi.fn(() => [{ view: { refreshFromVault } }]),
+    });
+    registerCommands(plugin as any);
+    const command = vi.mocked(plugin.addCommand).mock.calls
+      .map(([value]) => value)
+      .find((value) => value.id === "clear-run-state");
+
+    command?.callback?.();
+    const modal = Modal.opened.at(-1)!;
+    const clear = [...modal.contentEl.querySelectorAll("button")]
+      .find((button) => button.textContent === "Clear state")!;
+    clear.click();
+
+    await vi.waitFor(() => expect(refreshFromVault).toHaveBeenCalledOnce());
+    expect(plugin.stateStore.clearAll).toHaveBeenCalledOnce();
+  });
+
+  it("refuses to clear run state while a task is still active", async () => {
+    Modal.opened = [];
+    Notice.calls = [];
+    const plugin = makePlugin();
+    plugin.operations.snapshot.mockReturnValue([
+      { id: "operation-1", kind: "daily-run" },
+    ] as never);
+    registerCommands(plugin as any);
+    const command = vi.mocked(plugin.addCommand).mock.calls
+      .map(([value]) => value)
+      .find((value) => value.id === "clear-run-state");
+
+    command?.callback?.();
+
+    await vi.waitFor(() => expect(Notice.calls.at(-1)?.message).toMatch(/active task/i));
+    expect(plugin.stateStore.clearAll).not.toHaveBeenCalled();
+    expect(Modal.opened).toHaveLength(0);
+  });
+
+  it("refreshes open dashboards after a mark command updates papers.json", async () => {
+    const plugin = makePlugin();
+    const refreshFromVault = vi.fn(async () => undefined);
+    Object.assign(plugin.app.workspace, {
+      getLeavesOfType: vi.fn(() => [{ view: { refreshFromVault } }]),
+      getActiveFile: vi.fn(() => ({ basename: "2608.10002" })),
+    });
+    Object.assign(plugin.app, {
+      metadataCache: { getFileCache: vi.fn(() => null) },
+    });
+    const entry = { arxivId: "2608.10002", status: "to_read", priority: "normal" };
+    plugin.buildPaperIndex = vi.fn(() => ({
+      get: vi.fn(async () => entry),
+      setStatus: vi.fn(async () => entry),
+      setPriority: vi.fn(async () => entry),
+    })) as never;
+    registerCommands(plugin as any);
+    const command = vi.mocked(plugin.addCommand).mock.calls
+      .map(([value]) => value)
+      .find((value) => value.id === "mark-current-watch");
+
+    command?.callback?.();
+
+    await vi.waitFor(() => expect(refreshFromVault).toHaveBeenCalledOnce());
+    expect(plugin.buildPaperIndex).toHaveBeenCalled();
+  });
+
+  it("opens today's daily report through the writer-normalized path", async () => {
+    const plugin = makePlugin();
+    plugin.buildMarkdownWriter = vi.fn(() => ({
+      dailyPath: (date: string) => `arxiv-daily/daily/${date}.md`,
+    })) as never;
+    plugin.app.vault.getAbstractFileByPath = vi.fn((path: string) => ({ path })) as never;
+    registerCommands(plugin as any);
+    const command = vi.mocked(plugin.addCommand).mock.calls
+      .map(([value]) => value)
+      .find((value) => value.id === "open-today");
+
+    command?.callback?.();
+
+    await vi.waitFor(() => expect(plugin.app.workspace.openLinkText).toHaveBeenCalledOnce());
+    const [path] = vi.mocked(plugin.app.workspace.openLinkText).mock.calls[0]!;
+    expect(path).toMatch(/^arxiv-daily\/daily\/\d{4}-\d{2}-\d{2}\.md$/);
+  });
+
   it.each([
     [{ kind: "completed", papersWritten: 2, outcome: "papers_written", titleOnlyCandidates: { count: 3, total: 40 } },
       "arXiv Daily 2026-10-02: done (2 papers; 3/40 candidates judged by title only)"],
@@ -688,6 +787,7 @@ describe("registerCommands", () => {
       },
       embedding: {
         status: "fail",
+        mode: "local",
         modelId: "multilingual-e5-small-q8",
         dimension: 384,
         error: "fetch failed",

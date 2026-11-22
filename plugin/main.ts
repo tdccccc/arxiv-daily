@@ -2373,7 +2373,15 @@ export default class ArxivDailyPlugin extends Plugin {
   }
 
   private async diagnoseEmbedding(): Promise<EmbeddingDiagnostics> {
-    const embedding = createTransformersEmbeddingModel();
+    const mode = this.settings.embedding.mode;
+    const authorization = this.getLibraryConnectionStatus().kind;
+    if (mode === "remote") {
+      return await this.diagnoseRemoteEmbedding(authorization);
+    }
+    // Local mode: probe the shared model. Once any search or index run has
+    // loaded it this is an in-memory call; otherwise it downloads like the
+    // real path would, which is exactly what this diagnostic is for.
+    const embedding = this.buildEmbeddingModel();
     try {
       const started = Date.now();
       await embedding.embed(["diagnostic probe"]);
@@ -2381,6 +2389,7 @@ export default class ArxivDailyPlugin extends Plugin {
       const facts = await inspectTransformersEnv();
       return {
         status: "pass",
+        mode,
         modelId: embedding.modelId,
         dimension: embedding.dimension,
         remoteHost: facts?.remoteHost,
@@ -2392,11 +2401,71 @@ export default class ArxivDailyPlugin extends Plugin {
       const facts = await inspectTransformersEnv().catch(() => null);
       return {
         status: "fail",
+        mode,
         modelId: embedding.modelId,
         dimension: embedding.dimension,
         remoteHost: facts?.remoteHost,
         wasmPaths: facts?.wasmPaths,
         runtimeProbe: describeRuntimeProbe(),
+        error: describeDiagnosticsError(error),
+      };
+    }
+  }
+
+  /**
+   * Remote mode probes the endpoint that actually serves searches. It never
+   * touches the local transformers.js pipeline: someone who switched to remote
+   * embedding may have done so precisely because Hugging Face is unreachable.
+   * An unfinished configuration or a missing full-text authorization is
+   * reported as such instead of being probed.
+   */
+  private async diagnoseRemoteEmbedding(
+    authorization: LibraryConnectionStatus["kind"],
+  ): Promise<EmbeddingDiagnostics> {
+    const { model, dimension } = this.settings.embedding;
+    const modelId = !model.trim() || !Number.isInteger(dimension) || dimension <= 0
+      ? "remote (incomplete configuration)"
+      : remoteEmbeddingModelId(model, dimension);
+    const validation = validateEmbeddingConfig(this.settings);
+    if (!validation.ok) {
+      return {
+        status: "fail",
+        mode: "remote",
+        authorization,
+        modelId,
+        dimension,
+        error: `Remote embedding configuration incomplete: ${validation.reasons.join("; ")}`,
+      };
+    }
+    if (authorization !== "authorized") {
+      return {
+        status: "skipped",
+        mode: "remote",
+        authorization,
+        modelId,
+        dimension,
+        error: "Remote embedding requires authorizing full-text processing first",
+      };
+    }
+    const embedding = this.buildEmbeddingModel();
+    try {
+      const started = Date.now();
+      await embedding.embed(["diagnostic probe"]);
+      return {
+        status: "pass",
+        mode: "remote",
+        authorization,
+        modelId: embedding.modelId,
+        dimension: embedding.dimension,
+        loadMs: Date.now() - started,
+      };
+    } catch (error) {
+      return {
+        status: "fail",
+        mode: "remote",
+        authorization,
+        modelId: embedding.modelId,
+        dimension: embedding.dimension,
         error: describeDiagnosticsError(error),
       };
     }

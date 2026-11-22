@@ -159,6 +159,15 @@ export function registerCommands(plugin: ArxivDailyPlugin): void {
   }
 
   async function clearRunState() {
+    // Clearing mid-run would erase the status of the run that is writing it.
+    const active = plugin.operations.snapshot();
+    if (active.length > 0) {
+      notice(
+        `arXiv Daily: ${active.length} active task${active.length === 1 ? "" : "s"} must finish or be cancelled before clearing run state`,
+        10_000,
+      );
+      return;
+    }
     const choice = await chooseModal(
       plugin.app,
       "Clear arXiv Daily run state",
@@ -171,6 +180,7 @@ export function registerCommands(plugin: ArxivDailyPlugin): void {
     if (choice !== "clear") return;
     await plugin.stateStore.clearAll();
     plugin.progress.setIdle(undefined);
+    await refreshOpenDashboardViews(plugin);
     notice("arXiv Daily: run state cleared");
   }
 
@@ -248,6 +258,8 @@ export function registerCommands(plugin: ArxivDailyPlugin): void {
         notice(`arXiv Daily: ${id} marked ${labelForMark(mark)}`);
       },
     );
+    // An open dashboard still shows the mark from before papers.json changed.
+    await refreshOpenDashboardViews(plugin);
   }
 
   async function createPaperNote(rawId: string) {
@@ -295,7 +307,9 @@ export function registerCommands(plugin: ArxivDailyPlugin): void {
   }
 
   async function openTodayDaily() {
-    const path = `${plugin.settings.output.dailyDir}/${today()}.md`;
+    // The writer normalizes the configured daily directory (trailing slash,
+    // backslashes) exactly as the pipeline did when it wrote the file.
+    const path = plugin.buildMarkdownWriter().dailyPath(today());
     const file = plugin.app.vault.getAbstractFileByPath(path);
     if (file) {
       await plugin.app.workspace.openLinkText(path, "", false);
