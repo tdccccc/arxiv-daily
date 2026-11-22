@@ -193,9 +193,16 @@ export function formatResendFrom(fromEmail: string, fromName?: string): string {
   const email = fromEmail.trim();
   const name = fromName?.trim();
   if (!name) return email;
-  // Avoid breaking header if name contains quotes.
-  const safeName = name.replace(/"/g, "");
-  return `${safeName} <${email}>`;
+  return `${formatDisplayName(name)} <${email}>`;
+}
+
+/** RFC 5322 specials that force a quoted display name. */
+const DISPLAY_NAME_SPECIALS = /[()<>[\]:;@\\,."]/;
+
+/** Quote and escape a display name so a comma or quote cannot break the From header. */
+function formatDisplayName(name: string): string {
+  if (!DISPLAY_NAME_SPECIALS.test(name)) return name;
+  return `"${name.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
 }
 
 function hasProviderAcceptance(bodyText: string): boolean {
