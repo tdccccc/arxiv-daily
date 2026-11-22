@@ -2,12 +2,13 @@ import { beforeAll, describe, expect, it, vi } from "vitest";
 import {
   ButtonComponent,
   DropdownComponent,
+  Notice,
   Setting,
   TextComponent,
   ToggleComponent,
   type App,
 } from "obsidian";
-import { DEFAULT_SETTINGS } from "@arxiv-daily/core";
+import { DEFAULT_SETTINGS, LlmClient } from "@arxiv-daily/core";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import type ArxivDailyPlugin from "../main";
@@ -102,6 +103,9 @@ function makeLegacySettingsTab(
     logger: { error: vi.fn() },
     stateStore: { snapshot: () => ({}) },
     manifest: { version: "0.0.0-test" },
+    getHttpClient: () => ({}),
+    sendTestEmail: vi.fn().mockResolvedValue("Test sent"),
+    sendHostedVerificationEmail: vi.fn().mockResolvedValue("Verification sent"),
     getLibraryConnectionStatus: vi.fn().mockReturnValue({ kind: "disconnected" }),
     libraryIndexStatus: new LibraryIndexStatusStore(),
     automaticEmailSupported: () => true,
@@ -524,6 +528,36 @@ describe("legacy model field", () => {
     await vi.waitFor(() => expect(input!.value).toBe(DEFAULT_SETTINGS.llm.model));
     expect(settings.llm.model).toBe(DEFAULT_SETTINGS.llm.model);
   });
+
+  it("flushes a just-typed API key before fetching models", async () => {
+    let finishSave!: () => void;
+    const persistSettings = vi.fn().mockImplementationOnce(
+      () => new Promise<void>((resolve) => { finishSave = resolve; }),
+    );
+    const { tab, settings } = makeLegacySettingsTab(persistSettings);
+    const rows = renderLegacySettings(tab);
+    const keyInput = rows.get("API key")!.controlEl.querySelector("input") as HTMLInputElement;
+    const fetchedWith: string[] = [];
+    const fetchModels = vi.spyOn(LlmClient.prototype, "fetchModels").mockImplementation(async () => {
+      fetchedWith.push(settings.llm.apiKey);
+      return ["provider-a"];
+    });
+
+    keyInput.value = "fresh-key";
+    keyInput.dispatchEvent(new Event("input"));
+    keyInput.dispatchEvent(new Event("blur"));
+    const button = Array.from(rows.get("Model")!.controlEl.querySelectorAll("button"))
+      .find((candidate) => candidate.textContent === "Get models") as HTMLButtonElement;
+    button.click();
+
+    await vi.waitFor(() => expect(persistSettings).toHaveBeenCalledTimes(1));
+    expect(fetchModels).not.toHaveBeenCalled();
+    finishSave();
+
+    await vi.waitFor(() => expect(fetchModels).toHaveBeenCalledTimes(1));
+    expect(fetchedWith).toEqual(["fresh-key"]);
+    fetchModels.mockRestore();
+  });
 });
 
 describe("legacy text fields act when editing ends", () => {
@@ -662,6 +696,86 @@ describe("legacy pending category draft", () => {
     renderLegacySettings(tab);
 
     expect(rowByName(tab, "Category 2")).toBeUndefined();
+  });
+});
+
+describe("legacy email actions flush pending drafts", () => {
+  function deferredSave() {
+    let finish!: () => void;
+    const persistSettings = vi.fn().mockImplementationOnce(
+      () => new Promise<void>((resolve) => { finish = resolve; }),
+    );
+    return { persistSettings, finish: () => finish() };
+  }
+
+  it("persists a freshly pasted Resend key before sending a test email", async () => {
+    const { persistSettings, finish } = deferredSave();
+    const { tab, settings } = makeLegacySettingsTab(persistSettings);
+    const rows = renderLegacySettings(tab);
+    const input = rows.get("Resend API key")!.controlEl.querySelector("input") as HTMLInputElement;
+    const sendTest = componentOf(
+      rows.get("Send test email"),
+      ButtonComponent as never,
+    ) as ButtonComponent;
+
+    // No blur/Enter first: the button must flush the pasted draft itself.
+    input.value = "re_pasted_secret";
+    input.dispatchEvent(new Event("input"));
+    sendTest.buttonEl.click();
+
+    await vi.waitFor(() => expect(persistSettings).toHaveBeenCalledTimes(1));
+    expect(tab.plugin.sendTestEmail).not.toHaveBeenCalled();
+
+    finish();
+    await vi.waitFor(() => expect(tab.plugin.sendTestEmail).toHaveBeenCalledTimes(1));
+    expect(settings.email.apiKey).toBe("re_pasted_secret");
+  });
+
+  it("persists a freshly pasted verification code before sending a test email", async () => {
+    const { persistSettings, finish } = deferredSave();
+    const { tab, settings } = makeLegacySettingsTab(persistSettings);
+    settings.email.mode = "hosted";
+    const rows = renderLegacySettings(tab);
+    const input = rows.get("Verification code")!
+      .controlEl.querySelector("input") as HTMLInputElement;
+    const sendTest = componentOf(
+      rows.get("Send test email"),
+      ButtonComponent as never,
+    ) as ButtonComponent;
+
+    input.value = " new token \n value ";
+    input.dispatchEvent(new Event("input"));
+    sendTest.buttonEl.click();
+
+    await vi.waitFor(() => expect(persistSettings).toHaveBeenCalledTimes(1));
+    expect(tab.plugin.sendTestEmail).not.toHaveBeenCalled();
+
+    finish();
+    await vi.waitFor(() => expect(tab.plugin.sendTestEmail).toHaveBeenCalledTimes(1));
+    expect(settings.email.hostedToken).toBe("newtokenvalue");
+  });
+
+  it("persists the edited recipient before sending a verification email", async () => {
+    const { persistSettings, finish } = deferredSave();
+    const { tab, settings } = makeLegacySettingsTab(persistSettings);
+    settings.email.mode = "hosted";
+    const rows = renderLegacySettings(tab);
+    const input = componentOf(rows.get("Your email"), TextComponent as never) as TextComponent;
+    const sendVerification = componentOf(
+      rows.get("Send verification email"),
+      ButtonComponent as never,
+    ) as ButtonComponent;
+
+    input.inputEl.value = "new@example.com";
+    input.inputEl.dispatchEvent(new Event("input"));
+    sendVerification.buttonEl.click();
+
+    await vi.waitFor(() => expect(persistSettings).toHaveBeenCalledTimes(1));
+    expect(tab.plugin.sendHostedVerificationEmail).not.toHaveBeenCalled();
+
+    finish();
+    await vi.waitFor(() => expect(tab.plugin.sendHostedVerificationEmail).toHaveBeenCalledTimes(1));
+    expect(settings.email.to).toBe("new@example.com");
   });
 });
 

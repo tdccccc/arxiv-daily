@@ -220,6 +220,12 @@ export class ArxivDailySettingTab extends PluginSettingTab {
   private pendingLibraryIndexStatus: LibraryIndexStatus | undefined;
   private readonly controlRevisions = new WeakMap<object, number>();
   private readonly declarativeKeyRevisions = new Map<string, number>();
+  /**
+   * Pending draft commits for controls that save asynchronously on blur or
+   * change. Action buttons (Get models, Send test) flush the matching draft
+   * first so they act on what the user typed, not the previous stored value.
+   */
+  private readonly draftSaveHandles = new Map<string, () => Promise<void>>();
   private readonly pendingTopicEdits = new Set<Promise<void>>();
   private declarativeSetupGuideRow: Setting | undefined;
   /** Survives a row re-render so an in-flight "Get models" fetch isn't lost. */
@@ -381,6 +387,20 @@ export class ArxivDailySettingTab extends PluginSettingTab {
 
   public isCurrentControlChange(control: object, revision: number): boolean {
     return this.controlRevisions.get(control) === revision;
+  }
+
+  /** Register the draft-commit handle for one settings key's row. */
+  public registerDraftSave(key: string, save: () => Promise<void>): void {
+    this.draftSaveHandles.set(key, save);
+  }
+
+  /**
+   * Await a row's in-flight draft commit. Actions that read several settings
+   * (Get models, Send test) call this first so a blur/change save that is
+   * still persisting cannot make them read the previous stored value.
+   */
+  public async flushDraftSave(key: string): Promise<void> {
+    await this.draftSaveHandles.get(key)?.();
   }
 
   /** Resolve the value visible after a rejection finishes. */
@@ -1457,23 +1477,25 @@ export class ArxivDailySettingTab extends PluginSettingTab {
       .setDesc("Where chat requests are sent. Change this only if you use another provider.")
       .addText((t) => {
         t.inputEl.addClass("arxiv-daily-settings__llm-input");
+        const saveBaseUrl = async (): Promise<void> => {
+          const next = t.inputEl.value.trim();
+          const saved = await this.saveLegacyControl(
+            t,
+            "save API base URL",
+            SETTING_KEYS.llm.baseUrl,
+            [{ key: SETTING_KEYS.llm.baseUrl, value: next }],
+            (value) => {
+              const restored = typeof value === "string" ? value : "";
+              t.setValue(restored);
+              renderLlmHttpWarning(restored);
+            },
+          );
+          if (saved) this.refreshSetupGuide();
+        };
+        this.registerDraftSave("llm.baseUrl", saveBaseUrl);
         t.setPlaceholder("Provider URL")
           .setValue(s.llm.baseUrl || "https://api.deepseek.com/v1")
-          .onChange(async (v) => {
-            const next = v.trim();
-            const saved = await this.saveLegacyControl(
-              t,
-              "save API base URL",
-              SETTING_KEYS.llm.baseUrl,
-              [{ key: SETTING_KEYS.llm.baseUrl, value: next }],
-              (value) => {
-                const restored = typeof value === "string" ? value : "";
-                t.setValue(restored);
-                renderLlmHttpWarning(restored);
-              },
-            );
-            if (saved) this.refreshSetupGuide();
-          });
+          .onChange(saveBaseUrl);
       });
     const llmWarningEl = containerEl.createDiv({
       cls: "arxiv-daily-settings__llm-http-warning",
@@ -2018,19 +2040,21 @@ export class ArxivDailySettingTab extends PluginSettingTab {
           : "Where digests are delivered. With From empty, use the email on your Resend account.",
       )
       .addText((t) => {
+        const saveEmailTo = async (): Promise<void> => {
+          await this.saveLegacyControl(
+            t,
+            "save email address",
+            SETTING_KEYS.email.to,
+            [{ key: SETTING_KEYS.email.to, value: t.inputEl.value.trim() }],
+            (value) => {
+              t.setValue(typeof value === "string" ? value : "");
+            },
+          );
+        };
+        this.registerDraftSave("email.to", saveEmailTo);
         t.setPlaceholder("you@example.com")
           .setValue(s.email.to)
-          .onChange(async (v) => {
-            await this.saveLegacyControl(
-              t,
-              "save email address",
-              SETTING_KEYS.email.to,
-              [{ key: SETTING_KEYS.email.to, value: v.trim() }],
-              (value) => {
-                t.setValue(typeof value === "string" ? value : "");
-              },
-            );
-          });
+          .onChange(saveEmailTo);
       });
 
     if (hostedMode) {
@@ -2040,6 +2064,9 @@ export class ArxivDailySettingTab extends PluginSettingTab {
         .addButton((b) =>
           b.setButtonText("Send verification email").onClick(() => {
             this.runAction("send verification email", async () => {
+              // Send to the address currently on screen, not the one that was
+              // stored before the still-persisting change save.
+              await this.flushDraftSave("email.to");
               const message = await this.plugin.sendHostedVerificationEmail();
               new Notice(message, 10_000);
             });
@@ -2101,6 +2128,10 @@ export class ArxivDailySettingTab extends PluginSettingTab {
       .addButton((b) =>
         b.setButtonText("Send test").setCta().onClick(() => {
           this.runAction("send test email", async () => {
+            // The recipient and the mode's secret save asynchronously; a test
+            // sent before those commits lands would use the previous values.
+            await this.flushDraftSave("email.to");
+            await this.flushDraftSave(hostedMode ? "email.hostedToken" : "email.apiKey");
             const message = await this.plugin.sendTestEmail();
             new Notice(message, 10_000);
           });
@@ -2212,12 +2243,12 @@ export class ArxivDailySettingTab extends PluginSettingTab {
     const setting = new Setting(containerEl)
       .setName("Resend API key")
       .setDesc("From your mail provider account. Saved only on this device; masked in the input.");
-    renderSensitiveInput(this, setting, {
+    this.registerDraftSave("email.apiKey", renderSensitiveInput(this, setting, {
       value: this.plugin.settings.email.apiKey ?? "",
       placeholder: "Paste your Resend API key",
       ariaLabel: "Resend API key",
       save: (next) => this.changeSettingValue("email.apiKey", next),
-    });
+    }));
   }
   private renderHostedTokenSetting(containerEl: HTMLElement): void {
     const setting = new Setting(containerEl)
@@ -2225,24 +2256,24 @@ export class ArxivDailySettingTab extends PluginSettingTab {
       .setDesc(
         "After you open the verification link, copy the long code shown on the web page (not the short code in the email link). Use the same email address as above.",
       );
-    renderSensitiveInput(this, setting, {
+    this.registerDraftSave("email.hostedToken", renderSensitiveInput(this, setting, {
       value: this.plugin.settings.email.hostedToken ?? "",
       placeholder: "Paste the code from the verification page",
       ariaLabel: "verification code",
       normalize: (value) => value.replace(/\s+/g, "").trim(),
       save: (next) => this.changeSettingValue("email.hostedToken", next),
-    });
+    }));
   }
   private renderApiKeySetting(containerEl: HTMLElement): void {
     const setting = new Setting(containerEl)
       .setName("API key")
       .setDesc("Saved only on this device; masked in the input.");
-    renderSensitiveInput(this, setting, {
+    this.registerDraftSave("llm.apiKey", renderSensitiveInput(this, setting, {
       value: this.plugin.settings.llm.apiKey,
       placeholder: "Enter API key",
       ariaLabel: "LLM API key",
       save: (next) => this.changeSettingValue("llm.apiKey", next),
-    });
+    }));
   }
   private renderSetupGuide(containerEl: HTMLElement): void {
     const guide = this.createSetupGuide();
