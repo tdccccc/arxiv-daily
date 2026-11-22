@@ -293,21 +293,25 @@ async function rotateHistoryFiles(
   maxRotations: number,
 ): Promise<void> {
   if (maxRotations <= 0) {
-    await storage.remove(path);
+    if (await storage.exists(path)) await storage.remove(path);
     return;
   }
-  await storage.remove(`${path}.${maxRotations}`);
+  // StorageAdapter.remove is contractually allowed to reject absent paths on
+  // strict hosts (Obsidian's DataAdapter.remove throws ENOENT), so check first.
+  const oldest = `${path}.${maxRotations}`;
+  if (await storage.exists(oldest)) await storage.remove(oldest);
   for (let i = maxRotations - 1; i >= 1; i -= 1) {
     const from = `${path}.${i}`;
     const to = `${path}.${i + 1}`;
     if (await storage.exists(from)) {
-      await storage.remove(to);
+      if (await storage.exists(to)) await storage.remove(to);
       await storage.rename(from, to);
     }
   }
   if (await storage.exists(path)) {
-    await storage.remove(`${path}.1`);
-    await storage.rename(path, `${path}.1`);
+    const first = `${path}.1`;
+    if (await storage.exists(first)) await storage.remove(first);
+    await storage.rename(path, first);
   }
 }
 

@@ -60,6 +60,28 @@ function makeAppendStorage(initialFiles: Record<string, string> = {}) {
   };
 }
 
+/**
+ * Models a strict host such as Obsidian's DataAdapter.remove: removing a path
+ * that does not exist rejects with ENOENT instead of succeeding silently.
+ */
+function makeStrictStorage(initialFiles: Record<string, string> = {}) {
+  const base = makeStorage(initialFiles);
+  const storage = {
+    ...base.storage,
+    async remove(path: string) {
+      const normalized = base.storage.normalizePath(path);
+      if (!(normalized in base.files) && !base.dirs.has(normalized)) {
+        throw Object.assign(
+          new Error(`ENOENT: no such file or directory, remove '${normalized}'`),
+          { code: "ENOENT" },
+        );
+      }
+      await base.storage.remove(path);
+    },
+  } satisfies StorageAdapter;
+  return { ...base, storage };
+}
+
 function record(overrides: Partial<RunHistoryRecord> = {}): RunHistoryRecord {
   return {
     schemaVersion: 1,
@@ -162,6 +184,44 @@ describe("RunHistoryStore", () => {
     expect(latest.map((entry) => entry.date)).toEqual([
       "2026-06-24",
       "2026-06-23",
+    ]);
+  });
+
+  it("rotates repeatedly against a strict adapter that rejects removing absent paths", async () => {
+    const existing = `${JSON.stringify(record({
+      at: "2026-06-25T09:00:00.000Z",
+      date: "2026-06-23",
+    }))}\n`;
+    const { files, storage } = makeStrictStorage({
+      "arxiv-daily/.index/run-history.jsonl": existing,
+    });
+    const store = RunHistoryStore.fromStorage(
+      storage,
+      DEFAULT_SETTINGS.output,
+      undefined,
+      { maxBytes: existing.length, maxRotations: 3 },
+    );
+
+    // Every append exceeds maxBytes, so each one rotates a fresh chain.
+    for (let i = 0; i < 5; i += 1) {
+      await store.append(record({
+        at: `2026-06-25T10:0${i}:00.000Z`,
+        date: `2026-07-0${i + 1}`,
+      }));
+    }
+
+    expect(Object.keys(files).sort()).toEqual([
+      "arxiv-daily/.index/run-history.jsonl",
+      "arxiv-daily/.index/run-history.jsonl.1",
+      "arxiv-daily/.index/run-history.jsonl.2",
+      "arxiv-daily/.index/run-history.jsonl.3",
+    ]);
+    const latest = await store.readLatest(10);
+    expect(latest.map((entry) => entry.date)).toEqual([
+      "2026-07-05",
+      "2026-07-04",
+      "2026-07-03",
+      "2026-07-02",
     ]);
   });
 

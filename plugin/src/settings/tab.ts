@@ -364,7 +364,7 @@ export class ArxivDailySettingTab extends PluginSettingTab {
   }
 
   private async refreshLibraryAfterEmbeddingChange(keys: readonly string[]): Promise<void> {
-    if (keys.some((key) => ["embedding.mode", "embedding.baseUrl", "embedding.model", "embedding.dimension"].includes(key))) {
+    if (keys.some((key) => ["embedding.mode", "embedding.baseUrl", "embedding.apiKey", "embedding.model", "embedding.dimension"].includes(key))) {
       await this.plugin.refreshLibraryIndexTrace();
     }
   }
@@ -1673,6 +1673,9 @@ export class ArxivDailySettingTab extends PluginSettingTab {
       "Each topic becomes one section in the daily report.",
     );
 
+    // Legacy-only: the declarative settings intentionally omit this template
+    // shortcut (topics are edited through the Add topic list there); see the
+    // matching note in definitions.ts.
     new Setting(containerEl)
       .setName("Quick start")
       .setDesc("Load a preset bundle of topics or add one manually.")
@@ -1737,11 +1740,22 @@ export class ArxivDailySettingTab extends PluginSettingTab {
         });
       });
 
+    let timezoneSelect: HTMLSelectElement | undefined;
     new Setting(containerEl)
       .setName("Timezone")
       .addDropdown((d) => {
+        timezoneSelect = d.selectEl;
         for (const zone of TIMEZONE_OPTIONS) {
           d.addOption(zone.value, zone.label);
+        }
+        // A valid IANA zone saved through the free-text draft is not in the
+        // preset list; without its own option the dropdown silently shows
+        // nothing for it.
+        if (
+          s.arxiv.timezone &&
+          !TIMEZONE_OPTIONS.some((zone) => zone.value === s.arxiv.timezone)
+        ) {
+          d.addOption(s.arxiv.timezone, `${s.arxiv.timezone} — custom`);
         }
         d.setValue(s.arxiv.timezone).onChange(async (v) => {
           await this.saveLegacyControl(
@@ -1757,7 +1771,8 @@ export class ArxivDailySettingTab extends PluginSettingTab {
       })
       .addText((t) => {
         t.setPlaceholder("Or enter custom timezone").setValue("");
-        this.bindTimezoneDraftInput(t.inputEl);
+        // Pass the dropdown so a committed custom draft is reflected there.
+        this.bindTimezoneDraftInput(t.inputEl, timezoneSelect);
       });
 
     // ─── Output & Schedule ────────────────────────────
@@ -1957,62 +1972,9 @@ export class ArxivDailySettingTab extends PluginSettingTab {
       declarativeRows.renderEmbeddingDimensionRow(this, embeddingDimensionSetting);
     }
 
-    new Setting(containerEl)
-      .setName("Better PDF parser")
-      .setDesc("Optional local sidecar. Off by default; PDFs stay on this device either way.")
-      .addToggle((toggle) => {
-        toggle.setValue(s.pdfParserSidecar.enabled).onChange(async (enabled) => {
-          try {
-            await this.changeSettingValue("pdfParserSidecar.enabled", enabled);
-            this.renderLegacySettings();
-          } catch (error) {
-            toggle.setValue(this.plugin.settings.pdfParserSidecar.enabled);
-            this.reportActionError("save local parser sidecar", error);
-          }
-        });
-      });
-    if (s.pdfParserSidecar.enabled) {
-      new Setting(containerEl)
-        .setName("Sidecar capability URL")
-        .setDesc("Local loopback endpoint that reports parser capabilities.")
-        .addText((text) => {
-          text.setPlaceholder("HTTP://127.0.0.1:5001/v1/capabilities").setValue(s.pdfParserSidecar.capabilitiesUrl);
-          text.inputEl.addEventListener("change", () => {
-            this.runAction("save local parser sidecar URL", async () => {
-              try {
-                await this.changeSettingValues(this.sidecarUrlChanges(
-                  "pdfParserSidecar.capabilitiesUrl",
-                  text.inputEl.value.trim(),
-                ));
-                this.renderLegacySettings();
-              } catch (error) {
-                text.setValue(this.plugin.settings.pdfParserSidecar.capabilitiesUrl);
-                throw error;
-              }
-            });
-          });
-        });
-      new Setting(containerEl)
-        .setName("Sidecar parse URL")
-        .setDesc("Same-origin local loopback endpoint that accepts one PDF byte buffer.")
-        .addText((text) => {
-          text.setPlaceholder("HTTP://127.0.0.1:5001/v1/parse").setValue(s.pdfParserSidecar.parseUrl);
-          text.inputEl.addEventListener("change", () => {
-            this.runAction("save local parser sidecar URL", async () => {
-              try {
-                await this.changeSettingValues(this.sidecarUrlChanges(
-                  "pdfParserSidecar.parseUrl",
-                  text.inputEl.value.trim(),
-                ));
-                this.renderLegacySettings();
-              } catch (error) {
-                text.setValue(this.plugin.settings.pdfParserSidecar.parseUrl);
-                throw error;
-              }
-            });
-          });
-        });
-    }
+    // ADR 0013: the personal-library index extracts titles and abstracts with
+    // PDF.js and never calls a PDF-parser sidecar, so its controls are gone
+    // from both this legacy view and the declarative settings.
 
     // ─── Email ───────────────────────────────────────────
     this.sectionHeading(containerEl, "Email delivery", "email");

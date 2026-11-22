@@ -20,6 +20,7 @@ import {
   type DashboardRow,
   type DashboardSortDirection,
   type DashboardSortKey,
+  type DashboardTab,
 } from "@arxiv-daily/core";
 import { syncDashboardHistory, type DashboardMarkdownFile } from "@arxiv-daily/core";
 import {
@@ -444,6 +445,7 @@ class ArxivDailyDashboardView extends ItemView {
   }
 
   private async refreshRecentDatesForForeground(): Promise<void> {
+    const before = this.recentDatesRenderKey();
     const result = await this.plugin.recentDates.refreshWithin(
       RECENT_DATES_FOREGROUND_TIMEOUT_MS,
     );
@@ -452,6 +454,12 @@ class ArxivDailyDashboardView extends ItemView {
       : result.snapshot.error
         ? `arXiv recent dates partially refreshed: ${result.snapshot.error}`
         : null;
+    // reloadIndex() renders as soon as the local index scan finishes, which is
+    // usually before this network refresh returns. Repaint whenever the cache
+    // or the notice actually changed, including the normal completed path and
+    // the timeout fallback notice; an unchanged snapshot keeps the first
+    // render as the only one.
+    this.renderRecentDatesIfChanged(before);
     if (result.completed) return;
 
     const refresh = result.refresh
@@ -459,11 +467,11 @@ class ArxivDailyDashboardView extends ItemView {
         this.recentDatesNotice = snapshot.error
           ? `arXiv recent dates partially refreshed: ${snapshot.error}`
           : null;
-        if (this.isOpen) this.render();
+        this.renderRecentDatesIfChanged(before);
       })
       .catch((e) => {
         this.recentDatesNotice = `arXiv recent dates refresh failed: ${(e as Error).message}`;
-        if (this.isOpen) this.render();
+        this.renderRecentDatesIfChanged(before);
       })
       .finally(() => {
         if (this.recentDatesRefresh === refresh) {
@@ -471,6 +479,23 @@ class ArxivDailyDashboardView extends ItemView {
         }
       });
     this.recentDatesRefresh = refresh;
+  }
+
+  /** Everything the calendar and its recent-dates notice are drawn from. */
+  private recentDatesRenderKey(): string {
+    const snapshot = this.plugin.recentDates.snapshot();
+    return [
+      snapshot.status,
+      snapshot.refreshedAt,
+      snapshot.error ?? "",
+      [...snapshot.dates].sort().join(","),
+      this.recentDatesNotice ?? "",
+    ].join("\u0000");
+  }
+
+  private renderRecentDatesIfChanged(before: string): void {
+    if (!this.isOpen || this.recentDatesRenderKey() === before) return;
+    this.render();
   }
 
   private loadDetailSummaries(entries: DashboardRow["entry"][]): void {
@@ -722,8 +747,7 @@ class ArxivDailyDashboardView extends ItemView {
       });
       const actions = this.createEmptyActions(state);
       this.createEmptyActionButton(actions, "list", "Show All", () => {
-        this.query = { ...this.query, tab: "all" };
-        this.renderCurrentResults();
+        this.switchTab("all");
       });
       return;
     }
@@ -870,11 +894,7 @@ class ArxivDailyDashboardView extends ItemView {
         text: String(result.tabCounts[tab.id]),
       });
       button.addEventListener("click", () => {
-        this.query = { ...this.query, tab: tab.id };
-        this.currentPage = 0;
-        this.updateTabButtonState(tabs);
-        this.updateToolbarFilterCounts(tabs);
-        this.renderCurrentResults();
+        this.switchTab(tab.id);
       });
     }
     this.renderToolbarFilter(
@@ -937,6 +957,24 @@ class ArxivDailyDashboardView extends ItemView {
       (_button, evt) => this.showMoreMenu(evt),
     );
     this.createSettingsButton(actions);
+  }
+
+  /**
+   * Single tab-switch path for the toolbar and empty-state shortcuts: resets
+   * paging, keeps the tab aria/active state and toolbar filter counts in sync,
+   * then repaints the results.
+   */
+  private switchTab(tab: DashboardTab, tabs?: HTMLElement): void {
+    this.query = { ...this.query, tab };
+    this.currentPage = 0;
+    const tabBar = tabs ?? this.contentEl.querySelector<HTMLElement>(
+      ".arxiv-daily-dashboard__tabs",
+    );
+    if (tabBar) {
+      this.updateTabButtonState(tabBar);
+      this.updateToolbarFilterCounts(tabBar);
+    }
+    this.renderCurrentResults();
   }
 
   private updateTabButtonState(tabs: HTMLElement): void {
@@ -2374,6 +2412,11 @@ class ArxivDailyDashboardView extends ItemView {
   private buildLibrarySimilarOption(
     entry: DashboardRow["entry"],
   ): SimilarPapersModalOptions["library"] | undefined {
+    // The personal library is optional; without a connection the modal must
+    // default to Daily similar instead of opening a tab that always errors.
+    if (this.plugin.getLibraryConnectionStatus().kind === "disconnected") {
+      return undefined;
+    }
     const abstract = entry.abstract?.trim() ?? "";
     const query = abstract ? `${entry.title}\n\n${abstract}` : entry.title;
     if (!query.trim()) return undefined;
@@ -2408,7 +2451,8 @@ class ArxivDailyDashboardView extends ItemView {
    * is remembered per query and index revision, so the re-renders that follow
    * starring, batch actions or a reload repaint it without embedding the query
    * again; a staleness token drops responses from superseded queries. Failures
-   * (model errors) degrade to an inline message and never affect row filtering.
+   * (model errors) degrade to an inline message and never affect row filtering;
+   * they are not cached, so the next repaint (e.g. Refresh) retries them.
    *
    * A search is shared by every render of the same key and is cancelled only
    * when it is superseded (a different query, index or mode, or a query that no
@@ -2472,7 +2516,10 @@ class ArxivDailyDashboardView extends ItemView {
         if (controller.signal.aborted) return null;
         if (this.librarySearchPending?.controller === controller) {
           this.librarySearchPending = null;
-          this.librarySearchCache = { key, state };
+          // A transient failure (offline, embedding API 503) must stay
+          // retryable: caching it would pin the error until the query text or
+          // index changes. Successful and empty outcomes are safe to reuse.
+          if (state.kind !== "error") this.librarySearchCache = { key, state };
         }
         return state;
       });

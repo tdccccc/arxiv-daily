@@ -935,6 +935,113 @@ describe("syncDashboardHistory", () => {
     });
   });
 
+  describe("paper note published frontmatter", () => {
+    const withPublished = (id: string, title: string, published: string) =>
+      detailMarkdown(id, title).replace(
+        'daily_report: "[[arxiv/daily/2026-06-10|2026-06-10]]"',
+        published,
+      );
+
+    it.each([
+      [
+        "a daily wikilink",
+        'published: "[[arxiv-daily/daily/2026-06-09|2026-06-09]]"',
+      ],
+      ["a plain date", "published: 2026-06-09"],
+      ["an ISO timestamp", "published: 2026-06-09T02:28:06Z"],
+    ])(
+      "rebuilds the date from %s without papers.json or a daily report",
+      async (_label, publishedLine) => {
+        const id = "2606.25001";
+        const { files, storage } = makeStorage({
+          [`arxiv/papers/${id}.md`]: withPublished(
+            id,
+            "Published Paper",
+            publishedLine,
+          ),
+        });
+        const store = new PaperIndexStore(
+          storage,
+          output,
+          () => new Date("2026-06-14T00:00:00.000Z"),
+        );
+
+        const index = await syncDashboardHistory({
+          vault: makeVault(files),
+          store,
+          output,
+          topics,
+        });
+
+        expect(index.papers[`arxiv:${id}`]).toMatchObject({
+          detail: true,
+          published: "2026-06-09",
+          seenDates: ["2026-06-09"],
+          dailyReports: [],
+        });
+      },
+    );
+
+    it("prefers published over legacy date and daily_report fields", async () => {
+      const id = "2606.25002";
+      const note = detailMarkdown(id, "Mixed Dates Paper")
+        .replace(
+          'daily_report: "[[arxiv/daily/2026-06-10|2026-06-10]]"',
+          [
+            "published: 2026-06-09",
+            "date: 2026-06-11",
+            'daily_report: "[[arxiv/daily/2026-06-10|2026-06-10]]"',
+          ].join("\n"),
+        );
+      const { files, storage } = makeStorage({ [`arxiv/papers/${id}.md`]: note });
+      const store = new PaperIndexStore(
+        storage,
+        output,
+        () => new Date("2026-06-14T00:00:00.000Z"),
+      );
+
+      const index = await syncDashboardHistory({
+        vault: makeVault(files),
+        store,
+        output,
+        topics,
+      });
+
+      expect(index.papers[`arxiv:${id}`]).toMatchObject({
+        published: "2026-06-09",
+        seenDates: ["2026-06-09"],
+      });
+    });
+
+    it("still derives the date from a legacy date field", async () => {
+      const id = "2606.25003";
+      const legacy = detailMarkdown(id, "Legacy Dated Paper").replace(
+        'daily_report: "[[arxiv/daily/2026-06-10|2026-06-10]]"',
+        "date: 2026-06-11",
+      );
+      const { files, storage } = makeStorage({
+        [`arxiv/papers/${id}.md`]: legacy,
+      });
+      const store = new PaperIndexStore(
+        storage,
+        output,
+        () => new Date("2026-06-14T00:00:00.000Z"),
+      );
+
+      const index = await syncDashboardHistory({
+        vault: makeVault(files),
+        store,
+        output,
+        topics,
+      });
+
+      expect(index.papers[`arxiv:${id}`]).toMatchObject({
+        published: "2026-06-11",
+        seenDates: ["2026-06-11"],
+      });
+    });
+  });
+
   it("preserves unrelated index-only papers across repeated history syncs", async () => {
     const id = "2606.21001";
     const { files, storage } = makeStorage({

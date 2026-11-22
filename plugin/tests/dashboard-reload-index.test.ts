@@ -38,7 +38,18 @@ function indexEntry(id: string) {
   };
 }
 
-function setup() {
+interface RecentDatesStub {
+  snapshot: () => {
+    status: "idle" | "ready" | "failed";
+    dates: Set<string>;
+    refreshedAt: number;
+    error?: string;
+  };
+  hasDate: (date: string) => boolean;
+  refreshWithin: (timeoutMs: number) => Promise<unknown>;
+}
+
+function setup(recentDates?: Partial<RecentDatesStub>) {
   const { files, storage } = makeStorage({
     "arxiv/daily/2026-06-10.md": "## Topic\n### T\n- **Authors**: A\n- **arXiv**: [2606.00001](https://arxiv.org/abs/2606.00001)\n",
     "arxiv/.index/papers.json": JSON.stringify({
@@ -50,6 +61,7 @@ function setup() {
     adapter: { read: async (p: string) => files[p]! },
   };
   let create: ((leaf: unknown) => unknown) | undefined;
+  const emptySnapshot = { status: "idle" as const, dates: new Set<string>(), refreshedAt: 0 };
   const plugin = {
     app: { vault, workspace: {} },
     settings: { ...DEFAULT_SETTINGS, output },
@@ -58,16 +70,19 @@ function setup() {
     },
     logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
     recentDates: {
-      refreshWithin: async () => ({ completed: true, timedOut: false, snapshot: { refreshedAt: 0 } }),
+      refreshWithin: async () => ({ completed: true, timedOut: false, snapshot: emptySnapshot }),
       hasDate: () => false,
+      snapshot: () => emptySnapshot,
+      ...recentDates,
     },
     buildPaperIndex: () => new PaperIndexStore(storage as never, output),
-    operations: { snapshot: () => [] },
+    operations: { snapshot: () => [], subscribe: vi.fn(() => () => {}) },
     stateStore: { snapshot: () => ({}) },
   };
   registerDashboardView(plugin as never);
   const view = create!({}) as unknown as {
     entries: Array<{ pdfPath: string; status: string }>;
+    onOpen(): Promise<void>;
     reloadIndex(): Promise<void>;
     refreshFromVault(): Promise<void>;
     render: () => void;
@@ -104,6 +119,84 @@ describe("dashboard reloadIndex with unchanged markdown files", () => {
     expect(readSpy).not.toHaveBeenCalled();
     await view.refreshFromVault();
     expect(readSpy).toHaveBeenCalled();
+  });
+});
+
+describe("dashboard recent-dates foreground refresh", () => {
+  it("re-renders when the refresh completes after the first index render", async () => {
+    let resolveRefresh!: (value: unknown) => void;
+    let snapshot = {
+      status: "idle" as const,
+      dates: new Set<string>(),
+      refreshedAt: 0,
+    };
+    const { view } = setup({
+      snapshot: () => snapshot,
+      refreshWithin: () => new Promise((resolve) => { resolveRefresh = resolve; }),
+    });
+
+    const opening = view.onOpen();
+    await vi.waitFor(() => expect(view.render).toHaveBeenCalledTimes(1));
+
+    snapshot = {
+      status: "ready" as const,
+      dates: new Set(["2026-06-10"]),
+      refreshedAt: 1000,
+    };
+    resolveRefresh({ completed: true, timedOut: false, snapshot });
+    await vi.waitFor(() => expect(view.render).toHaveBeenCalledTimes(2));
+    await opening;
+  });
+
+  it("renders the timeout fallback notice immediately and clears it after the background refresh", async () => {
+    let resolveBackground!: (value: unknown) => void;
+    const empty = { status: "idle" as const, dates: new Set<string>(), refreshedAt: 0 };
+    let current = empty;
+    const { view } = setup({
+      snapshot: () => current,
+      refreshWithin: async () => ({
+        completed: false,
+        timedOut: true,
+        snapshot: empty,
+        refresh: new Promise((resolve) => { resolveBackground = resolve; }),
+      }),
+    });
+
+    await view.onOpen();
+    await vi.waitFor(() => expect(view.render).toHaveBeenCalledTimes(2));
+    const notice = (view as unknown as { recentDatesNotice: string | null })
+      .recentDatesNotice;
+    expect(notice).toContain("still refreshing in the background");
+
+    current = {
+      status: "ready" as const,
+      dates: new Set(["2026-06-10"]),
+      refreshedAt: 5000,
+    };
+    resolveBackground(current);
+    await vi.waitFor(() => expect(view.render).toHaveBeenCalledTimes(3));
+    expect((view as unknown as { recentDatesNotice: string | null }).recentDatesNotice)
+      .toBeNull();
+  });
+
+  it("does not redraw again when the completed refresh matches the rendered snapshot", async () => {
+    const snapshot = {
+      status: "ready" as const,
+      dates: new Set(["2026-06-10"]),
+      refreshedAt: 900,
+    };
+    const refreshWithin = vi.fn(async () => ({
+      completed: true,
+      timedOut: false,
+      snapshot,
+    }));
+    const { view } = setup({ snapshot: () => snapshot, refreshWithin });
+
+    await view.onOpen();
+    await vi.waitFor(() => expect(refreshWithin).toHaveBeenCalled());
+    await Promise.resolve();
+
+    expect(view.render).toHaveBeenCalledTimes(1);
   });
 });
 
