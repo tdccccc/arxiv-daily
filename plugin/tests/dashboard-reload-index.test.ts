@@ -163,7 +163,9 @@ describe("dashboard recent-dates foreground refresh", () => {
     });
 
     await view.onOpen();
-    await vi.waitFor(() => expect(view.render).toHaveBeenCalledTimes(2));
+    // The timeout notice rides on the first index render; painting before the
+    // scan finishes would replace Loading with an empty-state frame.
+    await vi.waitFor(() => expect(view.render).toHaveBeenCalledTimes(1));
     const notice = (view as unknown as { recentDatesNotice: string | null })
       .recentDatesNotice;
     expect(notice).toContain("still refreshing in the background");
@@ -174,9 +176,48 @@ describe("dashboard recent-dates foreground refresh", () => {
       refreshedAt: 5000,
     };
     resolveBackground(current);
-    await vi.waitFor(() => expect(view.render).toHaveBeenCalledTimes(3));
+    await vi.waitFor(() => expect(view.render).toHaveBeenCalledTimes(2));
     expect((view as unknown as { recentDatesNotice: string | null }).recentDatesNotice)
       .toBeNull();
+  });
+
+  it("clears the timeout notice even when the background snapshot is unchanged", async () => {
+    let resolveBackground!: (value: unknown) => void;
+    const empty = { status: "idle" as const, dates: new Set<string>(), refreshedAt: 0 };
+    const { view } = setup({
+      snapshot: () => empty,
+      refreshWithin: async () => ({
+        completed: false,
+        timedOut: true,
+        snapshot: empty,
+        refresh: new Promise((resolve) => { resolveBackground = resolve; }),
+      }),
+    });
+
+    await view.onOpen();
+    await vi.waitFor(() => expect(view.render).toHaveBeenCalledTimes(1));
+    expect((view as unknown as { recentDatesNotice: string | null }).recentDatesNotice)
+      .toContain("still refreshing in the background");
+
+    // Same dates and refreshedAt: only the notice changes, and the background
+    // callback must compare against the timeout frame, not the pre-timeout one.
+    resolveBackground(empty);
+    await vi.waitFor(() => expect(view.render).toHaveBeenCalledTimes(2));
+    expect((view as unknown as { recentDatesNotice: string | null }).recentDatesNotice)
+      .toBeNull();
+  });
+
+  it("never repaints over Loading while the first index scan is running", () => {
+    const { view } = setup();
+    const internals = view as unknown as {
+      indexReady: boolean;
+      recentDatesNotice: string | null;
+      renderRecentDatesIfChanged(before: string): void;
+    };
+    internals.indexReady = false;
+    internals.recentDatesNotice = "partially refreshed";
+    internals.renderRecentDatesIfChanged("stale");
+    expect(view.render).not.toHaveBeenCalled();
   });
 
   it("does not redraw again when the completed refresh matches the rendered snapshot", async () => {

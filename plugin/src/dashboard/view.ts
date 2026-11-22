@@ -289,6 +289,8 @@ class ArxivDailyDashboardView extends ItemView {
   } | null = null;
   private recentDatesNotice: string | null = null;
   private recentDatesRefresh: Promise<unknown> | null = null;
+  /** The first vault scan/render has completed; before that the view shows Loading. */
+  private indexReady = false;
   private searchDebounceTimer: number | null = null;
   private lastSyncedHistoryPaths: Set<string> | null = null;
   private calendarRefreshSeq = 0;
@@ -368,6 +370,7 @@ class ArxivDailyDashboardView extends ItemView {
   }
 
   private async reloadIndex(): Promise<void> {
+    this.indexReady = false;
     this.renderLoading();
     try {
       this.runDetached(
@@ -441,11 +444,14 @@ class ArxivDailyDashboardView extends ItemView {
       this.detailSummaryPaths = new Map();
       this.error = (e as Error).message;
     }
+    // The index is now the source for this frame; a foreground recent-dates
+    // refresh may repaint over it from here on.
+    this.indexReady = true;
     this.render();
   }
 
   private async refreshRecentDatesForForeground(): Promise<void> {
-    const before = this.recentDatesRenderKey();
+    let before = this.recentDatesRenderKey();
     const result = await this.plugin.recentDates.refreshWithin(
       RECENT_DATES_FOREGROUND_TIMEOUT_MS,
     );
@@ -461,6 +467,10 @@ class ArxivDailyDashboardView extends ItemView {
     // render as the only one.
     this.renderRecentDatesIfChanged(before);
     if (result.completed) return;
+    // The timeout notice is now on screen; compare the background completion
+    // against what is displayed, not against the pre-timeout key, or clearing
+    // the notice can be mistaken for "no change".
+    before = this.recentDatesRenderKey();
 
     const refresh = result.refresh
       .then((snapshot) => {
@@ -494,7 +504,9 @@ class ArxivDailyDashboardView extends ItemView {
   }
 
   private renderRecentDatesIfChanged(before: string): void {
-    if (!this.isOpen || this.recentDatesRenderKey() === before) return;
+    // A repaint before the initial scan finishes would replace Loading with
+    // an empty-state frame; reloadIndex's own render will include this data.
+    if (!this.isOpen || !this.indexReady || this.recentDatesRenderKey() === before) return;
     this.render();
   }
 
