@@ -625,6 +625,16 @@ describe("hosted deliverDailyEmailIfEnabled", () => {
     expect(error.message).not.toContain("private email body");
   });
 
+  it("passes a cancellation from verification through unchanged", async () => {
+    const cancellation = new RunCancelledError("verification cancelled");
+    await expect(startHostedEmailVerification({
+      http: { request: vi.fn(async () => { throw cancellation; }) },
+      baseUrl: "https://configurable-relay.example",
+      email: "recipient@example.com",
+      signal: new AbortController().signal,
+    })).rejects.toBe(cancellation);
+  });
+
   it("reports a cancellation during the claim as cancelled before the provider", async () => {
     const controller = new AbortController();
     const base = memoryStorage();

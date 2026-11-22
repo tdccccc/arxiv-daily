@@ -88,7 +88,9 @@ export async function startHostedEmailVerification(opts: {
       body: JSON.stringify({ email }),
       signal: opts.signal,
     });
-  } catch {
+  } catch (error) {
+    // A user cancellation is not a delivery failure.
+    if (isCancellationError(error)) throw error;
     throw new HostedDeliveryError(
       "Cannot reach Official delivery. Check your network and try again later.",
     );
