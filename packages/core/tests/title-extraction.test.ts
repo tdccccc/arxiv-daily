@@ -317,6 +317,27 @@ describe("extractTitleFromFirstPage (document metadata)", () => {
     )).toBe("WISE-PS1-STRM: source classification for WISE×PS1 – redshifts");
   });
 
+  it("keeps out-of-range numeric entities literal instead of throwing", () => {
+    expect(extractTitleFromFirstPage(
+      [],
+      undefined,
+      "Photometric redshifts &#99999999; and &#x110000; for surveys",
+    )).toBe("Photometric redshifts &#99999999; and &#x110000; for surveys");
+    expect(extractTitleFromFirstPage(
+      [],
+      undefined,
+      "Photometric redshifts &#xD800; for surveys",
+    )).toBe("Photometric redshifts &#xD800; for surveys");
+  });
+
+  it("still decodes valid astral-plane numeric entities", () => {
+    expect(extractTitleFromFirstPage(
+      [],
+      undefined,
+      "Photometric redshifts &#x1F600; for surveys",
+    )).toBe("Photometric redshifts 😀 for surveys");
+  });
+
   it("rejects garbage metadata (paths, file names, page references, arXiv stamps, LaTeX)", () => {
     const garbage = [
       "C:\\Documents and Settings\\senthil.d\\Desktop\\btq134.dvi",
