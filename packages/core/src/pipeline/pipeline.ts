@@ -678,6 +678,12 @@ export class ArxivPipeline {
       }
     }
     throwIfCancelled(signal);
+    // Detail notes were written before the report existed, so their frontmatter
+    // could not link back to it. Now that the report is the durable commit and
+    // the index knows the report path, rewrite those notes' `published` field.
+    // A failure here leaves a plain date, never a link to a missing report.
+    await this.refreshDetailReportLinks(dailyPath, confirmedPaths, visiblePapers, signal);
+    throwIfCancelled(signal);
     const totalS = ((Date.now() - t0) / 1000).toFixed(1);
     logger.info(
       `pipeline: completed ${dateStr} in ${totalS}s — ` +
@@ -741,6 +747,45 @@ export class ArxivPipeline {
     } catch (e) {
       if (isCancellationError(e)) throw e;
       this.deps.logger.error(`pipeline: detail index repair failed for ${arxivId}`, e);
+    }
+  }
+
+  /**
+   * Give the detail notes written in this run their report backlink. The note
+   * is written before the report exists, so writePaperDetail cannot know the
+   * report path. Called only after writeDaily succeeded; a note whose report
+   * link cannot be refreshed keeps its plain date.
+   */
+  private async refreshDetailReportLinks(
+    dailyPath: string,
+    confirmedPaths: ReadonlyMap<string, string>,
+    papers: ReadonlyArray<{ id: string; indexEntry?: PaperIndexEntry }>,
+    signal?: AbortSignal,
+  ): Promise<void> {
+    if (confirmedPaths.size === 0) return;
+    const entries = new Map(
+      papers.map((paper) => [paper.id, paper.indexEntry] as const),
+    );
+    for (const [id, paperPath] of confirmedPaths) {
+      const entry = entries.get(id);
+      if (!entry) continue;
+      try {
+        throwIfCancelled(signal);
+        const dailyReports = entry.dailyReports.includes(dailyPath)
+          ? entry.dailyReports
+          : [...entry.dailyReports, dailyPath];
+        await this.deps.writer.refreshPaperNoteFrontmatter(
+          { ...entry, dailyReports },
+          paperPath,
+        );
+        throwIfCancelled(signal);
+      } catch (e) {
+        if (isCancellationError(e)) throw e;
+        this.deps.logger.warn(
+          `pipeline: detail frontmatter refresh failed for ${id}`,
+          e,
+        );
+      }
     }
   }
 

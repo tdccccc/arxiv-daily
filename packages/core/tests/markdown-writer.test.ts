@@ -456,6 +456,38 @@ describe("MarkdownWriter strictness on existing files", () => {
     expect(written).not.toContain("daily_report:");
   });
 
+  it("writePaperDetail degrades a non-date published value to no link", async () => {
+    const { files, writer } = makeWriter();
+    const paper = {
+      id: "2605.06587",
+      title: "T",
+      authors: "A",
+      abstract: "",
+      category: "photo-z",
+      isDetail: true,
+      abstractConclusion: "",
+      fullSections: null,
+      published: "invalid-date",
+    };
+    await expect(writer.writePaperDetail(paper as any, "2026-06-10", "detail"))
+      .resolves.toBe("arxiv-daily/papers/2605.06587.md");
+    const written = files["arxiv-daily/papers/2605.06587.md"];
+    expect(written).toContain("published: invalid-date");
+    expect(written).not.toContain("[[arxiv-daily/daily/invalid-date");
+  });
+
+  it("writePaperNote degrades a non-date published value to no link", async () => {
+    const { writer } = makeWriter();
+    await expect(writer.writePaperNote({
+      arxivId: "2605.06587",
+      title: "T",
+      authors: ["A"],
+      primaryTopic: "photo-z",
+      published: "2026/06/09",
+      dailyReports: [],
+    } as any)).resolves.toBe("arxiv-daily/papers/2605.06587.md");
+  });
+
   it("writePaperDetail prefers the daily report date over stale Atom published dates", async () => {
     const { files, writer } = makeWriter({
       "arxiv-daily/daily/2026-06-12.md": "daily",
