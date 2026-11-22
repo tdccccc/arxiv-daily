@@ -444,6 +444,7 @@ class ArxivDailyDashboardView extends ItemView {
   }
 
   private async refreshRecentDatesForForeground(): Promise<void> {
+    const before = this.recentDatesRenderKey();
     const result = await this.plugin.recentDates.refreshWithin(
       RECENT_DATES_FOREGROUND_TIMEOUT_MS,
     );
@@ -452,6 +453,12 @@ class ArxivDailyDashboardView extends ItemView {
       : result.snapshot.error
         ? `arXiv recent dates partially refreshed: ${result.snapshot.error}`
         : null;
+    // reloadIndex() renders as soon as the local index scan finishes, which is
+    // usually before this network refresh returns. Repaint whenever the cache
+    // or the notice actually changed, including the normal completed path and
+    // the timeout fallback notice; an unchanged snapshot keeps the first
+    // render as the only one.
+    this.renderRecentDatesIfChanged(before);
     if (result.completed) return;
 
     const refresh = result.refresh
@@ -459,11 +466,11 @@ class ArxivDailyDashboardView extends ItemView {
         this.recentDatesNotice = snapshot.error
           ? `arXiv recent dates partially refreshed: ${snapshot.error}`
           : null;
-        if (this.isOpen) this.render();
+        this.renderRecentDatesIfChanged(before);
       })
       .catch((e) => {
         this.recentDatesNotice = `arXiv recent dates refresh failed: ${(e as Error).message}`;
-        if (this.isOpen) this.render();
+        this.renderRecentDatesIfChanged(before);
       })
       .finally(() => {
         if (this.recentDatesRefresh === refresh) {
@@ -471,6 +478,23 @@ class ArxivDailyDashboardView extends ItemView {
         }
       });
     this.recentDatesRefresh = refresh;
+  }
+
+  /** Everything the calendar and its recent-dates notice are drawn from. */
+  private recentDatesRenderKey(): string {
+    const snapshot = this.plugin.recentDates.snapshot();
+    return [
+      snapshot.status,
+      snapshot.refreshedAt,
+      snapshot.error ?? "",
+      [...snapshot.dates].sort().join(","),
+      this.recentDatesNotice ?? "",
+    ].join("\u0000");
+  }
+
+  private renderRecentDatesIfChanged(before: string): void {
+    if (!this.isOpen || this.recentDatesRenderKey() === before) return;
+    this.render();
   }
 
   private loadDetailSummaries(entries: DashboardRow["entry"][]): void {
