@@ -86,7 +86,8 @@ async function loadPlugin(options: { enabled?: boolean; files?: Record<string, s
   });
   Object.assign(plugin, {
     settings,
-    app: {},
+    // clear-run-state refreshes open dashboards; there are none in this test.
+    app: { workspace: { getLeavesOfType: () => [] } },
     manifest: { id: "arxiv-daily" },
     loadSettingsAndState: vi.fn(async () => []),
     cleanupCachesIfDue: vi.fn(),

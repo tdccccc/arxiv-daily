@@ -1,6 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   DEFAULT_SETTINGS,
+  PERSONAL_LIBRARY_PROPOSAL_SCHEMA_VERSION,
+  createPersonalLibraryCatalogInputManifestFingerprint,
+  createPersonalLibraryRepresentativeSetFingerprint,
   type LibraryInventory,
 } from "@arxiv-daily/core";
 import type { OpenedScopedLibrarySource } from "@arxiv-daily/node-runtime/scoped-library-source";
@@ -364,4 +367,91 @@ describe("personal library plugin lifecycle", () => {
     );
     expect(internals.openLibrarySource).not.toHaveBeenCalled();
   });
+
+  it("records a catalog load failure after selecting a folder", async () => {
+    const { plugin, internals } = makePlugin();
+    internals.libraryDirectoryPicker.select.mockResolvedValue({
+      kind: "selected",
+      path: "/private/papers",
+    });
+    internals.openLibrarySource.mockResolvedValue(
+      sourceWithInventory({ entries: [], truncated: false }, "/private/papers"),
+    );
+    internals.buildPersonalLibraryCatalogStore = vi.fn(() => ({
+      load: vi.fn(async () => {
+        throw Object.assign(new Error("catalog unreadable"), { code: "corrupt" });
+      }),
+    }));
+
+    await expect(plugin.selectLibraryRoot()).resolves.toBe("selected");
+
+    expect(plugin.getPersonalLibraryProfileSnapshot().catalogLoadError).toMatchObject({
+      kind: "catalog",
+      code: "corrupt",
+    });
+  });
+
+  it("publishes the reloaded proposal after a stale write conflict", async () => {
+    const { plugin, internals } = makePlugin();
+    internals.libraryConnection = createLibraryConnection("/papers", "1:2");
+    internals.libraryConnectionRevision = 0;
+    internals.libraryOutputRevision = 0;
+    const oldProposal = proposalAtRevision(1);
+    const reloadedProposal = proposalAtRevision(2);
+    let loads = 0;
+    const store = {
+      load: vi.fn(async () => (loads++ === 0 ? oldProposal : reloadedProposal)),
+      replace: vi.fn(async () => {
+        throw Object.assign(new Error("stale proposal"), { code: "stale" });
+      }),
+    };
+    internals.buildPersonalLibraryProfileStores = vi.fn(() => ({ proposal: store }));
+    internals.libraryProposal = oldProposal;
+    internals.libraryCatalog = { papers: {} };
+
+    await expect(plugin.renamePersonalLibraryProposedTopic({
+      topicId: "topic-1",
+      suggestedName: "Renamed topic",
+    })).rejects.toMatchObject({ code: "stale" });
+
+    expect(store.load).toHaveBeenCalledTimes(2);
+    // The edit failed, but the in-memory proposal is now the revision that is
+    // actually on disk, so the next attempt does not conflict again.
+    expect(plugin.getPersonalLibraryProfileSnapshot().proposal?.revision).toBe(2);
+  });
 });
+
+function proposalAtRevision(revision: number) {
+  const fingerprint = `sha256:${"a".repeat(64)}`;
+  const evidenceFingerprint = `sha256:${"b".repeat(64)}`;
+  const representatives = [{ paperKey: "arxiv:2608.00001", evidenceFingerprint }];
+  const catalogInputPapers = [{ paperKey: "arxiv:2608.00001", evidenceFingerprint }];
+  return {
+    schemaVersion: PERSONAL_LIBRARY_PROPOSAL_SCHEMA_VERSION,
+    revision,
+    proposalId: "proposal-1",
+    scopeFingerprint: fingerprint,
+    identificationFingerprint: fingerprint,
+    catalogInputFingerprint: createPersonalLibraryCatalogInputManifestFingerprint({
+      scopeFingerprint: fingerprint,
+      identificationFingerprint: fingerprint,
+      catalogInputPapers,
+    }),
+    catalogInputPapers,
+    generationContractFingerprint: fingerprint,
+    generatedAt: "2026-08-03T00:00:00.000Z",
+    topics: [{
+      id: "topic-1",
+      suggestedName: "Research agents",
+      directions: [{
+        id: "candidate-1",
+        text: "Reliability of long-running research agents",
+        discoveryCues: ["agents"],
+        representatives,
+        representativeSetFingerprint:
+          createPersonalLibraryRepresentativeSetFingerprint(representatives),
+        lineage: { candidateIds: ["candidate-1"] },
+      }],
+    }],
+  };
+}

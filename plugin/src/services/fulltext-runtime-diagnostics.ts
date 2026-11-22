@@ -36,6 +36,10 @@ export interface PdfJsDiagnostics {
 
 export interface EmbeddingDiagnostics {
   status: DiagnosticsStatus;
+  /** Backend the current settings select (ADR 0008): local transformers.js or a remote endpoint. */
+  mode: "local" | "remote";
+  /** Remote mode only: the library processing authorization state at probe time. */
+  authorization?: "authorized" | "authorization-required" | "authorization-invalidated" | "disconnected";
   modelId: string;
   dimension: number;
   /** transformers.js `env.remoteHost` after a load attempt. */
@@ -106,6 +110,8 @@ export function formatFullTextRuntimeDiagnostics(
   lines.push(`  status: ${pdfJs.status}`);
   lines.push("");
   lines.push("embeddings:");
+  lines.push(`  mode: ${embedding.mode}`);
+  if (embedding.authorization) lines.push(`  authorization: ${embedding.authorization}`);
   lines.push(`  model: ${embedding.modelId}`);
   lines.push(`  dimension: ${embedding.dimension}`);
   if (embedding.remoteHost) lines.push(`  remoteHost: ${embedding.remoteHost}`);
@@ -142,14 +148,16 @@ export function summarizeFullTextRuntimeDiagnostics(
   }
   const embeddingBits: string[] = [];
   if (embedding.status === "pass") {
-    embeddingBits.push("embeddings PASS");
+    embeddingBits.push(`${embedding.mode} embeddings PASS`);
     embeddingBits.push(`${embedding.dimension} dim`);
     if (embedding.loadMs !== undefined) embeddingBits.push(`${embedding.loadMs} ms`);
   } else if (embedding.status === "fail") {
-    embeddingBits.push("embeddings FAIL");
+    embeddingBits.push(`${embedding.mode} embeddings FAIL`);
     if (embedding.error) embeddingBits.push(embedding.error);
   } else {
-    embeddingBits.push("embeddings skipped");
+    embeddingBits.push(`${embedding.mode} embeddings skipped`);
+    if (embedding.authorization) embeddingBits.push(embedding.authorization);
+    else if (embedding.error) embeddingBits.push(embedding.error);
   }
   return `${pdfJsBits.join("; ")} | ${embeddingBits.join("; ")}`;
 }
