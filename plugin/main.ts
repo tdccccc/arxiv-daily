@@ -176,6 +176,7 @@ const LIBRARY_MODEL_PREPARATION_REQUIRED = "The embedding model changed. Retry p
 const LIBRARY_SEARCH_PREPARATION_REQUIRED = "The search index is not ready. Retry preparation to finish rebuilding it.";
 const LIBRARY_INDEX_READ_FAILED = "Could not read the library index. Retry preparation to repair it.";
 const LIBRARY_EMBEDDING_CONFIG_INCOMPLETE = "Remote embedding settings are incomplete. Finish the embedding configuration to use the library index.";
+const LIBRARY_PREPARATION_FAILED = "Library preparation failed. Retry preparation to repair or rebuild the index; see logs for details.";
 
 interface PersistedData {
   settings: PluginSettings;
@@ -2078,7 +2079,7 @@ export default class ArxivDailyPlugin extends Plugin {
       // even when the host could not deliver the abort in time. That is still
       // an outcome, not a preparation failure.
       if (error instanceof RunCancelledError) throw error;
-      this.libraryIndexStatus.setPreparationError("Library preparation failed. Retry preparation to repair or rebuild the index; see logs for details.");
+      this.libraryIndexStatus.setPreparationError(LIBRARY_PREPARATION_FAILED);
       this.libraryIndexedPapers = [];
       if (updateProgress) {
         this.progress?.setError("Personal library preparation failed");
@@ -2168,9 +2169,15 @@ export default class ArxivDailyPlugin extends Plugin {
       // index: the manifest read succeeded. Say what is actually missing and
       // keep the manifest-derived review metadata; constructing the remote
       // client here used to turn a blank API key into LIBRARY_INDEX_READ_FAILED.
+      // The papers themselves are only current if the manifest belongs to the
+      // model the settings now name: a not-yet-configured remote mode must not
+      // present the old local model's papers as the library's current index.
       if (!validateEmbeddingConfig(this.settings).ok) {
+        const expected = this.expectedEmbeddingModelIdentity();
+        const matchesCurrentIdentity = Object.keys(manifest.papers).length === 0
+          || (manifest.modelId === expected.modelId && manifest.dimension === expected.dimension);
         this.libraryIndexStatus.setPreparationError(LIBRARY_EMBEDDING_CONFIG_INCOMPLETE);
-        this.libraryIndexedPapers = indexedPapers;
+        this.libraryIndexedPapers = matchesCurrentIdentity ? indexedPapers : [];
         return;
       }
       const expected = this.expectedEmbeddingModelIdentity();
@@ -2201,6 +2208,10 @@ export default class ArxivDailyPlugin extends Plugin {
       const previousError = this.libraryIndexStatus.snapshot().preparationError;
       if (previousError === LIBRARY_MODEL_PREPARATION_REQUIRED || previousError === LIBRARY_INDEX_READ_FAILED
         || previousError === LIBRARY_EMBEDDING_CONFIG_INCOMPLETE
+        // A failed run left this behind. Once the manifest and the search
+        // generation verify against the current model, the failure is stale
+        // — otherwise switching back to a healthy index stays blocked forever.
+        || (previousError === LIBRARY_PREPARATION_FAILED && (generationVerified || readyPapers.length === 0))
         || (generationVerified && previousError === LIBRARY_SEARCH_PREPARATION_REQUIRED)) {
         this.libraryIndexStatus.setPreparationError(undefined);
       }

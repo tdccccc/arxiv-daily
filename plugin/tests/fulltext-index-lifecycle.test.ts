@@ -921,6 +921,141 @@ describe("personal library full-text index lifecycle", () => {
     expect(model.embed).toHaveBeenCalledTimes(1);
   });
 
+  it("clears a preparation failure once a healthy local model's index is verified again", async () => {
+    const runtime = remoteLibrary();
+    await runtime.plugin.authorizeLibraryProcessing();
+    runtime.legacy.replaceManifest.mockRejectedValueOnce(new Error("manifest write failed"));
+    await expect(runtime.plugin.indexPersonalLibraryFullText()).rejects.toThrow("manifest write failed");
+    expect(runtime.plugin.libraryIndexStatus.snapshot().preparationError).toMatch(/retry preparation/i);
+    expect(runtime.internals.libraryIndexedPapers).toEqual([]);
+
+    // The person moves back to the local model, whose index is healthy.
+    runtime.internals.settings.embedding = structuredClone(DEFAULT_SETTINGS.embedding);
+    const manifest = {
+      schemaVersion: FULLTEXT_KNOWLEDGE_BASE_SCHEMA_VERSION,
+      revision: 2,
+      scopeFingerprint: runtime.scopeFingerprint,
+      identificationFingerprint: runtime.identificationFingerprint,
+      modelId: LOCAL_EMBEDDING_MODEL_ID,
+      dimension: LOCAL_EMBEDDING_DIMENSION,
+      updatedAt: "2026-08-18T00:02:00.000Z",
+      papers: {
+        "arxiv:2601.00001": {
+          paperKey: "arxiv:2601.00001",
+          status: "ready" as const,
+          modelId: LOCAL_EMBEDDING_MODEL_ID,
+          dimension: LOCAL_EMBEDDING_DIMENSION,
+          title: "Existing paper",
+          textHash: "sha256:local",
+          chunkCount: 1,
+          filePaths: ["papers/2601.00001.pdf"],
+          observationFingerprints: ["fingerprint"],
+          updatedAt: "2026-08-18T00:02:00.000Z",
+        },
+      },
+    };
+    runtime.legacy.loadManifest.mockResolvedValue(manifest);
+    const close = vi.fn(async () => undefined);
+    runtime.internals.buildFullTextGenerationIndexStore = vi.fn(() => ({
+      openCurrent: vi.fn(async () => ({
+        descriptor: {
+          modelId: LOCAL_EMBEDDING_MODEL_ID,
+          dimension: LOCAL_EMBEDDING_DIMENSION,
+          sourceRevision: 2,
+        },
+        close,
+      })),
+    }));
+
+    await runtime.plugin.refreshLibraryIndexTrace();
+
+    expect(runtime.plugin.libraryIndexStatus.snapshot().preparationError).toBeUndefined();
+    expect(runtime.plugin.getPersonalLibraryProfileSnapshot().indexedPapers).toEqual([
+      { paperKey: "arxiv:2601.00001", title: "Existing paper" },
+    ]);
+    expect(close).toHaveBeenCalledOnce();
+  });
+
+  it("keeps another model's papers out of the review while remote settings are incomplete", async () => {
+    const runtime = fixture(memoryStorage().storage);
+    runtime.internals.settings.embedding = {
+      ...DEFAULT_SETTINGS.embedding,
+      mode: "remote",
+      baseUrl: "https://embed.example/v1",
+      apiKey: "",
+      model: "text-embedding-3-small",
+      dimension: 1536,
+    };
+    const localManifest = {
+      schemaVersion: FULLTEXT_KNOWLEDGE_BASE_SCHEMA_VERSION,
+      revision: 2,
+      scopeFingerprint: runtime.scopeFingerprint,
+      identificationFingerprint: runtime.identificationFingerprint,
+      modelId: LOCAL_EMBEDDING_MODEL_ID,
+      dimension: LOCAL_EMBEDDING_DIMENSION,
+      updatedAt: "2026-08-18T00:02:00.000Z",
+      papers: {
+        "arxiv:2601.00001": {
+          paperKey: "arxiv:2601.00001",
+          status: "ready" as const,
+          modelId: LOCAL_EMBEDDING_MODEL_ID,
+          dimension: LOCAL_EMBEDDING_DIMENSION,
+          title: "Existing paper",
+          textHash: "sha256:local",
+          chunkCount: 1,
+          filePaths: ["papers/2601.00001.pdf"],
+          observationFingerprints: ["fingerprint"],
+          updatedAt: "2026-08-18T00:02:00.000Z",
+        },
+      },
+    };
+    runtime.legacy.loadManifest.mockResolvedValue(localManifest);
+
+    await runtime.plugin.refreshLibraryIndexTrace();
+
+    // The manifest is readable and its run count survives, but its papers
+    // belong to the old local model: they are not the library's current index.
+    expect(runtime.plugin.libraryIndexStatus.snapshot().preparationError)
+      .toMatch(/embedding settings are incomplete/i);
+    expect(runtime.plugin.libraryIndexStatus.snapshot().lastRun?.papers).toBe(1);
+    expect(runtime.plugin.getPersonalLibraryProfileSnapshot().indexedPapers).toEqual([]);
+
+    // Completing the configuration and indexing under the named model makes
+    // the papers current again.
+    runtime.internals.settings.embedding.apiKey = "sk-embed";
+    const remoteManifest = {
+      ...structuredClone(localManifest),
+      modelId: "remote:text-embedding-3-small:1536",
+      dimension: 1536,
+      papers: {
+        "arxiv:2601.00001": {
+          ...structuredClone(localManifest.papers["arxiv:2601.00001"]),
+          modelId: "remote:text-embedding-3-small:1536",
+          dimension: 1536,
+        },
+      },
+    };
+    runtime.legacy.loadManifest.mockResolvedValue(remoteManifest);
+    const close = vi.fn(async () => undefined);
+    runtime.internals.buildFullTextGenerationIndexStore = vi.fn(() => ({
+      openCurrent: vi.fn(async () => ({
+        descriptor: {
+          modelId: "remote:text-embedding-3-small:1536",
+          dimension: 1536,
+          sourceRevision: 2,
+        },
+        close,
+      })),
+    }));
+
+    await runtime.plugin.refreshLibraryIndexTrace();
+
+    expect(runtime.plugin.libraryIndexStatus.snapshot().preparationError).toBeUndefined();
+    expect(runtime.plugin.getPersonalLibraryProfileSnapshot().indexedPapers).toEqual([
+      { paperKey: "arxiv:2601.00001", title: "Existing paper" },
+    ]);
+  });
+
   it("keeps the legacy migration fallback when the unsupported host has never cut over", async () => {
     const memory = memoryStorage();
     const runtime = fixture(limitedStorage(memory.storage));
