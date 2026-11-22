@@ -498,6 +498,32 @@ describe("Obsidian host adapters", () => {
     ).resolves.toBeUndefined();
   });
 
+  it("does not treat a stat permission or I/O failure as an absent path", async () => {
+    const root = await makeTempDir();
+    const adapter = realFilesystemAdapter(root);
+    adapter.stat = async () => {
+      throw Object.assign(new Error("EACCES: permission denied"), { code: "EACCES" });
+    };
+    const storage = new ObsidianStorageAdapter({ adapter } as any);
+
+    await expect(storage.remove("protected-file")).rejects.toMatchObject({
+      code: "EACCES",
+    });
+  });
+
+  it("falls back to rmdir when a host without stat refuses a directory", async () => {
+    const root = await makeTempDir();
+    const adapter = realFilesystemAdapter(root);
+    delete (adapter as { stat?: unknown }).stat;
+    await mkdir(join(root, "legacy-dir"), { recursive: true });
+    await writeFile(join(root, "legacy-dir", "a.txt"), "x", "utf8");
+    const storage = new ObsidianStorageAdapter({ adapter } as any);
+
+    await storage.remove("legacy-dir");
+
+    expect(await stat(join(root, "legacy-dir")).then(() => true, () => false)).toBe(false);
+  });
+
   it("creates desktop claims without process.getBuiltinModule", async () => {
     const root = await makeTempDir();
     const filesystemAdapter = {

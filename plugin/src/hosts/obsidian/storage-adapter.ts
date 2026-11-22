@@ -152,7 +152,15 @@ export class ObsidianStorageAdapter implements StorageAdapter {
     const target = this.normalizePath(path);
     const adapter = this.vault.adapter;
     if (typeof adapter.stat === "function") {
-      const stat = await adapter.stat(target).catch(() => null);
+      let stat;
+      try {
+        stat = await adapter.stat(target);
+      } catch (error) {
+        // Only a missing path is "already gone"; a permission or I/O failure
+        // must not be reported as a successful removal.
+        if (isMissingPathError(error)) return;
+        throw error;
+      }
       if (!stat) return;
       try {
         if (stat.type === "folder") {
@@ -171,6 +179,18 @@ export class ObsidianStorageAdapter implements StorageAdapter {
       await adapter.remove(target);
     } catch (error) {
       if (isMissingPathError(error)) return;
+      // A host without stat cannot tell us the type up front. If the file
+      // primitive refuses a directory, fall back to recursive rmdir when the
+      // adapter offers one instead of surfacing EISDIR/EPERM.
+      if (isDirectoryRemovalError(error)) {
+        try {
+          await adapter.rmdir(target, true);
+          return;
+        } catch (fallbackError) {
+          if (isMissingPathError(fallbackError)) return;
+          throw fallbackError;
+        }
+      }
       throw error;
     }
   }
@@ -206,4 +226,9 @@ function isMissingPathError(error: unknown): boolean {
   return (
     error instanceof Error && /ENOENT|no such file/i.test(error.message)
   );
+}
+
+/** A file-only primitive refusing a directory (EISDIR/EPERM). */
+function isDirectoryRemovalError(error: unknown): boolean {
+  return error instanceof Error && /EISDIR|EPERM|is a directory/i.test(error.message);
 }
