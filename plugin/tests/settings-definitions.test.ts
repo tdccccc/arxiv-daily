@@ -178,9 +178,6 @@ describe("buildSettingDefinitions structure", () => {
       renderEmbeddingApiKeyRow: () => {},
       renderEmbeddingModelRow: () => {},
       renderEmbeddingDimensionRow: () => {},
-      renderPdfParserSidecarEnabledRow: () => {},
-      renderPdfParserSidecarCapabilitiesUrlRow: () => {},
-      renderPdfParserSidecarParseUrlRow: () => {},
     };
   }
 

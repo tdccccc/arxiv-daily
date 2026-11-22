@@ -33,7 +33,6 @@ import {
   renderLibraryDirectionsRow,
   renderLlmBaseUrlRow,
   renderModelRow,
-  renderPdfParserSidecarCapabilitiesUrlRow,
   renderReasoningEffortRow,
   renderRunWindowRow,
   renderLibraryGuideRow,
@@ -2547,26 +2546,6 @@ describe("model field", () => {
   });
 });
 
-describe("local parser sidecar address", () => {
-  it("moves both endpoints when one moves to another port", async () => {
-    const { tab, settings } = makeTab();
-    settings.pdfParserSidecar.enabled = true;
-    const setting = new Setting(tab.containerEl);
-    renderPdfParserSidecarCapabilitiesUrlRow(tab, setting);
-    const input = setting.controlEl.querySelector("input")!;
-
-    input.value = "http://127.0.0.1:5002/v1/capabilities";
-    input.dispatchEvent(new Event("change"));
-
-    await vi.waitFor(() => {
-      expect(settings.pdfParserSidecar.capabilitiesUrl).toBe(
-        "http://127.0.0.1:5002/v1/capabilities",
-      );
-      expect(settings.pdfParserSidecar.parseUrl).toBe("http://127.0.0.1:5002/v1/parse");
-    });
-  });
-});
-
 describe("first report date", () => {
   function readyTab(recentDates: unknown) {
     const made = makeTab();
@@ -2981,9 +2960,6 @@ describe("wired getControlValue", () => {
       renderEmbeddingApiKeyRow: () => {},
       renderEmbeddingModelRow: () => {},
       renderEmbeddingDimensionRow: () => {},
-      renderPdfParserSidecarEnabledRow: () => {},
-      renderPdfParserSidecarCapabilitiesUrlRow: () => {},
-      renderPdfParserSidecarParseUrlRow: () => {},
     });
     const tabItems = tab.getSettingDefinitions();
     expect(tabItems.length).toBe(hostItems.length);

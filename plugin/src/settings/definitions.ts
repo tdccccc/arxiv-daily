@@ -103,9 +103,6 @@ export interface SettingDefinitionsHost {
   renderEmbeddingApiKeyRow?: (setting: Setting) => void;
   renderEmbeddingModelRow?: (setting: Setting) => void;
   renderEmbeddingDimensionRow?: (setting: Setting) => void;
-  renderPdfParserSidecarEnabledRow?: (setting: Setting) => void;
-  renderPdfParserSidecarCapabilitiesUrlRow?: (setting: Setting) => void;
-  renderPdfParserSidecarParseUrlRow?: (setting: Setting) => void;
 }
 
 export type SettingsSection =
@@ -172,9 +169,6 @@ export function buildSettingDefinitions(
     embeddingApiKey: host.renderEmbeddingApiKeyRow?.bind(host),
     embeddingModel: host.renderEmbeddingModelRow?.bind(host),
     embeddingDimension: host.renderEmbeddingDimensionRow?.bind(host),
-    sidecarEnabled: host.renderPdfParserSidecarEnabledRow?.bind(host),
-    sidecarCapabilitiesUrl: host.renderPdfParserSidecarCapabilitiesUrlRow?.bind(host),
-    sidecarParseUrl: host.renderPdfParserSidecarParseUrlRow?.bind(host),
     emailMode: host.renderEmailModeRow?.bind(host),
     emailTo: host.renderEmailToRow?.bind(host),
     hostedToken: host.renderHostedTokenRow?.bind(host),

@@ -282,12 +282,6 @@ export class ArxivDailySettingTab extends PluginSettingTab {
         declarativeRows.renderEmbeddingModelRow(this, setting),
       renderEmbeddingDimensionRow: (setting) =>
         declarativeRows.renderEmbeddingDimensionRow(this, setting),
-      renderPdfParserSidecarEnabledRow: (setting) =>
-        declarativeRows.renderPdfParserSidecarEnabledRow(this, setting),
-      renderPdfParserSidecarCapabilitiesUrlRow: (setting) =>
-        declarativeRows.renderPdfParserSidecarCapabilitiesUrlRow(this, setting),
-      renderPdfParserSidecarParseUrlRow: (setting) =>
-        declarativeRows.renderPdfParserSidecarParseUrlRow(this, setting),
       renderLibraryConnectionRow: (setting) =>
         declarativeRows.renderLibraryConnectionRow(this, setting),
       renderLibraryDirectionsRow: (setting) =>
@@ -1226,36 +1220,6 @@ export class ArxivDailySettingTab extends PluginSettingTab {
     if (confirmed) await apply();
   }
 
-  /**
-   * Changes for one sidecar endpoint edit. Both endpoints must share an
-   * origin, and each field saves alone, so moving one endpoint to another
-   * host or port moves the other to the same origin in the same change.
-   */
-  public sidecarUrlChanges(
-    key: "pdfParserSidecar.capabilitiesUrl" | "pdfParserSidecar.parseUrl",
-    next: string,
-  ): SettingsValueChange[] {
-    const changes: SettingsValueChange[] = [{ key, value: next }];
-    const otherKey = key === SETTING_KEYS.pdfParserSidecar.capabilitiesUrl
-      ? SETTING_KEYS.pdfParserSidecar.parseUrl
-      : SETTING_KEYS.pdfParserSidecar.capabilitiesUrl;
-    const otherValue = this.getControlValue(otherKey);
-    const other = typeof otherValue === "string" ? otherValue : "";
-    try {
-      const nextUrl = new URL(next);
-      const otherUrl = new URL(other);
-      if (nextUrl.origin !== otherUrl.origin) {
-        changes.push({
-          key: otherKey,
-          value: `${nextUrl.origin}${otherUrl.pathname}${otherUrl.search}`,
-        });
-      }
-    } catch {
-      // An unparsable URL is left to the settings validation to reject.
-    }
-    return changes;
-  }
-
   public async saveTimezone(timezone: string): Promise<void> {
     await this.plugin.settingsChanges.changeValue("arxiv.timezone", timezone);
   }
@@ -1631,7 +1595,14 @@ export class ArxivDailySettingTab extends PluginSettingTab {
           // and the re-render would remove the input being typed in.
           t.inputEl.addEventListener("change", () => {
             const v = t.inputEl.value.trim();
-            if (!v) return;
+            if (!v || v === category) return;
+            // normalizeUniqueCategories would silently drop the duplicate and
+            // the edited row would disappear; refuse it in place instead.
+            if (categories.some((other, j) => j !== i && other === v)) {
+              new Notice(`arXiv Daily: ${v} is already in the list.`);
+              t.setValue("");
+              return;
+            }
             const next = [...categories];
             next[i] = v;
             this.runAction("save category", async () => {
@@ -1672,6 +1643,11 @@ export class ArxivDailySettingTab extends PluginSettingTab {
           t.inputEl.addEventListener("change", () => {
             const v = t.inputEl.value.trim();
             if (!v) return;
+            if (categories.some((other) => other === v)) {
+              new Notice(`arXiv Daily: ${v} is already in the list.`);
+              t.setValue("");
+              return;
+            }
             this.runAction("save category", async () => {
               const saved = await this.saveCategoryDraft(v);
               if (saved) this.renderLegacySettings();

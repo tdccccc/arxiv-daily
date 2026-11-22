@@ -603,6 +603,26 @@ describe("legacy text fields act when editing ends", () => {
     expect(save).toHaveBeenCalledWith(key, typed);
   });
 
+  it("refuses a custom category already used by another row", async () => {
+    const persistSettings = vi.fn().mockResolvedValue(undefined);
+    const { tab, settings } = makeLegacySettingsTab(persistSettings);
+    settings.arxiv.categories = ["astro-ph", "hep-th"];
+    Notice.calls = [];
+    const rows = renderLegacySettings(tab);
+    const input = componentOf(rows.get("Category 1"), TextComponent as never) as TextComponent;
+
+    input.inputEl.value = "hep-th";
+    input.inputEl.dispatchEvent(new Event("change"));
+    await Promise.resolve();
+
+    expect(Notice.calls.map((call) => call.message)).toContain(
+      "arXiv Daily: hep-th is already in the list.",
+    );
+    expect(settings.arxiv.categories).toEqual(["astro-ph", "hep-th"]);
+    expect(persistSettings).not.toHaveBeenCalled();
+    expect(input.inputEl.value).toBe("");
+  });
+
   it("never renders the retired sidecar controls, even when the setting is enabled", () => {
     const { tab, settings } = makeLegacySettingsTab(vi.fn().mockResolvedValue(undefined));
     settings.pdfParserSidecar.enabled = true;
@@ -663,6 +683,28 @@ describe("legacy pending category draft", () => {
     expect(persistSettings).toHaveBeenCalledTimes(1);
     renderLegacySettings(tab);
     expect(rowByName(tab, "Category 3")).toBeUndefined();
+  });
+
+  it("refuses a custom draft category already in the list", async () => {
+    const persistSettings = vi.fn().mockResolvedValue(undefined);
+    const { tab, settings } = makeLegacySettingsTab(persistSettings);
+    renderLegacySettings(tab);
+    clickButton(tab.containerEl, "Add category");
+    renderLegacySettings(tab);
+    const draftRow = rowByName(tab, "Category 2")!;
+    const input = draftRow.querySelector("input") as HTMLInputElement;
+    Notice.calls = [];
+
+    input.value = "astro-ph";
+    input.dispatchEvent(new Event("change"));
+    await Promise.resolve();
+
+    expect(Notice.calls.map((call) => call.message)).toContain(
+      "arXiv Daily: astro-ph is already in the list.",
+    );
+    expect(settings.arxiv.categories).toEqual(["astro-ph"]);
+    expect(persistSettings).not.toHaveBeenCalled();
+    expect(input.value).toBe("");
   });
 
   it("removes the draft row via its Remove button without saving", () => {
