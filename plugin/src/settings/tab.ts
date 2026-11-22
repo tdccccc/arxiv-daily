@@ -1737,11 +1737,22 @@ export class ArxivDailySettingTab extends PluginSettingTab {
         });
       });
 
+    let timezoneSelect: HTMLSelectElement | undefined;
     new Setting(containerEl)
       .setName("Timezone")
       .addDropdown((d) => {
+        timezoneSelect = d.selectEl;
         for (const zone of TIMEZONE_OPTIONS) {
           d.addOption(zone.value, zone.label);
+        }
+        // A valid IANA zone saved through the free-text draft is not in the
+        // preset list; without its own option the dropdown silently shows
+        // nothing for it.
+        if (
+          s.arxiv.timezone &&
+          !TIMEZONE_OPTIONS.some((zone) => zone.value === s.arxiv.timezone)
+        ) {
+          d.addOption(s.arxiv.timezone, `${s.arxiv.timezone} — custom`);
         }
         d.setValue(s.arxiv.timezone).onChange(async (v) => {
           await this.saveLegacyControl(
@@ -1757,7 +1768,8 @@ export class ArxivDailySettingTab extends PluginSettingTab {
       })
       .addText((t) => {
         t.setPlaceholder("Or enter custom timezone").setValue("");
-        this.bindTimezoneDraftInput(t.inputEl);
+        // Pass the dropdown so a committed custom draft is reflected there.
+        this.bindTimezoneDraftInput(t.inputEl, timezoneSelect);
       });
 
     // ─── Output & Schedule ────────────────────────────

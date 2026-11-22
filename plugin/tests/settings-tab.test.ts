@@ -1306,3 +1306,27 @@ describe("legacy topic card header", () => {
     expect(container.querySelector(".arxiv-daily-settings__topic-tag")).toBeNull();
   });
 });
+
+describe("legacy timezone row", () => {
+  it("shows a saved custom timezone and syncs the dropdown after a custom commit", async () => {
+    const persistSettings = vi.fn().mockResolvedValue(undefined);
+    const { tab, settings } = makeLegacyApiKeyTab(persistSettings);
+    settings.arxiv.timezone = "Europe/Berlin";
+
+    const row = renderLegacySettings(tab).get("Timezone")!;
+    const dropdown = componentOf(row, DropdownComponent);
+    expect(Array.from(dropdown.selectEl.options).map((option) => option.value))
+      .toContain("Europe/Berlin");
+    expect(dropdown.selectEl.value).toBe("Europe/Berlin");
+
+    const input = row.controlEl.querySelector<HTMLInputElement>("input")!;
+    input.value = "America/Chicago";
+    input.dispatchEvent(new Event("change"));
+
+    await vi.waitFor(() => expect(settings.arxiv.timezone).toBe("America/Chicago"));
+    expect(Array.from(dropdown.selectEl.options).map((option) => option.value))
+      .toContain("America/Chicago");
+    expect(dropdown.selectEl.value).toBe("America/Chicago");
+    expect(input.value).toBe("");
+  });
+});

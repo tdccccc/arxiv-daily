@@ -1399,6 +1399,42 @@ describe("declarative LLM and category rows", () => {
     ).toBe(true);
   });
 
+  it("saves a freshly pasted Resend key before sending the test email", async () => {
+    const { tab, plugin, settings, saveSettings } = makeTab();
+    const save = deferred();
+    saveSettings.mockImplementationOnce(() => save.promise);
+    const setting = renderSetting();
+    renderEmailApiKeyRow(tab, setting as never);
+    const input = setting.controlEl.querySelector("input") as HTMLInputElement;
+    const sendTest = Array.from(setting.controlEl.querySelectorAll("button"))
+      .find((button) => button.textContent === "Send test") as HTMLButtonElement;
+
+    // No blur/change first: the click itself must flush the pasted draft.
+    input.value = "re_pasted_secret";
+    input.dispatchEvent(new Event("input"));
+    sendTest.click();
+
+    await vi.waitFor(() => expect(saveSettings).toHaveBeenCalledTimes(1));
+    expect(plugin.sendTestEmail).not.toHaveBeenCalled();
+
+    save.resolve();
+    await vi.waitFor(() => expect(plugin.sendTestEmail).toHaveBeenCalledTimes(1));
+    expect(settings.email.apiKey).toBe("re_pasted_secret");
+  });
+
+  it("keeps focus on the Resend row while its Send test button is pressed", () => {
+    const { tab } = makeTab();
+    const setting = renderSetting();
+    renderEmailApiKeyRow(tab, setting as never);
+    const sendTest = Array.from(setting.controlEl.querySelectorAll("button"))
+      .find((button) => button.textContent === "Send test") as HTMLButtonElement;
+
+    const pointerdown = new Event("pointerdown", { cancelable: true });
+    sendTest.dispatchEvent(pointerdown);
+
+    expect(pointerdown.defaultPrevented).toBe(true);
+  });
+
   it("restores the hidden Resend key when candidate persistence fails", async () => {
     const { tab, plugin, settings, saveSettings } = makeTab();
     settings.email.apiKey = "old-resend-secret";
@@ -1417,8 +1453,19 @@ describe("declarative LLM and category rows", () => {
     expect(input.value).toBe("old-resend-secret");
   });
 
-  it("keeps a custom timezone as a local draft and rejects invalid commits", async () => {
-    const { tab, settings, saveSettings } = makeTab();
+  it("shows a saved custom timezone as a selected dropdown option", () => {
+    const { tab, settings } = makeTab();
+    settings.arxiv.timezone = "Europe/Berlin";
+    const setting = renderSetting();
+    renderTimezoneRow(tab, setting as never);
+    const select = setting.controlEl.querySelector("select") as HTMLSelectElement;
+
+    expect(Array.from(select.options).map((option) => option.value))
+      .toContain("Europe/Berlin");
+    expect(select.value).toBe("Europe/Berlin");
+  });
+
+  it("keeps a custom timezone as a local draft and rejects invalid commits", async () => {    const { tab, settings, saveSettings } = makeTab();
     const setting = renderSetting();
     renderTimezoneRow(tab, setting as never);
     const input = setting.controlEl.querySelector("input") as HTMLInputElement;

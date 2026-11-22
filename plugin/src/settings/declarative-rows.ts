@@ -346,7 +346,18 @@ export function renderTimezoneRow(
     option.value = zone.value;
     option.textContent = zone.label;
   }
-  select.value = tab.plugin.settings.arxiv.timezone;
+  // A valid IANA zone saved through the free-text draft is not in the preset
+  // list; without its own option the select would silently show nothing.
+  const savedTimezone = tab.plugin.settings.arxiv.timezone;
+  if (
+    savedTimezone &&
+    !TIMEZONE_OPTIONS.some((zone) => zone.value === savedTimezone)
+  ) {
+    const option = select.createEl("option");
+    option.value = savedTimezone;
+    option.textContent = `${savedTimezone} — custom`;
+  }
+  select.value = savedTimezone;
   select.addEventListener("change", () => {
     const next = select.value;
     const revision = tab.beginControlChange(select);
@@ -723,7 +734,7 @@ export function renderEmailApiKeyRow(
   setting: Setting,
 ): void {
   prepareRow(setting);
-  renderSensitiveInput(tab, setting, {
+  const saveApiKey = renderSensitiveInput(tab, setting, {
     value: tab.plugin.settings.email.apiKey ?? "",
     placeholder: "Paste your Resend API key",
     ariaLabel: "Resend API key",
@@ -734,7 +745,13 @@ export function renderEmailApiKeyRow(
     label: "Send test",
     pendingLabel: "Sending…",
     action: "send test email",
-    beforeRun: () => waitForEmailToSave(tab),
+    // Clicking the button blurs the masked input; keep focus so the draft's
+    // own blur handler still runs, then flush it before sending either way.
+    preserveFocus: true,
+    beforeRun: async () => {
+      await waitForEmailToSave(tab);
+      await saveApiKey();
+    },
     run: () => tab.plugin.sendTestEmail(),
   });
 }
