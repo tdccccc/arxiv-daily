@@ -47,7 +47,9 @@ import {
 } from "./summarizer";
 import {
   parseDailyReportDiscoveryProvenance,
+  parseDailyReportPapers,
   extractPaperSummaries,
+  type DailyReportPaper,
 } from "./daily-summary-parser";
 import type { DailyPaperSlot } from "./daily-summary-assembler";
 import { normalizeMarkdownLine } from "./daily-summary-rendering";
@@ -65,6 +67,7 @@ import {
 } from "../sources";
 import { classifyPaperNote } from "../dashboard/paper-note-classifier";
 import { contentFetchFailedText } from "./content-fetch-failure";
+import { modernArxivResources } from "../utils/arxiv";
 
 /** Pipeline-local paper meta after source listing (arXiv-compatible shape). */
 interface SourcePaperMeta extends PaperMeta {
@@ -72,6 +75,22 @@ interface SourcePaperMeta extends PaperMeta {
   published?: string;
   updated?: string;
   paperKey?: string;
+}
+
+/** The paper fields a detail-note backlink needs when no index entry is at hand. */
+interface DetailLinkPaper {
+  id: string;
+  title: string;
+  authors: string;
+  category?: string;
+  published?: string;
+  paperPath?: string | null;
+  indexEntry?: PaperIndexEntry;
+}
+
+interface DetailReportLink {
+  entry: PaperIndexEntry;
+  paperPath: string;
 }
 
 /**
@@ -235,8 +254,13 @@ export class ArxivPipeline {
     // supports notes written by older versions without a separate marker.
     if (await this.deps.writer.dailyExists(dateStr)) {
       logger.info(`pipeline: daily ${dateStr} already exists, repairing index`);
-      await this.cleanupCommittedCheckpoints(dateStr);
-      return await this.repairExistingDaily(dateStr, signal);
+      const repaired = await this.repairExistingDaily(dateStr, signal);
+      // A failed or cancelled repair has not superseded its checkpoints, so a
+      // later attempt must still find them; only a completed repair clears them.
+      if (repaired.kind === "completed") {
+        await this.cleanupCommittedCheckpoints(dateStr);
+      }
+      return repaired;
     }
     throwIfCancelled(signal);
 
@@ -280,6 +304,9 @@ export class ArxivPipeline {
     // 3. Empty day
     if (sourcePapers.length === 0) {
       throwIfCancelled(signal);
+      // A completed empty day will not run again on its own; checkpoints from
+      // earlier attempts are dead state and must not linger in .index.
+      await this.cleanupCommittedCheckpoints(dateStr);
       // A successfully fetched empty announcement is terminal, not unpublished.
       return { kind: "completed", papersWritten: 0, outcome: "no_updates" };
     }
@@ -601,6 +628,16 @@ export class ArxivPipeline {
     });
     stageEnd("write-detail", ` (${detailCandidates.length} selected papers)`);
 
+    // Notes written this run and notes already on disk both belong in the
+    // report's detail links — a retry that writes no new note must still refresh
+    // the existing note's backlink.
+    const detailPaths = new Map<string, string>(confirmedPaths);
+    for (const paper of enriched) {
+      if (paper.paperPath && !detailPaths.has(paper.id)) {
+        detailPaths.set(paper.id, paper.paperPath);
+      }
+    }
+
     // 8. Daily summary, after detail attempts have established which links are real.
     throwIfCancelled(signal);
     stageStart("summarize-daily");
@@ -655,18 +692,11 @@ export class ArxivPipeline {
         ignoredIds,
       });
     }
-    await this.cleanupCommittedCheckpoints(dateStr);
     if (this.deps.paperIndex) {
       try {
         throwIfCancelled(signal);
         // The report is durable: commit the selected candidates' index entries
         // in the same pass that records the report, provenance, and summaries.
-        const detailPaths = new Map<string, string>(confirmedPaths);
-        for (const paper of enriched) {
-          if (paper.paperPath && !detailPaths.has(paper.id)) {
-            detailPaths.set(paper.id, paper.paperPath);
-          }
-        }
         await this.deps.paperIndex.upsertManyFromDailyPapers(
           filtered
             .filter((p) => reportIds.has(p.id) || known.entries.has(p.id))
@@ -711,8 +741,15 @@ export class ArxivPipeline {
     // could not link back to it. Now that the report is the durable commit and
     // the index knows the report path, rewrite those notes' `published` field.
     // A failure here leaves a plain date, never a link to a missing report.
-    await this.refreshDetailReportLinks(dailyPath, confirmedPaths, visiblePapers, signal);
+    await this.refreshDetailReportLinks(
+      dailyPath,
+      this.detailReportLinks(dateStr, dailyPath, detailPaths, visiblePapers),
+      signal,
+    );
     throwIfCancelled(signal);
+    // Only a committed index has superseded the checkpoints; a cancellation or
+    // failure above keeps them so the repair run can resume from them.
+    await this.cleanupCommittedCheckpoints(dateStr);
     const totalS = ((Date.now() - t0) / 1000).toFixed(1);
     logger.info(
       `pipeline: completed ${dateStr} in ${totalS}s — ` +
@@ -780,24 +817,125 @@ export class ArxivPipeline {
   }
 
   /**
-   * Give the detail notes written in this run their report backlink. The note
-   * is written before the report exists, so writePaperDetail cannot know the
-   * report path. Called only after writeDaily succeeded; a note whose report
-   * link cannot be refreshed keeps its plain date.
+   * The detail notes to relink after a committed report: the note paths plus
+   * an index-entry view for each. A note whose paper has no index entry (the
+   * pipeline can run without an index, and a repair may have only just created
+   * one) still gets a view built from the paper itself, so its `published`
+   * field links back to the report either way.
+   */
+  private detailReportLinks(
+    dateStr: string,
+    dailyPath: string,
+    detailPaths: ReadonlyMap<string, string>,
+    papers: ReadonlyArray<DetailLinkPaper>,
+  ): DetailReportLink[] {
+    const byId = new Map(papers.map((paper) => [paper.id, paper] as const));
+    const links: DetailReportLink[] = [];
+    for (const [id, paperPath] of detailPaths) {
+      const paper = byId.get(id);
+      if (!paper) continue;
+      const entry = this.detailLinkIndexEntry(paper, dailyPath, dateStr);
+      if (entry) links.push({ entry, paperPath });
+    }
+    return links;
+  }
+
+  /**
+   * The same links rebuilt from a committed report during a repair. Entries
+   * read back after the repair steps win: they carry the paper's full report
+   * history (and so its original published date), which a view built from this
+   * report alone would lose.
+   */
+  private repairedDetailReportLinks(
+    dateStr: string,
+    dailyPath: string,
+    papers: readonly DailyReportPaper[],
+    detailPaths: Readonly<Record<string, string | null>>,
+    entries: ReadonlyMap<string, PaperIndexEntry>,
+  ): DetailReportLink[] {
+    const byId = new Map(papers.map((paper) => [paper.id, paper] as const));
+    const links: DetailReportLink[] = [];
+    for (const [id, paperPath] of Object.entries(detailPaths)) {
+      if (!paperPath) continue;
+      const paper = byId.get(id);
+      const entry = this.detailLinkIndexEntry(
+        {
+          id,
+          title: paper?.title ?? id,
+          authors: paper?.authors ?? "",
+          category: paper ? this.primaryTopicForSection(paper.section) : "",
+          published: dateStr,
+          paperPath,
+          indexEntry: entries.get(id),
+        },
+        dailyPath,
+        dateStr,
+      );
+      if (entry) links.push({ entry, paperPath });
+    }
+    return links;
+  }
+
+  /**
+   * What a note's frontmatter needs, from its index entry when one exists and
+   * otherwise from the paper record alone. `refreshPaperNoteFrontmatter` reads
+   * title, authors, arXiv id, topic, published date, and daily reports.
+   */
+  private detailLinkIndexEntry(
+    paper: DetailLinkPaper,
+    dailyPath: string,
+    dateStr: string,
+  ): PaperIndexEntry | undefined {
+    if (paper.indexEntry) return paper.indexEntry;
+    const resources = modernArxivResources(paper.id);
+    if (!resources) return undefined;
+    const category = paper.category?.trim() ?? "";
+    const published = paper.published?.trim() || dateStr;
+    return {
+      paperKey: `arxiv:${resources.id}`,
+      source: "arxiv",
+      externalId: resources.id,
+      arxivId: resources.id,
+      title: paper.title,
+      authors: paper.authors
+        .split(",")
+        .map((author) => author.trim())
+        .filter(Boolean),
+      published,
+      updated: published,
+      category,
+      categories: category ? [category] : [],
+      topics: [],
+      primaryTopic: category,
+      detail: true,
+      status: "inbox",
+      priority: "normal",
+      seenDates: [dateStr],
+      dailyReports: [dailyPath],
+      discoveryProvenanceByReport: {},
+      paperPath: paper.paperPath ?? null,
+      arxivUrl: resources.absUrl,
+      pdfUrl: resources.pdfUrl,
+      pdfPath: "",
+      zoteroKey: "",
+      zoteroUri: "",
+      citationKey: "",
+      projects: [],
+    };
+  }
+
+  /**
+   * Give detail notes their report backlink. The note is written before the
+   * report exists, so writePaperDetail cannot know the report path. Called only
+   * after writeDaily succeeded; a note whose report link cannot be refreshed
+   * keeps its plain date.
    */
   private async refreshDetailReportLinks(
     dailyPath: string,
-    confirmedPaths: ReadonlyMap<string, string>,
-    papers: ReadonlyArray<{ id: string; indexEntry?: PaperIndexEntry }>,
+    links: readonly DetailReportLink[],
     signal?: AbortSignal,
   ): Promise<void> {
-    if (confirmedPaths.size === 0) return;
-    const entries = new Map(
-      papers.map((paper) => [paper.id, paper.indexEntry] as const),
-    );
-    for (const [id, paperPath] of confirmedPaths) {
-      const entry = entries.get(id);
-      if (!entry) continue;
+    for (const { entry, paperPath } of links) {
       try {
         throwIfCancelled(signal);
         const dailyReports = entry.dailyReports.includes(dailyPath)
@@ -811,7 +949,7 @@ export class ArxivPipeline {
       } catch (e) {
         if (isCancellationError(e)) throw e;
         this.deps.logger.warn(
-          `pipeline: detail frontmatter refresh failed for ${id}`,
+          `pipeline: detail frontmatter refresh failed for ${entry.arxivId}`,
           e,
         );
       }
@@ -919,12 +1057,21 @@ export class ArxivPipeline {
       const arxivIds = Array.from(
         new Set([...extractDailyArxivIds(markdown), ...Object.keys(summaries)]),
       );
+      const dailyPapers = parseDailyReportPapers(markdown);
       const dailyPath = this.deps.writer.dailyPath(dateStr);
       const canonicalDetailPaths: Record<string, string | null> = {};
       for (const arxivId of arxivIds) {
         throwIfCancelled(signal);
         canonicalDetailPaths[arxivId] = await this.verifiedDetailPath(arxivId, signal);
       }
+      throwIfCancelled(signal);
+      // A run can stop between writing the report and committing its index
+      // projection. The report is the durable commit, so rebuild the entries
+      // the index never received from the report itself; existing entries are
+      // left untouched and repaired by the reconcile steps below.
+      await this.deps.paperIndex.createMissingDailyPapers(
+        this.dailyReportIndexInputs(dailyPapers, canonicalDetailPaths, dateStr),
+      );
       throwIfCancelled(signal);
       await this.deps.paperIndex.reconcilePaperDetails(canonicalDetailPaths);
       throwIfCancelled(signal);
@@ -941,6 +1088,22 @@ export class ArxivPipeline {
       }
       throwIfCancelled(signal);
       await this.deps.paperIndex.setSummaries(summaries);
+      throwIfCancelled(signal);
+      // The run that wrote the report may have stopped before its detail notes
+      // learned the report path; rebuild those `published` links too.
+      const repairedEntries = await this.deps.paperIndex.getMany(arxivIds);
+      throwIfCancelled(signal);
+      await this.refreshDetailReportLinks(
+        dailyPath,
+        this.repairedDetailReportLinks(
+          dateStr,
+          dailyPath,
+          dailyPapers,
+          canonicalDetailPaths,
+          repairedEntries,
+        ),
+        signal,
+      );
       throwIfCancelled(signal);
       this.deps.logger.info(
         `pipeline: repaired daily and detail index for ${dateStr} (${arxivIds.length} papers)`,
@@ -1067,6 +1230,46 @@ export class ArxivPipeline {
         },
       };
     }
+  }
+
+  /**
+   * The entries a committed report implies, for papers the index is missing.
+   * A report block carries no category, so `arxivCategory` falls back to the
+   * configured one and the section heading supplies the topic tag when it
+   * names a configured topic. Fallback blocks keep their original abstract;
+   * structured blocks yield no summary here because the report holds the
+   * generated one, which `setSummaries` projects separately.
+   */
+  private dailyReportIndexInputs(
+    papers: readonly DailyReportPaper[],
+    detailPaths: Readonly<Record<string, string | null>>,
+    dateStr: string,
+  ): PaperIndexUpsert[] {
+    return papers.map((paper) => {
+      const detailPath = detailPaths[paper.id] ?? null;
+      return {
+        arxivId: paper.id,
+        title: paper.title,
+        authors: paper.authors,
+        date: dateStr,
+        published: dateStr,
+        arxivCategory: this.deps.arxiv.category,
+        abstract: paper.fallbackAbstract ?? "",
+        primaryTopic: this.primaryTopicForSection(paper.section),
+        detail: detailPath != null,
+        paperPath: detailPath ?? undefined,
+      };
+    });
+  }
+
+  /** The configured topic tag a report section heading belongs to, or "". */
+  private primaryTopicForSection(section: string | null): string {
+    if (!section) return "";
+    const heading = normalizeMarkdownLine(section);
+    for (const topic of this.deps.arxiv.topics ?? []) {
+      if (normalizeMarkdownLine(topic.name) === heading) return topic.tag;
+    }
+    return "";
   }
 
   private paperIndexInput(

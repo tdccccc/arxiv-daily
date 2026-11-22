@@ -308,6 +308,31 @@ export class PaperIndexStore {
   }
 
   /**
+   * Create entries for the papers a committed daily report holds that the index
+   * does not know yet, leaving every existing entry untouched. A run can stop
+   * between writing the report and committing its index projection; the report
+   * is the durable commit, so repairing it may rebuild those missing entries
+   * from it. Existing entries are never re-upserted, so later user state
+   * (status, priority, manual paths) cannot be overwritten by a repair.
+   */
+  async createMissingDailyPapers(
+    inputs: PaperIndexUpsert[],
+  ): Promise<Array<{ entry: PaperIndexEntry; wasNew: boolean }>> {
+    return this.enqueueMutation(async () => {
+      const inbox = await this.load();
+      let changed = false;
+      const results = inputs.map((input) => {
+        const existing = findEntry(inbox, input.arxivId);
+        if (existing) return { entry: existing, wasNew: false };
+        changed = true;
+        return upsertEntry(inbox, input);
+      });
+      if (changed) await this.saveUnlocked(inbox);
+      return results;
+    });
+  }
+
+  /**
    * The entries `upsertManyFromDailyPapers` would write, computed against the
    * current index without saving. The daily pipeline shows these candidate
    * views to note generation and only commits the real upsert after the report

@@ -1328,6 +1328,62 @@ describe("PaperIndexStore", () => {
     expect(await store.get("2606.00002")).not.toBeNull();
   });
 
+  it("creates only the daily papers the index is missing, preserving existing entries", async () => {
+    const { store } = makeStore();
+    await store.upsertFromDailyPaper({
+      arxivId: "2606.11111", title: "Existing title", authors: "A",
+      date: "2026-06-01", arxivCategory: "astro-ph", primaryTopic: "photo-z", detail: false,
+    });
+    await store.setStatus("2606.11111", "saved");
+    await store.setPriority("2606.11111", "high");
+    await store.setPaperPath("2606.11111", "custom/note.md");
+
+    const results = await store.createMissingDailyPapers([
+      {
+        arxivId: "2606.11111", title: "Report title", authors: "B",
+        date: "2026-06-11", arxivCategory: "astro-ph", primaryTopic: "other", detail: false,
+      },
+      {
+        arxivId: "2606.22222", title: "New paper", authors: "C, D",
+        date: "2026-06-11", published: "2026-06-11", arxivCategory: "astro-ph",
+        primaryTopic: "photo-z", abstract: "Abstract.", detail: true,
+        paperPath: "papers/2606.22222.md",
+      },
+    ]);
+
+    expect(results.map(({ wasNew }) => wasNew)).toEqual([false, true]);
+    // Existing user state and metadata are untouched by a repair.
+    expect(await store.get("2606.11111")).toMatchObject({
+      title: "Existing title",
+      status: "saved",
+      priority: "high",
+      detail: true,
+      paperPath: "custom/note.md",
+      primaryTopic: "photo-z",
+    });
+    expect(await store.get("2606.22222")).toMatchObject({
+      title: "New paper",
+      authors: ["C", "D"],
+      status: "inbox",
+      detail: true,
+      paperPath: "papers/2606.22222.md",
+      abstract: "Abstract.",
+      primaryTopic: "photo-z",
+      dailyReports: [],
+      seenDates: ["2026-06-11"],
+    });
+    // A repeated repair creates nothing new.
+    await expect(
+      store.createMissingDailyPapers([{
+        arxivId: "2606.22222", title: "Ignored", authors: "X",
+        date: "2026-06-12", arxivCategory: "astro-ph", primaryTopic: "photo-z", detail: false,
+      }]),
+    ).resolves.toEqual([
+      expect.objectContaining({ wasNew: false }),
+    ]);
+    expect(await store.get("2606.22222")).toMatchObject({ title: "New paper" });
+  });
+
   it("throws PaperIndexError for malformed JSON", async () => {
     const { store } = makeStore({
       "arxiv-daily/index/papers.json": "{not-json",
