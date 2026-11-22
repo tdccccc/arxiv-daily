@@ -28,7 +28,7 @@ import {
 } from "./src/services/email-delivery";
 import { settingsAndStateFromPersistedData } from "./src/settings/load";
 import { sanitizeDetailSelection, validateSchedulerConfig } from "@arxiv-daily/core";
-import { Logger, throwIfCancelled } from "@arxiv-daily/core";
+import { Logger, throwIfCancelled, RunCancelledError } from "@arxiv-daily/core";
 import { createStorageStateStore, type StateStore } from "@arxiv-daily/core";
 import { RunHistoryStore } from "@arxiv-daily/core";
 import { DAILY_RUN_LOCK_KEY, RunLock } from "@arxiv-daily/core";
@@ -176,6 +176,7 @@ const LIBRARY_MODEL_PREPARATION_REQUIRED = "The embedding model changed. Retry p
 const LIBRARY_SEARCH_PREPARATION_REQUIRED = "The search index is not ready. Retry preparation to finish rebuilding it.";
 const LIBRARY_INDEX_READ_FAILED = "Could not read the library index. Retry preparation to repair it.";
 const LIBRARY_EMBEDDING_CONFIG_INCOMPLETE = "Remote embedding settings are incomplete. Finish the embedding configuration to use the library index.";
+const LIBRARY_PREPARATION_FAILED = "Library preparation failed. Retry preparation to repair or rebuild the index; see logs for details.";
 
 interface PersistedData {
   settings: PluginSettings;
@@ -417,6 +418,8 @@ export default class ArxivDailyPlugin extends Plugin {
   private localEmbeddingModelInstance?: EmbeddingModel;
   /** Per-run preparation progress for the shared local model; index runs set it. */
   private localEmbeddingProgress?: (progress: ModelPreparationProgress) => void;
+  /** Removes the operations subscription installed by `disposeLocalEmbeddingModelWhenIdle`. */
+  private unsubscribeLocalEmbeddingDisposal?: () => void;
 
   getHttpClient(): HttpClient {
     if (!this.host) throw new Error("Obsidian host adapters are not initialized");
@@ -580,11 +583,7 @@ export default class ArxivDailyPlugin extends Plugin {
             this.cancelPersonalLibraryDirectionGeneration("model endpoint changed");
           }
         }
-        if (changedKeys.includes("embedding.mode") && candidate.embedding.mode !== "local") {
-          // Leaving the local mode releases the ONNX session now rather than
-          // keeping it until unload; a later return to local mode rebuilds it.
-          void this.disposeLocalEmbeddingModel();
-        }
+        this.prepareEmbeddingBackendChange(candidate, changedKeys);
         return rollback;
       },
     });
@@ -628,6 +627,10 @@ export default class ArxivDailyPlugin extends Plugin {
     this.operations.close("plugin unloaded");
     this.operations.cancelAll("plugin unloaded");
     this.libraryInventoryController?.abort("plugin unloaded");
+    // Cancellation precedes disposal: the run unwinds and no longer uses the
+    // session by the time it is released.
+    this.unsubscribeLocalEmbeddingDisposal?.();
+    this.unsubscribeLocalEmbeddingDisposal = undefined;
     void this.disposeLocalEmbeddingModel();
     this.unsubscribeOperations?.();
     this.unsubscribeOperations = undefined;
@@ -1636,7 +1639,7 @@ export default class ArxivDailyPlugin extends Plugin {
     if (this.settings.embedding.mode === "remote") {
       // The local model is no longer in use: release its session right away
       // rather than holding ~130 MB until the plugin unloads.
-      if (this.localEmbeddingModelInstance) void this.disposeLocalEmbeddingModel();
+      if (this.localEmbeddingModelInstance) this.disposeLocalEmbeddingModelWhenIdle();
       return createRemoteEmbeddingModel({
         baseUrl: this.settings.embedding.baseUrl,
         apiKey: this.settings.embedding.apiKey,
@@ -1654,6 +1657,82 @@ export default class ArxivDailyPlugin extends Plugin {
     }
     if (options?.onProgress) this.localEmbeddingProgress = options.onProgress;
     return this.localEmbeddingModelInstance;
+  }
+
+  /**
+   * Runtime side effects of an embedding settings change, computed before the
+   * candidate is persisted. A running index captured the mode/endpoint/model
+   * it started with: letting it continue would keep sending library titles
+   * and abstracts to the old endpoint and could publish a manifest that no
+   * longer matches settings. The save itself is not blocked on the run
+   * unwinding — the cancellation is enough.
+   */
+  private prepareEmbeddingBackendChange(
+    candidate: PluginSettings,
+    changedKeys: readonly string[],
+  ): void {
+    const backendKeys = [
+      "embedding.mode",
+      "embedding.baseUrl",
+      "embedding.model",
+      "embedding.dimension",
+      "embedding.apiKey",
+    ];
+    if (changedKeys.some((key) => backendKeys.includes(key))) {
+      this.cancelPersonalLibraryFullTextIndexing("embedding settings changed");
+    }
+    if (changedKeys.includes("embedding.mode") && candidate.embedding.mode !== "local") {
+      // Leaving the local mode releases the ONNX session once no full-text
+      // index run can still be using it; a later return to local mode
+      // rebuilds it.
+      this.disposeLocalEmbeddingModelWhenIdle();
+    }
+  }
+
+  /**
+   * Release the shared local embedding model, but only once no full-text
+   * index run can still be using it. Disposing mid-run would destroy the
+   * extractor under an in-flight embed and make the rest of the run reload a
+   * session nothing would release; a deferred release waits for the last run
+   * to finish.
+   */
+  private disposeLocalEmbeddingModelWhenIdle(): void {
+    const operations = this.operations as SettingsOperationRegistry | undefined;
+    if (!operations) {
+      void this.disposeLocalEmbeddingModel();
+      return;
+    }
+    const runActive = operations.snapshot().some(
+      (operation) => operation.kind === "personal-library-fulltext-index",
+    );
+    if (!runActive) {
+      void this.disposeLocalEmbeddingModel();
+      return;
+    }
+    if (this.unsubscribeLocalEmbeddingDisposal) return;
+    this.unsubscribeLocalEmbeddingDisposal = operations.subscribe((active) => {
+      if (active.some((operation) => operation.kind === "personal-library-fulltext-index")) return;
+      this.unsubscribeLocalEmbeddingDisposal?.();
+      this.unsubscribeLocalEmbeddingDisposal = undefined;
+      void this.disposeLocalEmbeddingModel();
+    });
+  }
+
+  /**
+   * Refuse to publish an index built for embedding settings that have since
+   * changed. Phrased as a cancellation: the work is no longer what the current
+   * settings describe, which is an outcome, not a preparation failure.
+   */
+  private assertEmbeddingSettingsCurrent(
+    mode: "local" | "remote",
+    identity: { modelId: string; dimension: number },
+  ): void {
+    const current = this.expectedEmbeddingModelIdentity();
+    if (this.settings.embedding.mode !== mode
+      || current.modelId !== identity.modelId
+      || current.dimension !== identity.dimension) {
+      throw new RunCancelledError("Embedding settings changed during library indexing");
+    }
   }
 
   private async disposeLocalEmbeddingModel(): Promise<void> {
@@ -1746,6 +1825,11 @@ export default class ArxivDailyPlugin extends Plugin {
       "Personal library full-text index",
       scopeFingerprint,
     );
+    // The run embeds for, and may only publish, the backend it started with.
+    // A settings change mid-run cancels it; hosts where cancellation cannot
+    // reach the run are still stopped by the commit guard below.
+    const startedEmbeddingMode = this.settings.embedding.mode;
+    const startedEmbeddingIdentity = this.expectedEmbeddingModelIdentity();
     const updateProgress = this.operations.snapshot().length === 1;
     if (updateProgress) {
       this.progress?.setTask("Indexing library titles and abstracts", "Extracting and embedding titles and abstracts");
@@ -1876,6 +1960,7 @@ export default class ArxivDailyPlugin extends Plugin {
           throwIfCancelled(operation.signal);
           this.assertLibraryConnectionCurrent(connection, revision);
           this.assertRemoteEmbeddingReady();
+          this.assertEmbeddingSettingsCurrent(startedEmbeddingMode, startedEmbeddingIdentity);
           await legacyMigrationLease?.assertOwned();
         },
         afterManifestCommit: legacyMigrationLease
@@ -1990,7 +2075,11 @@ export default class ArxivDailyPlugin extends Plugin {
       // AbortSignal.throwIfAborted can throw a plain-string reason; normalize
       // it so both UI entry points recognize cancellation as an outcome.
       throwIfCancelled(operation.signal);
-      this.libraryIndexStatus.setPreparationError("Library preparation failed. Retry preparation to repair or rebuild the index; see logs for details.");
+      // A run can also stop itself (embedding settings changed underneath it)
+      // even when the host could not deliver the abort in time. That is still
+      // an outcome, not a preparation failure.
+      if (error instanceof RunCancelledError) throw error;
+      this.libraryIndexStatus.setPreparationError(LIBRARY_PREPARATION_FAILED);
       this.libraryIndexedPapers = [];
       if (updateProgress) {
         this.progress?.setError("Personal library preparation failed");
@@ -2080,9 +2169,15 @@ export default class ArxivDailyPlugin extends Plugin {
       // index: the manifest read succeeded. Say what is actually missing and
       // keep the manifest-derived review metadata; constructing the remote
       // client here used to turn a blank API key into LIBRARY_INDEX_READ_FAILED.
+      // The papers themselves are only current if the manifest belongs to the
+      // model the settings now name: a not-yet-configured remote mode must not
+      // present the old local model's papers as the library's current index.
       if (!validateEmbeddingConfig(this.settings).ok) {
+        const expected = this.expectedEmbeddingModelIdentity();
+        const matchesCurrentIdentity = Object.keys(manifest.papers).length === 0
+          || (manifest.modelId === expected.modelId && manifest.dimension === expected.dimension);
         this.libraryIndexStatus.setPreparationError(LIBRARY_EMBEDDING_CONFIG_INCOMPLETE);
-        this.libraryIndexedPapers = indexedPapers;
+        this.libraryIndexedPapers = matchesCurrentIdentity ? indexedPapers : [];
         return;
       }
       const expected = this.expectedEmbeddingModelIdentity();
@@ -2113,6 +2208,10 @@ export default class ArxivDailyPlugin extends Plugin {
       const previousError = this.libraryIndexStatus.snapshot().preparationError;
       if (previousError === LIBRARY_MODEL_PREPARATION_REQUIRED || previousError === LIBRARY_INDEX_READ_FAILED
         || previousError === LIBRARY_EMBEDDING_CONFIG_INCOMPLETE
+        // A failed run left this behind. Once the manifest and the search
+        // generation verify against the current model, the failure is stale
+        // — otherwise switching back to a healthy index stays blocked forever.
+        || (previousError === LIBRARY_PREPARATION_FAILED && (generationVerified || readyPapers.length === 0))
         || (generationVerified && previousError === LIBRARY_SEARCH_PREPARATION_REQUIRED)) {
         this.libraryIndexStatus.setPreparationError(undefined);
       }
@@ -2908,6 +3007,12 @@ export default class ArxivDailyPlugin extends Plugin {
           if (reloaded.status === "fulfilled") {
             this.libraryProposal = reloaded.value;
             this.libraryProposalLoadError = null;
+            // Which indexed papers count as new is derived from the proposal,
+            // so the count has to follow the revision now on disk rather than
+            // keep describing the stale one.
+            await this.recomputeLibraryNewPaperKeys();
+          } else {
+            this.libraryProposalLoadError = this.safeProfileLoadError("proposal", reloaded.reason);
           }
         }
         throw error;
