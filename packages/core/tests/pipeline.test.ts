@@ -1140,6 +1140,46 @@ describe("ArxivPipeline", () => {
     expect(summary.removeAll).toHaveBeenCalledWith(date);
   });
 
+  it("clears date-scoped checkpoints when the announcement lists no papers", async () => {
+    const d = makeDeps();
+    const date = "2026-06-22";
+    d.fetcher.fetchRecent = vi.fn().mockResolvedValue(
+      `<html><body><dl id="articles"><h3>Mon, 22 Jun 2026</h3></dl></body></html>`,
+    );
+    const filter = {
+      lookupReusable: vi.fn(async () => null),
+      save: vi.fn(async () => undefined),
+      removeAll: vi.fn(async () => undefined),
+    };
+    const summary = {
+      lookupReusable: vi.fn(),
+      upsert: vi.fn(),
+      removeAll: vi.fn(async () => undefined),
+    };
+    const pipeline = new ArxivPipeline({
+      markupParser,
+      fetcher: d.fetcher as any,
+      paperFetcher: d.paperFetcher as any,
+      writer: d.writer as any,
+      checkpointStores: { filter, summary },
+      llm: d.llm as any,
+      logger: d.logger,
+      arxiv: testArxiv,
+      advanced: DEFAULT_SETTINGS.advanced,
+      output: DEFAULT_SETTINGS.output,
+      llmSettings: DEFAULT_SETTINGS.llm,
+      detailSelection: testDetailSelection,
+    });
+
+    expect(await pipeline.runForDate(date)).toEqual({
+      kind: "completed",
+      papersWritten: 0,
+      outcome: "no_updates",
+    });
+    expect(filter.removeAll).toHaveBeenCalledWith(date);
+    expect(summary.removeAll).toHaveBeenCalledWith(date);
+  });
+
   it("repairs daily-report links and summaries when a daily file already exists", async () => {
     const d = makeDeps();
     const id = "2607.00001";

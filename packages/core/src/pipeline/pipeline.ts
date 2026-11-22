@@ -304,6 +304,9 @@ export class ArxivPipeline {
     // 3. Empty day
     if (sourcePapers.length === 0) {
       throwIfCancelled(signal);
+      // A completed empty day will not run again on its own; checkpoints from
+      // earlier attempts are dead state and must not linger in .index.
+      await this.cleanupCommittedCheckpoints(dateStr);
       // A successfully fetched empty announcement is terminal, not unpublished.
       return { kind: "completed", papersWritten: 0, outcome: "no_updates" };
     }
