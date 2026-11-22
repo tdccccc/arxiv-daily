@@ -1660,14 +1660,30 @@ export default class ArxivDailyPlugin extends Plugin {
 
   /**
    * Runtime side effects of an embedding settings change, computed before the
-   * candidate is persisted. Leaving the local mode releases the ONNX session
-   * once no full-text index run can still be using it.
+   * candidate is persisted. A running index captured the mode/endpoint/model
+   * it started with: letting it continue would keep sending library titles
+   * and abstracts to the old endpoint and could publish a manifest that no
+   * longer matches settings. The save itself is not blocked on the run
+   * unwinding — the cancellation is enough.
    */
   private prepareEmbeddingBackendChange(
     candidate: PluginSettings,
     changedKeys: readonly string[],
   ): void {
+    const backendKeys = [
+      "embedding.mode",
+      "embedding.baseUrl",
+      "embedding.model",
+      "embedding.dimension",
+      "embedding.apiKey",
+    ];
+    if (changedKeys.some((key) => backendKeys.includes(key))) {
+      this.cancelPersonalLibraryFullTextIndexing("embedding settings changed");
+    }
     if (changedKeys.includes("embedding.mode") && candidate.embedding.mode !== "local") {
+      // Leaving the local mode releases the ONNX session once no full-text
+      // index run can still be using it; a later return to local mode
+      // rebuilds it.
       this.disposeLocalEmbeddingModelWhenIdle();
     }
   }
