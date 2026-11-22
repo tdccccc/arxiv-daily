@@ -745,6 +745,12 @@ export default class ArxivDailyPlugin extends Plugin {
     const revoked = revokeLibraryConnection(previous);
     this.beginLibraryMutation();
     this.cancelPersonalLibraryDirectionGeneration("library processing authorization revoked");
+    // Remote full-text indexing sends titles and abstracts to the embedding
+    // endpoint, so revocation must stop that run synchronously too (ADR 0008);
+    // local indexing is offline and keeps its own lifecycle.
+    if (this.settings.embedding.mode === "remote") {
+      this.cancelPersonalLibraryFullTextIndexing("library processing authorization revoked");
+    }
     // Consent becomes ineffective synchronously at invocation, before waiting for
     // an earlier library mutation to finish.
     this.libraryConnection = revoked;
@@ -1804,9 +1810,15 @@ export default class ArxivDailyPlugin extends Plugin {
         embedding,
         store,
         logger: this.logger,
-        beforeManifestCommit: legacyMigrationLease
-          ? () => legacyMigrationLease!.assertOwned()
-          : undefined,
+        // The run started under the authorization that was current then. A
+        // revocation (or a folder/output change) that landed while the last
+        // papers were embedding must not be published as a committed index.
+        beforeManifestCommit: async () => {
+          throwIfCancelled(operation.signal);
+          this.assertLibraryConnectionCurrent(connection, revision);
+          this.assertRemoteEmbeddingReady();
+          await legacyMigrationLease?.assertOwned();
+        },
         afterManifestCommit: legacyMigrationLease
           ? () => legacyMigrationLease!.assertOwned()
           : undefined,
@@ -2892,6 +2904,10 @@ export default class ArxivDailyPlugin extends Plugin {
 
   private cancelPersonalLibraryDirectionGeneration(reason: string): void {
     this.cancelPersonalLibraryOperationKinds(reason, ["personal-library-direction-generation"]);
+  }
+
+  private cancelPersonalLibraryFullTextIndexing(reason: string): void {
+    this.cancelPersonalLibraryOperationKinds(reason, ["personal-library-fulltext-index"]);
   }
 
 
