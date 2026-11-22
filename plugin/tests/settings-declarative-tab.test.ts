@@ -1027,6 +1027,16 @@ describe("declarative embedding rows delegate the consent flow", () => {
     expect(select.value).toBe("local");
   });
 
+  it("re-evaluates the library index when only the embedding API key changes", async () => {
+    const { tab, settings, plugin } = makeTab();
+    settings.embedding.apiKey = "";
+
+    await tab.changeSettingValue("embedding.apiKey", "sk-new-key");
+
+    expect(settings.embedding.apiKey).toBe("sk-new-key");
+    expect(plugin.refreshLibraryIndexTrace).toHaveBeenCalledTimes(1);
+  });
+
   it("labels the local option honestly about the one-time model download, not as always-offline", () => {
     const { tab } = makeTab();
     const setting = renderSetting();

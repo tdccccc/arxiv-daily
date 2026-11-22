@@ -364,7 +364,7 @@ export class ArxivDailySettingTab extends PluginSettingTab {
   }
 
   private async refreshLibraryAfterEmbeddingChange(keys: readonly string[]): Promise<void> {
-    if (keys.some((key) => ["embedding.mode", "embedding.baseUrl", "embedding.model", "embedding.dimension"].includes(key))) {
+    if (keys.some((key) => ["embedding.mode", "embedding.baseUrl", "embedding.apiKey", "embedding.model", "embedding.dimension"].includes(key))) {
       await this.plugin.refreshLibraryIndexTrace();
     }
   }
