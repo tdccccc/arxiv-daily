@@ -26,6 +26,34 @@ describe("direction matching preview", () => {
     expect(JSON.stringify(papers)).toBe(before);
   });
 
+  it("accepts a single surrounding json code fence", async () => {
+    const result = await previewPersonalLibraryDirection({
+      text: "Research agents", papers, categories: ["cs.LG"],
+      llm: { call: async () => "```json\n" + JSON.stringify({ papers: [
+        { id: "sample-1", category: "preview", directions: ["preview#1"], relevanceScore: 90 },
+      ] }) + "\n```" },
+    });
+    expect(result.papers[0]!.matched).toBe(true);
+  });
+
+  it("asks once more when the first answer violates the format", async () => {
+    const calls: string[] = [];
+    const result = await previewPersonalLibraryDirection({
+      text: "Research agents", papers, categories: ["cs.LG"],
+      llm: { call: async (messages) => {
+        calls.push(messages[messages.length - 1]!.content);
+        return calls.length === 1
+          ? "not json"
+          : JSON.stringify({ papers: [
+            { id: "sample-1", category: "preview", directions: ["preview#1"], relevanceScore: 90 },
+          ] });
+      } },
+    });
+    expect(calls).toHaveLength(2);
+    expect(calls[1]).toContain("上一次回复未通过校验");
+    expect(result.papers[0]!.matched).toBe(true);
+  });
+
   it("rejects invented response identities", async () => {
     await expect(previewPersonalLibraryDirection({ text: "Research agents", papers, categories: ["cs.LG"],
       llm: { call: async () => JSON.stringify({ papers: [{ id: "invented", category: "preview", directions: ["preview#1"], relevanceScore: 90 }] }) },

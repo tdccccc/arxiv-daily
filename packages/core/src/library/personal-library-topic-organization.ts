@@ -1,3 +1,4 @@
+import { unwrapSingleCodeFence } from "../pipeline/paper-filter";
 import {
   PERSONAL_LIBRARY_MAX_CLUSTER_MEMBERS,
   PERSONAL_LIBRARY_MAX_DESCRIPTION_LENGTH,
@@ -73,7 +74,7 @@ export function decodeOrganizedTopics(
   | { ok: false; reason: OrganizationValidationReason } {
   let value: unknown;
   try {
-    value = JSON.parse(raw);
+    value = JSON.parse(unwrapSingleCodeFence(raw));
   } catch {
     return { ok: false, reason: "not-json" };
   }
