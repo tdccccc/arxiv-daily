@@ -20,6 +20,7 @@ import {
   type DashboardRow,
   type DashboardSortDirection,
   type DashboardSortKey,
+  type DashboardTab,
 } from "@arxiv-daily/core";
 import { syncDashboardHistory, type DashboardMarkdownFile } from "@arxiv-daily/core";
 import {
@@ -746,8 +747,7 @@ class ArxivDailyDashboardView extends ItemView {
       });
       const actions = this.createEmptyActions(state);
       this.createEmptyActionButton(actions, "list", "Show All", () => {
-        this.query = { ...this.query, tab: "all" };
-        this.renderCurrentResults();
+        this.switchTab("all");
       });
       return;
     }
@@ -894,11 +894,7 @@ class ArxivDailyDashboardView extends ItemView {
         text: String(result.tabCounts[tab.id]),
       });
       button.addEventListener("click", () => {
-        this.query = { ...this.query, tab: tab.id };
-        this.currentPage = 0;
-        this.updateTabButtonState(tabs);
-        this.updateToolbarFilterCounts(tabs);
-        this.renderCurrentResults();
+        this.switchTab(tab.id);
       });
     }
     this.renderToolbarFilter(
@@ -961,6 +957,24 @@ class ArxivDailyDashboardView extends ItemView {
       (_button, evt) => this.showMoreMenu(evt),
     );
     this.createSettingsButton(actions);
+  }
+
+  /**
+   * Single tab-switch path for the toolbar and empty-state shortcuts: resets
+   * paging, keeps the tab aria/active state and toolbar filter counts in sync,
+   * then repaints the results.
+   */
+  private switchTab(tab: DashboardTab, tabs?: HTMLElement): void {
+    this.query = { ...this.query, tab };
+    this.currentPage = 0;
+    const tabBar = tabs ?? this.contentEl.querySelector<HTMLElement>(
+      ".arxiv-daily-dashboard__tabs",
+    );
+    if (tabBar) {
+      this.updateTabButtonState(tabBar);
+      this.updateToolbarFilterCounts(tabBar);
+    }
+    this.renderCurrentResults();
   }
 
   private updateTabButtonState(tabs: HTMLElement): void {
@@ -2398,6 +2412,11 @@ class ArxivDailyDashboardView extends ItemView {
   private buildLibrarySimilarOption(
     entry: DashboardRow["entry"],
   ): SimilarPapersModalOptions["library"] | undefined {
+    // The personal library is optional; without a connection the modal must
+    // default to Daily similar instead of opening a tab that always errors.
+    if (this.plugin.getLibraryConnectionStatus().kind === "disconnected") {
+      return undefined;
+    }
     const abstract = entry.abstract?.trim() ?? "";
     const query = abstract ? `${entry.title}\n\n${abstract}` : entry.title;
     if (!query.trim()) return undefined;
@@ -2432,7 +2451,8 @@ class ArxivDailyDashboardView extends ItemView {
    * is remembered per query and index revision, so the re-renders that follow
    * starring, batch actions or a reload repaint it without embedding the query
    * again; a staleness token drops responses from superseded queries. Failures
-   * (model errors) degrade to an inline message and never affect row filtering.
+   * (model errors) degrade to an inline message and never affect row filtering;
+   * they are not cached, so the next repaint (e.g. Refresh) retries them.
    *
    * A search is shared by every render of the same key and is cancelled only
    * when it is superseded (a different query, index or mode, or a query that no
@@ -2496,7 +2516,10 @@ class ArxivDailyDashboardView extends ItemView {
         if (controller.signal.aborted) return null;
         if (this.librarySearchPending?.controller === controller) {
           this.librarySearchPending = null;
-          this.librarySearchCache = { key, state };
+          // A transient failure (offline, embedding API 503) must stay
+          // retryable: caching it would pin the error until the query text or
+          // index changes. Successful and empty outcomes are safe to reuse.
+          if (state.kind !== "error") this.librarySearchCache = { key, state };
         }
         return state;
       });

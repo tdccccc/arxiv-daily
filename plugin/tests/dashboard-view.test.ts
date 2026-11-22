@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeAll, describe, expect, it, vi } from "vitest";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import {
@@ -18,6 +18,7 @@ import {
   openMarkdownFileOnce,
   paginateDashboardRows,
   refreshOpenDashboardViews,
+  registerDashboardView,
   shouldForceDashboardHistorySyncAfterDetailDeletion,
   shouldSkipDashboardHistorySync,
   trashFileWithUserPreference,
@@ -1150,5 +1151,145 @@ describe("bindSearchClearButton", () => {
     const button = document.createElement("button");
     bindSearchClearButton(input, button, vi.fn());
     expect(button.hidden).toBe(true);
+  });
+});
+
+type CreateOptions = {
+  cls?: string;
+  text?: string;
+  type?: string;
+  value?: string;
+  attr?: Record<string, string>;
+};
+
+beforeAll(() => {
+  const proto = HTMLElement.prototype as HTMLElement & {
+    createEl?: (tag: string, options?: CreateOptions) => HTMLElement;
+    createDiv?: (options?: CreateOptions) => HTMLElement;
+    createSpan?: (options?: CreateOptions) => HTMLElement;
+    toggleClass?: (className: string, force?: boolean) => void;
+    empty?: () => void;
+    setText?: (text: string) => void;
+  };
+  proto.empty ??= function () { this.replaceChildren(); };
+  proto.setText ??= function (text) { this.textContent = text; };
+  proto.toggleClass ??= function (className, force) {
+    this.classList.toggle(className, force);
+  };
+  proto.createEl ??= function (tag, options = {}) {
+    const element = document.createElement(tag);
+    if (options.cls) element.className = options.cls;
+    if (options.text) element.textContent = options.text;
+    if (options.type) element.setAttribute("type", options.type);
+    if (options.value !== undefined) {
+      (element as HTMLInputElement | HTMLOptionElement).value = options.value;
+    }
+    for (const [key, value] of Object.entries(options.attr ?? {})) {
+      element.setAttribute(key, value);
+    }
+    this.appendChild(element);
+    return element;
+  };
+  proto.createDiv ??= function (options = {}) {
+    return this.createEl("div", options);
+  };
+  proto.createSpan ??= function (options = {}) {
+    return this.createEl("span", options);
+  };
+});
+
+function makeView(overrides: {
+  connection?: "disconnected" | "authorized";
+  search?: ReturnType<typeof vi.fn>;
+} = {}) {
+  let create: ((leaf: unknown) => unknown) | undefined;
+  const plugin = {
+    app: { vault: { adapter: {} }, workspace: {} },
+    registerView: (type: string, creator: (leaf: unknown) => unknown) => {
+      if (type === ARXIV_DAILY_DASHBOARD_VIEW) create = creator;
+    },
+    settings: structuredClone(DEFAULT_SETTINGS),
+    logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+    getLibraryConnectionStatus: () => ({
+      kind: overrides.connection ?? "disconnected",
+    }),
+    searchPersonalLibraryFullText: overrides.search ?? vi.fn(),
+  };
+  registerDashboardView(plugin as never);
+  return create!({}) as any;
+}
+
+describe("dashboard similar-papers library option", () => {
+  const entry = {
+    arxivId: "2606.00001",
+    title: "A paper",
+    abstract: "An abstract.",
+  } as never;
+
+  it("is omitted while the personal library is disconnected", () => {
+    const search = vi.fn();
+    const view = makeView({ connection: "disconnected", search });
+
+    expect(view.buildLibrarySimilarOption(entry)).toBeUndefined();
+    expect(search).not.toHaveBeenCalled();
+  });
+
+  it("queries with title and abstract once a library is connected", () => {
+    const view = makeView({ connection: "authorized" });
+
+    const library = view.buildLibrarySimilarOption(entry);
+
+    expect(library).toBeDefined();
+    expect(library.query).toBe("A paper\n\nAn abstract.");
+  });
+});
+
+describe("dashboard Starred empty-state Show All", () => {
+  function tabBar() {
+    const tabs = document.createElement("div");
+    tabs.className = "arxiv-daily-dashboard__tabs";
+    const starred = document.createElement("button");
+    starred.className = "arxiv-daily-dashboard__tab";
+    starred.setAttribute("data-tab", "starred");
+    starred.setAttribute("aria-pressed", "true");
+    starred.classList.add("is-active");
+    const all = document.createElement("button");
+    all.className = "arxiv-daily-dashboard__tab";
+    all.setAttribute("data-tab", "all");
+    all.setAttribute("aria-pressed", "false");
+    tabs.append(starred, all);
+    return { tabs, starred, all };
+  }
+
+  it("switches tabs, resets paging and repaints through the shared tab path", () => {
+    const view = makeView();
+    const { tabs, starred, all } = tabBar();
+    view.contentEl = document.createElement("div");
+    view.contentEl.appendChild(tabs);
+    view.entries = [{ arxivId: "2606.00001" }];
+    view.query = { tab: "starred" };
+    view.currentPage = 3;
+    const renderCurrentResults = vi
+      .spyOn(view, "renderCurrentResults")
+      .mockImplementation(() => {});
+
+    const state = document.createElement("div");
+    view.renderEmptyState(state, {
+      rows: [],
+      stats: { total: 1, weekAdded: 1, starred: 0, details: 0 },
+      tabCounts: { all: 1, starred: 0 },
+    });
+    const showAll = Array.from(state.querySelectorAll("button"))
+      .find((button) => button.textContent?.includes("Show All"));
+    expect(showAll).toBeDefined();
+    showAll!.click();
+
+    expect(view.query.tab).toBe("all");
+    expect(view.currentPage).toBe(0);
+    expect(all.getAttribute("aria-pressed")).toBe("true");
+    expect(all.classList.contains("is-active")).toBe(true);
+    expect(starred.getAttribute("aria-pressed")).toBe("false");
+    expect(starred.classList.contains("is-active")).toBe(false);
+    expect(renderCurrentResults).toHaveBeenCalledTimes(1);
   });
 });
