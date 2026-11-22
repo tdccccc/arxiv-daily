@@ -1265,12 +1265,13 @@ describe("declarative LLM and category rows", () => {
     expect(saveSettings).toHaveBeenCalledTimes(2);
   });
 
-  it("renders each category as a fixed dropdown without custom input", () => {
+  it("renders each category as a preset dropdown plus a custom input", () => {
     const { tab } = makeTab();
     const setting = renderSetting();
     renderCategoryRow(tab, setting as never, 0);
     expect(setting.controlEl.querySelector("select")).not.toBeNull();
-    expect(setting.controlEl.querySelector("input")).toBeNull();
+    const input = setting.controlEl.querySelector("input");
+    expect(input?.placeholder).toBe("Or enter custom category");
   });
 
   it("integrates hosted verification into the email row", async () => {
@@ -2056,6 +2057,44 @@ describe("topic and category saves that fail", () => {
 });
 
 describe("category rows", () => {
+  it("adds a valid non-preset subcategory from the custom input", async () => {
+    const { tab, settings, saveSettings } = makeTab();
+    vi.spyOn(tab, "refreshSettings").mockImplementation(() => {});
+    const setting = new Setting(tab.containerEl);
+    renderCategoryRow(tab, setting, 0);
+    const input = setting.controlEl.querySelector("input")!;
+
+    input.value = "astro-ph.CO";
+    input.dispatchEvent(new Event("change"));
+
+    await vi.waitFor(() => expect(settings.arxiv.categories).toEqual(["astro-ph.CO"]));
+    expect(settings.arxiv.category).toBe("astro-ph.CO");
+    expect(saveSettings).toHaveBeenCalledWith(expect.objectContaining({
+      arxiv: expect.objectContaining({ categories: ["astro-ph.CO"] }),
+    }));
+  });
+
+  it("refuses a custom category another row already has instead of dropping a row", async () => {
+    const { Notice } = await import("obsidian");
+    const notices = (Notice as unknown as { calls: Array<{ message: string }> }).calls;
+    notices.length = 0;
+    const { tab, settings, saveSettings } = makeTab();
+    settings.arxiv.categories = ["astro-ph", "gr-qc"];
+    const refresh = vi.spyOn(tab, "refreshSettings").mockImplementation(() => {});
+    const setting = new Setting(tab.containerEl);
+    renderCategoryRow(tab, setting, 1);
+    const input = setting.controlEl.querySelector("input")!;
+
+    input.value = "astro-ph";
+    input.dispatchEvent(new Event("change"));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(settings.arxiv.categories).toEqual(["astro-ph", "gr-qc"]);
+    expect(notices.map((call) => call.message).join("\n")).toMatch(/already/i);
+    expect(saveSettings).not.toHaveBeenCalled();
+    expect(refresh).not.toHaveBeenCalled();
+  });
+
   it("refuses a category another row already has instead of dropping a row", async () => {
     const { Notice } = await import("obsidian");
     const notices = (Notice as unknown as { calls: Array<{ message: string }> }).calls;

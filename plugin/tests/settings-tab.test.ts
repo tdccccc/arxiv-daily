@@ -569,35 +569,17 @@ describe("legacy text fields act when editing ends", () => {
     expect(save).toHaveBeenCalledWith(key, typed);
   });
 
-  it("moves both sidecar URLs on change and not while typing", async () => {
+  it("never renders the retired sidecar controls, even when the setting is enabled", () => {
     const { tab, settings } = makeLegacyApiKeyTab(vi.fn().mockResolvedValue(undefined));
     settings.pdfParserSidecar.enabled = true;
+
     const rows = renderLegacySettings(tab);
-    const input = componentOf(
-      rows.get("Sidecar capability URL"),
-      TextComponent as never,
-    ) as TextComponent;
-    input.inputEl.value = "";
 
-    typeInto(input.inputEl, "http://127.0.0.1:5002/v1/capabilities");
-    expect(settings.pdfParserSidecar.capabilitiesUrl).toBe(
-      DEFAULT_SETTINGS.pdfParserSidecar.capabilitiesUrl,
-    );
-
-    input.inputEl.dispatchEvent(new Event("change"));
-    await vi.waitFor(() =>
-      expect(settings.pdfParserSidecar.parseUrl).toBe("http://127.0.0.1:5002/v1/parse"));
-  });
-
-  it("restores the sidecar toggle and reports when enabling is rejected", async () => {
-    const { tab, settings } = makeLegacyApiKeyTab(vi.fn().mockRejectedValue(new Error("disk full")));
-    const rows = renderLegacySettings(tab);
-    const toggle = componentOf(rows.get("Better PDF parser"), ToggleComponent as never) as ToggleComponent;
-
-    await expect(toggle.trigger(true)).resolves.toBeUndefined();
-
-    expect(settings.pdfParserSidecar.enabled).toBe(false);
-    expect(toggle.value).toBe(false);
+    expect(rows.has("Better PDF parser")).toBe(false);
+    expect(rows.has("Sidecar capability URL")).toBe(false);
+    expect(rows.has("Sidecar parse URL")).toBe(false);
+    expect(tab.containerEl.textContent).not.toContain("Better PDF parser");
+    expect(tab.containerEl.textContent).not.toContain("Sidecar");
   });
 });
 

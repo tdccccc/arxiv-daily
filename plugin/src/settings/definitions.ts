@@ -216,6 +216,10 @@ export function buildSettingDefinitions(
       }
       else business.push({ type: 'list', heading: section.heading, cls: settingsSectionClass('topics'),
         emptyState: section.emptyState, items: topics.map((topic,index)=>({name:topic.name.trim()||'(unnamed)',render:(setting:Setting)=>host.renderTopicRow?.(setting,index)})),
+        // Intentional legacy-only feature: the <1.13 "Quick start" template
+        // dropdown is not ported. Templates only prefill topic cards, which
+        // this list's Add topic action already edits directly; keep this note
+        // in sync with the legacy comment in tab.ts.
         addItem:{name:section.addItemName,action:()=>void host.addTopic?.()} });
     } else {
       if (section.id === 'library' && !host.renderLibraryConnectionRow) continue;

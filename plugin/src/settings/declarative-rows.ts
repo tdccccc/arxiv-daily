@@ -323,6 +323,31 @@ export function renderCategoryRow(
       tab.refreshSettings();
     });
   });
+  // Subcategories outside the preset list (e.g. a narrow arXiv subfield) can
+  // still be entered directly, mirroring the legacy settings row.
+  const custom = setting.controlEl.createEl("input", {
+    type: "text",
+    attr: { placeholder: "Or enter custom category" },
+  });
+  custom.addEventListener("change", () => {
+    const next = custom.value.trim();
+    if (!next || next === current) return;
+    if (categories.some((category, other) => other !== index && category === next)) {
+      new Notice(`arXiv Daily: ${next} is already in the list.`);
+      custom.value = "";
+      return;
+    }
+    void tab.runAction("save category", async () => {
+      if (isDraft) {
+        await tab.saveCategoryDraft(next);
+      } else {
+        const values = [...categories];
+        values[index] = next;
+        await tab.setArxivCategories(values);
+      }
+      tab.refreshSettings();
+    });
+  });
 }
 
 /** One research topic: the shared expandable topic card. */
