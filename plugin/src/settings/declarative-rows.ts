@@ -84,12 +84,24 @@ export function renderLlmBaseUrlRow(
   };
   refreshWarning();
   input.addEventListener("input", refreshWarning);
-  input.addEventListener("change", () => {
+
+  // Coalesce change-triggered commits with the flush "Get models" performs:
+  // a click right after typing often lands while the change save is still
+  // persisting, and reading `settings.llm.baseUrl` then returns the old URL.
+  let savedValue = input.value;
+  let saveQueue = Promise.resolve();
+  let latestSave: { value: string; promise: Promise<void> } | undefined;
+  const saveBaseUrl = (): Promise<void> => {
     const next = input.value.trim();
+    // A pending edit can still change the durable value. Returning to the
+    // saved value must queue behind it, not silently cancel the edit.
+    if (!latestSave && next === savedValue) return Promise.resolve();
+    if (latestSave?.value === next) return latestSave.promise;
     const revision = tab.beginControlChange(input);
-    tab.runAction("save API base URL", async () => {
+    const operation = saveQueue.then(async () => {
       try {
         await tab.changeSettingValue("llm.baseUrl", next);
+        savedValue = next;
         if (tab.isCurrentControlChange(input, revision)) input.value = next;
         tab.refreshDeclarativeSetupGuide();
       } catch (error) {
@@ -99,18 +111,27 @@ export function renderLlmBaseUrlRow(
         throw error;
       }
     });
-  });
+    let tracked: Promise<void>;
+    tracked = operation.finally(() => {
+      if (latestSave?.promise === tracked) latestSave = undefined;
+    });
+    latestSave = { value: next, promise: tracked };
+    saveQueue = tracked.catch(() => undefined);
+    return tracked;
+  };
+  input.addEventListener("change", () => tab.runAction("save API base URL", saveBaseUrl));
+  tab.registerDraftSave("llm.baseUrl", saveBaseUrl);
 }
 
 export function renderApiKeyRow(tab: ArxivDailySettingTab, setting: Setting): void {
   prepareRow(setting);
-  renderSensitiveInput(tab, setting, {
+  tab.registerDraftSave("llm.apiKey", renderSensitiveInput(tab, setting, {
     value: tab.plugin.settings.llm.apiKey,
     placeholder: "Enter API key",
     ariaLabel: "LLM API key",
     save: (next) => tab.changeSettingValue("llm.apiKey", next),
     onCommitted: () => tab.refreshDeclarativeSetupGuide(),
-  });
+  }));
 }
 
 export function renderReasoningEffortRow(
@@ -231,13 +252,19 @@ export function renderModelRow(tab: ArxivDailySettingTab, setting: Setting): voi
     void (async () => {
     button.textContent = "Fetching…";
     button.disabled = true;
-    // Snapshot the endpoint when the request starts, not when the row was
-    // rendered: editing the API key or base URL does not re-render this row,
-    // and that edit is exactly how a first-time setup reaches this button.
-    // The snapshot still rejects a result if the endpoint changes while the
-    // fetch is in flight.
-    const requestCacheKey = modelFetchCacheKey(tab.plugin.settings.llm);
     try {
+      // Both endpoint fields commit asynchronously on blur/change. Clicking
+      // here immediately after typing would otherwise read the previous
+      // stored values — and then discard the fetch result when that save
+      // lands. Await the pending drafts before snapshotting the endpoint.
+      await tab.flushDraftSave("llm.apiKey");
+      await tab.flushDraftSave("llm.baseUrl");
+      // Snapshot the endpoint when the request starts, not when the row was
+      // rendered: editing the API key or base URL does not re-render this row,
+      // and that edit is exactly how a first-time setup reaches this button.
+      // The snapshot still rejects a result if the endpoint changes while the
+      // fetch is in flight.
+      const requestCacheKey = modelFetchCacheKey(tab.plugin.settings.llm);
       const client = new LlmClient(
         tab.plugin.settings.llm,
         tab.plugin.logger,
@@ -943,75 +970,6 @@ export function renderEmbeddingDimensionRow(
         if (tab.isCurrentControlChange(input, revision)) {
           input.value = String(tab.restoreCurrentControlValue(error, "embedding.dimension"));
           validate();
-        }
-        throw error;
-      }
-    });
-  });
-}
-
-export function renderPdfParserSidecarEnabledRow(
-  tab: ArxivDailySettingTab,
-  setting: Setting,
-): void {
-  prepareRow(setting);
-  new ToggleComponent(setting.controlEl)
-    .setValue(tab.plugin.settings.pdfParserSidecar.enabled)
-    .onChange((enabled) => {
-      tab.runAction("save local parser sidecar", async () => {
-        await tab.changeSettingValue("pdfParserSidecar.enabled", enabled);
-        tab.refreshSettings();
-      });
-    });
-}
-
-export function renderPdfParserSidecarCapabilitiesUrlRow(
-  tab: ArxivDailySettingTab,
-  setting: Setting,
-): void {
-  renderPdfParserSidecarUrlRow(
-    tab,
-    setting,
-    "pdfParserSidecar.capabilitiesUrl",
-    "HTTP://127.0.0.1:5001/v1/capabilities",
-  );
-}
-
-export function renderPdfParserSidecarParseUrlRow(
-  tab: ArxivDailySettingTab,
-  setting: Setting,
-): void {
-  renderPdfParserSidecarUrlRow(
-    tab,
-    setting,
-    "pdfParserSidecar.parseUrl",
-    "HTTP://127.0.0.1:5001/v1/parse",
-  );
-}
-
-function renderPdfParserSidecarUrlRow(
-  tab: ArxivDailySettingTab,
-  setting: Setting,
-  key: "pdfParserSidecar.capabilitiesUrl" | "pdfParserSidecar.parseUrl",
-  placeholder: string,
-): void {
-  prepareRow(setting);
-  const input = setting.controlEl.createEl("input", { type: "url", attr: { placeholder } });
-  input.value = key === "pdfParserSidecar.capabilitiesUrl"
-    ? tab.plugin.settings.pdfParserSidecar.capabilitiesUrl
-    : tab.plugin.settings.pdfParserSidecar.parseUrl;
-  input.addEventListener("change", () => {
-    const next = input.value.trim();
-    const revision = tab.beginControlChange(input);
-    tab.runAction("save local parser sidecar URL", async () => {
-      try {
-        const changes = tab.sidecarUrlChanges(key, next);
-        await tab.changeSettingValues(changes);
-        if (tab.isCurrentControlChange(input, revision)) input.value = next;
-        if (changes.length > 1) tab.refreshSettings();
-      } catch (error) {
-        if (tab.isCurrentControlChange(input, revision)) {
-          input.value = tab.restoreCurrentStringControlValue(error, key);
         }
         throw error;
       }

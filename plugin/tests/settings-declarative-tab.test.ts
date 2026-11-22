@@ -33,7 +33,6 @@ import {
   renderLibraryDirectionsRow,
   renderLlmBaseUrlRow,
   renderModelRow,
-  renderPdfParserSidecarCapabilitiesUrlRow,
   renderReasoningEffortRow,
   renderRunWindowRow,
   renderLibraryGuideRow,
@@ -2388,6 +2387,64 @@ describe("model field", () => {
     fetchModels.mockRestore();
   });
 
+  it("flushes a just-typed API key and base URL before fetching models", async () => {
+    const { tab, plugin, settings, saveSettings } = makeTab();
+    (plugin as unknown as { getHttpClient: () => unknown }).getHttpClient = () => ({});
+    const keySave = deferred();
+    const urlSave = deferred();
+    saveSettings
+      .mockImplementationOnce(() => keySave.promise)
+      .mockImplementationOnce(() => urlSave.promise);
+    vi.spyOn(tab, "refreshDeclarativeSetupGuide").mockImplementation(() => {});
+    const keySetting = new Setting(tab.containerEl);
+    renderApiKeyRow(tab, keySetting);
+    const urlSetting = new Setting(tab.containerEl);
+    renderLlmBaseUrlRow(tab, urlSetting);
+    const modelSetting = new Setting(tab.containerEl);
+    renderModelRow(tab, modelSetting);
+    const keyInput = keySetting.controlEl.querySelector<HTMLInputElement>("input")!;
+    const urlInput = urlSetting.controlEl.querySelector<HTMLInputElement>("input")!;
+    const fetchedWith: Array<{ apiKey: string; baseUrl: string }> = [];
+    const fetchModels = vi.spyOn(LlmClient.prototype, "fetchModels").mockImplementation(async () => {
+      fetchedWith.push({
+        apiKey: settings.llm.apiKey,
+        baseUrl: settings.llm.baseUrl,
+      });
+      return ["provider-a"];
+    });
+
+    // The blur save is still persisting and the change save is queued behind
+    // it; a click before either finishes must wait for both, then fetch with
+    // exactly what the inputs show.
+    keyInput.value = "fresh-key";
+    keyInput.dispatchEvent(new Event("input"));
+    keyInput.dispatchEvent(new Event("blur"));
+    urlInput.value = "https://fresh.example.com/v1";
+    urlInput.dispatchEvent(new Event("change"));
+    const button = Array.from(modelSetting.controlEl.querySelectorAll("button"))
+      .find((candidate) => candidate.textContent === "Get models")!;
+    button.click();
+
+    await vi.waitFor(() => expect(saveSettings).toHaveBeenCalledTimes(1));
+    expect(fetchModels).not.toHaveBeenCalled();
+    keySave.resolve();
+    await vi.waitFor(() => expect(saveSettings).toHaveBeenCalledTimes(2));
+    expect(fetchModels).not.toHaveBeenCalled();
+    urlSave.resolve();
+
+    const suggest = tab.getModelInputSuggest()!;
+    await vi.waitFor(() => expect(suggest.hasModels()).toBe(true));
+    expect(fetchedWith).toEqual([{
+      apiKey: "fresh-key",
+      baseUrl: "https://fresh.example.com/v1",
+    }]);
+    expect(suggest.previewSuggestions("")).toEqual(["provider-a"]);
+    expect(tab.getFetchedModelOptions(
+      [settings.llm.provider, "https://fresh.example.com/v1", "fresh-key"].join("\u0000"),
+    )).toEqual(["provider-a"]);
+    fetchModels.mockRestore();
+  });
+
   it("discards a fetch whose endpoint changes while the request is in flight", async () => {
     const { tab, plugin, settings } = makeTab();
     (plugin as unknown as { getHttpClient: () => unknown }).getHttpClient = () => ({});
@@ -2486,26 +2543,6 @@ describe("model field", () => {
 
     expect(closeSpy).toHaveBeenCalledTimes(1);
     expect(tab.getModelInputSuggest()).not.toBe(first);
-  });
-});
-
-describe("local parser sidecar address", () => {
-  it("moves both endpoints when one moves to another port", async () => {
-    const { tab, settings } = makeTab();
-    settings.pdfParserSidecar.enabled = true;
-    const setting = new Setting(tab.containerEl);
-    renderPdfParserSidecarCapabilitiesUrlRow(tab, setting);
-    const input = setting.controlEl.querySelector("input")!;
-
-    input.value = "http://127.0.0.1:5002/v1/capabilities";
-    input.dispatchEvent(new Event("change"));
-
-    await vi.waitFor(() => {
-      expect(settings.pdfParserSidecar.capabilitiesUrl).toBe(
-        "http://127.0.0.1:5002/v1/capabilities",
-      );
-      expect(settings.pdfParserSidecar.parseUrl).toBe("http://127.0.0.1:5002/v1/parse");
-    });
   });
 });
 
@@ -2923,9 +2960,6 @@ describe("wired getControlValue", () => {
       renderEmbeddingApiKeyRow: () => {},
       renderEmbeddingModelRow: () => {},
       renderEmbeddingDimensionRow: () => {},
-      renderPdfParserSidecarEnabledRow: () => {},
-      renderPdfParserSidecarCapabilitiesUrlRow: () => {},
-      renderPdfParserSidecarParseUrlRow: () => {},
     });
     const tabItems = tab.getSettingDefinitions();
     expect(tabItems.length).toBe(hostItems.length);
