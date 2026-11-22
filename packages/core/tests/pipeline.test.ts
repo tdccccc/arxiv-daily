@@ -689,6 +689,116 @@ describe("ArxivPipeline", () => {
     );
   });
 
+  it("relinks an existing detail note on a retry that writes no new note", async () => {
+    const d = makeDeps();
+    const arxivId = /arXiv:(\d{4}\.\d{4,5})/.exec(recentHtml)![1]!;
+    const date = firstDateFromFixture();
+    const dailyPath = `daily/${date}.md`;
+    const notePath = `papers/${arxivId}.md`;
+    d.writer.writePaperDetail = vi.fn(async (paper: any) => {
+      d.writes[`papers/${paper.id}.md`] = verifiedDetailMarkdown(paper.id);
+      return `papers/${paper.id}.md`;
+    });
+    d.writer.paperDetailExists = vi.fn(
+      async (candidate: string) => `papers/${candidate}.md` in d.writes,
+    );
+    d.paperFetcher.fetch = vi.fn(async () => ({
+      abstractConclusion: "abstract and conclusion",
+      fullSections: "detail content",
+    }));
+    d.llm.call = vi.fn(async (messages: any[]) => {
+      const system = messages[0]?.content ?? "";
+      if (system.includes("判断它命中了哪些方向")) {
+        return JSON.stringify({
+          papers: [{ relevanceScore: 80, id: arxivId, category: "photo-z", directions: ["photo-z#1"] }],
+        });
+      }
+      if (system.includes("strict research-paper evaluator")) {
+        return JSON.stringify({ papers: [{ id: arxivId, score: 85, reason: "direct contribution" }] });
+      }
+      return "## detail summary\n";
+    });
+    const summarizeDaily = vi.fn()
+      .mockRejectedValueOnce(new Error("summarizer endpoint down"))
+      .mockResolvedValue({ markdown: "### Committed paper", slots: [] });
+    const pipeline = new ArxivPipeline({
+      markupParser,
+      fetcher: d.fetcher as any,
+      paperFetcher: d.paperFetcher as any,
+      writer: d.writer as any,
+      llm: d.llm as any,
+      logger: d.logger,
+      arxiv: testArxiv,
+      advanced: DEFAULT_SETTINGS.advanced,
+      output: DEFAULT_SETTINGS.output,
+      llmSettings: DEFAULT_SETTINGS.llm,
+      detailSelection: testDetailSelection,
+      summarizeDaily: summarizeDaily as any,
+    });
+
+    // The first run wrote the note, then failed before the report existed.
+    expect(await pipeline.runForDate(date)).toMatchObject({ kind: "failed_transient" });
+    expect(d.writer.writePaperDetail).toHaveBeenCalledTimes(1);
+    expect(d.writer.refreshPaperNoteFrontmatter).not.toHaveBeenCalled();
+
+    // The retry reuses the existing note (the selector excludes it) but must
+    // still give it the report backlink written in this run.
+    expect(await pipeline.runForDate(date)).toMatchObject({ kind: "completed" });
+    expect(d.writer.writePaperDetail).toHaveBeenCalledTimes(1);
+    expect(d.writer.refreshPaperNoteFrontmatter).toHaveBeenCalledWith(
+      expect.objectContaining({
+        arxivId,
+        dailyReports: [dailyPath],
+      }),
+      notePath,
+    );
+  });
+
+  it("refreshes a detail note's report backlink without a paper index", async () => {
+    const d = makeDeps();
+    const { files, writer } = makeWriterHarness();
+    const arxivId = /arXiv:(\d{4}\.\d{4,5})/.exec(recentHtml)![1]!;
+    const date = firstDateFromFixture();
+    d.paperFetcher.fetch = vi.fn(async () => ({
+      abstractConclusion: "abstract and conclusion",
+      fullSections: "detail content",
+    }));
+    d.llm.call = vi.fn(async (messages: any[]) => {
+      const system = messages[0]?.content ?? "";
+      const daily = structuredDailyResponse(messages);
+      if (daily) return daily;
+      if (system.includes("判断它命中了哪些方向")) {
+        return JSON.stringify({
+          papers: [{ relevanceScore: 80, id: arxivId, category: "photo-z", directions: ["photo-z#1"] }],
+        });
+      }
+      if (system.includes("strict research-paper evaluator")) {
+        return JSON.stringify({ papers: [{ id: arxivId, score: 85, reason: "direct contribution" }] });
+      }
+      return "## Research question\nDetailed note body.";
+    });
+    const pipeline = new ArxivPipeline({
+      markupParser,
+      fetcher: d.fetcher as any,
+      paperFetcher: d.paperFetcher as any,
+      writer,
+      llm: d.llm as any,
+      logger: d.logger,
+      arxiv: testArxiv,
+      advanced: DEFAULT_SETTINGS.advanced,
+      output: DEFAULT_SETTINGS.output,
+      llmSettings: DEFAULT_SETTINGS.llm,
+      detailSelection: testDetailSelection,
+    });
+
+    expect(await pipeline.runForDate(date)).toMatchObject({ kind: "completed" });
+
+    const note = files[`arxiv-daily/papers/${arxivId}.md`]!;
+    expect(note).toContain(
+      `published: "[[arxiv-daily/daily/${date}|${date}]]"`,
+    );
+  });
+
   it("leaves detail notes without a report link when the daily write fails", async () => {
     const d = makeDeps();
     const arxivId = /arXiv:(\d{4}\.\d{4,5})/.exec(recentHtml)![1]!;

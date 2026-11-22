@@ -625,6 +625,16 @@ export class ArxivPipeline {
     });
     stageEnd("write-detail", ` (${detailCandidates.length} selected papers)`);
 
+    // Notes written this run and notes already on disk both belong in the
+    // report's detail links — a retry that writes no new note must still refresh
+    // the existing note's backlink.
+    const detailPaths = new Map<string, string>(confirmedPaths);
+    for (const paper of enriched) {
+      if (paper.paperPath && !detailPaths.has(paper.id)) {
+        detailPaths.set(paper.id, paper.paperPath);
+      }
+    }
+
     // 8. Daily summary, after detail attempts have established which links are real.
     throwIfCancelled(signal);
     stageStart("summarize-daily");
@@ -684,12 +694,6 @@ export class ArxivPipeline {
         throwIfCancelled(signal);
         // The report is durable: commit the selected candidates' index entries
         // in the same pass that records the report, provenance, and summaries.
-        const detailPaths = new Map<string, string>(confirmedPaths);
-        for (const paper of enriched) {
-          if (paper.paperPath && !detailPaths.has(paper.id)) {
-            detailPaths.set(paper.id, paper.paperPath);
-          }
-        }
         await this.deps.paperIndex.upsertManyFromDailyPapers(
           filtered
             .filter((p) => reportIds.has(p.id) || known.entries.has(p.id))
@@ -736,7 +740,7 @@ export class ArxivPipeline {
     // A failure here leaves a plain date, never a link to a missing report.
     await this.refreshDetailReportLinks(
       dailyPath,
-      this.detailReportLinks(dateStr, dailyPath, confirmedPaths, visiblePapers),
+      this.detailReportLinks(dateStr, dailyPath, detailPaths, visiblePapers),
       signal,
     );
     throwIfCancelled(signal);
