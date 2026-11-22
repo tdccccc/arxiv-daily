@@ -1,6 +1,6 @@
 # PdfService 下载论文 PDF 时未校验 %PDF- 文件头，会把 arXiv 返回的 HTTP 200 HTML 错误/校验页保存为 .pdf
 
-状态：未修复
+状态：已修复（分支 `fix/2026-11-22-review`）
 
 > 来源：2026-11-22 main `2557b90a` 代码审查（核心 PDF 下载服务）
 > 严重程度：中 · 置信度：已复现（离线实测：HTML 正文被以 `kind: "done"` 写入 `.pdf`）
@@ -41,3 +41,7 @@ arXiv 在 PDF 尚未生成、触发限流/人机验证（reCAPTCHA）、论文�
 - `packages/core/tests/pdf.test.ts`：
   - 模拟 `fetchPdf` 返回 HTML 字节（HTTP 200），断言返回 `{ kind: "fetch_error" }`、未写入 `.pdf` 文件且 `paperIndex.setPdfPath` 未被调用；
   - 模拟返回以 `%PDF-1.7` 开头的合法字节，断言正常写入并更新 `pdfPath`。
+
+## 修复情况
+
+新增共享 `hasPdfMagic`（在前 1024 字节查找 `%PDF-`）；`ArxivFetcher.fetchPdf` 在重试循环之后拒绝非 PDF 响应，`PdfService.downloadById` 落盘前再次守门，返回 `fetch_error`，不写 `.pdf` 也不更新 `pdfPath`。测试：`pdf` + `arxiv-fetcher` 58 项通过，既有非 PDF 夹具改为真实 `%PDF-1.7` 头。

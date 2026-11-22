@@ -1,6 +1,6 @@
 # Obsidian 命令面板与诊断三处遗漏：状态/标记命令不刷新 Dashboard、远程嵌入诊断强行拉取本地模型、打开今日日报未规范化路径
 
-状态：未修复
+状态：已修复（分支 `fix/2026-11-22-review`）
 
 > 来源：2026-11-22 main `2557b90a` 代码审查（Obsidian 命令与诊断）
 > 严重程度：低 · 置信度：代码推断
@@ -43,3 +43,7 @@
   - 调用 `set-paper-status` / `mark-current-*` 与 `clear-run-state` 后，断言已打开的 Dashboard 视图收到刷新；有活跃日报任务时 `clear-run-state` 被安全拦截；
   - `dailyDir` 含尾斜杠（如 `"arxiv-daily/daily/"`）时 `open-today-daily` 仍能找到并打开今日日报。
 - `plugin/tests/fulltext-runtime-diagnostics.test.ts`：`embedding.mode === "remote"` 时运行诊断不调用本地 `transformers` 模型下载。
+
+## 修复情况
+
+`clear-run-state` 在存在活跃任务时拒绝清理，清理成功后刷新 Dashboard；`set-paper-status`/`mark-current-*` 更新后刷新 Dashboard；`open-today-daily` 使用 writer 规范化的 `dailyPath()`；`diagnoseEmbedding` 在远程模式下校验配置与授权并通过共享嵌入后端探测，不再下载本地模型，诊断报告标注 local/remote。测试：`commands`、`fulltext-runtime-diagnostics` 等；插件全量 1310 项通过。

@@ -1,6 +1,6 @@
 # 本地嵌入模型每次搜索都重建 ONNX WASM 实例且未释放，且首次加载失败会永久毒化实例缓存
 
-状态：未修复
+状态：已修复（分支 `fix/2026-11-22-review`）
 
 > 来源：2026-11-22 main `2557b90a` 代码审查（Obsidian 文献库搜索与本地嵌入运行时）
 > 严重程度：中 · 置信度：部分已复现（core `pipelinePromise` 失败毒化已离线复现；插件侧未缓存实例为代码推断）
@@ -39,3 +39,7 @@
 
 - `packages/core/tests/transformers-embedding-model.test.ts`：注入第 1 次 reject、第 2 次 resolve 的 `loadPipeline`，验证第 1 次 `embed()` 失败后第 2 次 `embed()` 能恢复成功（`loadPipeline` 被调用 2 次）。
 - `plugin/tests/embedding-model-runtime.test.ts` 或 `plugin/tests/dashboard-library-search.test.ts`：连续两次执行本地 `searchPersonalLibraryFullText()`，断言底层本地模型加载只发生一次。
+
+## 修复情况
+
+`transformers-embedding-model` 在 `load()` 自身 reject 时清空 `pipelinePromise`（调用方中止不清理，仍在进行的加载可复用），并新增可选 `dispose()`；插件缓存单个本地模型实例，搜索、索引与诊断共享，卸载或切到远程模式时释放 ONNX 会话。测试：core `transformers-embedding-model` 4 项（首次失败后重试成功、dispose 后重载），plugin `embedding-model-runtime` 6 项及相关 55 项通过。

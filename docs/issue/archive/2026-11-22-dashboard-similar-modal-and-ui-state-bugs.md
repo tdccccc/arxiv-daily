@@ -1,6 +1,6 @@
 # Reading Dashboard 三处交互与状态缺陷：未连接文献库打开相似论文报错、Show All 未同步页签状态、搜索失败永久缓存
 
-状态：未修复
+状态：已修复（分支 `fix/2026-11-22-review`）
 
 > 来源：2026-11-22 main `2557b90a` 代码审查（Obsidian Reading Dashboard）
 > 严重程度：中 · 置信度：代码推断
@@ -53,3 +53,7 @@
   - 未连接文献库时触发相似论文操作，断言传给 `SimilarPapersModal` 的 `library` 为 `undefined`、不调用 `searchPersonalLibraryFullText`。
   - Starred 为空时点击 "Show All"，断言 `All` 页签处于激活状态（`aria-selected` / active class）、`Starred` 取消激活、分页归零。
   - 模拟 `searchPersonalLibraryFullText` 第 1 次 reject、第 2 次 resolve，验证报错后重新刷新 Dashboard 会再次发起查询并展示匹配结果。
+
+## 修复情况
+
+未连接文献库时不再向相似论文弹窗提供 Library 选项，默认展示 Daily similar；Starred 空态的 **Show All** 复用统一 `switchTab`（重置分页、页签高亮与筛选计数）；文献库搜索的错误状态不再写入缓存，刷新或重新渲染会重新发起查询。测试：`dashboard-view` + `dashboard-library-search` 73 项通过。

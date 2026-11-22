@@ -1,6 +1,6 @@
 # 设置页修改 API Key 或 Base URL 后点击 "Get models"，拉取成功但下拉模型列表被静默丢弃
 
-状态：未修复
+状态：已修复（分支 `fix/2026-11-22-review`）
 
 > 来源：2026-11-22 main `2557b90a` 代码审查（Obsidian 设置页）
 > 严重程度：高 · 置信度：代码推断
@@ -33,3 +33,7 @@
 
 - `plugin/tests/settings-declarative-tab.test.ts`：渲染 `renderModelRow` 时 `apiKey` 为空，随后原地修改 `settings.llm.apiKey`（以及修改 `settings.llm.baseUrl` 的另一条用例）但不重绘模型行，点击 "Get models"，断言 `setModels` 和 `showAll` 被调用且候选存入新 key 下。
 - 反向回归：发起 "Get models" 后在 Promise resolve 之前修改 `settings.llm.baseUrl` 或 `apiKey`，断言过期响应不被应用到当前 `ModelInputSuggest`。
+
+## 修复情况
+
+点击 **Get models** 时在发起请求前实时快照 `modelFetchCacheKey`，结果写入该 key 并以它判定是否应用；输入框获得焦点时也按实时 key 恢复已缓存列表。请求在途期间修改端点仍会丢弃过期结果。测试：`plugin/tests/settings-declarative-tab.test.ts` 新增首次填写 API Key、修改 Base URL 后立即拉取的应用用例，以及请求在途变更端点的丢弃用例。

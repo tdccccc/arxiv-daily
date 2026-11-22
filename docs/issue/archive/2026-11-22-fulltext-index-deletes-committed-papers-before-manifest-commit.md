@@ -1,6 +1,6 @@
 # 文献库索引在提交新 manifest 之前提前删除旧论文文档，切换模型失败或中途取消会破坏已提交索引
 
-状态：未修复
+状态：已修复（分支 `fix/2026-11-22-review`）
 
 > 来源：2026-11-22 main `2557b90a` 代码审查（个人文献库索引编排）
 > 严重程度：高 · 置信度：代码推断
@@ -40,3 +40,7 @@
 - `packages/core/tests/fulltext-index-orchestration.test.ts`：
   - 切换模型且新模型 embedding 全失败时，断言抛出保留旧索引错误后，原模型的 `loadPaper` 全部非空且磁盘文件数未减少。
   - 同模型下某篇原 `ready` 论文重建失败或某篇被 prune，在 `beforeManifestCommit` 触发取消或并发修改造成 CAS 冲突，断言旧 manifest 下原 `ready` 论文的 `.json` 文件均仍存在于存储中。
+
+## 修复情况
+
+逐篇失败与 pruning 的删除改为收集到 `keysToRemoveAfterCommit`，仅在 `replaceManifest` 成功之后删除，后置删除失败只记 warning；`modelChanged` 时完全不删除旧模型命名空间的论文文档。新增“重建失败后取消仍保留已提交文档”和“切换模型全部失败后旧模型文档与 manifest 不变”两条测试。验证：`fulltext-index-orchestration` 68 项通过。

@@ -1,6 +1,6 @@
 # ObsidianStorageAdapter.remove 仅支持存在的文件，导致 Obsidian 下旧搜索索引清理必然失败且运行历史超 512 KB 后永久停写
 
-状态：未修复
+状态：已修复（分支 `fix/2026-11-22-review`）
 
 > 来源：2026-11-22 main `2557b90a` 代码审查（Obsidian 存储适配器 + core 索引维护与运行历史）
 > 严重程度：高 · 置信度：已复现（核心路径按 Obsidian `DataAdapter.remove` 语义离线复现）
@@ -40,3 +40,7 @@
 - `plugin/tests/obsidian-adapters.test.ts`：修正/新增严格模拟 Obsidian `DataAdapter`（`remove` 对目录抛 `EISDIR`、对缺失文件抛 `ENOENT`，另提供 `rmdir(path, recursive)`）的测试，验证 `ObsidianStorageAdapter.remove` 能删除非空目录且对不存在路径幂等返回。
 - `packages/core/tests/run-history.test.ts`：使用对缺失路径抛 `ENOENT` 的 `StorageAdapter` 验证 `RunHistoryStore` 首次与连续轮转均成功。
 - `packages/core/tests/fulltext-generation-index-store.test.ts`：使用文件级 `remove` + 目录 `rmdir`（或通过 `ObsidianStorageAdapter`）验证 `runHostAuthorizedMaintenance()` 能彻底清理含 `descriptor.json` 和 `objects/` 的非空旧代目录。
+
+## 修复情况
+
+`StorageAdapter.remove` 契约明确为递归且幂等；Obsidian 适配器先 `stat`，目录走 `rmdir(path, true)`，缺失路径与 stat/remove 之间的 ENOENT 竞态均静默返回。`rotateHistoryFiles` 在每次 remove 前检查 `exists`；generation 维护改为自底向上删除子树。测试替身改为严格 `DataAdapter` 语义（`remove` 对目录抛 `EISDIR`、对缺失文件抛 `ENOENT`，另提供 `rmdir`），新增目录删除、幂等删除、连续轮转与非空旧代目录清理用例。验证：`obsidian-adapters` 31、`run-history` 22、`fulltext-generation-index-store` 79 项通过。

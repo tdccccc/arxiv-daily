@@ -1,6 +1,6 @@
 # 非自适应思考的 Claude 模型传入 maxCompletionTokens=4096 时，思考预算占掉 4095 token 仅剩 1 个输出 token
 
-状态：未修复
+状态：已修复（分支 `fix/2026-11-22-review`）
 
 > 来源：2026-11-22 main `2557b90a` 代码审查（LLM 客户端与个人文献库方向生成/预览）
 > 严重程度：中 · 置信度：已复现（离线请求体实测：`max_tokens: 4096`、`thinking.budget_tokens: 4095`，剩余输出 1 token）
@@ -44,3 +44,7 @@ params.thinking = { type: "enabled", budget_tokens: Math.min(requested, cap - 1)
 ## 修复后应补的测试
 
 - `packages/core/tests/llm/`：针对 `claude-sonnet-4-5` + `thinkingMode: true` + `reasoningEffort: "medium"/"high"` + `maxCompletionTokens: 4096`，断言发送给 Anthropic 的 `max_tokens - thinking.budget_tokens` 至少覆盖可见输出预算（例如 `>= 4096`），且 `thinking.budget_tokens >= 1024`。
+
+## 修复情况
+
+调用方传入的 `maxCompletionTokens` 视为可见输出预算：原生 Anthropic 非自适应思考下 `max_tokens = requested + maxCompletionTokens`（受 32k 上限约束），`budget_tokens` 不再占满几乎全部额度；原有的 `maxCompletionTokens <= 1024` 前置拒绝保留。测试更新并新增 medium/high effort 用例，断言可见预算至少 4096 且 `budget_tokens >= 1024`。

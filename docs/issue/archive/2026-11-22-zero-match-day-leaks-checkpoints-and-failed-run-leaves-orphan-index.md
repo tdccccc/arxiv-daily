@@ -1,6 +1,6 @@
 # 零命中日报完成后遗漏清理检查点文件，且流水线在摘要成功前就写入 papers.json 残留孤立条目
 
-状态：未修复
+状态：已修复（分支 `fix/2026-11-22-review`）
 
 > 来源：2026-11-22 main `2557b90a` 代码审查（日报流水线状态清理与索引一致性）
 > 严重程度：低 · 置信度：代码推断
@@ -35,3 +35,7 @@
 - `packages/core/tests/pipeline.test.ts`：
   - 预置某日期的筛选与摘要检查点后运行 0 命中流程，断言检查点文件被 `cleanupCommittedCheckpoints` 清除；
   - 模拟 `summarizeDaily` 抛错或取消，断言 `papers.json` 不新增无 `dailyReports` 且无 `summary` 的孤立条目。
+
+## 修复情况
+
+两条零命中完成分支补 `cleanupCommittedCheckpoints`；新增 `PaperIndexStore.previewDailyMatches`（只计算不落盘），精读与摘要使用候选视图，`writeDaily` 成功后才把索引 upsert 与日报链接、来源、摘要一起提交，失败或取消不再留下无摘要的孤立条目。验证：11 个 pipeline/paper-index 测试文件 217 项通过。

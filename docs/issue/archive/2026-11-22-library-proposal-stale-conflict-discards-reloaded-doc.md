@@ -1,6 +1,6 @@
 # 文献库提案持久化冲突重读时丢弃结果导致内存状态过期，且切换库目录加载 catalog 失败未记录错误
 
-状态：未修复
+状态：已修复（分支 `fix/2026-11-22-review`）
 
 > 来源：2026-11-22 main `2557b90a` 代码审查（Obsidian 个人文献库状态管理）
 > 严重程度：中 · 置信度：代码推断
@@ -40,3 +40,7 @@
 - `plugin/tests/personal-library-interest-profile-modal.test.ts` 或 `plugin/tests/library-connection-lifecycle.test.ts`：
   - 模拟外部将提案文件推进到新 revision 后调用 `renamePersonalLibraryProposedTopic()`，断言抛出冲突错误后 `plugin.getPersonalLibraryProfileSnapshot().proposal.revision` 已更新为磁盘最新 revision；
   - 模拟 `selectLibraryRoot()` 指向包含损坏 catalog 的库，断言 `getPersonalLibraryProfileSnapshot().catalogLoadError` 非空。
+
+## 修复情况
+
+提案持久化冲突后把重读文档写回 `this.libraryProposal` 并清空加载错误，下一次渲染即使用磁盘最新 revision；`selectLibraryRoot` 加载 catalog 失败时记录 `libraryCatalogLoadError`。测试：`library-connection-lifecycle` 17 项通过（冲突后 revision 前移、损坏 catalog 记录错误）。

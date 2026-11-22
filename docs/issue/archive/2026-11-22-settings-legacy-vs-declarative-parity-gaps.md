@@ -1,6 +1,6 @@
 # Obsidian 1.13+ 声明式设置页与旧版设置页存在三处功能脱节（已废弃 Sidecar 仍暴露于旧版、模板与自定义分类缺失于新版）
 
-状态：未修复
+状态：已修复（分支 `fix/2026-11-22-review`）
 
 > 来源：2026-11-22 main `2557b90a` 代码审查（Obsidian 设置页双实现一致性）
 > 严重程度：低 · 置信度：代码推断
@@ -30,3 +30,7 @@
 
 - `plugin/tests/settings-tab.test.ts`：断言旧版设置页不再渲染 `"Better PDF parser"` / sidecar URL 控件。
 - `plugin/tests/settings-declarative-tab.test.ts`：如补齐自定义分类输入，断言 Obsidian 1.13+ 设置页可添加并保存预设外的合法 arXiv 分类。
+
+## 修复情况
+
+旧版 `<1.13` 设置页移除已废弃的 Better PDF parser / sidecar URL 控件（ADR 0013）；1.13+ 声明式分类行新增“Or enter custom category”输入（含重复拒绝与草稿行保存）；快速开始主题模板保留为旧版专用，并在 `tab.ts`/`definitions.ts` 注释说明有意差异。测试：`settings-tab` 96、`settings-declarative-tab` 195、`settings-definitions` 31 项通过。

@@ -1,6 +1,6 @@
 # Dashboard 历史索引同步忽略 MarkdownWriter 写入的 published frontmatter，重建后单篇笔记丢失日期
 
-状态：未修复
+状态：已修复（分支 `fix/2026-11-22-review`）
 
 > 来源：2026-11-22 main `2557b90a` 代码审查（Dashboard 索引重建与笔记格式契约）
 > 严重程度：中 · 置信度：代码推断
@@ -49,3 +49,7 @@ candidates.push({
 - `plugin/tests/dashboard-history-sync.test.ts`（或 core 对应测试）：
   - 分别测试 `published: 2026-06-09` 和 `published: "[[arxiv-daily/daily/2026-06-09|2026-06-09]]"` 两种现行 `MarkdownWriter` 格式的论文笔记，在无 `papers.json` 和无日报文件时经 `syncDashboardHistory` 重建，断言 `entry.published === "2026-06-09"` 且 `entry.seenDates` 包含 `"2026-06-09"`；
   - 保留旧版 `date:` / `daily_report:` 笔记的兼容回归测试。
+
+## 修复情况
+
+`collectPaperCandidates` 按 `published -> date -> daily_report` 解析日期；`published` 同时支持纯 `YYYY-MM-DD`、ISO 时间戳和日报 wikilink。测试：`dashboard-history-sync` 51 项通过（两种现行 MarkdownWriter 格式、ISO、优先级与旧字段兼容）。

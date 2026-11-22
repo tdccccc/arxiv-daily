@@ -1,6 +1,6 @@
 # 远程嵌入配置尚未填完时被误报为“文献库索引无法读取”，且随后补填 embedding.apiKey 不会恢复状态
 
-状态：未修复
+状态：已修复（分支 `fix/2026-11-22-review`）
 
 > 来源：2026-11-22 main `2557b90a` 代码审查（Obsidian 文献库设置与索引状态刷新）
 > 严重程度：高 · 置信度：代码推断
@@ -40,3 +40,7 @@
 - `plugin/tests/embedding-mode-selection.test.ts` 或 `plugin/tests/settings-declarative-tab.test.ts`：
   - 连接并建好本地索引后切到 `remote` 模式（缺少 `apiKey`），断言 `libraryIndexStatus.snapshot().preparationError` 不为 `LIBRARY_INDEX_READ_FAILED`。
   - 已有完整 `baseUrl`/`model`/`dimension` 但 `apiKey` 为空时，通过设置页仅修改 `embedding.apiKey`，断言 `refreshLibraryIndexTrace` 被调用且状态立即更新。
+
+## 修复情况
+
+`refreshLibraryIndexTrace` 不再构造会抛异常的嵌入客户端：先用 `validateEmbeddingConfig` 校验，配置不完整时进入独立的“配置待完善”状态并保留 manifest 派生的已索引论文与新论文计数；期望模型身份直接由设置推导（本地固定值，远程 `remoteEmbeddingModelId`）。`embedding.apiKey` 已加入设置页刷新白名单（`f480bb8a`）。测试：`fulltext-index-lifecycle` 33、`settings-declarative-tab`/`embedding-mode-selection` 191 项通过。

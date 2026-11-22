@@ -1,6 +1,6 @@
 # Hosted 邮件投递把取消异常和前置校验错误吞成了 HostedDeliveryError（标记为不确定状态），且 Resend 发件人名称未转义引号
 
-状态：未修复
+状态：已修复（分支 `fix/2026-11-22-review`）
 
 > 来源：2026-11-22 main `2557b90a` 代码审查（邮件投递）
 > 严重程度：中 · 置信度：已复现（离线实测：`RunCancelledError` 被包装成 `HostedDeliveryError(..., ambiguous: true, notSent: false)`）
@@ -48,3 +48,7 @@
 - `packages/core/tests/delivery/`：
   - `sendViaHosted` 在 `beforeProviderAttempt` 或 `http.request` 抛出 `RunCancelledError` 时，断言原样 reject 为取消错误且不会把投递标记为 ambiguous；
   - `formatResendFrom` 针对含逗号、句点、双引号的 `fromName` 生成合法 RFC 5322 `From` 头。
+
+## 修复情况
+
+`sendViaHosted` 将 `beforeProviderAttempt` 移出 provider 的 try 块，取消异常原样透传，前置校验失败不再伪装为 `HostedDeliveryError(ambiguous)`；`formatResendFrom` 对含 RFC 5322 特殊字符的显示名加双引号并转义 `\` 与 `"`。测试：`hosted-deliver` + `resend` 118 项通过。

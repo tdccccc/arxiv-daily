@@ -1,6 +1,6 @@
 # 撤销文献库远程处理授权时未取消正在进行的全文索引，远程嵌入请求继续外发并提交索引
 
-状态：未修复
+状态：已修复（分支 `fix/2026-11-22-review`）
 
 > 来源：2026-11-22 main `2557b90a` 代码审查（Obsidian 文献库授权与索引生命周期）
 > 严重程度：高 · 置信度：代码推断
@@ -30,3 +30,7 @@
 - `plugin/tests/fulltext-index-lifecycle.test.ts` 或 `plugin/tests/library-connection-lifecycle.test.ts`：
   - 模拟远程嵌入模式索引 3 篇论文，在第 1 篇嵌入回调内调用 `revokeLibraryProcessing()`，断言第 2、3 篇不再调用远程 `http.request`，索引任务以取消结束且不提交新 manifest。
   - 本地嵌入模式下撤销（仅影响 LLM 方向生成的）授权时，确认预期行为与 ADR 0008 一致（不误杀本地离线索引，或按明确产品策略测试）。
+
+## 修复情况
+
+`revokeLibraryProcessing` 在远程嵌入模式下同步取消 `personal-library-fulltext-index` 操作；传给索引的 `beforeManifestCommit` 复检取消信号、连接版本与远程授权，撤销后不再提交 manifest。测试：`fulltext-index-lifecycle` 新增“首篇嵌入期间撤销后不再发起后续嵌入且不提交”与“提交守卫拒绝”两条。

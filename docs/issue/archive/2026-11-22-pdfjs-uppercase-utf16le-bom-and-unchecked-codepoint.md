@@ -1,6 +1,6 @@
 # PdfJsDocumentParser 对大写 UTF-16LE BOM（FFFE）按大端误解码成乱码，且标题抽取未校验 HTML 数字实体码点范围
 
-状态：未修复
+状态：已修复（分支 `fix/2026-11-22-review`）
 
 > 来源：2026-11-22 main `2557b90a` 代码审查（PDF 文档解析与标题抽取）
 > 严重程度：低 · 置信度：已复现（离线实测：`/Title <FFFE48006900>` 被误解码为 `"䠀椀"` `U+4800 U+6900`）
@@ -52,3 +52,7 @@ PDF 元数据兜底解析与标题抽取存在两处边界缺陷：
   - 构造 `/Title <FFFE48006900>`（大写 BOM）与 `/Title <fffe48006900>`（小写 BOM），断言均解出 `"Hi"`；
   - 构造超长十六进制 `/Title`（如 100 KB 十六进制串），断言不抛 `RangeError`。
 - `packages/core/tests/title-extraction.test.ts`：包含 `&#99999999;`、`&#x110000;` 的标题文本安全解码不抛异常。
+
+## 修复情况
+
+`rawInfoTitle` 用 `/^fffe/i` 判定小端，十六进制串按块转字符串避免超长 `/Title` 触发调用栈溢出；`title-extraction` 在 `String.fromCodePoint` 前校验码点范围与代理项，越界/非法实体保留原文本。测试：`pdfjs-document-parser` + `title-extraction` 33 项通过（大写/小写 BOM、100 KB 十六进制、越界实体）。

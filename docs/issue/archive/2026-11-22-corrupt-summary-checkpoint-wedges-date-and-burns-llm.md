@@ -1,6 +1,6 @@
 # 损坏的日报摘要检查点文件会让该日期陷入重试死循环、消耗 10 次 LLM 调用且插件内无法自愈
 
-状态：未修复
+状态：已修复（分支 `fix/2026-11-22-review`）
 
 > 来源：2026-11-22 main `2557b90a` 代码审查（日报流水线与摘要检查点存储）
 > 严重程度：高 · 置信度：已复现
@@ -29,3 +29,7 @@
 ## 修复后应补的测试
 
 - `packages/core/tests/pipeline/pipeline-error-handling.test.ts`（及 `daily-summary-checkpoint-store.test.ts`）：当 `daily-summary-checkpoints/<date>.json` 为损坏 JSON 且无有效 `.bak` 时，运行 `DailyPipeline` 能完成日报生成并清理检查点，不会重复消耗 LLM 调用或永久卡死该日期；同时保留 `EIO` 读取故障不覆写原文件的保护测试。
+
+## 修复情况
+
+`DailySummaryCheckpointStore.loadForMutation` 仅对 I/O `unreadable` 拒绝覆写；确定损坏（主/备均无法解析且无有效备份）按空文档重建并记录 warning。原“双损坏必须拒绝”用例改为断言重建，保留 EIO 不覆写保护。新增流水线用例：非法 JSON 且无 `.bak` 时整轮 `completed`、只发生 filter + 摘要 2 次 LLM 调用、提交后检查点被清理。验证：`daily-summary-checkpoint-store` 80、`pipeline-error-handling` 30 项通过。

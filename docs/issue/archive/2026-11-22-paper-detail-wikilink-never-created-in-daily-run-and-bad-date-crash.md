@@ -1,6 +1,6 @@
 # 日报流水线先写精读笔记再写日报导致 published 日报双向链接永远缺失，且非法日期字符串会让写笔记崩溃
 
-状态：未修复
+状态：已修复（分支 `fix/2026-11-22-review`）
 
 > 来源：2026-11-22 main `2557b90a` 代码审查（日报流水线与 MarkdownWriter）
 > 严重程度：中 · 置信度：部分已复现（非法日期抛 `Error("Invalid date: invalid-date")` 已离线复现；流水线先后顺序为代码推断）
@@ -50,3 +50,7 @@ private async publishedReportLink(
 
 - `packages/core/tests/pipeline.test.ts`：完整跑一次包含 detail 论文的 `DailyPipeline`，断言写出精读笔记的 `published` frontmatter 为指向当日日报的 wikilink（且在 `writeDaily` 失败时不产生悬空日报链接）。
 - `packages/core/tests/markdown-writer.test.ts`：向 `writePaperNote` / `writePaperDetail` 传入非法 `published` 字符串，断言安全写出笔记且不抛 `Invalid date`。
+
+## 修复情况
+
+`writeDaily` 成功且索引记录日报后，对本次 `confirmedPaths` 调用 `refreshPaperNoteFrontmatter` 回填日报 wikilink；日报失败或取消时不执行，避免悬空链接。`publishedReportLink` 先校验 `YYYY-MM-DD`，非法值退化为无链接。测试：`pipeline` + `markdown-writer` 93 项通过。

@@ -1,6 +1,6 @@
 # Dashboard 打开时 recentDates 正常加载完成后未触发重绘，回看日历日期一直显示不可运行
 
-状态：未修复
+状态：已修复（分支 `fix/2026-11-22-review`）
 
 > 来源：2026-11-22 main `2557b90a` 代码审查（Obsidian Reading Dashboard）
 > 严重程度：中 · 置信度：代码推断
@@ -43,3 +43,7 @@
 - `plugin/tests/dashboard-view.test.ts` 或 `plugin/tests/dashboard-reload-index.test.ts`：
   - 模拟 `refreshWithin` 在 `reloadIndex` 完成首次 `render()` 之后 resolve（`completed: true`，并填充 `hasDate` 返回 `true`），断言视图自动再次 `render()` 且日历日期更新为可运行状态。
   - 模拟 `refreshWithin` 返回 `timedOut: true`（后台 `refresh` 尚未 resolve），断言超时降级提示立刻渲染；后台完成后再次重绘清除提示。
+
+## 修复情况
+
+`refreshRecentDatesForForeground` 以渲染键（状态、刷新时间、错误、日期、提示）判定变化，在 `refreshWithin` 返回后以及后台完成/失败/超时回调统一重绘；正常完成路径会立即更新日历可用状态与部分失败提示，快照未变化时不重复渲染。测试：`dashboard-reload-index` 6 项通过。

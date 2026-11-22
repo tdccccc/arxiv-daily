@@ -1,6 +1,6 @@
 # 非原生 Anthropic 代理/网关配置下仍发送 Anthropic 原生思考字段且跳过参数回退
 
-状态：未修复
+状态：已修复（分支 `fix/2026-11-22-review`）
 
 > 来源：2026-11-22 main `2557b90a` 代码审查（LLM 客户端）
 > 严重程度：中 · 置信度：已复现（离线请求体实测：向 `/chat/completions` 发送 `thinking` 与 `output_config`，且 `rejectedOptionalParameter` 返回 `undefined`）
@@ -36,3 +36,7 @@
   - `provider: "anthropic"` + 非 `api.anthropic.com` `baseUrl` 时，请求体不带原生 `output_config` / `budget_tokens`，走 OpenAI 兼容参数；
   - 同配置下若端点返回 400 `"Unknown parameter: 'reasoning_effort'"`（或 `'thinking'`），`LlmClient` 自动降级丢弃参数并重试成功；
   - 原生 `api.anthropic.com` 仍保留原有行为（带原生 `thinking`/`output_config`，且不自动静默丢弃 `thinking`）。
+
+## 修复情况
+
+原生 Anthropic 参数生成改为以 `usesNativeAnthropic`（provider + `api.anthropic.com` 主机）为条件；Anthropic 代理/网关走 OpenAI 兼容参数（`reasoning_effort`），不再发送原生 `thinking`/`output_config`。`rejectedOptionalParameter` 接收 `provider`/`baseUrl` 并在非原生路径允许丢弃 `reasoning_effort`/`output_config`。测试：`tests/llm` 9 个文件 164 项通过，覆盖代理请求体与 400 降级重试。

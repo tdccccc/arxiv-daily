@@ -1,6 +1,6 @@
 # 设置页两处输入保存缺陷：自发邮件 "Send test" 未先落盘刚粘贴的 Resend API Key，自定义时区重开后从下拉框消失
 
-状态：未修复
+状态：已修复（分支 `fix/2026-11-22-review`）
 
 > 来源：2026-11-22 main `2557b90a` 代码审查（Obsidian 设置页）
 > 严重程度：中 · 置信度：代码推断
@@ -54,3 +54,7 @@
   - Self-Send 模式下在 Resend API Key 输入框写入值后直接点击 "Send test"（不先派发 `blur`/`change`），断言 `email.apiKey` 先持久化完成再调用 `sendTestEmail()`。
   - 当 `settings.arxiv.timezone` 为 `"Europe/Berlin"` 时渲染 `renderTimezoneRow`，断言 `<select>` 含对应 option 且 `select.value === "Europe/Berlin"`。
 - `plugin/tests/settings-tab.test.ts`：验证旧版设置页自定义时区回显及输入框提交后同步 `<select>`。
+
+## 修复情况
+
+Self-Send Resend 行保留输入焦点，并在 **Send test** 前 `await saveApiKey()` 冲刷刚粘贴的密钥；声明式与旧版设置页都会为已保存但不在预设列表中的 IANA 时区补动态 `option` 并选中，旧版补传 `select` 以同步自定义草稿。测试：`settings-declarative-tab` 193、`settings-tab` 97 项通过。

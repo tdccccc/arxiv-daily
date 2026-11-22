@@ -1,6 +1,6 @@
 # 个人文献库方向预览与主题整理未剥离 Markdown JSON 代码围栏，且方向预览无纠错重试
 
-状态：未修复
+状态：已修复（分支 `fix/2026-11-22-review`）
 
 > 来源：2026-11-22 main `2557b90a` 代码审查（个人文献库 LLM 响应解析）
 > 严重程度：低 · 置信度：代码推断
@@ -42,3 +42,7 @@
 - `packages/core/tests/personal-library-direction-preview.test.ts` 与 `packages/core/tests/personal-library-topic-organization.test.ts`：
   - 返回带单层 ```` ```json ... ``` ```` 围栏的合法 JSON 时成功解码；
   - 返回附带多余说明文字或损坏 JSON 时仍拒绝。
+
+## 修复情况
+
+方向预览与主题整理复用 `unwrapSingleCodeFence`，仅剥离单层 ```json 围栏；方向预览增加一次格式纠错重问（只说明违反的规则，不回显模型原文），围栏外夹杂说明文字或损坏 JSON 仍拒绝。测试：`personal-library-direction-preview` + `personal-library-topic-organization` 94 项通过。
