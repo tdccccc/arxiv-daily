@@ -33,7 +33,6 @@ import {
   renderLibraryDirectionsRow,
   renderLlmBaseUrlRow,
   renderModelRow,
-  renderPdfParserSidecarCapabilitiesUrlRow,
   renderReasoningEffortRow,
   renderRunWindowRow,
   renderLibraryGuideRow,
@@ -1027,6 +1026,16 @@ describe("declarative embedding rows delegate the consent flow", () => {
     expect(select.value).toBe("local");
   });
 
+  it("re-evaluates the library index when only the embedding API key changes", async () => {
+    const { tab, settings, plugin } = makeTab();
+    settings.embedding.apiKey = "";
+
+    await tab.changeSettingValue("embedding.apiKey", "sk-new-key");
+
+    expect(settings.embedding.apiKey).toBe("sk-new-key");
+    expect(plugin.refreshLibraryIndexTrace).toHaveBeenCalledTimes(1);
+  });
+
   it("labels the local option honestly about the one-time model download, not as always-offline", () => {
     const { tab } = makeTab();
     const setting = renderSetting();
@@ -1265,12 +1274,13 @@ describe("declarative LLM and category rows", () => {
     expect(saveSettings).toHaveBeenCalledTimes(2);
   });
 
-  it("renders each category as a fixed dropdown without custom input", () => {
+  it("renders each category as a preset dropdown plus a custom input", () => {
     const { tab } = makeTab();
     const setting = renderSetting();
     renderCategoryRow(tab, setting as never, 0);
     expect(setting.controlEl.querySelector("select")).not.toBeNull();
-    expect(setting.controlEl.querySelector("input")).toBeNull();
+    const input = setting.controlEl.querySelector("input");
+    expect(input?.placeholder).toBe("Or enter custom category");
   });
 
   it("integrates hosted verification into the email row", async () => {
@@ -1399,6 +1409,42 @@ describe("declarative LLM and category rows", () => {
     ).toBe(true);
   });
 
+  it("saves a freshly pasted Resend key before sending the test email", async () => {
+    const { tab, plugin, settings, saveSettings } = makeTab();
+    const save = deferred();
+    saveSettings.mockImplementationOnce(() => save.promise);
+    const setting = renderSetting();
+    renderEmailApiKeyRow(tab, setting as never);
+    const input = setting.controlEl.querySelector("input") as HTMLInputElement;
+    const sendTest = Array.from(setting.controlEl.querySelectorAll("button"))
+      .find((button) => button.textContent === "Send test") as HTMLButtonElement;
+
+    // No blur/change first: the click itself must flush the pasted draft.
+    input.value = "re_pasted_secret";
+    input.dispatchEvent(new Event("input"));
+    sendTest.click();
+
+    await vi.waitFor(() => expect(saveSettings).toHaveBeenCalledTimes(1));
+    expect(plugin.sendTestEmail).not.toHaveBeenCalled();
+
+    save.resolve();
+    await vi.waitFor(() => expect(plugin.sendTestEmail).toHaveBeenCalledTimes(1));
+    expect(settings.email.apiKey).toBe("re_pasted_secret");
+  });
+
+  it("keeps focus on the Resend row while its Send test button is pressed", () => {
+    const { tab } = makeTab();
+    const setting = renderSetting();
+    renderEmailApiKeyRow(tab, setting as never);
+    const sendTest = Array.from(setting.controlEl.querySelectorAll("button"))
+      .find((button) => button.textContent === "Send test") as HTMLButtonElement;
+
+    const pointerdown = new Event("pointerdown", { cancelable: true });
+    sendTest.dispatchEvent(pointerdown);
+
+    expect(pointerdown.defaultPrevented).toBe(true);
+  });
+
   it("restores the hidden Resend key when candidate persistence fails", async () => {
     const { tab, plugin, settings, saveSettings } = makeTab();
     settings.email.apiKey = "old-resend-secret";
@@ -1417,8 +1463,19 @@ describe("declarative LLM and category rows", () => {
     expect(input.value).toBe("old-resend-secret");
   });
 
-  it("keeps a custom timezone as a local draft and rejects invalid commits", async () => {
-    const { tab, settings, saveSettings } = makeTab();
+  it("shows a saved custom timezone as a selected dropdown option", () => {
+    const { tab, settings } = makeTab();
+    settings.arxiv.timezone = "Europe/Berlin";
+    const setting = renderSetting();
+    renderTimezoneRow(tab, setting as never);
+    const select = setting.controlEl.querySelector("select") as HTMLSelectElement;
+
+    expect(Array.from(select.options).map((option) => option.value))
+      .toContain("Europe/Berlin");
+    expect(select.value).toBe("Europe/Berlin");
+  });
+
+  it("keeps a custom timezone as a local draft and rejects invalid commits", async () => {    const { tab, settings, saveSettings } = makeTab();
     const setting = renderSetting();
     renderTimezoneRow(tab, setting as never);
     const input = setting.controlEl.querySelector("input") as HTMLInputElement;
@@ -2009,6 +2066,44 @@ describe("topic and category saves that fail", () => {
 });
 
 describe("category rows", () => {
+  it("adds a valid non-preset subcategory from the custom input", async () => {
+    const { tab, settings, saveSettings } = makeTab();
+    vi.spyOn(tab, "refreshSettings").mockImplementation(() => {});
+    const setting = new Setting(tab.containerEl);
+    renderCategoryRow(tab, setting, 0);
+    const input = setting.controlEl.querySelector("input")!;
+
+    input.value = "astro-ph.CO";
+    input.dispatchEvent(new Event("change"));
+
+    await vi.waitFor(() => expect(settings.arxiv.categories).toEqual(["astro-ph.CO"]));
+    expect(settings.arxiv.category).toBe("astro-ph.CO");
+    expect(saveSettings).toHaveBeenCalledWith(expect.objectContaining({
+      arxiv: expect.objectContaining({ categories: ["astro-ph.CO"] }),
+    }));
+  });
+
+  it("refuses a custom category another row already has instead of dropping a row", async () => {
+    const { Notice } = await import("obsidian");
+    const notices = (Notice as unknown as { calls: Array<{ message: string }> }).calls;
+    notices.length = 0;
+    const { tab, settings, saveSettings } = makeTab();
+    settings.arxiv.categories = ["astro-ph", "gr-qc"];
+    const refresh = vi.spyOn(tab, "refreshSettings").mockImplementation(() => {});
+    const setting = new Setting(tab.containerEl);
+    renderCategoryRow(tab, setting, 1);
+    const input = setting.controlEl.querySelector("input")!;
+
+    input.value = "astro-ph";
+    input.dispatchEvent(new Event("change"));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(settings.arxiv.categories).toEqual(["astro-ph", "gr-qc"]);
+    expect(notices.map((call) => call.message).join("\n")).toMatch(/already/i);
+    expect(saveSettings).not.toHaveBeenCalled();
+    expect(refresh).not.toHaveBeenCalled();
+  });
+
   it("refuses a category another row already has instead of dropping a row", async () => {
     const { Notice } = await import("obsidian");
     const notices = (Notice as unknown as { calls: Array<{ message: string }> }).calls;
@@ -2243,6 +2338,170 @@ describe("model field", () => {
     fetchModels.mockRestore();
   });
 
+  it("applies models fetched after the API key was edited without re-rendering the row", async () => {
+    const { tab, plugin, settings } = makeTab();
+    expect(settings.llm.apiKey).toBe("");
+    (plugin as unknown as { getHttpClient: () => unknown }).getHttpClient = () => ({});
+    const fetchModels = vi
+      .spyOn(LlmClient.prototype, "fetchModels")
+      .mockResolvedValue(["provider-a", "provider-b"]);
+    const setting = new Setting(tab.containerEl);
+    renderModelRow(tab, setting);
+
+    // The API key row saves into settings without re-rendering the model row.
+    settings.llm.apiKey = "fresh-key";
+
+    const button = Array.from(setting.controlEl.querySelectorAll("button"))
+      .find((candidate) => candidate.textContent === "Get models")!;
+    button.click();
+    const suggest = tab.getModelInputSuggest()!;
+    await vi.waitFor(() => expect(suggest.hasModels()).toBe(true));
+
+    expect(suggest.previewSuggestions("")).toEqual(["provider-a", "provider-b"]);
+    expect(tab.getFetchedModelOptions(
+      [settings.llm.provider, settings.llm.baseUrl, "fresh-key"].join("\u0000"),
+    )).toEqual(["provider-a", "provider-b"]);
+    fetchModels.mockRestore();
+  });
+
+  it("applies models fetched after the base URL was edited without re-rendering the row", async () => {
+    const { tab, plugin, settings } = makeTab();
+    (plugin as unknown as { getHttpClient: () => unknown }).getHttpClient = () => ({});
+    const fetchModels = vi
+      .spyOn(LlmClient.prototype, "fetchModels")
+      .mockResolvedValue(["provider-a"]);
+    const setting = new Setting(tab.containerEl);
+    renderModelRow(tab, setting);
+
+    settings.llm.baseUrl = "https://a-new-provider.example.com/v1";
+
+    const button = Array.from(setting.controlEl.querySelectorAll("button"))
+      .find((candidate) => candidate.textContent === "Get models")!;
+    button.click();
+    const suggest = tab.getModelInputSuggest()!;
+    await vi.waitFor(() => expect(suggest.hasModels()).toBe(true));
+    expect(suggest.previewSuggestions("")).toEqual(["provider-a"]);
+    expect(tab.getFetchedModelOptions(
+      [settings.llm.provider, settings.llm.baseUrl, settings.llm.apiKey].join("\u0000"),
+    )).toEqual(["provider-a"]);
+    fetchModels.mockRestore();
+  });
+
+  it("flushes a just-typed API key and base URL before fetching models", async () => {
+    const { tab, plugin, settings, saveSettings } = makeTab();
+    (plugin as unknown as { getHttpClient: () => unknown }).getHttpClient = () => ({});
+    const keySave = deferred();
+    const urlSave = deferred();
+    saveSettings
+      .mockImplementationOnce(() => keySave.promise)
+      .mockImplementationOnce(() => urlSave.promise);
+    vi.spyOn(tab, "refreshDeclarativeSetupGuide").mockImplementation(() => {});
+    const keySetting = new Setting(tab.containerEl);
+    renderApiKeyRow(tab, keySetting);
+    const urlSetting = new Setting(tab.containerEl);
+    renderLlmBaseUrlRow(tab, urlSetting);
+    const modelSetting = new Setting(tab.containerEl);
+    renderModelRow(tab, modelSetting);
+    const keyInput = keySetting.controlEl.querySelector<HTMLInputElement>("input")!;
+    const urlInput = urlSetting.controlEl.querySelector<HTMLInputElement>("input")!;
+    const fetchedWith: Array<{ apiKey: string; baseUrl: string }> = [];
+    const fetchModels = vi.spyOn(LlmClient.prototype, "fetchModels").mockImplementation(async () => {
+      fetchedWith.push({
+        apiKey: settings.llm.apiKey,
+        baseUrl: settings.llm.baseUrl,
+      });
+      return ["provider-a"];
+    });
+
+    // The blur save is still persisting and the change save is queued behind
+    // it; a click before either finishes must wait for both, then fetch with
+    // exactly what the inputs show.
+    keyInput.value = "fresh-key";
+    keyInput.dispatchEvent(new Event("input"));
+    keyInput.dispatchEvent(new Event("blur"));
+    urlInput.value = "https://fresh.example.com/v1";
+    urlInput.dispatchEvent(new Event("change"));
+    const button = Array.from(modelSetting.controlEl.querySelectorAll("button"))
+      .find((candidate) => candidate.textContent === "Get models")!;
+    button.click();
+
+    await vi.waitFor(() => expect(saveSettings).toHaveBeenCalledTimes(1));
+    expect(fetchModels).not.toHaveBeenCalled();
+    keySave.resolve();
+    await vi.waitFor(() => expect(saveSettings).toHaveBeenCalledTimes(2));
+    expect(fetchModels).not.toHaveBeenCalled();
+    urlSave.resolve();
+
+    const suggest = tab.getModelInputSuggest()!;
+    await vi.waitFor(() => expect(suggest.hasModels()).toBe(true));
+    expect(fetchedWith).toEqual([{
+      apiKey: "fresh-key",
+      baseUrl: "https://fresh.example.com/v1",
+    }]);
+    expect(suggest.previewSuggestions("")).toEqual(["provider-a"]);
+    expect(tab.getFetchedModelOptions(
+      [settings.llm.provider, "https://fresh.example.com/v1", "fresh-key"].join("\u0000"),
+    )).toEqual(["provider-a"]);
+    fetchModels.mockRestore();
+  });
+
+  it("discards a fetch whose endpoint changes while the request is in flight", async () => {
+    const { tab, plugin, settings } = makeTab();
+    (plugin as unknown as { getHttpClient: () => unknown }).getHttpClient = () => ({});
+    let resolveFetch: ((models: string[]) => void) | undefined;
+    const fetchModels = vi
+      .spyOn(LlmClient.prototype, "fetchModels")
+      .mockImplementation(() => new Promise((resolve) => { resolveFetch = resolve; }));
+    const setting = new Setting(tab.containerEl);
+    renderModelRow(tab, setting);
+    settings.llm.apiKey = "request-key";
+    const button = Array.from(setting.controlEl.querySelectorAll("button"))
+      .find((candidate) => candidate.textContent === "Get models")!;
+
+    button.click();
+    await vi.waitFor(() => expect(fetchModels).toHaveBeenCalled());
+    settings.llm.apiKey = "changed-key";
+    resolveFetch!(["provider-a"]);
+
+    await vi.waitFor(() => expect(tab.getFetchedModelOptions(
+      [settings.llm.provider, settings.llm.baseUrl, "request-key"].join("\u0000"),
+    )).toEqual(["provider-a"]));
+    expect(tab.getModelInputSuggest()!.hasModels()).toBe(false);
+    expect(tab.getFetchedModelOptions(
+      [settings.llm.provider, settings.llm.baseUrl, "changed-key"].join("\u0000"),
+    )).toBeUndefined();
+    fetchModels.mockRestore();
+  });
+
+  it("consults the live endpoint cache when the input gains focus", async () => {
+    const { tab, plugin, settings } = makeTab();
+    (plugin as unknown as { getHttpClient: () => unknown }).getHttpClient = () => ({});
+    const fetchModels = vi
+      .spyOn(LlmClient.prototype, "fetchModels")
+      .mockResolvedValue(["provider-a"]);
+    const setting = new Setting(tab.containerEl);
+    renderModelRow(tab, setting);
+    const input = setting.controlEl.querySelector<HTMLInputElement>(
+      "input.arxiv-daily-settings__model-input",
+    )!;
+    const button = Array.from(setting.controlEl.querySelectorAll("button"))
+      .find((candidate) => candidate.textContent === "Get models")!;
+    button.click();
+    const suggest = tab.getModelInputSuggest()!;
+    await vi.waitFor(() => expect(suggest.hasModels()).toBe(true));
+
+    // A key edit makes the fetched list stale; focusing must not keep showing it.
+    settings.llm.apiKey = "different-key";
+    input.dispatchEvent(new Event("focus"));
+    expect(suggest.hasModels()).toBe(false);
+
+    // Reverting the endpoint restores the same cached list.
+    settings.llm.apiKey = "";
+    input.dispatchEvent(new Event("focus"));
+    expect(suggest.previewSuggestions("")).toEqual(["provider-a"]);
+    fetchModels.mockRestore();
+  });
+
   it("still shows fetched models after the row redraws while the fetch is in flight", async () => {
     const { tab, plugin } = makeTab();
     (plugin as unknown as { getHttpClient: () => unknown }).getHttpClient = () => ({});
@@ -2284,26 +2543,6 @@ describe("model field", () => {
 
     expect(closeSpy).toHaveBeenCalledTimes(1);
     expect(tab.getModelInputSuggest()).not.toBe(first);
-  });
-});
-
-describe("local parser sidecar address", () => {
-  it("moves both endpoints when one moves to another port", async () => {
-    const { tab, settings } = makeTab();
-    settings.pdfParserSidecar.enabled = true;
-    const setting = new Setting(tab.containerEl);
-    renderPdfParserSidecarCapabilitiesUrlRow(tab, setting);
-    const input = setting.controlEl.querySelector("input")!;
-
-    input.value = "http://127.0.0.1:5002/v1/capabilities";
-    input.dispatchEvent(new Event("change"));
-
-    await vi.waitFor(() => {
-      expect(settings.pdfParserSidecar.capabilitiesUrl).toBe(
-        "http://127.0.0.1:5002/v1/capabilities",
-      );
-      expect(settings.pdfParserSidecar.parseUrl).toBe("http://127.0.0.1:5002/v1/parse");
-    });
   });
 });
 
@@ -2721,9 +2960,6 @@ describe("wired getControlValue", () => {
       renderEmbeddingApiKeyRow: () => {},
       renderEmbeddingModelRow: () => {},
       renderEmbeddingDimensionRow: () => {},
-      renderPdfParserSidecarEnabledRow: () => {},
-      renderPdfParserSidecarCapabilitiesUrlRow: () => {},
-      renderPdfParserSidecarParseUrlRow: () => {},
     });
     const tabItems = tab.getSettingDefinitions();
     expect(tabItems.length).toBe(hostItems.length);

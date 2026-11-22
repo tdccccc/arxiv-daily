@@ -1,7 +1,21 @@
 const MODERN_ARXIV_ID_RE = /^(\d{4}\.\d{4,5})(?:v\d+)?$/i;
 const ARXIV_URL_PATH_RE = /^\/(abs|pdf|html|e-print)\/(\d{4}\.\d{4,5})(?:v\d+)?(\.pdf)?$/i;
-const RAW_HTTP_URL_RE = /^https?:\/\/[^/?#]+([^?#]*)(?:[?#].*)?$/i;
 const ALLOWED_ARXIV_HOSTS = new Set(["arxiv.org", "www.arxiv.org"]);
+
+/**
+ * Raw path component of an absolute HTTP(S) URL, before any query or fragment.
+ * Parsed without a backtracking regex: the equivalent pattern (an optional
+ * query group after a greedy path group) is a polynomial ReDoS risk on
+ * caller-supplied input.
+ */
+function rawHttpPath(input: string): string | undefined {
+  if (/[\r\n]/.test(input)) return undefined;
+  const authority = /^https?:\/\/[^/?#]+/i.exec(input)?.[0];
+  if (!authority) return undefined;
+  const rest = input.slice(authority.length);
+  const end = rest.search(/[?#]/);
+  return end === -1 ? rest : rest.slice(0, end);
+}
 
 export interface ModernArxivResources {
   id: string;
@@ -29,7 +43,7 @@ export function modernArxivResources(input: string): ModernArxivResources | null
     } catch {
       return null;
     }
-    const rawPath = RAW_HTTP_URL_RE.exec(candidate)?.[1];
+    const rawPath = rawHttpPath(candidate);
     const pathMatch = rawPath ? ARXIV_URL_PATH_RE.exec(rawPath) : null;
     if (
       (url.protocol !== "https:" && url.protocol !== "http:") ||

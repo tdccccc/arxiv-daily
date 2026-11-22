@@ -266,18 +266,33 @@ function rawInfoTitle(bytes: Uint8Array): string | undefined {
       out.push(parseInt(content.slice(index, index + 2), 16));
     }
     if (utf16) {
-      const littleEndian = content.startsWith("fffe");
+      // Hex strings in the wild are frequently uppercase; FFFE is still a
+      // little-endian BOM.
+      const littleEndian = /^fffe/i.test(content);
       const codeUnits: number[] = [];
       for (let index = 2; index + 1 < out.length; index += 2) {
         codeUnits.push(littleEndian
           ? out[index]! | (out[index + 1]! << 8)
           : (out[index]! << 8) | out[index + 1]!);
       }
-      return String.fromCharCode(...codeUnits);
+      return codeUnitsToString(codeUnits);
     }
-    return String.fromCharCode(...out);
+    return codeUnitsToString(out);
   }
   return undefined;
+}
+
+/**
+ * `String.fromCharCode(...units)` overflows the call stack for a long /Title;
+ * a malformed PDF may carry an arbitrarily long hex string. Convert in chunks.
+ */
+function codeUnitsToString(units: readonly number[]): string {
+  const CHUNK = 0x2000;
+  let result = "";
+  for (let index = 0; index < units.length; index += CHUNK) {
+    result += String.fromCharCode(...units.slice(index, index + CHUNK));
+  }
+  return result;
 }
 
 /** Decode PDF string literal escapes (`\(` -> `(`, `\\` -> `\`, `\n` etc.). */

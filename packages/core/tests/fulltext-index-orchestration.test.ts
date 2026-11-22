@@ -651,6 +651,50 @@ describe("full-text indexing orchestration", () => {
     expect(embedding.calls).toBe(10);
   });
 
+  it("keeps committed paper documents when a rebuild fails before the manifest commits", async () => {
+    const key = "arxiv:2403.19236";
+    const catalog = makeCatalog([{ paperKey: key, filePaths: ["lib/a.pdf"], fingerprint: fingerprint("f1") }]);
+    const store = new MemoryStore(), embedding = new FakeEmbedding();
+    const extractor = new FakeExtractor({ "lib/a.pdf": [LONG_ALPHA] });
+    const args = { catalog, store, embedding, extractor, source: new FakeSource(), now: () => new Date(NOW) };
+    await indexPersonalLibraryFullText(args);
+    expect(await store.loadPaper(key)).not.toBeNull();
+
+    // A changed observation forces a rebuild; the rebuild fails and the final
+    // CAS never happens, so the committed document must still be there.
+    extractor.failFor.add("lib/a.pdf");
+    const changed = makeCatalog([{ paperKey: key, filePaths: ["lib/a.pdf"], fingerprint: fingerprint("f2") }]);
+    await expect(indexPersonalLibraryFullText({
+      ...args, catalog: changed, beforeManifestCommit: () => { throw new Error("cancelled"); },
+    })).rejects.toThrow("cancelled");
+    expect(store.removed.has(key)).toBe(false);
+    expect(await store.loadPaper(key)).not.toBeNull();
+  });
+
+  it("preserves the previous model's documents when a model switch indexes nothing", async () => {
+    const key = "arxiv:2403.19236";
+    const catalog = makeCatalog([{ paperKey: key, filePaths: ["lib/a.pdf"], fingerprint: fingerprint("f1") }]);
+    const store = new MemoryStore(), embedding = new FakeEmbedding();
+    const extractor = new FakeExtractor({ "lib/a.pdf": [LONG_ALPHA] });
+    await indexPersonalLibraryFullText({
+      catalog, store, embedding, extractor, source: new FakeSource(), now: () => new Date(NOW),
+    });
+    const previous = await store.loadManifest();
+
+    const failingEmbedding = {
+      modelId: "remote-other-model",
+      dimension: 8,
+      prefixPolicy: "e5" as const,
+      embed: async () => { throw new Error("remote embedding unavailable"); },
+    };
+    await expect(indexPersonalLibraryFullText({
+      catalog, store, embedding: failingEmbedding, extractor, source: new FakeSource(),
+    })).rejects.toThrow(/previous index was preserved/);
+    expect((await store.loadManifest()).modelId).toBe(previous.modelId);
+    expect(store.removed.has(key)).toBe(false);
+    expect(await store.loadPaper(key)).not.toBeNull();
+  });
+
   it("reuses a staged paper after a failed final CAS without bypassing its next guard", async () => {
     const catalog = makeCatalog([{ paperKey: "arxiv:2403.19236", filePaths: ["lib/a.pdf"], fingerprint: fingerprint("f1") }]);
     const store = new MemoryStore(), embedding = new FakeEmbedding();

@@ -167,6 +167,12 @@ export async function indexPersonalLibraryFullText(
   };
 
   const outcomes: FullTextIndexPaperOutcome[] = [];
+  // Paper documents are only deleted after the manifest CAS commits. Until
+  // then the committed manifest still references them, so deleting earlier
+  // would corrupt the previous index when a run fails or is cancelled.
+  // Switching models never deletes the old model's documents at all: the old
+  // manifest is expected to stay usable until the user switches back.
+  const keysToRemoveAfterCommit = new Set<string>();
   let titlesRefreshed = 0;
   const units = await collectIndexUnits({
     catalog,
@@ -214,8 +220,8 @@ export async function indexPersonalLibraryFullText(
         embedding.dimension,
         unit,
       ));
-      if (previous?.status === "ready") {
-        await discardOrphanedPaperDocument(store, paperKey, log);
+      if (previous?.status === "ready" && !modelChanged) {
+        keysToRemoveAfterCommit.add(paperKey);
       }
       continue;
     }
@@ -383,8 +389,8 @@ export async function indexPersonalLibraryFullText(
         embedding.dimension,
         unit,
       ));
-      if (previous?.status === "ready") {
-        await discardOrphanedPaperDocument(store, paperKey, log);
+      if (previous?.status === "ready" && !modelChanged) {
+        keysToRemoveAfterCommit.add(paperKey);
       }
     }
     // Yield between papers so a long index run does not freeze host UIs (the
@@ -415,7 +421,7 @@ export async function indexPersonalLibraryFullText(
       }
       continue;
     }
-    await store.removePaper(paperKey);
+    if (!modelChanged) keysToRemoveAfterCommit.add(paperKey);
     delete papers[paperKey];
     if (!completedMigrationKeys.has(paperKey)) pruned += 1;
   }
@@ -426,6 +432,9 @@ export async function indexPersonalLibraryFullText(
   throwIfCancelled(input.signal);
   await input.beforeManifestCommit?.();
   const saved = await store.replaceManifest(next, loaded.revision);
+  for (const paperKey of keysToRemoveAfterCommit) {
+    await discardOrphanedPaperDocument(store, paperKey, log);
+  }
   await input.afterManifestCommit?.();
   log?.info(
     `fulltext: index run complete (revision ${saved.revision}, indexed ${outcomes.filter((o) => o.status === "indexed").length}, `

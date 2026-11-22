@@ -89,6 +89,12 @@ export interface EmbeddingModel {
    * calling (see `applyEmbeddingPrefix`); the host treats input as final.
    */
   embed(texts: readonly string[], options?: EmbeddingOptions): Promise<readonly Float32Array[]>;
+  /**
+   * Optional release hook for engines that hold a session (the local
+   * transformers.js pipeline). Hosts call it when they stop using the model;
+   * the model is unusable afterwards and may be rebuilt from scratch.
+   */
+  dispose?(): Promise<void>;
 }
 
 /**

@@ -16,7 +16,8 @@ function fixture(provider: string, thinkingMode = true, overrides: Partial<LlmSe
   const request = vi.fn(async (_req: HttpRequest) => answer);
   const client = new LlmClient({
     ...DEFAULT_SETTINGS.llm, provider, thinkingMode,
-    baseUrl: "https://provider.example/v1", model: "test-model", apiKey: "test-key",
+    baseUrl: provider === "anthropic" ? "https://api.anthropic.com/v1" : "https://provider.example/v1",
+    model: "test-model", apiKey: "test-key",
     reasoningEffort: "high",
     ...overrides,
   }, new Logger("error"), { request });
@@ -59,9 +60,11 @@ describe("provider request contract", () => {
       headers: { "x-api-key": "test-key", "anthropic-version": "2023-06-01" },
     });
     expect(body()).toMatchObject({
-      system: "Be concise.", messages: prompt, max_tokens: 4096,
+      system: "Be concise.", messages: prompt, max_tokens: 20480,
       thinking: { type: "adaptive" }, output_config: { effort: "high" },
     });
+    // Thinking counts against max_tokens; keep the caller's full visible budget.
+    expect(body().max_tokens - 4096).toBeGreaterThanOrEqual(4096);
     expect(body()).not.toHaveProperty("stream_options");
     expect(body().thinking).not.toHaveProperty("budget_tokens");
     expect(metrics).toHaveBeenCalledWith(expect.objectContaining({ inputTokens: 8, outputTokens: 2 }));
@@ -141,15 +144,23 @@ describe("provider request contract", () => {
     }
   });
 
-  it("keeps the Anthropic thinking budget below an explicit completion cap", async () => {
-    const { client, body } = fixture("anthropic");
+  it("adds the Anthropic thinking budget on top of an explicit completion cap", async () => {
+    const { client, body } = fixture("anthropic", true, { reasoningEffort: "medium" });
     await client.call(prompt, { maxCompletionTokens: 4096 });
     expect(body().thinking.type).toBe("enabled");
-    expect(body().thinking.budget_tokens).toBeGreaterThanOrEqual(1024);
-    expect(body().thinking.budget_tokens).toBeLessThan(4096);
-    expect(body().max_tokens).toBe(4096);
+    expect(body().max_tokens).toBe(12288);
+    expect(body().thinking.budget_tokens).toBe(8192);
+    expect(body().max_tokens - body().thinking.budget_tokens).toBeGreaterThanOrEqual(4096);
     expect(body()).not.toHaveProperty("extra_body");
     expect(body()).not.toHaveProperty("reasoning_effort");
+  });
+
+  it("keeps a full visible-output budget with high-effort Anthropic thinking", async () => {
+    const { client, body } = fixture("anthropic");
+    await client.call(prompt, { maxCompletionTokens: 4096 });
+    expect(body().max_tokens).toBe(20480);
+    expect(body().thinking).toEqual({ type: "enabled", budget_tokens: 16384 });
+    expect(body().max_tokens - body().thinking.budget_tokens).toBeGreaterThanOrEqual(4096);
   });
 
   it("supplies a valid Anthropic completion cap when the caller leaves it unset", async () => {
@@ -157,6 +168,15 @@ describe("provider request contract", () => {
     await client.call(prompt);
     expect(body().thinking.budget_tokens).toBe(16384);
     expect(body().max_tokens).toBeGreaterThan(16384);
+  });
+
+  it("keeps a visible-answer budget for adaptive thinking at medium effort", async () => {
+    const { client, body } = fixture("anthropic", true, {
+      baseUrl: "https://api.anthropic.com/v1", model: "claude-opus-4-7", reasoningEffort: "medium",
+    });
+    await client.call(prompt, { maxCompletionTokens: 4096 });
+    expect(body().thinking).toEqual({ type: "adaptive" });
+    expect(body().max_tokens).toBe(12288);
   });
 
   it("does not cap Anthropic adaptive thinking answers at 4096 tokens by default", async () => {
@@ -174,6 +194,27 @@ describe("provider request contract", () => {
     });
     await client.call(prompt);
     expect(body().max_tokens).toBe(8192);
+  });
+
+  it("speaks OpenAI-compatible parameters through a non-native Anthropic proxy", async () => {
+    const { client, request, body } = fixture("anthropic", true, {
+      baseUrl: "https://proxy.example.com/v1", model: "claude-opus-4-7",
+    });
+    await client.call(prompt, { maxCompletionTokens: 4096 });
+    expect(request.mock.calls[0]![0].url).toBe("https://proxy.example.com/v1/chat/completions");
+    expect(body()).toMatchObject({ max_tokens: 4096, reasoning_effort: "high" });
+    expect(body()).not.toHaveProperty("thinking");
+    expect(body()).not.toHaveProperty("output_config");
+  });
+
+  it("does not send Anthropic thinking fields to a proxy when thinking is off", async () => {
+    const { client, body } = fixture("anthropic", false, {
+      baseUrl: "https://proxy.example.com/v1", model: "claude-sonnet-4-5",
+    });
+    await client.call(prompt, { temperature: 0.2 });
+    expect(body()).toMatchObject({ temperature: 0.2 });
+    expect(body()).not.toHaveProperty("thinking");
+    expect(body()).not.toHaveProperty("output_config");
   });
 
   it("rejects an impossible Anthropic thinking budget before making a request", async () => {

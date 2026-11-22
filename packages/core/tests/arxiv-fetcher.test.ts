@@ -461,7 +461,7 @@ describe("ArxivFetcher", () => {
 
   it("fetches PDF bytes with an arrayBuffer response", async () => {
     const requests: HttpRequest[] = [];
-    const bodyBuffer = new Uint8Array([1, 2, 3]).buffer;
+    const bodyBuffer = new TextEncoder().encode("%PDF-1.7\n%%EOF\n").buffer;
     const http: HttpClient = {
       request: vi.fn(async (req) => {
         requests.push(req);
@@ -476,11 +476,26 @@ describe("ArxivFetcher", () => {
 
     const pdf = await makeFetcher(http).fetchPdf("2606.12345");
 
-    expect(Array.from(new Uint8Array(pdf))).toEqual([1, 2, 3]);
+    expect(Array.from(new Uint8Array(pdf))).toEqual(Array.from(new Uint8Array(bodyBuffer)));
     expect(requests[0]).toMatchObject({
       url: "https://arxiv.org/pdf/2606.12345",
       responseType: "arrayBuffer",
     });
+  });
+
+  it("rejects an HTTP 200 HTML body instead of returning it as PDF bytes", async () => {
+    const http: HttpClient = {
+      request: vi.fn(async () => ({
+        status: 200,
+        headers: { "content-type": "text/html" },
+        bodyText: "<!DOCTYPE html><html>captcha</html>",
+        bodyBuffer: new TextEncoder().encode("<!DOCTYPE html><html>captcha</html>").buffer,
+      })),
+    };
+
+    await expect(makeFetcher(http).fetchPdf("2606.12345"))
+      .rejects.toThrow("response is not a PDF");
+    expect(http.request).toHaveBeenCalledOnce();
   });
 
   it("uses Retry-After seconds for 429 backoff before retrying", async () => {
@@ -984,7 +999,12 @@ describe("ArxivFetcher", () => {
     const http: HttpClient = { request: vi.fn(async (req) => {
       requests.push(req);
       return req.responseType === "arrayBuffer"
-        ? { status: 200, headers: {}, bodyText: "", bodyBuffer: new ArrayBuffer(1) }
+        ? {
+            status: 200,
+            headers: {},
+            bodyText: "",
+            bodyBuffer: new TextEncoder().encode("%PDF-1.7\n").buffer,
+          }
         : { status: 200, headers: {}, bodyText: "ok" };
     }) };
     const fetcher = makeFetcher(http, undefined, {

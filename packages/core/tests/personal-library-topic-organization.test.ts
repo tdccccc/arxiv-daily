@@ -167,7 +167,19 @@ describe("decodeOrganizedTopics", () => {
     expectRejection(value, "direction-count");
   });
 
-  it.each(["plain text", "```json\n{}\n```", "{\"topics\":"])("rejects non-JSON output %s", (raw) => {
+  it.each(["plain text", "{\"topics\":"])("rejects non-JSON output %s", (raw) => {
+    expect(decodeOrganizedTopics(raw, groups)).toEqual({ ok: false, reason: "not-json" });
+  });
+
+  it("unwraps exactly one surrounding json code fence", () => {
+    const raw = `\`\`\`json\n${JSON.stringify(organization())}\n\`\`\``;
+    expect(decodeOrganizedTopics(raw, groups)).toEqual(decode(organization()));
+    const fencedBad = "```json\n{}\n```";
+    expect(decodeOrganizedTopics(fencedBad, groups)).toEqual({ ok: false, reason: "wrong-shape" });
+  });
+
+  it("still rejects a fence surrounded by extra prose", () => {
+    const raw = `Here is the organization:\n\`\`\`json\n${JSON.stringify(organization())}\n\`\`\``;
     expect(decodeOrganizedTopics(raw, groups)).toEqual({ ok: false, reason: "not-json" });
   });
 

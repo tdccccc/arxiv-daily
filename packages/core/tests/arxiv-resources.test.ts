@@ -25,6 +25,13 @@ describe("modernArxivResources", () => {
     expect(modernArxivResources(input)).toEqual(expected);
   });
 
+  it("rejects a pathological URL without pathological backtracking", () => {
+    // Shaped like the polynomial-ReDoS witness: an authority followed by many
+    // empty quoted segments. The parser must stay linear.
+    const hostile = `http://${'""'.repeat(10_000)}`;
+    expect(modernArxivResources(hostile)).toBeNull();
+  });
+
   it.each([
     "",
     "hep-th/9901001",

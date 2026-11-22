@@ -1,4 +1,14 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  DEFAULT_SETTINGS,
+  FULLTEXT_KNOWLEDGE_BASE_SCHEMA_VERSION,
+  LOCAL_EMBEDDING_DIMENSION,
+  LOCAL_EMBEDDING_MODEL_ID,
+  createLibraryConnection,
+  createPersonalLibraryIdentificationFingerprint,
+  createPersonalLibraryScopeFingerprint,
+} from "@arxiv-daily/core";
+import ArxivDailyPlugin from "../main.ts";
 import { createTransformersEmbeddingModel } from "../src/hosts/obsidian/embedding-model";
 
 const runtime = vi.hoisted(() => ({
@@ -79,5 +89,99 @@ describe("local embedding runtime contract", () => {
     await expect(createTransformersEmbeddingModel().embed(["query: test"], { signal: controller.signal }))
       .rejects.toMatchObject({ name: "AbortError", message: "not now" });
     expect(runtime.pipeline).not.toHaveBeenCalled();
+  });
+});
+
+describe("plugin local embedding reuse", () => {
+  function pluginWithLibrary() {
+    const plugin = Object.create(ArxivDailyPlugin.prototype) as ArxivDailyPlugin;
+    const internals = plugin as unknown as Record<string, any>;
+    const connection = createLibraryConnection("/papers", "1:2");
+    const scopeFingerprint = createPersonalLibraryScopeFingerprint({
+      rootIdentity: connection.rootIdentity,
+      eligibleExtensions: connection.eligibleExtensions,
+    });
+    const identificationFingerprint = createPersonalLibraryIdentificationFingerprint(
+      connection.eligibleExtensions,
+    );
+    const manifest = {
+      schemaVersion: FULLTEXT_KNOWLEDGE_BASE_SCHEMA_VERSION,
+      revision: 1,
+      scopeFingerprint,
+      identificationFingerprint,
+      modelId: LOCAL_EMBEDDING_MODEL_ID,
+      dimension: LOCAL_EMBEDDING_DIMENSION,
+      updatedAt: "2026-08-18T00:00:00.000Z",
+      papers: {
+        "arxiv:2601.00001": {
+          paperKey: "arxiv:2601.00001",
+          status: "ready" as const,
+          modelId: LOCAL_EMBEDDING_MODEL_ID,
+          dimension: LOCAL_EMBEDDING_DIMENSION,
+          title: "A paper",
+          textHash: "sha256:x",
+          chunkCount: 1,
+          filePaths: ["paper.pdf"],
+          observationFingerprints: ["fingerprint"],
+          updatedAt: "2026-08-18T00:00:00.000Z",
+        },
+      },
+    };
+    Object.assign(plugin, {
+      settings: structuredClone(DEFAULT_SETTINGS),
+      logger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+      host: { storage: { normalizePath: (path: string) => path }, http: {} },
+      libraryConnection: connection,
+      libraryConnectionRevision: 0,
+      libraryOutputRevision: 0,
+    });
+    internals.buildPersonalLibraryCatalogStore = vi.fn(() => ({
+      load: vi.fn(async () => ({ papers: {}, files: {} })),
+    }));
+    internals.buildFullTextKnowledgeBaseStore = vi.fn(() => ({
+      loadManifest: vi.fn(async () => structuredClone(manifest)),
+      loadPaper: vi.fn(async () => null),
+    }));
+    internals.buildFullTextGenerationIndexStore = vi.fn(() => ({
+      openCurrent: vi.fn(async () => null),
+    }));
+    return { plugin, internals };
+  }
+
+  it("loads the local ONNX pipeline once for consecutive searches", async () => {
+    runtime.pipeline.mockResolvedValue(vi.fn(async (input: string | readonly string[]) => ({
+      dims: [typeof input === "string" ? 1 : input.length, LOCAL_EMBEDDING_DIMENSION],
+      data: new Float32Array(LOCAL_EMBEDDING_DIMENSION),
+    })));
+    const { plugin } = pluginWithLibrary();
+
+    await expect(plugin.searchPersonalLibraryFullText("alpha")).resolves.toEqual([]);
+    await expect(plugin.searchPersonalLibraryFullText("beta")).resolves.toEqual([]);
+
+    expect(runtime.pipeline).toHaveBeenCalledOnce();
+    expect(plugin.buildEmbeddingModel()).toBe(plugin.buildEmbeddingModel());
+  });
+
+  it("releases the local model when the embedding mode leaves local", async () => {
+    runtime.pipeline.mockResolvedValue(vi.fn(async (input: string | readonly string[]) => ({
+      dims: [typeof input === "string" ? 1 : input.length, LOCAL_EMBEDDING_DIMENSION],
+      data: new Float32Array(LOCAL_EMBEDDING_DIMENSION),
+    })));
+    const { plugin } = pluginWithLibrary();
+    const model = plugin.buildEmbeddingModel();
+    const dispose = vi.spyOn(model, "dispose");
+    plugin.settings.embedding = {
+      ...plugin.settings.embedding,
+      mode: "remote",
+      baseUrl: "https://api.openai.com/v1",
+      apiKey: "sk-embed",
+      model: "text-embedding-3-small",
+      dimension: 1536,
+    };
+
+    const remote = plugin.buildEmbeddingModel();
+
+    expect(remote.modelId).toBe("remote:text-embedding-3-small:1536");
+    await vi.waitFor(() => expect(dispose).toHaveBeenCalledOnce());
   });
 });

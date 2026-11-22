@@ -718,34 +718,62 @@ function generationParameters(
   maxCompletionTokens?: number,
 ): Record<string, unknown> {
   const params: Record<string, unknown> = {};
+  // Native Anthropic owns the `/messages` protocol. An Anthropic preset
+  // pointed at a proxy/gateway speaks plain OpenAI, so it must get neither
+  // Anthropic-only fields nor Anthropic defaults.
+  const nativeAnthropic = usesNativeAnthropic(settings);
   if (maxCompletionTokens !== undefined) {
     params[settings.provider === "openai" ? "max_completion_tokens" : "max_tokens"] = maxCompletionTokens;
-  } else if (settings.provider === "anthropic") {
+  } else if (nativeAnthropic) {
     params.max_tokens = settings.thinkingMode
       ? ANTHROPIC_THINKING_MAX_TOKENS
       : ANTHROPIC_DEFAULT_MAX_TOKENS;
   }
-  const hasThinkingToggle = ["anthropic", "deepseek", "zhipu"].includes(settings.provider);
+  const hasThinkingToggle = nativeAnthropic
+    || settings.provider === "deepseek"
+    || settings.provider === "zhipu";
   if (!settings.thinkingMode) {
     params.temperature = options.temperature ?? LLM_TEMPERATURE;
     if (hasThinkingToggle) params.thinking = { type: "disabled" };
     return params;
   }
-  if (settings.provider === "anthropic") {
+  if (nativeAnthropic) {
+    const budgets: Record<string, number> = { low: 2048, medium: 8192, high: 16384 };
+    const requested = budgets[settings.reasoningEffort] ?? 8192;
     if (usesAdaptiveAnthropicThinking(settings.model)) {
       params.thinking = { type: "adaptive" };
       params.output_config = { effort: anthropicAdaptiveEffort(settings.reasoningEffort) };
+      if (maxCompletionTokens !== undefined) {
+        // Adaptive thinking still counts against `max_tokens`; do not lock the
+        // visible answer to the caller's budget alone.
+        params.max_tokens = Math.min(
+          maxCompletionTokens + requested,
+          ANTHROPIC_THINKING_MAX_TOKENS,
+        );
+      }
       return params;
     }
-    const budgets: Record<string, number> = { low: 2048, medium: 8192, high: 16384 };
-    const requested = budgets[settings.reasoningEffort] ?? 8192;
-    const cap = maxCompletionTokens
-      ?? Math.min(requested + 16_000, ANTHROPIC_THINKING_MAX_TOKENS);
-    if (cap <= 1024) {
+    if (maxCompletionTokens === undefined) {
+      const cap = Math.min(requested + 16_000, ANTHROPIC_THINKING_MAX_TOKENS);
+      params.max_tokens = cap;
+      params.thinking = { type: "enabled", budget_tokens: Math.min(requested, cap - 1) };
+      return params;
+    }
+    // `maxCompletionTokens` is the caller's visible-answer budget. Thinking
+    // tokens count against the same `max_tokens`, so add that budget on top
+    // instead of allocating almost all of it to `budget_tokens`.
+    if (maxCompletionTokens <= 1024) {
       throw new TypeError("Anthropic thinking requires maxCompletionTokens greater than 1024");
     }
+    const cap = Math.min(
+      Math.max(requested + maxCompletionTokens, maxCompletionTokens + 1024),
+      ANTHROPIC_THINKING_MAX_TOKENS,
+    );
     params.max_tokens = cap;
-    params.thinking = { type: "enabled", budget_tokens: Math.min(requested, cap - 1) };
+    params.thinking = {
+      type: "enabled",
+      budget_tokens: Math.max(1024, Math.min(requested, cap - maxCompletionTokens)),
+    };
   } else {
     if (hasThinkingToggle) params.thinking = { type: "enabled" };
     if (settings.provider !== "zhipu") params.reasoning_effort = settings.reasoningEffort;
@@ -767,7 +795,7 @@ export function isUnsupportedStreamOptionsError(err: unknown): boolean {
  * thinking configuration itself, and dropping it there would quietly turn
  * thinking off on a model that supports it.
  */
-const DROPPABLE_GENERATION_PARAMETERS = ["thinking", "reasoning_effort", "temperature"] as const;
+const DROPPABLE_GENERATION_PARAMETERS = ["thinking", "output_config", "reasoning_effort", "temperature"] as const;
 
 const REJECTED_WORDING =
   "(?:unknown|unrecognized|unsupported|unexpected|not (?:allowed|permitted|supported)|extra (?:fields?|inputs?)|additional propert(?:y|ies))";
@@ -782,12 +810,14 @@ const REJECTED_WORDING =
 export function rejectedOptionalParameter(
   err: unknown,
   body: Record<string, unknown>,
-  settings: Pick<LlmSettings, "provider">,
+  settings: Pick<LlmSettings, "provider" | "baseUrl">,
 ): string | undefined {
   if ("stream_options" in body && isUnsupportedStreamOptionsError(err)) return "stream_options";
   const status = (err as LlmStatusError | undefined)?.status;
   if (status !== 400 && status !== 422) return undefined;
-  if (settings.provider === "anthropic") return undefined;
+  // Native Anthropic is the only path where these fields are part of the
+  // protocol; there a rejection is about the thinking configuration itself.
+  if (usesNativeAnthropic(settings)) return undefined;
   const message = err instanceof Error ? err.message : String(err);
   return DROPPABLE_GENERATION_PARAMETERS.find((key) => key in body && new RegExp(
     `${REJECTED_WORDING}[^.\\n]{0,40}\\b${key}\\b|\\b${key}\\b[^.\\n]{0,40}${REJECTED_WORDING}`,

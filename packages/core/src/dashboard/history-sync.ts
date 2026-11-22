@@ -301,7 +301,11 @@ async function collectPaperCandidates(
         arxivId,
         title: frontmatter.title || firstH1(markdown) || arxivId,
         authors: frontmatter.authors || "",
-        date: frontmatter.date || dateFromDailyReport(dailyReport) || undefined,
+        date:
+          dateFromPublished(frontmatter.published) ||
+          frontmatter.date ||
+          dateFromDailyReport(dailyReport) ||
+          undefined,
         topic,
         path,
         detail: true,
@@ -881,6 +885,18 @@ function dateFromDailyReport(value: string | undefined): string {
   if (!value) return "";
   const match = /\b(\d{4}-\d{2}-\d{2})\b/.exec(value);
   return match?.[1] ?? "";
+}
+
+/**
+ * Current MarkdownWriter paper notes store the date in `published`: either a
+ * plain value (`2026-06-09`, possibly an ISO timestamp) or a daily-report
+ * wikilink such as `[[arxiv-daily/daily/2026-06-09|2026-06-09]]`. Both carry
+ * the date as a leading YYYY-MM-DD; older notes used `date`/`daily_report`.
+ */
+function dateFromPublished(value: string | undefined): string {
+  if (!value) return "";
+  // No trailing \b: an ISO timestamp continues with a word character ("...09T").
+  return /\d{4}-\d{2}-\d{2}/.exec(value)?.[0] ?? "";
 }
 
 function dailyReportPathFromLink(value: string | undefined): string | undefined {

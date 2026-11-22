@@ -5,14 +5,18 @@ import {
   FullTextGenerationIndexStore,
   GENERATION_DESCRIPTOR_FORMAT_VERSION,
   GENERATION_DESCRIPTOR_SCHEMA_VERSION,
+  LOCAL_EMBEDDING_DIMENSION,
+  LOCAL_EMBEDDING_MODEL_ID,
   OperationRegistry,
   createEmptyPersonalLibraryCatalog,
+  createLibraryFileObservationFingerprint,
   createPersonalLibraryIdentificationFingerprint,
   createPersonalLibraryScopeFingerprint,
   type EmbeddingModel,
   type FullTextKnowledgeBaseManifest,
   type FullTextKnowledgeBaseStore,
   type GenerationDescriptor,
+  type OperationHandle,
   type StorageAdapter,
 } from "@arxiv-daily/core";
 import { Notice } from "obsidian";
@@ -223,6 +227,8 @@ function fixture(storage: StorageAdapter) {
     operations: new OperationRegistry(),
     libraryIndexStatus: new LibraryIndexStatusStore(),
     libraryConnection: connection,
+    saveData: vi.fn(async () => undefined),
+    libraryMutationQueue: Promise.resolve(),
     librarySource: {
       canonicalRoot: connection.selectedRoot,
       rootIdentity: connection.rootIdentity,
@@ -274,9 +280,14 @@ describe("personal library full-text index lifecycle", () => {
   it("keeps retry available after restarting with an unfinished search generation", async () => {
     const runtime = fixture(memoryStorage().storage);
     const manifest = await runtime.legacy.loadManifest();
-    Object.assign(manifest, { revision: 2, modelId: "fixture-model", dimension: 2 });
+    // The trace derives the expected identity from settings (local mode here),
+    // not from the indexing fixture's model stub.
+    Object.assign(manifest, {
+      revision: 2, modelId: LOCAL_EMBEDDING_MODEL_ID, dimension: LOCAL_EMBEDDING_DIMENSION,
+    });
     manifest.papers["arxiv:2601.00001"] = {
-      paperKey: "arxiv:2601.00001", status: "ready", modelId: "fixture-model", dimension: 2,
+      paperKey: "arxiv:2601.00001", status: "ready",
+      modelId: LOCAL_EMBEDDING_MODEL_ID, dimension: LOCAL_EMBEDDING_DIMENSION,
       title: "Existing paper", textHash: "sha256:old", chunkCount: 1,
       filePaths: ["paper.pdf"], observationFingerprints: ["fingerprint"],
       updatedAt: "2026-08-18T00:00:00.000Z",
@@ -292,6 +303,81 @@ describe("personal library full-text index lifecycle", () => {
     expect(runtime.plugin.libraryIndexStatus.snapshot().preparationError).toMatch(/search index.*retry preparation/i);
     expect(close).toHaveBeenCalledOnce();
     expect(runtime.internals.libraryIndexedPapers).toEqual([]);
+  });
+
+  /**
+   * An unfinished remote embedding configuration used to reach
+   * `buildEmbeddingModel()` inside the refresh `try`, so its "API key is
+   * required" error was reported as an unreadable index and wiped the review
+   * metadata. Config state is not index state.
+   */
+  it("reports incomplete remote embedding settings as configuration, not a read failure", async () => {
+    const runtime = fixture(memoryStorage().storage);
+    runtime.internals.settings.embedding = {
+      ...DEFAULT_SETTINGS.embedding,
+      mode: "remote",
+      baseUrl: "https://api.openai.com/v1",
+      apiKey: "",
+      model: "text-embedding-3-small",
+      dimension: 1536,
+    };
+    const manifest = await runtime.legacy.loadManifest();
+    Object.assign(manifest, {
+      revision: 2,
+      modelId: "remote:text-embedding-3-small:1536",
+      dimension: 1536,
+    });
+    manifest.papers["arxiv:2601.00001"] = {
+      paperKey: "arxiv:2601.00001",
+      status: "ready",
+      modelId: "remote:text-embedding-3-small:1536",
+      dimension: 1536,
+      title: "Existing paper",
+      textHash: "sha256:old",
+      chunkCount: 1,
+      filePaths: ["paper.pdf"],
+      observationFingerprints: ["fingerprint"],
+      updatedAt: "2026-08-18T00:00:00.000Z",
+    };
+    runtime.legacy.loadManifest.mockResolvedValue(manifest);
+    runtime.internals.libraryProposal = {
+      revision: 1,
+      proposalId: "proposal.1",
+      scopeFingerprint: runtime.scopeFingerprint,
+      catalogInputPapers: [],
+    };
+    const buildEmbeddingModel = vi.fn();
+    runtime.internals.buildEmbeddingModel = buildEmbeddingModel;
+
+    await runtime.plugin.refreshLibraryIndexTrace();
+
+    const status = runtime.plugin.libraryIndexStatus.snapshot();
+    expect(status.preparationError).toMatch(/embedding settings are incomplete/i);
+    expect(status.preparationError).not.toMatch(/could not read the library index/i);
+    // The manifest was readable: its run count and review metadata survive.
+    expect(status.lastRun?.papers).toBe(1);
+    expect(runtime.plugin.getPersonalLibraryProfileSnapshot().indexedPapers).toEqual([
+      { paperKey: "arxiv:2601.00001", title: "Existing paper" },
+    ]);
+    expect(runtime.plugin.getPersonalLibraryProfileSnapshot().newPaperKeys).toEqual([
+      "arxiv:2601.00001",
+    ]);
+    // Building the model would have thrown here; the trace derives the
+    // expected identity from settings instead.
+    expect(buildEmbeddingModel).not.toHaveBeenCalled();
+
+    // Completing the configuration clears the configuration state on the next
+    // refresh; an empty manifest keeps this about the error transition.
+    runtime.internals.settings.embedding.apiKey = "sk-embed";
+    runtime.legacy.loadManifest.mockResolvedValue({
+      ...(await runtime.legacy.loadManifest()),
+      revision: 0,
+      modelId: "",
+      dimension: 0,
+      papers: {},
+    });
+    await runtime.plugin.refreshLibraryIndexTrace();
+    expect(runtime.plugin.libraryIndexStatus.snapshot().preparationError).toBeUndefined();
   });
 
   it("keeps a read failure visible without deleting the old index", async () => {
@@ -563,6 +649,411 @@ describe("personal library full-text index lifecycle", () => {
     const memory = memoryStorage();
     const runtime = fixture(memory.storage);
     expect(runtime.plugin.cancelPersonalLibraryIndexing()).toBe(false);
+  });
+
+  /**
+   * A remote-mode library with three ready papers and a local listing that
+   * matches its scan, so indexing goes straight to extraction and embedding
+   * (no folder rescan, no arXiv lookup).
+   */
+  function remoteLibrary() {
+    const runtime = fixture(memoryStorage().storage);
+    const { scopeFingerprint, identificationFingerprint, connection } = runtime;
+    const catalog = createEmptyPersonalLibraryCatalog(
+      scopeFingerprint,
+      identificationFingerprint,
+      new Date("2026-08-18T00:00:00.000Z"),
+    );
+    const entries = [];
+    for (let index = 1; index <= 3; index += 1) {
+      const arxivId = `2601.0000${index}`;
+      const paperKey = `arxiv:${arxivId}`;
+      const path = `papers/${arxivId}.pdf`;
+      const entry = { path, type: "file" as const, size: 10, mtimeMs: 1_000 + index };
+      entries.push(entry);
+      catalog.files[path] = {
+        path,
+        status: "ready",
+        observationFingerprint: createLibraryFileObservationFingerprint(
+          entry,
+          identificationFingerprint,
+        ),
+        paperKey,
+        arxivId,
+        updatedAt: "2026-08-18T00:00:00.000Z",
+      };
+      catalog.papers[paperKey] = {
+        paperKey,
+        source: "arxiv",
+        externalId: arxivId,
+        title: `Paper ${index}`,
+        authors: ["A"],
+        abstract: "Abstract",
+        published: "2026-01-01T00:00:00.000Z",
+        updated: "2026-01-01T00:00:00.000Z",
+        primaryCategory: "cs.LG",
+        categories: ["cs.LG"],
+        evidenceDepth: "metadata-and-abstract",
+        filePaths: [path],
+      };
+    }
+    catalog.lastScan = {
+      ready: 3, unresolved: 0, unrelated: 0, failed: 0, papers: 3, truncated: false,
+    };
+    runtime.internals.buildPersonalLibraryCatalogStore = vi.fn(() => ({
+      load: vi.fn(async () => structuredClone(catalog)),
+    }));
+    runtime.internals.librarySource = {
+      canonicalRoot: connection.selectedRoot,
+      rootIdentity: connection.rootIdentity,
+      inventory: vi.fn(async () => ({ entries, truncated: false })),
+      readBinary: vi.fn(async () => new Uint8Array([1, 2, 3]).buffer),
+    };
+    runtime.internals.buildFullTextExtractor = vi.fn(() => ({
+      provenance: { id: "fixture-pdf", version: "1" },
+      extractPdfText: vi.fn(async () => ({
+        pages: ["Reliable Research Agents\n\nWe study reliable agents."],
+        metadataTitle: "Reliable Research Agents",
+      })),
+    }));
+    runtime.internals.settings.embedding = {
+      ...DEFAULT_SETTINGS.embedding,
+      mode: "remote",
+      baseUrl: "https://embed.example/v1",
+      apiKey: "sk-embed",
+      model: "fixture-model",
+      dimension: 2,
+    };
+    return runtime;
+  }
+
+  it("stops a remote index before the next paper when authorization is revoked", async () => {
+    const runtime = remoteLibrary();
+    await runtime.plugin.authorizeLibraryProcessing();
+    const embed = vi.fn(async (texts: readonly string[]) => {
+      if (embed.mock.calls.length === 1) await runtime.plugin.revokeLibraryProcessing();
+      return texts.map(() => new Float32Array([0, 0]));
+    });
+    runtime.internals.buildEmbeddingModel = vi.fn(() => ({
+      modelId: "remote:fixture-model:2",
+      dimension: 2,
+      prefixPolicy: "none",
+      embed,
+    }) satisfies EmbeddingModel);
+
+    await expect(runtime.plugin.indexPersonalLibraryFullText()).rejects.toMatchObject({
+      name: "RunCancelledError",
+      message: "library processing authorization revoked",
+    });
+
+    // Only the paper whose embedding was already in flight left the machine.
+    expect(embed).toHaveBeenCalledTimes(1);
+    expect(runtime.plugin.getLibraryConnectionStatus().kind).toBe("authorization-required");
+    expect(runtime.legacy.replaceManifest).not.toHaveBeenCalled();
+    expect(runtime.plugin.libraryIndexStatus.snapshot()).toEqual({});
+  });
+
+  it("refuses the manifest commit when revocation cannot abort the run in time", async () => {
+    const runtime = remoteLibrary();
+    await runtime.plugin.authorizeLibraryProcessing();
+    // Simulate a host where cancellation is too late to reach the running
+    // task: every paper still embeds, so only the commit guard can stop the
+    // revoked index from being published.
+    const registry = runtime.internals.operations as OperationRegistry;
+    runtime.internals.operations = new Proxy(registry, {
+      get(target, property) {
+        if (property === "cancel") return () => false;
+        const value = Reflect.get(target, property, target) as unknown;
+        return typeof value === "function" ? value.bind(target) : value;
+      },
+    }) as OperationRegistry;
+    const embed = vi.fn(async (texts: readonly string[]) => {
+      if (embed.mock.calls.length === 1) await runtime.plugin.revokeLibraryProcessing();
+      return texts.map(() => new Float32Array([0, 0]));
+    });
+    runtime.internals.buildEmbeddingModel = vi.fn(() => ({
+      modelId: "remote:fixture-model:2",
+      dimension: 2,
+      prefixPolicy: "none",
+      embed,
+    }) satisfies EmbeddingModel);
+
+    await expect(runtime.plugin.indexPersonalLibraryFullText()).rejects.toThrow(
+      "Library connection changed during personal library operation",
+    );
+
+    expect(embed).toHaveBeenCalledTimes(3);
+    expect(runtime.legacy.replaceManifest).not.toHaveBeenCalled();
+  });
+
+  it("cancels a running remote index when the embedding endpoint changes", async () => {
+    const runtime = remoteLibrary();
+    await runtime.plugin.authorizeLibraryProcessing();
+    let releaseEmbed!: () => void;
+    const embedGate = new Promise<void>((resolve) => { releaseEmbed = resolve; });
+    const embed = vi.fn(async (texts: readonly string[]) => {
+      await embedGate;
+      return texts.map(() => new Float32Array([0, 0]));
+    });
+    runtime.internals.buildEmbeddingModel = vi.fn(() => ({
+      modelId: "remote:fixture-model:2",
+      dimension: 2,
+      prefixPolicy: "none",
+      embed,
+    }) satisfies EmbeddingModel);
+    const registry = runtime.internals.operations as OperationRegistry;
+    const begin = registry.begin.bind(registry);
+    let indexOperation: OperationHandle | undefined;
+    vi.spyOn(registry, "begin").mockImplementation((kind, label, key) => {
+      const handle = begin(kind, label, key);
+      if (kind === "personal-library-fulltext-index") indexOperation = handle;
+      return handle;
+    });
+
+    const run = runtime.plugin.indexPersonalLibraryFullText();
+    await vi.waitFor(() => expect(embed).toHaveBeenCalledTimes(1));
+    expect(indexOperation?.signal.aborted).toBe(false);
+    const candidate = structuredClone(runtime.internals.settings);
+    candidate.embedding = { ...candidate.embedding, baseUrl: "https://other.example/v1" };
+    runtime.internals.prepareEmbeddingBackendChange(candidate, ["embedding.baseUrl"]);
+
+    // The abort fires synchronously with the settings change; no further
+    // titles or abstracts may leave for the old endpoint.
+    expect(indexOperation?.signal.aborted).toBe(true);
+    expect(indexOperation?.signal.reason).toBe("embedding settings changed");
+    releaseEmbed();
+    await expect(run).rejects.toMatchObject({
+      name: "RunCancelledError",
+      message: "embedding settings changed",
+    });
+    expect(embed).toHaveBeenCalledTimes(1);
+    expect(runtime.legacy.replaceManifest).not.toHaveBeenCalled();
+    // A cancelled run is an outcome, not a preparation failure.
+    expect(runtime.plugin.libraryIndexStatus.snapshot()).toEqual({});
+  });
+
+  it("refuses the manifest commit when embedding settings changed and cancellation could not reach the run", async () => {
+    const runtime = remoteLibrary();
+    await runtime.plugin.authorizeLibraryProcessing();
+    // Simulate a host where cancellation cannot abort the running task: the
+    // run finishes every paper, so only the commit guard can stop a manifest
+    // that no longer matches settings from being published.
+    const registry = runtime.internals.operations as OperationRegistry;
+    runtime.internals.operations = new Proxy(registry, {
+      get(target, property) {
+        if (property === "cancel") return () => false;
+        const value = Reflect.get(target, property, target) as unknown;
+        return typeof value === "function" ? value.bind(target) : value;
+      },
+    }) as OperationRegistry;
+    const embed = vi.fn(async (texts: readonly string[]) => {
+      if (embed.mock.calls.length === 1) {
+        runtime.internals.settings.embedding = structuredClone(DEFAULT_SETTINGS.embedding);
+      }
+      return texts.map(() => new Float32Array([0, 0]));
+    });
+    runtime.internals.buildEmbeddingModel = vi.fn(() => ({
+      modelId: "remote:fixture-model:2",
+      dimension: 2,
+      prefixPolicy: "none",
+      embed,
+    }) satisfies EmbeddingModel);
+
+    await expect(runtime.plugin.indexPersonalLibraryFullText()).rejects.toMatchObject({
+      name: "RunCancelledError",
+      message: "Embedding settings changed during library indexing",
+    });
+
+    expect(embed).toHaveBeenCalledTimes(3);
+    expect(runtime.legacy.replaceManifest).not.toHaveBeenCalled();
+    expect(runtime.plugin.libraryIndexStatus.snapshot()).toEqual({});
+  });
+
+  it("cancels a local index when embedding settings change and releases the model only after it ends", async () => {
+    const runtime = remoteLibrary();
+    runtime.internals.settings.embedding = structuredClone(DEFAULT_SETTINGS.embedding);
+    let releaseEmbed!: () => void;
+    const embedGate = new Promise<void>((resolve) => { releaseEmbed = resolve; });
+    const model = {
+      modelId: LOCAL_EMBEDDING_MODEL_ID,
+      dimension: LOCAL_EMBEDDING_DIMENSION,
+      prefixPolicy: "e5",
+      embed: vi.fn(async (texts: readonly string[]) => {
+        await embedGate;
+        return texts.map(() => new Float32Array(LOCAL_EMBEDDING_DIMENSION));
+      }),
+      dispose: vi.fn(async () => undefined),
+    } satisfies EmbeddingModel;
+    runtime.internals.buildEmbeddingModel = vi.fn(() => model);
+    runtime.internals.localEmbeddingModelInstance = model;
+
+    const run = runtime.plugin.indexPersonalLibraryFullText();
+    await vi.waitFor(() => expect(model.embed).toHaveBeenCalledTimes(1));
+    // Switching to remote releases the ONNX session, but not while the run
+    // still holds it: disposing now would kill the extractor under the
+    // in-flight embed and make the rest of the run reload a session nothing
+    // would release.
+    const candidate = structuredClone(runtime.internals.settings);
+    candidate.embedding = {
+      ...candidate.embedding,
+      mode: "remote",
+      baseUrl: "https://embed.example/v1",
+      apiKey: "sk-embed",
+      model: "text-embedding-3-small",
+      dimension: 1536,
+    };
+    runtime.internals.prepareEmbeddingBackendChange(candidate, ["embedding.mode"]);
+    expect(model.dispose).not.toHaveBeenCalled();
+    expect(runtime.internals.localEmbeddingModelInstance).toBe(model);
+
+    releaseEmbed();
+    await expect(run).rejects.toMatchObject({ name: "RunCancelledError" });
+    await vi.waitFor(() => expect(model.dispose).toHaveBeenCalledOnce());
+    expect(model.embed).toHaveBeenCalledTimes(1);
+    expect(runtime.internals.localEmbeddingModelInstance).toBeUndefined();
+
+    // The disposed instance is not rebuilt in place: the next local use gets
+    // a fresh model rather than one that could reload an orphaned session.
+    delete (runtime.internals as Record<string, unknown>).buildEmbeddingModel;
+    const rebuilt = runtime.plugin.buildEmbeddingModel();
+    expect(rebuilt).not.toBe(model);
+    expect(runtime.internals.localEmbeddingModelInstance).toBe(rebuilt);
+    expect(model.embed).toHaveBeenCalledTimes(1);
+  });
+
+  it("clears a preparation failure once a healthy local model's index is verified again", async () => {
+    const runtime = remoteLibrary();
+    await runtime.plugin.authorizeLibraryProcessing();
+    runtime.legacy.replaceManifest.mockRejectedValueOnce(new Error("manifest write failed"));
+    await expect(runtime.plugin.indexPersonalLibraryFullText()).rejects.toThrow("manifest write failed");
+    expect(runtime.plugin.libraryIndexStatus.snapshot().preparationError).toMatch(/retry preparation/i);
+    expect(runtime.internals.libraryIndexedPapers).toEqual([]);
+
+    // The person moves back to the local model, whose index is healthy.
+    runtime.internals.settings.embedding = structuredClone(DEFAULT_SETTINGS.embedding);
+    const manifest = {
+      schemaVersion: FULLTEXT_KNOWLEDGE_BASE_SCHEMA_VERSION,
+      revision: 2,
+      scopeFingerprint: runtime.scopeFingerprint,
+      identificationFingerprint: runtime.identificationFingerprint,
+      modelId: LOCAL_EMBEDDING_MODEL_ID,
+      dimension: LOCAL_EMBEDDING_DIMENSION,
+      updatedAt: "2026-08-18T00:02:00.000Z",
+      papers: {
+        "arxiv:2601.00001": {
+          paperKey: "arxiv:2601.00001",
+          status: "ready" as const,
+          modelId: LOCAL_EMBEDDING_MODEL_ID,
+          dimension: LOCAL_EMBEDDING_DIMENSION,
+          title: "Existing paper",
+          textHash: "sha256:local",
+          chunkCount: 1,
+          filePaths: ["papers/2601.00001.pdf"],
+          observationFingerprints: ["fingerprint"],
+          updatedAt: "2026-08-18T00:02:00.000Z",
+        },
+      },
+    };
+    runtime.legacy.loadManifest.mockResolvedValue(manifest);
+    const close = vi.fn(async () => undefined);
+    runtime.internals.buildFullTextGenerationIndexStore = vi.fn(() => ({
+      openCurrent: vi.fn(async () => ({
+        descriptor: {
+          modelId: LOCAL_EMBEDDING_MODEL_ID,
+          dimension: LOCAL_EMBEDDING_DIMENSION,
+          sourceRevision: 2,
+        },
+        close,
+      })),
+    }));
+
+    await runtime.plugin.refreshLibraryIndexTrace();
+
+    expect(runtime.plugin.libraryIndexStatus.snapshot().preparationError).toBeUndefined();
+    expect(runtime.plugin.getPersonalLibraryProfileSnapshot().indexedPapers).toEqual([
+      { paperKey: "arxiv:2601.00001", title: "Existing paper" },
+    ]);
+    expect(close).toHaveBeenCalledOnce();
+  });
+
+  it("keeps another model's papers out of the review while remote settings are incomplete", async () => {
+    const runtime = fixture(memoryStorage().storage);
+    runtime.internals.settings.embedding = {
+      ...DEFAULT_SETTINGS.embedding,
+      mode: "remote",
+      baseUrl: "https://embed.example/v1",
+      apiKey: "",
+      model: "text-embedding-3-small",
+      dimension: 1536,
+    };
+    const localManifest = {
+      schemaVersion: FULLTEXT_KNOWLEDGE_BASE_SCHEMA_VERSION,
+      revision: 2,
+      scopeFingerprint: runtime.scopeFingerprint,
+      identificationFingerprint: runtime.identificationFingerprint,
+      modelId: LOCAL_EMBEDDING_MODEL_ID,
+      dimension: LOCAL_EMBEDDING_DIMENSION,
+      updatedAt: "2026-08-18T00:02:00.000Z",
+      papers: {
+        "arxiv:2601.00001": {
+          paperKey: "arxiv:2601.00001",
+          status: "ready" as const,
+          modelId: LOCAL_EMBEDDING_MODEL_ID,
+          dimension: LOCAL_EMBEDDING_DIMENSION,
+          title: "Existing paper",
+          textHash: "sha256:local",
+          chunkCount: 1,
+          filePaths: ["papers/2601.00001.pdf"],
+          observationFingerprints: ["fingerprint"],
+          updatedAt: "2026-08-18T00:02:00.000Z",
+        },
+      },
+    };
+    runtime.legacy.loadManifest.mockResolvedValue(localManifest);
+
+    await runtime.plugin.refreshLibraryIndexTrace();
+
+    // The manifest is readable and its run count survives, but its papers
+    // belong to the old local model: they are not the library's current index.
+    expect(runtime.plugin.libraryIndexStatus.snapshot().preparationError)
+      .toMatch(/embedding settings are incomplete/i);
+    expect(runtime.plugin.libraryIndexStatus.snapshot().lastRun?.papers).toBe(1);
+    expect(runtime.plugin.getPersonalLibraryProfileSnapshot().indexedPapers).toEqual([]);
+
+    // Completing the configuration and indexing under the named model makes
+    // the papers current again.
+    runtime.internals.settings.embedding.apiKey = "sk-embed";
+    const remoteManifest = {
+      ...structuredClone(localManifest),
+      modelId: "remote:text-embedding-3-small:1536",
+      dimension: 1536,
+      papers: {
+        "arxiv:2601.00001": {
+          ...structuredClone(localManifest.papers["arxiv:2601.00001"]),
+          modelId: "remote:text-embedding-3-small:1536",
+          dimension: 1536,
+        },
+      },
+    };
+    runtime.legacy.loadManifest.mockResolvedValue(remoteManifest);
+    const close = vi.fn(async () => undefined);
+    runtime.internals.buildFullTextGenerationIndexStore = vi.fn(() => ({
+      openCurrent: vi.fn(async () => ({
+        descriptor: {
+          modelId: "remote:text-embedding-3-small:1536",
+          dimension: 1536,
+          sourceRevision: 2,
+        },
+        close,
+      })),
+    }));
+
+    await runtime.plugin.refreshLibraryIndexTrace();
+
+    expect(runtime.plugin.libraryIndexStatus.snapshot().preparationError).toBeUndefined();
+    expect(runtime.plugin.getPersonalLibraryProfileSnapshot().indexedPapers).toEqual([
+      { paperKey: "arxiv:2601.00001", title: "Existing paper" },
+    ]);
   });
 
   it("keeps the legacy migration fallback when the unsupported host has never cut over", async () => {

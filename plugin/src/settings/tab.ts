@@ -220,6 +220,12 @@ export class ArxivDailySettingTab extends PluginSettingTab {
   private pendingLibraryIndexStatus: LibraryIndexStatus | undefined;
   private readonly controlRevisions = new WeakMap<object, number>();
   private readonly declarativeKeyRevisions = new Map<string, number>();
+  /**
+   * Pending draft commits for controls that save asynchronously on blur or
+   * change. Action buttons (Get models, Send test) flush the matching draft
+   * first so they act on what the user typed, not the previous stored value.
+   */
+  private readonly draftSaveHandles = new Map<string, () => Promise<void>>();
   private readonly pendingTopicEdits = new Set<Promise<void>>();
   private declarativeSetupGuideRow: Setting | undefined;
   /** Survives a row re-render so an in-flight "Get models" fetch isn't lost. */
@@ -276,12 +282,6 @@ export class ArxivDailySettingTab extends PluginSettingTab {
         declarativeRows.renderEmbeddingModelRow(this, setting),
       renderEmbeddingDimensionRow: (setting) =>
         declarativeRows.renderEmbeddingDimensionRow(this, setting),
-      renderPdfParserSidecarEnabledRow: (setting) =>
-        declarativeRows.renderPdfParserSidecarEnabledRow(this, setting),
-      renderPdfParserSidecarCapabilitiesUrlRow: (setting) =>
-        declarativeRows.renderPdfParserSidecarCapabilitiesUrlRow(this, setting),
-      renderPdfParserSidecarParseUrlRow: (setting) =>
-        declarativeRows.renderPdfParserSidecarParseUrlRow(this, setting),
       renderLibraryConnectionRow: (setting) =>
         declarativeRows.renderLibraryConnectionRow(this, setting),
       renderLibraryDirectionsRow: (setting) =>
@@ -364,7 +364,7 @@ export class ArxivDailySettingTab extends PluginSettingTab {
   }
 
   private async refreshLibraryAfterEmbeddingChange(keys: readonly string[]): Promise<void> {
-    if (keys.some((key) => ["embedding.mode", "embedding.baseUrl", "embedding.model", "embedding.dimension"].includes(key))) {
+    if (keys.some((key) => ["embedding.mode", "embedding.baseUrl", "embedding.apiKey", "embedding.model", "embedding.dimension"].includes(key))) {
       await this.plugin.refreshLibraryIndexTrace();
     }
   }
@@ -381,6 +381,20 @@ export class ArxivDailySettingTab extends PluginSettingTab {
 
   public isCurrentControlChange(control: object, revision: number): boolean {
     return this.controlRevisions.get(control) === revision;
+  }
+
+  /** Register the draft-commit handle for one settings key's row. */
+  public registerDraftSave(key: string, save: () => Promise<void>): void {
+    this.draftSaveHandles.set(key, save);
+  }
+
+  /**
+   * Await a row's in-flight draft commit. Actions that read several settings
+   * (Get models, Send test) call this first so a blur/change save that is
+   * still persisting cannot make them read the previous stored value.
+   */
+  public async flushDraftSave(key: string): Promise<void> {
+    await this.draftSaveHandles.get(key)?.();
   }
 
   /** Resolve the value visible after a rejection finishes. */
@@ -1206,36 +1220,6 @@ export class ArxivDailySettingTab extends PluginSettingTab {
     if (confirmed) await apply();
   }
 
-  /**
-   * Changes for one sidecar endpoint edit. Both endpoints must share an
-   * origin, and each field saves alone, so moving one endpoint to another
-   * host or port moves the other to the same origin in the same change.
-   */
-  public sidecarUrlChanges(
-    key: "pdfParserSidecar.capabilitiesUrl" | "pdfParserSidecar.parseUrl",
-    next: string,
-  ): SettingsValueChange[] {
-    const changes: SettingsValueChange[] = [{ key, value: next }];
-    const otherKey = key === SETTING_KEYS.pdfParserSidecar.capabilitiesUrl
-      ? SETTING_KEYS.pdfParserSidecar.parseUrl
-      : SETTING_KEYS.pdfParserSidecar.capabilitiesUrl;
-    const otherValue = this.getControlValue(otherKey);
-    const other = typeof otherValue === "string" ? otherValue : "";
-    try {
-      const nextUrl = new URL(next);
-      const otherUrl = new URL(other);
-      if (nextUrl.origin !== otherUrl.origin) {
-        changes.push({
-          key: otherKey,
-          value: `${nextUrl.origin}${otherUrl.pathname}${otherUrl.search}`,
-        });
-      }
-    } catch {
-      // An unparsable URL is left to the settings validation to reject.
-    }
-    return changes;
-  }
-
   public async saveTimezone(timezone: string): Promise<void> {
     await this.plugin.settingsChanges.changeValue("arxiv.timezone", timezone);
   }
@@ -1457,23 +1441,25 @@ export class ArxivDailySettingTab extends PluginSettingTab {
       .setDesc("Where chat requests are sent. Change this only if you use another provider.")
       .addText((t) => {
         t.inputEl.addClass("arxiv-daily-settings__llm-input");
+        const saveBaseUrl = async (): Promise<void> => {
+          const next = t.inputEl.value.trim();
+          const saved = await this.saveLegacyControl(
+            t,
+            "save API base URL",
+            SETTING_KEYS.llm.baseUrl,
+            [{ key: SETTING_KEYS.llm.baseUrl, value: next }],
+            (value) => {
+              const restored = typeof value === "string" ? value : "";
+              t.setValue(restored);
+              renderLlmHttpWarning(restored);
+            },
+          );
+          if (saved) this.refreshSetupGuide();
+        };
+        this.registerDraftSave("llm.baseUrl", saveBaseUrl);
         t.setPlaceholder("Provider URL")
           .setValue(s.llm.baseUrl || "https://api.deepseek.com/v1")
-          .onChange(async (v) => {
-            const next = v.trim();
-            const saved = await this.saveLegacyControl(
-              t,
-              "save API base URL",
-              SETTING_KEYS.llm.baseUrl,
-              [{ key: SETTING_KEYS.llm.baseUrl, value: next }],
-              (value) => {
-                const restored = typeof value === "string" ? value : "";
-                t.setValue(restored);
-                renderLlmHttpWarning(restored);
-              },
-            );
-            if (saved) this.refreshSetupGuide();
-          });
+          .onChange(saveBaseUrl);
       });
     const llmWarningEl = containerEl.createDiv({
       cls: "arxiv-daily-settings__llm-http-warning",
@@ -1609,7 +1595,14 @@ export class ArxivDailySettingTab extends PluginSettingTab {
           // and the re-render would remove the input being typed in.
           t.inputEl.addEventListener("change", () => {
             const v = t.inputEl.value.trim();
-            if (!v) return;
+            if (!v || v === category) return;
+            // normalizeUniqueCategories would silently drop the duplicate and
+            // the edited row would disappear; refuse it in place instead.
+            if (categories.some((other, j) => j !== i && other === v)) {
+              new Notice(`arXiv Daily: ${v} is already in the list.`);
+              t.setValue("");
+              return;
+            }
             const next = [...categories];
             next[i] = v;
             this.runAction("save category", async () => {
@@ -1650,6 +1643,11 @@ export class ArxivDailySettingTab extends PluginSettingTab {
           t.inputEl.addEventListener("change", () => {
             const v = t.inputEl.value.trim();
             if (!v) return;
+            if (categories.some((other) => other === v)) {
+              new Notice(`arXiv Daily: ${v} is already in the list.`);
+              t.setValue("");
+              return;
+            }
             this.runAction("save category", async () => {
               const saved = await this.saveCategoryDraft(v);
               if (saved) this.renderLegacySettings();
@@ -1673,6 +1671,9 @@ export class ArxivDailySettingTab extends PluginSettingTab {
       "Each topic becomes one section in the daily report.",
     );
 
+    // Legacy-only: the declarative settings intentionally omit this template
+    // shortcut (topics are edited through the Add topic list there); see the
+    // matching note in definitions.ts.
     new Setting(containerEl)
       .setName("Quick start")
       .setDesc("Load a preset bundle of topics or add one manually.")
@@ -1737,11 +1738,22 @@ export class ArxivDailySettingTab extends PluginSettingTab {
         });
       });
 
+    let timezoneSelect: HTMLSelectElement | undefined;
     new Setting(containerEl)
       .setName("Timezone")
       .addDropdown((d) => {
+        timezoneSelect = d.selectEl;
         for (const zone of TIMEZONE_OPTIONS) {
           d.addOption(zone.value, zone.label);
+        }
+        // A valid IANA zone saved through the free-text draft is not in the
+        // preset list; without its own option the dropdown silently shows
+        // nothing for it.
+        if (
+          s.arxiv.timezone &&
+          !TIMEZONE_OPTIONS.some((zone) => zone.value === s.arxiv.timezone)
+        ) {
+          d.addOption(s.arxiv.timezone, `${s.arxiv.timezone} — custom`);
         }
         d.setValue(s.arxiv.timezone).onChange(async (v) => {
           await this.saveLegacyControl(
@@ -1757,7 +1769,8 @@ export class ArxivDailySettingTab extends PluginSettingTab {
       })
       .addText((t) => {
         t.setPlaceholder("Or enter custom timezone").setValue("");
-        this.bindTimezoneDraftInput(t.inputEl);
+        // Pass the dropdown so a committed custom draft is reflected there.
+        this.bindTimezoneDraftInput(t.inputEl, timezoneSelect);
       });
 
     // ─── Output & Schedule ────────────────────────────
@@ -1957,62 +1970,9 @@ export class ArxivDailySettingTab extends PluginSettingTab {
       declarativeRows.renderEmbeddingDimensionRow(this, embeddingDimensionSetting);
     }
 
-    new Setting(containerEl)
-      .setName("Better PDF parser")
-      .setDesc("Optional local sidecar. Off by default; PDFs stay on this device either way.")
-      .addToggle((toggle) => {
-        toggle.setValue(s.pdfParserSidecar.enabled).onChange(async (enabled) => {
-          try {
-            await this.changeSettingValue("pdfParserSidecar.enabled", enabled);
-            this.renderLegacySettings();
-          } catch (error) {
-            toggle.setValue(this.plugin.settings.pdfParserSidecar.enabled);
-            this.reportActionError("save local parser sidecar", error);
-          }
-        });
-      });
-    if (s.pdfParserSidecar.enabled) {
-      new Setting(containerEl)
-        .setName("Sidecar capability URL")
-        .setDesc("Local loopback endpoint that reports parser capabilities.")
-        .addText((text) => {
-          text.setPlaceholder("HTTP://127.0.0.1:5001/v1/capabilities").setValue(s.pdfParserSidecar.capabilitiesUrl);
-          text.inputEl.addEventListener("change", () => {
-            this.runAction("save local parser sidecar URL", async () => {
-              try {
-                await this.changeSettingValues(this.sidecarUrlChanges(
-                  "pdfParserSidecar.capabilitiesUrl",
-                  text.inputEl.value.trim(),
-                ));
-                this.renderLegacySettings();
-              } catch (error) {
-                text.setValue(this.plugin.settings.pdfParserSidecar.capabilitiesUrl);
-                throw error;
-              }
-            });
-          });
-        });
-      new Setting(containerEl)
-        .setName("Sidecar parse URL")
-        .setDesc("Same-origin local loopback endpoint that accepts one PDF byte buffer.")
-        .addText((text) => {
-          text.setPlaceholder("HTTP://127.0.0.1:5001/v1/parse").setValue(s.pdfParserSidecar.parseUrl);
-          text.inputEl.addEventListener("change", () => {
-            this.runAction("save local parser sidecar URL", async () => {
-              try {
-                await this.changeSettingValues(this.sidecarUrlChanges(
-                  "pdfParserSidecar.parseUrl",
-                  text.inputEl.value.trim(),
-                ));
-                this.renderLegacySettings();
-              } catch (error) {
-                text.setValue(this.plugin.settings.pdfParserSidecar.parseUrl);
-                throw error;
-              }
-            });
-          });
-        });
-    }
+    // ADR 0013: the personal-library index extracts titles and abstracts with
+    // PDF.js and never calls a PDF-parser sidecar, so its controls are gone
+    // from both this legacy view and the declarative settings.
 
     // ─── Email ───────────────────────────────────────────
     this.sectionHeading(containerEl, "Email delivery", "email");
@@ -2056,19 +2016,21 @@ export class ArxivDailySettingTab extends PluginSettingTab {
           : "Where digests are delivered. With From empty, use the email on your Resend account.",
       )
       .addText((t) => {
+        const saveEmailTo = async (): Promise<void> => {
+          await this.saveLegacyControl(
+            t,
+            "save email address",
+            SETTING_KEYS.email.to,
+            [{ key: SETTING_KEYS.email.to, value: t.inputEl.value.trim() }],
+            (value) => {
+              t.setValue(typeof value === "string" ? value : "");
+            },
+          );
+        };
+        this.registerDraftSave("email.to", saveEmailTo);
         t.setPlaceholder("you@example.com")
           .setValue(s.email.to)
-          .onChange(async (v) => {
-            await this.saveLegacyControl(
-              t,
-              "save email address",
-              SETTING_KEYS.email.to,
-              [{ key: SETTING_KEYS.email.to, value: v.trim() }],
-              (value) => {
-                t.setValue(typeof value === "string" ? value : "");
-              },
-            );
-          });
+          .onChange(saveEmailTo);
       });
 
     if (hostedMode) {
@@ -2078,6 +2040,9 @@ export class ArxivDailySettingTab extends PluginSettingTab {
         .addButton((b) =>
           b.setButtonText("Send verification email").onClick(() => {
             this.runAction("send verification email", async () => {
+              // Send to the address currently on screen, not the one that was
+              // stored before the still-persisting change save.
+              await this.flushDraftSave("email.to");
               const message = await this.plugin.sendHostedVerificationEmail();
               new Notice(message, 10_000);
             });
@@ -2139,6 +2104,10 @@ export class ArxivDailySettingTab extends PluginSettingTab {
       .addButton((b) =>
         b.setButtonText("Send test").setCta().onClick(() => {
           this.runAction("send test email", async () => {
+            // The recipient and the mode's secret save asynchronously; a test
+            // sent before those commits lands would use the previous values.
+            await this.flushDraftSave("email.to");
+            await this.flushDraftSave(hostedMode ? "email.hostedToken" : "email.apiKey");
             const message = await this.plugin.sendTestEmail();
             new Notice(message, 10_000);
           });
@@ -2250,12 +2219,12 @@ export class ArxivDailySettingTab extends PluginSettingTab {
     const setting = new Setting(containerEl)
       .setName("Resend API key")
       .setDesc("From your mail provider account. Saved only on this device; masked in the input.");
-    renderSensitiveInput(this, setting, {
+    this.registerDraftSave("email.apiKey", renderSensitiveInput(this, setting, {
       value: this.plugin.settings.email.apiKey ?? "",
       placeholder: "Paste your Resend API key",
       ariaLabel: "Resend API key",
       save: (next) => this.changeSettingValue("email.apiKey", next),
-    });
+    }));
   }
   private renderHostedTokenSetting(containerEl: HTMLElement): void {
     const setting = new Setting(containerEl)
@@ -2263,24 +2232,24 @@ export class ArxivDailySettingTab extends PluginSettingTab {
       .setDesc(
         "After you open the verification link, copy the long code shown on the web page (not the short code in the email link). Use the same email address as above.",
       );
-    renderSensitiveInput(this, setting, {
+    this.registerDraftSave("email.hostedToken", renderSensitiveInput(this, setting, {
       value: this.plugin.settings.email.hostedToken ?? "",
       placeholder: "Paste the code from the verification page",
       ariaLabel: "verification code",
       normalize: (value) => value.replace(/\s+/g, "").trim(),
       save: (next) => this.changeSettingValue("email.hostedToken", next),
-    });
+    }));
   }
   private renderApiKeySetting(containerEl: HTMLElement): void {
     const setting = new Setting(containerEl)
       .setName("API key")
       .setDesc("Saved only on this device; masked in the input.");
-    renderSensitiveInput(this, setting, {
+    this.registerDraftSave("llm.apiKey", renderSensitiveInput(this, setting, {
       value: this.plugin.settings.llm.apiKey,
       placeholder: "Enter API key",
       ariaLabel: "LLM API key",
       save: (next) => this.changeSettingValue("llm.apiKey", next),
-    });
+    }));
   }
   private renderSetupGuide(containerEl: HTMLElement): void {
     const guide = this.createSetupGuide();

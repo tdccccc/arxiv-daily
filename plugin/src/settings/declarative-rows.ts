@@ -84,12 +84,24 @@ export function renderLlmBaseUrlRow(
   };
   refreshWarning();
   input.addEventListener("input", refreshWarning);
-  input.addEventListener("change", () => {
+
+  // Coalesce change-triggered commits with the flush "Get models" performs:
+  // a click right after typing often lands while the change save is still
+  // persisting, and reading `settings.llm.baseUrl` then returns the old URL.
+  let savedValue = input.value;
+  let saveQueue = Promise.resolve();
+  let latestSave: { value: string; promise: Promise<void> } | undefined;
+  const saveBaseUrl = (): Promise<void> => {
     const next = input.value.trim();
+    // A pending edit can still change the durable value. Returning to the
+    // saved value must queue behind it, not silently cancel the edit.
+    if (!latestSave && next === savedValue) return Promise.resolve();
+    if (latestSave?.value === next) return latestSave.promise;
     const revision = tab.beginControlChange(input);
-    tab.runAction("save API base URL", async () => {
+    const operation = saveQueue.then(async () => {
       try {
         await tab.changeSettingValue("llm.baseUrl", next);
+        savedValue = next;
         if (tab.isCurrentControlChange(input, revision)) input.value = next;
         tab.refreshDeclarativeSetupGuide();
       } catch (error) {
@@ -99,18 +111,27 @@ export function renderLlmBaseUrlRow(
         throw error;
       }
     });
-  });
+    let tracked: Promise<void>;
+    tracked = operation.finally(() => {
+      if (latestSave?.promise === tracked) latestSave = undefined;
+    });
+    latestSave = { value: next, promise: tracked };
+    saveQueue = tracked.catch(() => undefined);
+    return tracked;
+  };
+  input.addEventListener("change", () => tab.runAction("save API base URL", saveBaseUrl));
+  tab.registerDraftSave("llm.baseUrl", saveBaseUrl);
 }
 
 export function renderApiKeyRow(tab: ArxivDailySettingTab, setting: Setting): void {
   prepareRow(setting);
-  renderSensitiveInput(tab, setting, {
+  tab.registerDraftSave("llm.apiKey", renderSensitiveInput(tab, setting, {
     value: tab.plugin.settings.llm.apiKey,
     placeholder: "Enter API key",
     ariaLabel: "LLM API key",
     save: (next) => tab.changeSettingValue("llm.apiKey", next),
     onCommitted: () => tab.refreshDeclarativeSetupGuide(),
-  });
+  }));
 }
 
 export function renderReasoningEffortRow(
@@ -177,8 +198,6 @@ export function renderModelRow(tab: ArxivDailySettingTab, setting: Setting): voi
   });
   input.value = tab.plugin.settings.llm.model;
 
-  const cacheKey = modelFetchCacheKey(tab.plugin.settings.llm);
-
   const commitModel = (next: string): void => {
     if (next === tab.plugin.settings.llm.model) {
       input.value = next;
@@ -206,11 +225,22 @@ export function renderModelRow(tab: ArxivDailySettingTab, setting: Setting): voi
   // left open or attached underneath the new one.
   const suggest = new ModelInputSuggest(tab.app, input, commitModel);
   tab.setModelInputSuggest(suggest);
-  input.addEventListener("focus", () => suggest.showAll());
+  // The endpoint (provider/base URL/API key) can change after this row was
+  // rendered without re-rendering it, so consult the live key on focus.
+  input.addEventListener("focus", () => {
+    suggest.setModels(
+      tab.getFetchedModelOptions(modelFetchCacheKey(tab.plugin.settings.llm)) ?? [],
+      input.value,
+    );
+    suggest.showAll();
+  });
   // A re-render reuses this same Setting but rebuilds its children, so
   // restore a previous fetch — but only if it's still for the endpoint
   // currently configured.
-  suggest.setModels(tab.getFetchedModelOptions(cacheKey) ?? [], input.value);
+  suggest.setModels(
+    tab.getFetchedModelOptions(modelFetchCacheKey(tab.plugin.settings.llm)) ?? [],
+    input.value,
+  );
 
   input.addEventListener("change", () => commitModel(input.value.trim()));
 
@@ -223,20 +253,32 @@ export function renderModelRow(tab: ArxivDailySettingTab, setting: Setting): voi
     button.textContent = "Fetching…";
     button.disabled = true;
     try {
+      // Both endpoint fields commit asynchronously on blur/change. Clicking
+      // here immediately after typing would otherwise read the previous
+      // stored values — and then discard the fetch result when that save
+      // lands. Await the pending drafts before snapshotting the endpoint.
+      await tab.flushDraftSave("llm.apiKey");
+      await tab.flushDraftSave("llm.baseUrl");
+      // Snapshot the endpoint when the request starts, not when the row was
+      // rendered: editing the API key or base URL does not re-render this row,
+      // and that edit is exactly how a first-time setup reaches this button.
+      // The snapshot still rejects a result if the endpoint changes while the
+      // fetch is in flight.
+      const requestCacheKey = modelFetchCacheKey(tab.plugin.settings.llm);
       const client = new LlmClient(
         tab.plugin.settings.llm,
         tab.plugin.logger,
         tab.plugin.getHttpClient(),
       );
       const models = await client.fetchModels();
-      tab.setFetchedModelOptions(cacheKey, models);
+      tab.setFetchedModelOptions(requestCacheKey, models);
       // Looked up fresh instead of reusing the closed-over `suggest`: a
       // redraw that happened while the fetch was in flight registered a
       // new instance for the new input, and updating this one would be
       // invisible. If the endpoint settings changed since the fetch
       // started, this result is for a provider the row no longer
       // reflects, so skip applying it.
-      if (modelFetchCacheKey(tab.plugin.settings.llm) === cacheKey) {
+      if (modelFetchCacheKey(tab.plugin.settings.llm) === requestCacheKey) {
         const liveSuggest = tab.getModelInputSuggest();
         liveSuggest?.setModels(models, tab.plugin.settings.llm.model);
         liveSuggest?.showAll();
@@ -308,6 +350,31 @@ export function renderCategoryRow(
       tab.refreshSettings();
     });
   });
+  // Subcategories outside the preset list (e.g. a narrow arXiv subfield) can
+  // still be entered directly, mirroring the legacy settings row.
+  const custom = setting.controlEl.createEl("input", {
+    type: "text",
+    attr: { placeholder: "Or enter custom category" },
+  });
+  custom.addEventListener("change", () => {
+    const next = custom.value.trim();
+    if (!next || next === current) return;
+    if (categories.some((category, other) => other !== index && category === next)) {
+      new Notice(`arXiv Daily: ${next} is already in the list.`);
+      custom.value = "";
+      return;
+    }
+    void tab.runAction("save category", async () => {
+      if (isDraft) {
+        await tab.saveCategoryDraft(next);
+      } else {
+        const values = [...categories];
+        values[index] = next;
+        await tab.setArxivCategories(values);
+      }
+      tab.refreshSettings();
+    });
+  });
 }
 
 /** One research topic: the shared expandable topic card. */
@@ -331,7 +398,18 @@ export function renderTimezoneRow(
     option.value = zone.value;
     option.textContent = zone.label;
   }
-  select.value = tab.plugin.settings.arxiv.timezone;
+  // A valid IANA zone saved through the free-text draft is not in the preset
+  // list; without its own option the select would silently show nothing.
+  const savedTimezone = tab.plugin.settings.arxiv.timezone;
+  if (
+    savedTimezone &&
+    !TIMEZONE_OPTIONS.some((zone) => zone.value === savedTimezone)
+  ) {
+    const option = select.createEl("option");
+    option.value = savedTimezone;
+    option.textContent = `${savedTimezone} — custom`;
+  }
+  select.value = savedTimezone;
   select.addEventListener("change", () => {
     const next = select.value;
     const revision = tab.beginControlChange(select);
@@ -708,7 +786,7 @@ export function renderEmailApiKeyRow(
   setting: Setting,
 ): void {
   prepareRow(setting);
-  renderSensitiveInput(tab, setting, {
+  const saveApiKey = renderSensitiveInput(tab, setting, {
     value: tab.plugin.settings.email.apiKey ?? "",
     placeholder: "Paste your Resend API key",
     ariaLabel: "Resend API key",
@@ -719,7 +797,13 @@ export function renderEmailApiKeyRow(
     label: "Send test",
     pendingLabel: "Sending…",
     action: "send test email",
-    beforeRun: () => waitForEmailToSave(tab),
+    // Clicking the button blurs the masked input; keep focus so the draft's
+    // own blur handler still runs, then flush it before sending either way.
+    preserveFocus: true,
+    beforeRun: async () => {
+      await waitForEmailToSave(tab);
+      await saveApiKey();
+    },
     run: () => tab.plugin.sendTestEmail(),
   });
 }
@@ -886,75 +970,6 @@ export function renderEmbeddingDimensionRow(
         if (tab.isCurrentControlChange(input, revision)) {
           input.value = String(tab.restoreCurrentControlValue(error, "embedding.dimension"));
           validate();
-        }
-        throw error;
-      }
-    });
-  });
-}
-
-export function renderPdfParserSidecarEnabledRow(
-  tab: ArxivDailySettingTab,
-  setting: Setting,
-): void {
-  prepareRow(setting);
-  new ToggleComponent(setting.controlEl)
-    .setValue(tab.plugin.settings.pdfParserSidecar.enabled)
-    .onChange((enabled) => {
-      tab.runAction("save local parser sidecar", async () => {
-        await tab.changeSettingValue("pdfParserSidecar.enabled", enabled);
-        tab.refreshSettings();
-      });
-    });
-}
-
-export function renderPdfParserSidecarCapabilitiesUrlRow(
-  tab: ArxivDailySettingTab,
-  setting: Setting,
-): void {
-  renderPdfParserSidecarUrlRow(
-    tab,
-    setting,
-    "pdfParserSidecar.capabilitiesUrl",
-    "HTTP://127.0.0.1:5001/v1/capabilities",
-  );
-}
-
-export function renderPdfParserSidecarParseUrlRow(
-  tab: ArxivDailySettingTab,
-  setting: Setting,
-): void {
-  renderPdfParserSidecarUrlRow(
-    tab,
-    setting,
-    "pdfParserSidecar.parseUrl",
-    "HTTP://127.0.0.1:5001/v1/parse",
-  );
-}
-
-function renderPdfParserSidecarUrlRow(
-  tab: ArxivDailySettingTab,
-  setting: Setting,
-  key: "pdfParserSidecar.capabilitiesUrl" | "pdfParserSidecar.parseUrl",
-  placeholder: string,
-): void {
-  prepareRow(setting);
-  const input = setting.controlEl.createEl("input", { type: "url", attr: { placeholder } });
-  input.value = key === "pdfParserSidecar.capabilitiesUrl"
-    ? tab.plugin.settings.pdfParserSidecar.capabilitiesUrl
-    : tab.plugin.settings.pdfParserSidecar.parseUrl;
-  input.addEventListener("change", () => {
-    const next = input.value.trim();
-    const revision = tab.beginControlChange(input);
-    tab.runAction("save local parser sidecar URL", async () => {
-      try {
-        const changes = tab.sidecarUrlChanges(key, next);
-        await tab.changeSettingValues(changes);
-        if (tab.isCurrentControlChange(input, revision)) input.value = next;
-        if (changes.length > 1) tab.refreshSettings();
-      } catch (error) {
-        if (tab.isCurrentControlChange(input, revision)) {
-          input.value = tab.restoreCurrentStringControlValue(error, key);
         }
         throw error;
       }

@@ -44,6 +44,8 @@ function makeStorage(withBinary = true) {
 }
 
 describe("PdfService", () => {
+  const pdfBytes = new TextEncoder().encode("%PDF-1.7\n%%EOF\n").buffer;
+
   it("downloads PDFs to vault storage and records pdfPath", async () => {
     const { files, binaries, storage } = makeStorage();
     const store = new PaperIndexStore(
@@ -62,7 +64,7 @@ describe("PdfService", () => {
     });
     const service = new PdfService({
       fetcher: {
-        fetchPdf: vi.fn().mockResolvedValue(new Uint8Array([1, 2, 3]).buffer),
+        fetchPdf: vi.fn().mockResolvedValue(pdfBytes),
       },
       storage,
       paperIndex: store,
@@ -76,18 +78,39 @@ describe("PdfService", () => {
       kind: "done",
       arxivId: "2606.12345",
       path: "arxiv-daily/pdfs/2606.12345.pdf",
-      bytes: 3,
+      bytes: pdfBytes.byteLength,
       entryUpdated: true,
     });
-    expect(Array.from(new Uint8Array(binaries["arxiv-daily/pdfs/2606.12345.pdf"]))).toEqual([
-      1,
-      2,
-      3,
-    ]);
+    expect(Array.from(new Uint8Array(binaries["arxiv-daily/pdfs/2606.12345.pdf"]))).toEqual(
+      Array.from(new Uint8Array(pdfBytes)),
+    );
     const saved = JSON.parse(files["arxiv-daily/.index/papers.json"]);
     expect(saved.papers["arxiv:2606.12345"].pdfPath).toBe(
       "arxiv-daily/pdfs/2606.12345.pdf",
     );
+  });
+
+  it("rejects an HTML error page without writing a .pdf or updating pdfPath", async () => {
+    const { files, binaries, storage } = makeStorage();
+    const setPdfPath = vi.fn();
+    const service = new PdfService({
+      fetcher: {
+        fetchPdf: vi.fn().mockResolvedValue(
+          new TextEncoder().encode("<!DOCTYPE html><html>captcha</html>").buffer,
+        ),
+      },
+      storage,
+      paperIndex: { setPdfPath } as any,
+      output: DEFAULT_SETTINGS.output,
+      logger: new Logger("error"),
+    });
+
+    await expect(service.downloadById("2606.12345")).resolves.toMatchObject({
+      kind: "fetch_error",
+    });
+    expect(binaries).toEqual({});
+    expect(setPdfPath).not.toHaveBeenCalled();
+    expect(files).toEqual({});
   });
 
   it("reports missing binary storage support", async () => {

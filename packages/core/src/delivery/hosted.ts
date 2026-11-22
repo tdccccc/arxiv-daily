@@ -1,4 +1,5 @@
 import { isHttpTransportError, type HttpClient } from "../core/adapters";
+import { isCancellationError } from "../services/cancellation";
 import {
   OFFICIAL_DELIVERY_AVAILABLE,
   type DailyDigest,
@@ -87,7 +88,9 @@ export async function startHostedEmailVerification(opts: {
       body: JSON.stringify({ email }),
       signal: opts.signal,
     });
-  } catch {
+  } catch (error) {
+    // A user cancellation is not a delivery failure.
+    if (isCancellationError(error)) throw error;
     throw new HostedDeliveryError(
       "Cannot reach Official delivery. Check your network and try again later.",
     );
@@ -124,9 +127,14 @@ export async function sendViaHosted(opts: {
     );
   }
 
+  // Completing the durable claim is outside the provider attempt: its failure
+  // (including cancellation) says nothing about whether the relay was reached,
+  // and the caller must see a cancellation as a cancellation. Mirrors
+  // sendViaResend.
+  await opts.beforeProviderAttempt?.();
+
   let res;
   try {
-    await opts.beforeProviderAttempt?.();
     opts.onProviderInvocation?.();
     res = await opts.http.request({
       url: `${base}/v1/deliver`,
@@ -147,6 +155,7 @@ export async function sendViaHosted(opts: {
       signal: opts.signal,
     });
   } catch (error) {
+    if (isCancellationError(error)) throw error;
     // Only a failure the host proved happened before the request was sent
     // leaves the relay untouched; everything else may have reached it.
     const notSent = isHttpTransportError(error) && error.requestNotSent;

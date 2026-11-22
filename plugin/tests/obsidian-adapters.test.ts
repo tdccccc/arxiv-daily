@@ -87,8 +87,31 @@ function realFilesystemAdapter(root: string) {
     async rename(from: string, to: string) {
       await rename(join(root, from), join(root, to));
     },
+    // Mirrors Obsidian's DataAdapter: single existing files only. Missing paths
+    // throw ENOENT and directories throw EISDIR; directories need rmdir().
     async remove(path: string) {
-      await rm(join(root, path), { recursive: true, force: true });
+      const target = join(root, path);
+      const info = await stat(target);
+      if (info.isDirectory()) {
+        throw Object.assign(
+          new Error(`EISDIR: illegal operation on a directory, remove '${target}'`),
+          { code: "EISDIR" },
+        );
+      }
+      await rm(target);
+    },
+    async rmdir(path: string, recursive: boolean) {
+      await rm(join(root, path), { recursive });
+    },
+    async stat(path: string) {
+      const info = await stat(join(root, path)).catch(() => null);
+      if (!info) return null;
+      return {
+        type: info.isDirectory() ? "folder" : "file",
+        ctime: info.ctimeMs,
+        mtime: info.mtimeMs,
+        size: info.size,
+      };
     },
     async list(path: string) {
       const entries = await fsReaddir(join(root, path), { withFileTypes: true });
@@ -429,6 +452,76 @@ describe("Obsidian host adapters", () => {
     const storage = new ObsidianStorageAdapter(app.vault as any);
 
     expect(storage.createTextExclusive).toBeUndefined();
+  });
+
+  it("keeps the filesystem test double faithful to strict DataAdapter semantics", async () => {
+    const root = await makeTempDir();
+    const adapter = realFilesystemAdapter(root);
+    await mkdir(join(root, "strict-dir"), { recursive: true });
+
+    await expect(adapter.remove("strict-dir")).rejects.toMatchObject({
+      code: "EISDIR",
+    });
+    await expect(adapter.remove("strict-missing")).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+
+    await adapter.rmdir("strict-dir", true);
+    expect(await stat(join(root, "strict-dir")).then(() => true, () => false)).toBe(false);
+  });
+
+  it("removes non-empty directories recursively and is idempotent for absent paths", async () => {
+    const root = await makeTempDir();
+    const storage = new ObsidianStorageAdapter({
+      adapter: realFilesystemAdapter(root),
+    } as any);
+    const generation = join(root, "arxiv-daily/.index/generations/gen-old");
+    await mkdir(join(generation, "objects"), { recursive: true });
+    await writeFile(join(generation, "descriptor.json"), "{}", "utf8");
+    await writeFile(join(generation, "objects", "0001.bin"), "x", "utf8");
+    await mkdir(join(root, "arxiv-daily/.index/generations/gen-keep"), { recursive: true });
+
+    await storage.remove("arxiv-daily/.index/generations/gen-old");
+
+    expect(await stat(generation).then(() => true, () => false)).toBe(false);
+    expect(
+      await stat(join(root, "arxiv-daily/.index/generations/gen-keep"))
+        .then(() => true, () => false),
+    ).toBe(true);
+
+    // Absent paths (file or directory) are not an error.
+    await expect(
+      storage.remove("arxiv-daily/.index/generations/gen-old"),
+    ).resolves.toBeUndefined();
+    await expect(
+      storage.remove("arxiv-daily/.index/missing-file.json"),
+    ).resolves.toBeUndefined();
+  });
+
+  it("does not treat a stat permission or I/O failure as an absent path", async () => {
+    const root = await makeTempDir();
+    const adapter = realFilesystemAdapter(root);
+    adapter.stat = async () => {
+      throw Object.assign(new Error("EACCES: permission denied"), { code: "EACCES" });
+    };
+    const storage = new ObsidianStorageAdapter({ adapter } as any);
+
+    await expect(storage.remove("protected-file")).rejects.toMatchObject({
+      code: "EACCES",
+    });
+  });
+
+  it("falls back to rmdir when a host without stat refuses a directory", async () => {
+    const root = await makeTempDir();
+    const adapter = realFilesystemAdapter(root);
+    delete (adapter as { stat?: unknown }).stat;
+    await mkdir(join(root, "legacy-dir"), { recursive: true });
+    await writeFile(join(root, "legacy-dir", "a.txt"), "x", "utf8");
+    const storage = new ObsidianStorageAdapter({ adapter } as any);
+
+    await storage.remove("legacy-dir");
+
+    expect(await stat(join(root, "legacy-dir")).then(() => true, () => false)).toBe(false);
   });
 
   it("creates desktop claims without process.getBuiltinModule", async () => {

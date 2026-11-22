@@ -7,6 +7,7 @@ import {
   type PaperIndexStore,
 } from "./paper-index";
 import { normalizeArxivId } from "./manual-fetch";
+import { hasPdfMagic } from "../utils/pdf-magic";
 import type { Logger } from "./logger";
 import { isCancellationError, throwIfCancelled } from "./cancellation";
 
@@ -63,6 +64,16 @@ export class PdfService {
     }
 
     throwIfCancelled(signal);
+    // Final gate before persistence: a fetcher from an older host or a test
+    // seam may not enforce the header, and an HTML error page must never be
+    // saved as `<id>.pdf` nor recorded in papers.json.
+    if (!hasPdfMagic(pdf)) {
+      this.deps.logger.error(`pdf: response for ${arxivId} is not a PDF`);
+      return {
+        kind: "fetch_error",
+        reason: `response is not a PDF: ${arxivId}`,
+      };
+    }
     const path = this.deps.storage.normalizePath(
       `${derivePaperInboxPaths(this.deps.output).rootDir || "arxiv-daily"}/pdfs/${arxivId}.pdf`,
     );

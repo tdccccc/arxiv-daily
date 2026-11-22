@@ -148,6 +148,12 @@ function fixture(entries: Array<{ path: string; size: number; mtimeMs: number }>
   });
   internals.buildFullTextKnowledgeBaseStore = vi.fn(() => legacy);
   internals.buildEmbeddingModel = vi.fn(() => embeddingModel);
+  // The fixture's model identity is "fixture-model"/2, so the index trace must
+  // compare against the same identity the embedding stub produces.
+  internals.expectedEmbeddingModelIdentity = vi.fn(() => ({
+    modelId: embeddingModel.modelId,
+    dimension: embeddingModel.dimension,
+  }));
 
   return { plugin, internals, source, fetchMetadataByIds, legacy };
 }
@@ -277,10 +283,10 @@ describe("Build index scans a never-scanned library first", () => {
     const { plugin, internals } = fixture([]);
     const embedding = internals.buildEmbeddingModel();
     internals.buildEmbeddingModel.mockImplementation((options: {
-      signal: AbortSignal;
       onProgress: (progress: { phase: string; message: string; progress?: number }) => void;
     }) => {
-      expect(options?.signal).toBeInstanceOf(AbortSignal);
+      // The local model is shared across runs now, so each index run installs
+      // its own preparation reporter instead of a fresh model with a signal.
       expect(options?.onProgress).toBeTypeOf("function");
       options.onProgress({ phase: "loading", message: "Loading local model files", progress: 42 });
       expect(plugin.libraryIndexStatus.snapshot().activity?.phase).toContain("Loading local model files");

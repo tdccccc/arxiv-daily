@@ -10,8 +10,13 @@ import {
 } from "../../src/delivery/delivery-state";
 import { DEFAULT_SETTINGS } from "../../src/settings/defaults";
 import type { StorageAdapter } from "../../src/core/adapters";
-import { startHostedEmailVerification } from "../../src/delivery/hosted";
+import {
+  HostedDeliveryError,
+  sendViaHosted,
+  startHostedEmailVerification,
+} from "../../src/delivery/hosted";
 import { HttpTransportError } from "../../src/core/adapters";
+import { RunCancelledError } from "../../src/services/cancellation";
 
 async function persistedDeliveryText(
   storage: StorageAdapter,
@@ -620,6 +625,49 @@ describe("hosted deliverDailyEmailIfEnabled", () => {
     expect(error.message).not.toContain("private email body");
   });
 
+  it("passes a cancellation from verification through unchanged", async () => {
+    const cancellation = new RunCancelledError("verification cancelled");
+    await expect(startHostedEmailVerification({
+      http: { request: vi.fn(async () => { throw cancellation; }) },
+      baseUrl: "https://configurable-relay.example",
+      email: "recipient@example.com",
+      signal: new AbortController().signal,
+    })).rejects.toBe(cancellation);
+  });
+
+  it("reports a cancellation during the claim as cancelled before the provider", async () => {
+    const controller = new AbortController();
+    const base = memoryStorage();
+    const storage: StorageAdapter = {
+      ...base,
+      async createTextExclusive(path, content) {
+        const created = await base.createTextExclusive(path, content);
+        controller.abort("cancelled while claiming");
+        return created;
+      },
+    };
+    const request = vi.fn();
+    const result = await deliverDailyEmailIfEnabled(digest, {
+      storage,
+      http: { request },
+      output,
+      signal: controller.signal,
+      email: {
+        enabled: true,
+        mode: "hosted",
+        to: "you@example.com",
+        fromEmail: "",
+        hostedToken: "device_token_hex",
+      },
+    });
+
+    expect(result).toMatchObject({
+      kind: "failed",
+      reason: "cancelled_before_provider_attempt",
+    });
+    expect(request).not.toHaveBeenCalled();
+  });
+
   it("rejects hosted mode without token", async () => {
     const result = await deliverDailyEmailIfEnabled(digest, {
       storage: memoryStorage(),
@@ -638,5 +686,92 @@ describe("hosted deliverDailyEmailIfEnabled", () => {
     if (result.kind === "disabled") {
       expect(result.reason).toBe("verification_token_missing");
     }
+  });
+});
+
+describe("sendViaHosted provider stages", () => {
+  const digest = sampleDailyDigest({ date: "2026-07-27", language: "zh" });
+  const request = {
+    to: "you@example.com",
+    digest,
+    idempotencyKey: "arxiv-daily:auto:2026-07-27:you@example.com",
+    subject: "subject",
+    html: "<p>body</p>",
+    text: "body",
+  };
+
+  it("passes a cancellation from beforeProviderAttempt through unchanged", async () => {
+    const http = { request: vi.fn() };
+    await expect(sendViaHosted({
+      http,
+      token: "device_token_hex",
+      request,
+      beforeProviderAttempt: async () => {
+        throw new RunCancelledError("run cancelled before the claim");
+      },
+    })).rejects.toMatchObject({
+      name: "RunCancelledError",
+      message: "run cancelled before the claim",
+    });
+    expect(http.request).not.toHaveBeenCalled();
+  });
+
+  it("does not disguise a pre-provider failure as an ambiguous delivery", async () => {
+    const failure = new Error("delivery claim write failed");
+    await expect(sendViaHosted({
+      http: { request: vi.fn() },
+      token: "device_token_hex",
+      request,
+      beforeProviderAttempt: async () => {
+        throw failure;
+      },
+    })).rejects.toBe(failure);
+  });
+
+  it("passes a cancellation from the HTTP client through unchanged", async () => {
+    await expect(sendViaHosted({
+      http: {
+        request: vi.fn(async () => {
+          throw new RunCancelledError("cancelled in flight");
+        }),
+      },
+      token: "device_token_hex",
+      request,
+    })).rejects.toMatchObject({
+      name: "RunCancelledError",
+      message: "cancelled in flight",
+    });
+  });
+
+  it("marks a transport failure the host proved was not sent as notSent", async () => {
+    const error = await sendViaHosted({
+      http: {
+        request: vi.fn(async () => {
+          throw new HttpTransportError("network", "connect failed", {
+            requestNotSent: true,
+          });
+        }),
+      },
+      token: "device_token_hex",
+      request,
+    }).catch((caught: unknown) => caught);
+
+    expect(error).toBeInstanceOf(HostedDeliveryError);
+    expect(error).toMatchObject({ notSent: true, ambiguous: false });
+  });
+
+  it("keeps an unclassified transport failure ambiguous", async () => {
+    const error = await sendViaHosted({
+      http: {
+        request: vi.fn(async () => {
+          throw new Error("socket closed");
+        }),
+      },
+      token: "device_token_hex",
+      request,
+    }).catch((caught: unknown) => caught);
+
+    expect(error).toBeInstanceOf(HostedDeliveryError);
+    expect(error).toMatchObject({ notSent: false, ambiguous: true });
   });
 });

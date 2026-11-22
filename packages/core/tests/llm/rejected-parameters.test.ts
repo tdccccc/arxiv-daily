@@ -28,7 +28,7 @@ const okJson = JSON.stringify({ choices: [{ message: { content: "Hi" } }] });
  */
 function strictEndpoint(rejectMessage: (field: string) => string, knows: string[] = []) {
   const sent: Array<Record<string, unknown>> = [];
-  const optional = ["thinking", "reasoning_effort", "temperature"];
+  const optional = ["thinking", "output_config", "reasoning_effort", "temperature"];
   const request = vi.fn(async (req: HttpRequest) => {
     const body = JSON.parse(String(req.body)) as Record<string, unknown>;
     sent.push(body);
@@ -116,6 +116,22 @@ describe("optional request fields a provider rejects", () => {
     expect(request).toHaveBeenCalledTimes(1);
   });
 
+  it("drops fields an Anthropic proxy rejects as OpenAI-compatible parameters", async () => {
+    const { sent, request } = strictEndpoint((field) => `Unknown parameter: '${field}'.`);
+    const llm = clientFor(request, {
+      provider: "anthropic",
+      baseUrl: "https://proxy.example.com/v1",
+      model: "claude-opus-4-7",
+      thinkingMode: true,
+    });
+
+    await expect(llm.call(messages)).resolves.toBe("fine");
+    expect(sent[0]).toHaveProperty("reasoning_effort");
+    expect(sent[0]).not.toHaveProperty("thinking");
+    expect(sent[0]).not.toHaveProperty("output_config");
+    expect(sent[1]).not.toHaveProperty("reasoning_effort");
+  });
+
   it("never drops thinking from native Anthropic requests", async () => {
     const request = vi.fn(async () => response(400, JSON.stringify({
       type: "error",
@@ -136,7 +152,7 @@ describe("optional request fields a provider rejects", () => {
   describe("rejectedOptionalParameter", () => {
     const body = { thinking: { type: "enabled" }, reasoning_effort: "high", temperature: 0.2 };
     const status400 = (message: string) => Object.assign(new Error(message), { status: 400 });
-    const deepseek = { provider: "deepseek" };
+    const deepseek = { provider: "deepseek", baseUrl: "https://api.deepseek.com/v1" };
 
     it.each([
       ["Unknown parameter: 'thinking'.", "thinking"],

@@ -95,6 +95,27 @@ describe("dashboard library search block", () => {
     expect(search).toHaveBeenCalledTimes(2);
   });
 
+  it("does not cache a failed search, so the next repaint retries it", async () => {
+    const search = vi.fn()
+      .mockRejectedValueOnce(new Error("embedding API replied 503"))
+      .mockResolvedValueOnce([
+        { paperKey: "arxiv:2606.00001", title: "A", score: 0.5, scoreKind: "cosine", rankingScore: 0.5, rankingScoreKind: "cosine", hits: [] },
+      ]);
+    const { view } = setup({ search });
+
+    view.refreshLibrarySearch();
+    await flush();
+    expect(rendered.map((state) => state.kind)).toEqual(["loading", "error"]);
+
+    // A Refresh/re-render keeps the same query and index revision; the
+    // transient failure must be retried instead of replayed from the cache.
+    view.refreshLibrarySearch();
+    await flush();
+    expect(search).toHaveBeenCalledTimes(2);
+    expect(rendered.map((state) => state.kind))
+      .toEqual(["loading", "error", "loading", "matches"]);
+  });
+
   describe("cancellation", () => {
     /** A search that stays in flight until its signal aborts, then rejects like an aborted request. */
     function hangingSearch() {

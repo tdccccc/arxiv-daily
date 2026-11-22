@@ -12,6 +12,7 @@ import {
 } from "../core/adapters";
 import type { PaperMeta } from "./arxiv-parser";
 import { modernArxivResources } from "../utils/arxiv";
+import { hasPdfMagic } from "../utils/pdf-magic";
 import { setTimer, clearTimer } from "../utils/timers";
 import { isAtomPaperMeta, type AtomMetadataCache } from "./atom-metadata-cache";
 
@@ -581,7 +582,14 @@ export class ArxivFetcher {
 
   async fetchPdf(arxivId: string, signal?: AbortSignal): Promise<ArrayBuffer> {
     const url = requireArxivResources(arxivId).pdfUrl;
-    return this.fetchBinary(url, {}, signal);
+    const body = await this.fetchBinary(url, {}, signal);
+    // arXiv can answer with an HTTP 200 HTML page (captcha, rate limit, PDF not
+    // generated yet). A definitive non-PDF body is not worth retrying, so the
+    // magic is checked after the retry loop rather than inside it.
+    if (!hasPdfMagic(body)) {
+      throw new Error(`response is not a PDF (missing %PDF- header): ${url}`);
+    }
+    return body;
   }
 
   async fetchSource(

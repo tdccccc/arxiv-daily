@@ -440,7 +440,7 @@ export class FullTextGenerationIndexStore {
         continue;
       }
       try {
-        await this.storage.remove(generation.directory);
+        await this.removeGenerationTree(generation.directory);
         if (await this.storage.exists(generation.directory)) {
           retained.push({ generationId, reason: "remove-failed" });
         } else {
@@ -1594,6 +1594,27 @@ export class FullTextGenerationIndexStore {
 
   private async safeExists(path: string): Promise<boolean> {
     try { return await this.storage.exists(path); } catch (caught) { throw wrap("write-failed", `cannot check generation path: ${path}`, caught); }
+  }
+
+  /**
+   * Deletes a generation subtree bottom-up. Never rely on a host's recursive
+   * directory removal: strict hosts (Obsidian's `DataAdapter`) refuse to remove
+   * non-empty directories, so files are removed first and each directory only
+   * after its children are gone. `StorageAdapter.remove` is idempotent, but a
+   * missing directory must not reach `list`, which rejects absent folders.
+   */
+  private async removeGenerationTree(directory: string): Promise<void> {
+    if (!(await this.storage.exists(directory))) return;
+    if (this.storage.list) {
+      for (const entry of await this.storage.list(directory)) {
+        if (entry.type === "folder") {
+          await this.removeGenerationTree(entry.path);
+        } else if (await this.storage.exists(entry.path)) {
+          await this.storage.remove(entry.path);
+        }
+      }
+    }
+    await this.storage.remove(directory);
   }
 
   private async assertStagingClaim(path: string, expected: StagingClaim): Promise<void> {

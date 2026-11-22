@@ -10,7 +10,7 @@ import {
   shouldSendEmail,
   supportsAutomaticEmailDelivery,
 } from "../../src/delivery/delivery-state";
-import { RESEND_API_URL, sendViaResend } from "../../src/delivery/resend";
+import { RESEND_API_URL, formatResendFrom, sendViaResend } from "../../src/delivery/resend";
 import {
   HttpTransportError,
   type HttpClient,
@@ -1068,5 +1068,30 @@ describe("deliverDailyEmailIfEnabled", () => {
     const state = await loadDeliveryState(storage, output);
     expect(shouldSendEmail(state, digest.date, "one@example.com")).toBe(false);
     expect(shouldSendEmail(state, digest.date, "two@example.com")).toBe(false);
+  });
+});
+
+describe("formatResendFrom", () => {
+  it("keeps an ordinary display name unquoted", () => {
+    expect(formatResendFrom("from@example.com", "Daily")).toBe(
+      "Daily <from@example.com>",
+    );
+  });
+
+  it("returns the bare address without a display name", () => {
+    expect(formatResendFrom("from@example.com")).toBe("from@example.com");
+    expect(formatResendFrom("from@example.com", "   ")).toBe("from@example.com");
+  });
+
+  it("quotes and escapes RFC 5322 specials in the display name", () => {
+    expect(formatResendFrom("from@example.com", "Dr. Smith, Lab")).toBe(
+      '"Dr. Smith, Lab" <from@example.com>',
+    );
+    expect(formatResendFrom("from@example.com", 'A "quoted" name')).toBe(
+      '"A \\"quoted\\" name" <from@example.com>',
+    );
+    expect(formatResendFrom("from@example.com", "Back\\slash")).toBe(
+      '"Back\\\\slash" <from@example.com>',
+    );
   });
 });

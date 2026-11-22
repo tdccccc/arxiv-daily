@@ -1,10 +1,24 @@
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  DEFAULT_SETTINGS,
+  authorizeLibraryConnection,
+  createLibraryConnection,
+  type EmbeddingSettings,
+} from "@arxiv-daily/core";
+import ArxivDailyPlugin from "../main.ts";
 import {
   describeDiagnosticsError,
   formatFullTextRuntimeDiagnostics,
   summarizeFullTextRuntimeDiagnostics,
   type FullTextRuntimeDiagnostics,
 } from "../src/services/fulltext-runtime-diagnostics";
+
+const transformersRuntime = vi.hoisted(() => ({ pipeline: vi.fn() }));
+vi.mock("@huggingface/transformers", () => transformersRuntime);
+
+beforeEach(() => {
+  transformersRuntime.pipeline.mockReset();
+});
 
 function passReport(): FullTextRuntimeDiagnostics {
   return {
@@ -19,6 +33,7 @@ function passReport(): FullTextRuntimeDiagnostics {
     },
     embedding: {
       status: "pass",
+      mode: "local",
       modelId: "multilingual-e5-small-q8",
       dimension: 384,
       remoteHost: "https://huggingface.co/",
@@ -51,6 +66,7 @@ describe("formatFullTextRuntimeDiagnostics", () => {
         "  status: pass",
         "",
         "embeddings:",
+        "  mode: local",
         "  model: multilingual-e5-small-q8",
         "  dimension: 384",
         "  remoteHost: https://huggingface.co/",
@@ -66,6 +82,7 @@ describe("formatFullTextRuntimeDiagnostics", () => {
     const report = passReport();
     report.embedding = {
       status: "fail",
+      mode: "local",
       modelId: "multilingual-e5-small-q8",
       dimension: 384,
       error: "fetch failed",
@@ -104,7 +121,7 @@ describe("summarizeFullTextRuntimeDiagnostics", () => {
     const summary = summarizeFullTextRuntimeDiagnostics(passReport());
     expect(summary).toBe(
       "pdf.js PASS; window.pdfjsLib v4.2.189; smoke 15 pages / 12345 chars | "
-        + "embeddings PASS; 384 dim; 1234 ms",
+        + "local embeddings PASS; 384 dim; 1234 ms",
     );
   });
 
@@ -119,6 +136,7 @@ describe("summarizeFullTextRuntimeDiagnostics", () => {
     };
     report.embedding = {
       status: "fail",
+      mode: "local",
       modelId: "multilingual-e5-small-q8",
       dimension: 384,
       error: "dimension mismatch",
@@ -149,5 +167,91 @@ describe("describeDiagnosticsError", () => {
     expect(describeDiagnosticsError(new Error("boom"))).toBe("boom");
     expect(describeDiagnosticsError("plain string")).toBe("plain string");
     expect(describeDiagnosticsError(42)).toBe("42");
+  });
+});
+
+describe("diagnoseEmbedding backend selection (ADR 0008)", () => {
+  function remotePlugin(embedding: Partial<EmbeddingSettings>) {
+    const plugin = Object.create(ArxivDailyPlugin.prototype) as any;
+    const request = vi.fn(async () => ({
+      status: 200,
+      bodyText: JSON.stringify({ data: [{ embedding: [0.1, 0.2] }] }),
+    }));
+    Object.assign(plugin, {
+      settings: {
+        ...structuredClone(DEFAULT_SETTINGS),
+        embedding: {
+          ...DEFAULT_SETTINGS.embedding,
+          mode: "remote" as const,
+          baseUrl: "https://api.openai.com/v1",
+          apiKey: "sk-embed",
+          model: "text-embedding-3-small",
+          dimension: 2,
+          ...embedding,
+        },
+      },
+      logger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+      host: { http: { request }, storage: { normalizePath: (path: string) => path } },
+      libraryConnection: undefined,
+    });
+    return { plugin, request };
+  }
+
+  function authorize(plugin: any): void {
+    plugin.libraryConnection = authorizeLibraryConnection(
+      createLibraryConnection("/papers", "1:2"),
+      {
+        llmBaseUrl: plugin.settings.llm.baseUrl,
+        embeddingEndpoint: { baseUrl: plugin.settings.embedding.baseUrl },
+      },
+    );
+  }
+
+  it("reports an incomplete remote configuration without touching either backend", async () => {
+    const { plugin, request } = remotePlugin({ apiKey: "" });
+
+    const diagnostics = await plugin.diagnoseEmbedding();
+
+    expect(diagnostics).toMatchObject({
+      status: "fail",
+      mode: "remote",
+      authorization: "disconnected",
+    });
+    expect(diagnostics.error).toMatch(/configuration incomplete/i);
+    expect(request).not.toHaveBeenCalled();
+    expect(transformersRuntime.pipeline).not.toHaveBeenCalled();
+  });
+
+  it("skips the remote probe when full-text processing is not authorized", async () => {
+    const { plugin, request } = remotePlugin({});
+
+    const diagnostics = await plugin.diagnoseEmbedding();
+
+    expect(diagnostics).toMatchObject({
+      status: "skipped",
+      mode: "remote",
+      authorization: "disconnected",
+    });
+    expect(diagnostics.error).toMatch(/authorizing full-text processing/i);
+    expect(request).not.toHaveBeenCalled();
+    expect(transformersRuntime.pipeline).not.toHaveBeenCalled();
+  });
+
+  it("probes the configured remote endpoint and never loads the local model", async () => {
+    const { plugin, request } = remotePlugin({});
+    authorize(plugin);
+
+    const diagnostics = await plugin.diagnoseEmbedding();
+
+    expect(diagnostics).toMatchObject({
+      status: "pass",
+      mode: "remote",
+      authorization: "authorized",
+      modelId: "remote:text-embedding-3-small:2",
+      dimension: 2,
+    });
+    expect(request).toHaveBeenCalledOnce();
+    expect(request.mock.calls[0]![0].url).toBe("https://api.openai.com/v1/embeddings");
+    expect(transformersRuntime.pipeline).not.toHaveBeenCalled();
   });
 });
