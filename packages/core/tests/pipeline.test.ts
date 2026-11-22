@@ -9,6 +9,7 @@ import { parseRecent } from "../src/pipeline/arxiv-parser";
 import { RunCancelledError } from "../src/services/cancellation";
 import { Logger } from "../src/services/logger";
 import { PaperIndexStore } from "../src/services/paper-index";
+import { MarkdownWriter } from "../src/pipeline/markdown-writer";
 import { DEFAULT_SETTINGS } from "../src/settings/defaults";
 import { HttpTransportError, type StorageAdapter } from "../src/core/adapters";
 import { deliverDailyEmailIfEnabled } from "../src/delivery/deliver-email";
@@ -148,6 +149,7 @@ function makeDeps() {
     paperDetailExists: vi.fn(async () => false),
     readPaperDetail: vi.fn(async (id: string) =>
       writes[`papers/${id}.md`] ?? verifiedDetailMarkdown(id)),
+    refreshPaperNoteFrontmatter: vi.fn(async (_entry: any, path: string) => path),
   };
   const llm = {
     call: vi.fn().mockResolvedValueOnce(JSON.stringify({ papers: [] })),
@@ -199,6 +201,43 @@ function firstDateFromFixture(): string {
     July: 7, August: 8, September: 9, October: 10, November: 11, December: 12,
   };
   return `${m[3]}-${String(months[m[2]]).padStart(2, "0")}-${String(Number(m[1])).padStart(2, "0")}`;
+}
+
+function makeWriterHarness() {
+  const files: Record<string, string> = {};
+  const dirs = new Set<string>();
+  const storage = {
+    normalizePath(path: string) {
+      return path.replace(/\\/g, "/");
+    },
+    async readText(path: string) {
+      return files[path];
+    },
+    async writeText(path: string, content: string) {
+      files[path] = content;
+    },
+    async exists(path: string) {
+      return path in files || dirs.has(path);
+    },
+    async mkdir(path: string) {
+      dirs.add(path);
+    },
+    async rename(from: string, to: string) {
+      files[to] = files[from];
+      delete files[from];
+    },
+    async remove(path: string) {
+      delete files[path];
+      dirs.delete(path);
+    },
+  } satisfies StorageAdapter;
+  const writer = new MarkdownWriter({
+    storage,
+    logger: new Logger("error"),
+    arxiv: testArxiv,
+    output: DEFAULT_SETTINGS.output,
+  });
+  return { files, writer };
 }
 
 function firstBucketPapersFromFixture() {
@@ -600,6 +639,198 @@ describe("ArxivPipeline", () => {
     expect(entry.dailyReports).toEqual([`daily/${date}.md`]);
   });
 
+  it("links a detail note to the daily report written later in the run", async () => {
+    const d = makeDeps();
+    const { store } = makePaperIndex();
+    const { files, writer } = makeWriterHarness();
+    const arxivId = /arXiv:(\d{4}\.\d{4,5})/.exec(recentHtml)![1]!;
+    const date = firstDateFromFixture();
+    d.paperFetcher.fetch = vi.fn(async () => ({
+      abstractConclusion: "abstract and conclusion",
+      fullSections: "detail content",
+    }));
+    d.llm.call = vi.fn(async (messages: any[]) => {
+      const system = messages[0]?.content ?? "";
+      const daily = structuredDailyResponse(messages);
+      if (daily) return daily;
+      if (system.includes("判断它命中了哪些方向")) {
+        return JSON.stringify({
+          papers: [{ relevanceScore: 80, id: arxivId, category: "photo-z", directions: ["photo-z#1"] }],
+        });
+      }
+      if (system.includes("strict research-paper evaluator")) {
+        return JSON.stringify({
+          papers: [{ id: arxivId, score: 80, reason: "strong contribution" }],
+        });
+      }
+      return "## Research question\nDetailed note body.";
+    });
+
+    const pipeline = new ArxivPipeline({
+      markupParser,
+      fetcher: d.fetcher as any,
+      paperFetcher: d.paperFetcher as any,
+      writer,
+      paperIndex: store,
+      llm: d.llm as any,
+      logger: d.logger,
+      arxiv: testArxiv,
+      advanced: DEFAULT_SETTINGS.advanced,
+      output: DEFAULT_SETTINGS.output,
+      llmSettings: DEFAULT_SETTINGS.llm,
+      detailSelection: testDetailSelection,
+    });
+
+    expect(await pipeline.runForDate(date)).toMatchObject({ kind: "completed" });
+
+    const note = files[`arxiv-daily/papers/${arxivId}.md`]!;
+    expect(note).toContain(
+      `published: "[[arxiv-daily/daily/${date}|${date}]]"`,
+    );
+  });
+
+  it("leaves detail notes without a report link when the daily write fails", async () => {
+    const d = makeDeps();
+    const arxivId = /arXiv:(\d{4}\.\d{4,5})/.exec(recentHtml)![1]!;
+    const date = firstDateFromFixture();
+    d.writer.writeDaily.mockRejectedValue(new Error("disk full"));
+    d.paperFetcher.fetch = vi.fn(async () => ({
+      abstractConclusion: "abstract and conclusion",
+      fullSections: "detail content",
+    }));
+    d.llm.call = vi.fn(async (messages: any[]) => {
+      const system = messages[0]?.content ?? "";
+      if (system.includes("判断它命中了哪些方向")) {
+        return JSON.stringify({
+          papers: [{ relevanceScore: 80, id: arxivId, category: "photo-z", directions: ["photo-z#1"] }],
+        });
+      }
+      if (system.includes("strict research-paper evaluator")) {
+        return JSON.stringify({
+          papers: [{ id: arxivId, score: 80, reason: "strong contribution" }],
+        });
+      }
+      return structuredDailyResponse(messages) ?? "## Research question\nDetailed note body.";
+    });
+    const paperIndex = {
+      getMany: vi.fn(async () => new Map()),
+      upsertManyFromDailyPapers: vi.fn(async (papers: any[]) =>
+        papers.map((paper) => ({
+          entry: {
+            arxivId: paper.arxivId,
+            title: paper.title,
+            authors: [paper.authors],
+            published: paper.published,
+            primaryTopic: paper.primaryTopic,
+            status: "inbox",
+            dailyReports: [],
+            paperPath: null,
+          },
+          wasNew: true,
+        })),
+      ),
+      setPaperPath: vi.fn(async () => null),
+      addDailyReports: vi.fn(),
+      setSummaries: vi.fn(),
+    };
+    const pipeline = new ArxivPipeline({
+      markupParser,
+      fetcher: d.fetcher as any,
+      paperFetcher: d.paperFetcher as any,
+      writer: d.writer as any,
+      paperIndex: paperIndex as any,
+      llm: d.llm as any,
+      logger: d.logger,
+      arxiv: testArxiv,
+      advanced: DEFAULT_SETTINGS.advanced,
+      output: DEFAULT_SETTINGS.output,
+      llmSettings: DEFAULT_SETTINGS.llm,
+      detailSelection: testDetailSelection,
+    });
+
+    await expect(pipeline.runForDate(date)).rejects.toThrow("disk full");
+    expect(d.writer.writePaperDetail).toHaveBeenCalled();
+    expect(d.writer.refreshPaperNoteFrontmatter).not.toHaveBeenCalled();
+  });
+
+  it("does not persist paper index entries when daily summarization fails", async () => {
+    const d = makeDeps();
+    const { files, store } = makePaperIndex();
+    const arxivId = /arXiv:(\d{4}\.\d{4,5})/.exec(recentHtml)![1]!;
+    const date = firstDateFromFixture();
+    d.llm.call = vi.fn(async (msgs: any[]) => {
+      if ((msgs[0]?.content ?? "").includes("判断它命中了哪些方向")) {
+        return JSON.stringify({
+          papers: [{ relevanceScore: 80, id: arxivId, category: "photo-z", directions: ["photo-z#1"] }],
+        });
+      }
+      throw new Error("summarizer should not be called");
+    });
+    const pipeline = new ArxivPipeline({
+      markupParser,
+      fetcher: d.fetcher as any,
+      paperFetcher: d.paperFetcher as any,
+      writer: d.writer as any,
+      paperIndex: store,
+      llm: d.llm as any,
+      logger: d.logger,
+      arxiv: testArxiv,
+      advanced: DEFAULT_SETTINGS.advanced,
+      output: DEFAULT_SETTINGS.output,
+      llmSettings: DEFAULT_SETTINGS.llm,
+      detailSelection: testDetailSelection,
+      summarizeDaily: vi.fn(async () => {
+        throw new TypeError("assembler broke");
+      }),
+    });
+
+    expect(await pipeline.runForDate(date)).toEqual({
+      kind: "failed_transient",
+      reason: "daily summary failed: assembler broke",
+    });
+    expect(files["arxiv-daily/.index/papers.json"]).toBeUndefined();
+    expect((await store.getMany([arxivId])).size).toBe(0);
+  });
+
+  it("does not persist paper index entries when the run is cancelled before the report", async () => {
+    const d = makeDeps();
+    const { files, store } = makePaperIndex();
+    const arxivId = /arXiv:(\d{4}\.\d{4,5})/.exec(recentHtml)![1]!;
+    const date = firstDateFromFixture();
+    d.llm.call = vi.fn(async (msgs: any[]) => {
+      if ((msgs[0]?.content ?? "").includes("判断它命中了哪些方向")) {
+        return JSON.stringify({
+          papers: [{ relevanceScore: 80, id: arxivId, category: "photo-z", directions: ["photo-z#1"] }],
+        });
+      }
+      throw new Error("summarizer should not be called");
+    });
+    const pipeline = new ArxivPipeline({
+      markupParser,
+      fetcher: d.fetcher as any,
+      paperFetcher: d.paperFetcher as any,
+      writer: d.writer as any,
+      paperIndex: store,
+      llm: d.llm as any,
+      logger: d.logger,
+      arxiv: testArxiv,
+      advanced: DEFAULT_SETTINGS.advanced,
+      output: DEFAULT_SETTINGS.output,
+      llmSettings: DEFAULT_SETTINGS.llm,
+      detailSelection: testDetailSelection,
+      summarizeDaily: vi.fn(async () => {
+        throw new RunCancelledError("stop before report");
+      }),
+    });
+
+    expect(await pipeline.runForDate(date)).toEqual({
+      kind: "cancelled",
+      reason: "stop before report",
+    });
+    expect(files["arxiv-daily/.index/papers.json"]).toBeUndefined();
+    expect((await store.getMany([arxivId])).size).toBe(0);
+  });
+
   it("fetches multiple categories and deduplicates papers before filtering", async () => {
     const d = makeDeps();
     const { files, store } = makePaperIndex();
@@ -742,6 +973,61 @@ describe("ArxivPipeline", () => {
     const json = JSON.parse(files["arxiv-daily/.index/papers.json"]);
     expect(json.papers[`arxiv:${arxivId}`].status).toBe("ignored");
     expect(json.papers[`arxiv:${arxivId}`].seenDates).toContain(date);
+  });
+
+  it("clears date-scoped checkpoints when every match is ignored", async () => {
+    const d = makeDeps();
+    const { store } = makePaperIndex();
+    const arxivId = /arXiv:(\d{4}\.\d{4,5})/.exec(recentHtml)![1]!;
+    const date = firstDateFromFixture();
+    await store.upsertFromDailyPaper({
+      arxivId,
+      title: "Old",
+      authors: "A",
+      date: "2026-05-01",
+      arxivCategory: "astro-ph",
+      primaryTopic: "photo-z",
+      detail: false,
+    });
+    await store.setStatus(arxivId, "ignored");
+    d.llm.call = vi.fn(async (msgs: any[]) =>
+      (msgs[0]?.content ?? "").includes("判断它命中了哪些方向")
+        ? JSON.stringify({
+            papers: [{ relevanceScore: 80, id: arxivId, category: "photo-z", directions: ["photo-z#1"] }],
+          })
+        : "");
+    const filter = {
+      lookupReusable: vi.fn(async () => null),
+      save: vi.fn(async () => undefined),
+      removeAll: vi.fn(async () => undefined),
+    };
+    const summary = {
+      lookupReusable: vi.fn(),
+      upsert: vi.fn(),
+      removeAll: vi.fn(async () => undefined),
+    };
+    const pipeline = new ArxivPipeline({
+      markupParser,
+      fetcher: d.fetcher as any,
+      paperFetcher: d.paperFetcher as any,
+      writer: d.writer as any,
+      paperIndex: store,
+      checkpointStores: { filter, summary },
+      llm: d.llm as any,
+      logger: d.logger,
+      arxiv: testArxiv,
+      advanced: DEFAULT_SETTINGS.advanced,
+      output: DEFAULT_SETTINGS.output,
+      llmSettings: DEFAULT_SETTINGS.llm,
+      detailSelection: testDetailSelection,
+    });
+
+    expect(await pipeline.runForDate(date)).toMatchObject({
+      kind: "completed",
+      papersWritten: 0,
+    });
+    expect(filter.removeAll).toHaveBeenCalledWith(date);
+    expect(summary.removeAll).toHaveBeenCalledWith(date);
   });
 
   it("repairs daily-report links and summaries when a daily file already exists", async () => {

@@ -184,10 +184,27 @@ const HTML_ENTITIES: Readonly<Record<string, string>> = {
 /** Decode the numeric and common named HTML entities pdf.js leaves in metadata. */
 function decodeHtmlEntities(text: string): string {
   return text.replace(/&#x([0-9a-f]+);|&#(\d+);|&[a-z]+;/gi, (match, hex: string | undefined, dec: string | undefined) => {
-    if (hex) return String.fromCodePoint(parseInt(hex, 16));
-    if (dec) return String.fromCodePoint(parseInt(dec, 10));
+    if (hex) return codePointOrLiteral(parseInt(hex, 16), match);
+    if (dec) return codePointOrLiteral(parseInt(dec, 10), match);
     return HTML_ENTITIES[match.toLowerCase()] ?? match;
   });
+}
+
+/**
+ * `String.fromCodePoint` throws `RangeError` outside Unicode and produces
+ * unpaired surrogates inside it. A damaged entity keeps its literal text
+ * instead of failing the whole title extraction.
+ */
+function codePointOrLiteral(code: number, literal: string): string {
+  if (
+    !Number.isInteger(code) ||
+    code < 0 ||
+    code > 0x10ffff ||
+    (code >= 0xd800 && code <= 0xdfff)
+  ) {
+    return literal;
+  }
+  return String.fromCodePoint(code);
 }
 
 /** Normalized lowercase token set, used for the metadata/font coverage check. */

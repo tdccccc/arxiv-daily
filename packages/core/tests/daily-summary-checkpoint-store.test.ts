@@ -679,15 +679,31 @@ describe("DailySummaryCheckpointStore", () => {
     ]);
   });
 
-  it("rejects mutation when both primary and backup are corrupt", async () => {
+  it("rebuilds a definitively corrupt checkpoint when both files are corrupt", async () => {
     const { files, storage } = makeStorage();
     files[documentPath] = "corrupt primary";
     files[backupPath] = "corrupt backup";
+    const warning = vi.fn();
 
-    await expect(makeStore(storage).upsert(reportDate, compatibility(), structuredResult))
-      .rejects.toThrow(/cannot mutate unreadable/);
-    expect(files[documentPath]).toBe("corrupt primary");
-    expect(files[backupPath]).toBe("corrupt backup");
+    await makeStore(storage, warning).upsert(reportDate, compatibility(), structuredResult);
+
+    expect(warning.mock.calls.some(([message]) =>
+      String(message).includes("corrupt daily summary checkpoint rebuilt"))).toBe(true);
+    expect(await makeStore(storage).lookupReusable(reportDate, compatibility()))
+      .toEqual(structuredResult);
+  });
+
+  it("rebuilds a corrupt checkpoint when no valid backup exists", async () => {
+    const { files, storage } = makeStorage();
+    files[documentPath] = "{ not json";
+    const warning = vi.fn();
+
+    await makeStore(storage, warning).upsert(reportDate, compatibility(), structuredResult);
+
+    expect(warning.mock.calls.some(([message]) =>
+      String(message).includes("corrupt daily summary checkpoint rebuilt"))).toBe(true);
+    expect(await makeStore(storage).lookupReusable(reportDate, compatibility()))
+      .toEqual(structuredResult);
   });
 
   it("recovers a valid backup when the primary is corrupt", async () => {

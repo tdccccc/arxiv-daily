@@ -538,8 +538,8 @@ describe("filter decision record on commit", () => {
     expect(h.writer.writeDaily).not.toHaveBeenCalled();
     expect(readRecord(h.files).candidates.map((c: { id: string; outcome: string }) => [c.id, c.outcome]))
       .toEqual([[id(1), "skipped_by_model"], [id(2), "skipped_by_model"]]);
-    // Checkpoint handling on this path is unchanged: nothing cleans it up.
-    expect(h.files[checkpointPath]).toBeDefined();
+    // The terminal zero-match day clears its checkpoints like a committed day.
+    expect(h.files[checkpointPath]).toBeUndefined();
   });
 
   it("records a day on which every kept paper was ignored", async () => {
@@ -558,7 +558,7 @@ describe("filter decision record on commit", () => {
     expect(h.writer.writeDaily).not.toHaveBeenCalled();
     expect(readRecord(h.files).candidates.map((c: { id: string; outcome: string }) => [c.id, c.outcome]))
       .toEqual([[id(1), "excluded_ignored"], [id(2), "excluded_ignored"], [id(3), "skipped_by_model"]]);
-    expect(h.files[checkpointPath]).toBeDefined();
+    expect(h.files[checkpointPath]).toBeUndefined();
   });
 
   it("only warns when a no-match day cannot be recorded", async () => {

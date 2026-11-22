@@ -276,7 +276,10 @@ export class MarkdownWriter {
   private async publishedReportLink(
     published: string | undefined,
   ): Promise<string | undefined> {
-    if (!published) return undefined;
+    // `published` can come from a hand-edited or damaged index and is not
+    // guaranteed to be a date. A non-date must degrade to no link instead of
+    // aborting the whole note through dailyPath()'s validation.
+    if (!published || !/^\d{4}-\d{2}-\d{2}$/.test(published)) return undefined;
     const path = this.dailyPath(published);
     return (await this.opts.storage.exists(path))
       ? dailyReportLink(path, published)

@@ -46,4 +46,40 @@ describe("shared PDF.js parser", () => {
       .rejects.toMatchObject({ name: "AbortError", message: "stop before load" });
     expect(lib.getDocument).not.toHaveBeenCalled();
   });
+
+  function parserWithEmptyInfoTitle() {
+    const getDocument = vi.fn<PdfJsLib["getDocument"]>(() => ({
+      promise: Promise.resolve({
+        numPages: 1,
+        getPage: async () => ({
+          getTextContent: async () => ({
+            items: [{ str: "Body text", transform: [1, 0, 0, 10, 0, 20] }],
+          }),
+          view: [0, 0, 100, 100] as const,
+        }),
+        getMetadata: async () => ({ info: { Title: "" } }),
+      }),
+      destroy: vi.fn(async () => {}),
+    }));
+    return new PdfJsDocumentParser({ getDocument }, {
+      provenance: { id: "node-pdfjs", version: "1" },
+    });
+  }
+
+  it.each(["FFFE", "fffe"])(
+    "decodes a %s UTF-16LE BOM in a hex /Title as little-endian",
+    async (bom) => {
+      const bytes = new TextEncoder().encode(`%PDF-1.7\n/Title <${bom}48006900>\n`);
+      const result = await parserWithEmptyInfoTitle().parse(bytes);
+      expect(result.metadata?.title).toBe("Hi");
+    },
+  );
+
+  it("does not overflow the stack on a huge hex /Title", async () => {
+    const bytes = new TextEncoder().encode(
+      `%PDF-1.7\n/Title <${"41".repeat(50_000)}>\n`,
+    );
+    const result = await parserWithEmptyInfoTitle().parse(bytes);
+    expect(result.metadata?.title).toHaveLength(50_000);
+  });
 });
