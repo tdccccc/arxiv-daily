@@ -721,6 +721,7 @@ export default class ArxivDailyPlugin extends Plugin {
       }
       await this.reloadPersonalLibraryCatalog(mutationRevision).catch((error) => {
         this.libraryCatalog = null;
+        this.libraryCatalogLoadError = this.safeProfileLoadError("catalog", error);
         this.logger.error?.("personal library catalog load failed after folder selection", error);
       });
       await this.reloadPersonalLibraryProfileDocuments(mutationRevision);
@@ -2830,7 +2831,15 @@ export default class ArxivDailyPlugin extends Plugin {
         return this.getPersonalLibraryProfileSnapshot();
       } catch (error) {
         if (this.isReviewPersistenceConflict(error)) {
-          await this.loadPersonalLibraryProposalDocumentDirect(guard, stores);
+          // Another client (CLI, Workbench) advanced the document while this
+          // edit was in flight. Re-read it so the next render shows the
+          // revision on disk instead of the stale in-memory one that will
+          // conflict again.
+          const reloaded = await this.loadPersonalLibraryProposalDocumentDirect(guard, stores);
+          if (reloaded.status === "fulfilled") {
+            this.libraryProposal = reloaded.value;
+            this.libraryProposalLoadError = null;
+          }
         }
         throw error;
       }
