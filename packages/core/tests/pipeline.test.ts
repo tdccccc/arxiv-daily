@@ -1043,6 +1043,7 @@ describe("ArxivPipeline", () => {
     d.writer.readDaily.mockResolvedValue(markdown);
     const paperIndex = {
       getMany: vi.fn(async () => new Map()),
+      createMissingDailyPapers: vi.fn(async () => []),
       reconcilePaperDetails: vi.fn(async () => 0),
       addDailyReports: vi.fn(async () => undefined),
       setSummaries: vi.fn(async () => 1),
@@ -1087,6 +1088,7 @@ describe("ArxivPipeline", () => {
     ].join("\n"));
     const paperIndex = {
       getMany: vi.fn(async () => new Map()),
+      createMissingDailyPapers: vi.fn(async () => []),
       reconcilePaperDetails: vi.fn(async () => 0),
       addDailyReports: vi.fn(async () => undefined),
       reconcileDailyReportOccurrenceProvenance: vi.fn(async () => 1),
@@ -1118,6 +1120,7 @@ describe("ArxivPipeline", () => {
     ].join("\n"));
     const paperIndex = {
       getMany: vi.fn(async () => new Map()),
+      createMissingDailyPapers: vi.fn(async () => []),
       reconcilePaperDetails: vi.fn(async () => 0), addDailyReports: vi.fn(async () => undefined),
       reconcileDailyReportOccurrenceProvenance: vi.fn(async () => 0), setSummaries: vi.fn(async () => 0),
     };
@@ -1144,6 +1147,7 @@ describe("ArxivPipeline", () => {
     d.writer.readDaily.mockResolvedValue(legacyReport);
     const paperIndex = {
       getMany: vi.fn(async () => new Map()),
+      createMissingDailyPapers: vi.fn(async () => []),
       reconcilePaperDetails: vi.fn(async () => 0),
       addDailyReports: vi.fn(async () => undefined),
       reconcileDailyReportOccurrenceProvenance: vi.fn(async () => 0),
@@ -1192,6 +1196,7 @@ describe("ArxivPipeline", () => {
           entry: { status: "inbox", paperPath: null, ...input },
         })),
       ),
+      createMissingDailyPapers: vi.fn(async () => []),
       reconcilePaperDetails: vi.fn(async () => 0),
       addDailyReports: vi.fn(async () => {
         if (failDailyLink) {
@@ -1252,6 +1257,7 @@ describe("ArxivPipeline", () => {
     ].join("\r\n"));
     const paperIndex = {
       getMany: vi.fn(async () => new Map()),
+      createMissingDailyPapers: vi.fn(async () => []),
       reconcilePaperDetails: vi.fn(async () => 0),
       addDailyReports: vi.fn(async () => undefined),
       setSummaries: vi.fn(async () => 0),
@@ -1301,6 +1307,7 @@ describe("ArxivPipeline", () => {
     ].join("\n"));
     const paperIndex = {
       getMany: vi.fn(async () => new Map()),
+      createMissingDailyPapers: vi.fn(async () => []),
       reconcilePaperDetails: vi.fn(async () => 0),
       addDailyReports: vi.fn(async () => undefined),
       setSummaries: vi.fn(async () => 1),
@@ -1389,6 +1396,7 @@ describe("ArxivPipeline", () => {
     d.writer.readDaily.mockResolvedValue(markdown);
     const paperIndex = {
       getMany: vi.fn(async () => new Map()),
+      createMissingDailyPapers: vi.fn(async () => []),
       reconcilePaperDetails: vi.fn(async () => 0),
       addDailyReports: vi.fn(async () => undefined),
       setSummaries: vi.fn(async () => 1),
@@ -1473,6 +1481,107 @@ describe("ArxivPipeline", () => {
     expect(d.writer.writePaperDetail).not.toHaveBeenCalled();
   });
 
+  it("rebuilds the day's missing index entries and detail backlink after a run stops before the index commit", async () => {
+    const d = makeDeps();
+    const { store } = makePaperIndex();
+    const date = firstDateFromFixture();
+    const id = firstBucketPapersFromFixture()[0]!.id;
+    const dailyPath = `daily/${date}.md`;
+    const notePath = `papers/${id}.md`;
+    const controller = new AbortController();
+    let dailyExists = false;
+    d.writer.dailyExists = vi.fn(async () => dailyExists);
+    d.writer.writeDaily = vi.fn(async (writtenDate: string, markdown: string) => {
+      d.writes[`daily/${writtenDate}.md`] = markdown;
+      dailyExists = true;
+      // The report is committed; the run stops before its index projection.
+      controller.abort("cancelled after daily write");
+      return `daily/${writtenDate}.md`;
+    });
+    d.writer.readDaily = vi.fn(
+      async (writtenDate: string) => d.writes[`daily/${writtenDate}.md`] ?? "",
+    );
+    d.writer.writePaperDetail = vi.fn(async (paper: any) => {
+      d.writes[`papers/${paper.id}.md`] = verifiedDetailMarkdown(paper.id);
+      return `papers/${paper.id}.md`;
+    });
+    d.writer.paperDetailExists = vi.fn(
+      async (candidate: string) => `papers/${candidate}.md` in d.writes,
+    );
+    d.llm.call = vi.fn(async (messages: any[]) => {
+      const system = messages[0]?.content ?? "";
+      if (system.includes("判断它命中了哪些方向")) {
+        return JSON.stringify({
+          papers: [{ relevanceScore: 80, id, category: "photo-z", directions: ["photo-z#1"] }],
+        });
+      }
+      if (system.includes("strict research-paper evaluator")) {
+        return JSON.stringify({ papers: [{ id, score: 85, reason: "direct contribution" }] });
+      }
+      return "## detail summary\n";
+    });
+    d.paperFetcher.fetch = vi.fn(async () => ({
+      abstractConclusion: "abstract and conclusion",
+      fullSections: "detail content",
+    }));
+    const summarizeDaily = vi.fn(async () => ({
+      markdown: [
+        "## Photo-z",
+        "### Committed paper",
+        `- **arXiv**: [${id}](https://arxiv.org/abs/${id})`,
+        "- **核心问题**: Committed problem.",
+      ].join("\n"),
+      slots: [],
+    }));
+    const pipeline = new ArxivPipeline({
+      markupParser,
+      fetcher: d.fetcher as any,
+      paperFetcher: d.paperFetcher as any,
+      writer: d.writer as any,
+      paperIndex: store,
+      llm: d.llm as any,
+      logger: d.logger,
+      arxiv: testArxiv,
+      advanced: DEFAULT_SETTINGS.advanced,
+      output: DEFAULT_SETTINGS.output,
+      llmSettings: DEFAULT_SETTINGS.llm,
+      detailSelection: testDetailSelection,
+      summarizeDaily: summarizeDaily as any,
+    });
+
+    expect(await pipeline.runForDate(date, controller.signal)).toEqual({
+      kind: "cancelled",
+      reason: "cancelled after daily write",
+    });
+    expect(d.writer.writePaperDetail).toHaveBeenCalledTimes(1);
+    expect(await store.get(id)).toBeNull();
+
+    // The report is the durable commit: repair rebuilds the index entry and
+    // the note's report backlink from it instead of losing the day forever.
+    expect(await pipeline.runForDate(date)).toMatchObject({
+      kind: "completed",
+      papersWritten: 1,
+    });
+    expect(await store.get(id)).toMatchObject({
+      title: "Committed paper",
+      detail: true,
+      paperPath: notePath,
+      primaryTopic: "photo-z",
+      dailyReports: [dailyPath],
+      summary: { coreProblem: "Committed problem." },
+    });
+    expect(d.writer.refreshPaperNoteFrontmatter).toHaveBeenCalledWith(
+      expect.objectContaining({
+        arxivId: id,
+        title: "Committed paper",
+        primaryTopic: "photo-z",
+        dailyReports: [dailyPath],
+      }),
+      notePath,
+    );
+    expect(d.writer.writePaperDetail).toHaveBeenCalledTimes(1);
+  });
+
   it("does not repair detail state from an unverified canonical-path note", async () => {
     const d = makeDeps();
     const { store } = makePaperIndex();
@@ -1512,6 +1621,7 @@ describe("ArxivPipeline", () => {
     d.writer.readPaperDetail.mockRejectedValue(new Error("permission denied"));
     const paperIndex = {
       getMany: vi.fn(async () => new Map()),
+      createMissingDailyPapers: vi.fn(async () => []),
       reconcilePaperDetails: vi.fn(), addDailyReports: vi.fn(), setSummaries: vi.fn(),
     };
     const pipeline = new ArxivPipeline({
@@ -1579,6 +1689,7 @@ describe("ArxivPipeline", () => {
     let failWrite = true;
     const paperIndex = {
       getMany: vi.fn(async () => new Map()),
+      createMissingDailyPapers: vi.fn(async () => []),
       reconcilePaperDetails: vi.fn(async () => {
         if (failWrite) {
           failWrite = false;
@@ -1633,6 +1744,7 @@ describe("ArxivPipeline", () => {
       let fail = true;
       const paperIndex = {
       getMany: vi.fn(async () => new Map()),
+        createMissingDailyPapers: vi.fn(async () => []),
         reconcilePaperDetails: vi.fn(async () => 0),
         addDailyReports: vi.fn(async () => {
           if (failedMethod === "addDailyReports" && fail) {
@@ -1757,11 +1869,11 @@ describe("ArxivPipeline", () => {
   });
 
   it.each([
-    { index: false, expectedKind: "completed" },
-    { index: true, expectedKind: "failed_transient" },
+    { index: false, expectedKind: "completed", cleansUp: true },
+    { index: true, expectedKind: "failed_transient", cleansUp: false },
   ] as const)(
-    "keeps the original $expectedKind result when existing-daily cleanup fails (index=$index)",
-    async ({ index, expectedKind }) => {
+    "keeps the original $expectedKind result and only cleans up after a completed repair (index=$index)",
+    async ({ index, expectedKind, cleansUp }) => {
       const d = makeDeps();
       const date = "2026-05-11";
       const id = "2607.00001";
@@ -1775,6 +1887,7 @@ describe("ArxivPipeline", () => {
         removeAll: vi.fn(async () => { throw new Error("cleanup denied"); }),
       };
       const paperIndex = index ? {
+        createMissingDailyPapers: vi.fn(async () => []),
         reconcilePaperDetails: vi.fn(async () => { throw new Error("repair denied"); }),
         addDailyReports: vi.fn(),
         setSummaries: vi.fn(),
@@ -1799,16 +1912,16 @@ describe("ArxivPipeline", () => {
       const result = await pipeline.runForDate(date);
 
       expect(result.kind).toBe(expectedKind);
+      if (!cleansUp) {
+        // A retry may still resume from these checkpoints.
+        expect(checkpointStore.removeAll).not.toHaveBeenCalled();
+        return;
+      }
       expect(checkpointStore.removeAll).toHaveBeenCalledWith(date);
       expect(warn).toHaveBeenCalledWith(
         expect.stringContaining("checkpoint cleanup failed"),
         expect.any(Error),
       );
-      if (paperIndex) {
-        expect(checkpointStore.removeAll.mock.invocationCallOrder[0]).toBeLessThan(
-          paperIndex.reconcilePaperDetails.mock.invocationCallOrder[0]!,
-        );
-      }
     },
   );
 
@@ -1873,6 +1986,7 @@ describe("ArxivPipeline", () => {
     };
     const paperIndex = {
       getMany: vi.fn(async () => new Map()),
+      createMissingDailyPapers: vi.fn(async () => []),
       reconcilePaperDetails: vi.fn(async () => { controller.abort("cancelled after detail repair"); }),
       addDailyReports: vi.fn(),
       setSummaries: vi.fn(),
@@ -1897,7 +2011,8 @@ describe("ArxivPipeline", () => {
       kind: "cancelled",
       reason: "cancelled after detail repair",
     });
-    expect(checkpointStore.removeAll).toHaveBeenCalledTimes(1);
+    // The interrupted repair has not superseded its checkpoints; a retry reuses them.
+    expect(checkpointStore.removeAll).not.toHaveBeenCalled();
     expect(paperIndex.addDailyReports).not.toHaveBeenCalled();
     expect(paperIndex.setSummaries).not.toHaveBeenCalled();
   });
@@ -2083,10 +2198,10 @@ describe("ArxivPipeline", () => {
       kind: "cancelled",
       reason: "cancelled after daily links",
     });
-    expect(checkpointStore.removeAll).toHaveBeenCalledTimes(1);
-    expect(checkpointStore.removeAll.mock.invocationCallOrder[0]).toBeLessThan(
-      paperIndex.addDailyReports.mock.invocationCallOrder[0]!,
-    );
+    // The report exists, but the index projection did not finish; the repair
+    // run still needs these checkpoints, so they must survive the cancellation.
+    expect(checkpointStore.removeAll).not.toHaveBeenCalled();
+    expect(paperIndex.addDailyReports).toHaveBeenCalledTimes(1);
     expect(paperIndex.setSummaries).not.toHaveBeenCalled();
   });
 
@@ -2113,6 +2228,7 @@ describe("ArxivPipeline", () => {
           entry: { status: "inbox", paperPath: null, ...input },
         })),
       ),
+      createMissingDailyPapers: vi.fn(async () => []),
       reconcilePaperDetails: vi.fn(async () => 0),
       addDailyReports: vi.fn(async () => {
         if (failDailyLink) {
@@ -2151,16 +2267,17 @@ describe("ArxivPipeline", () => {
       kind: "failed_transient",
       reason: "paper index daily report update failed: index disk full",
     });
-    expect(checkpointStore.removeAll).toHaveBeenCalledTimes(1);
-    expect(checkpointStore.removeAll.mock.invocationCallOrder[0]).toBeLessThan(
-      paperIndex.addDailyReports.mock.invocationCallOrder[0]!,
-    );
+    // The index commit failed, so the checkpoints are still the repair run's input.
+    expect(checkpointStore.removeAll).not.toHaveBeenCalled();
 
     await expect(pipeline.runForDate(date)).resolves.toMatchObject({
       kind: "completed",
       papersWritten: 1,
     });
-    expect(checkpointStore.removeAll).toHaveBeenCalledTimes(2);
+    expect(checkpointStore.removeAll).toHaveBeenCalledTimes(1);
+    expect(checkpointStore.removeAll.mock.invocationCallOrder[0]).toBeGreaterThan(
+      paperIndex.addDailyReports.mock.invocationCallOrder[1]!,
+    );
     expect(d.fetcher.fetchRecent).toHaveBeenCalledTimes(1);
     expect(paperIndex.addDailyReports).toHaveBeenCalledTimes(2);
     expect(paperIndex.setSummaries).toHaveBeenCalledTimes(1);
@@ -2190,6 +2307,7 @@ describe("ArxivPipeline", () => {
         upsertManyFromDailyPapers: vi.fn(async (inputs: any[]) =>
           inputs.map((input) => ({ wasNew: true, entry: { status: "inbox", paperPath: null, ...input } })),
         ),
+        createMissingDailyPapers: vi.fn(async () => []),
         reconcilePaperDetails: vi.fn(async () => 0),
         addDailyReports: vi.fn(async () => {
           if (failIndex) {
@@ -2327,6 +2445,7 @@ describe("ArxivPipeline", () => {
       d.writer.readDaily = vi.fn(async () => markdown);
       const paperIndex = {
       getMany: vi.fn(async () => new Map()),
+        createMissingDailyPapers: vi.fn(async () => []),
         reconcilePaperDetails: vi.fn(async () => 0),
         addDailyReports: vi.fn(async () => undefined),
         setSummaries: vi.fn(async () => 0),
@@ -2412,6 +2531,7 @@ describe("ArxivPipeline", () => {
           entry: { status: "inbox", paperPath: null, ...input },
         })),
       ),
+      createMissingDailyPapers: vi.fn(async () => []),
       reconcilePaperDetails: vi.fn(async () => 0),
       addDailyReports: vi.fn(async () => undefined),
       setSummaries: vi.fn(async () => 1),
@@ -2442,19 +2562,21 @@ describe("ArxivPipeline", () => {
       kind: "cancelled",
       reason: "cancelled after daily write",
     });
-    expect(checkpointStore.removeAll).toHaveBeenCalledTimes(1);
-    expect(cleanupWarning).toHaveBeenCalledWith(
-      expect.stringContaining("checkpoint cleanup failed"),
-      expect.any(Error),
-    );
-    expect(checkpointStore.removeAll.mock.invocationCallOrder[0]).toBeLessThan(
-      paperIndex.addDailyReports.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
-    );
+    // Cancelled before the index commit: keep the checkpoints for the repair.
+    expect(checkpointStore.removeAll).not.toHaveBeenCalled();
+    expect(cleanupWarning).not.toHaveBeenCalled();
     expect(paperIndex.addDailyReports).not.toHaveBeenCalled();
 
     expect(await pipeline.runForDate(firstDateFromFixture())).toMatchObject({ kind: "completed", papersWritten: 1,
     });
-    expect(checkpointStore.removeAll).toHaveBeenCalledTimes(2);
+    expect(checkpointStore.removeAll).toHaveBeenCalledTimes(1);
+    expect(checkpointStore.removeAll.mock.invocationCallOrder[0]).toBeGreaterThan(
+      paperIndex.addDailyReports.mock.invocationCallOrder[0]!,
+    );
+    expect(cleanupWarning).toHaveBeenCalledWith(
+      expect.stringContaining("checkpoint cleanup failed"),
+      expect.any(Error),
+    );
     expect(paperIndex.addDailyReports).toHaveBeenCalledWith(
       [id],
       `daily/${firstDateFromFixture()}.md`,
