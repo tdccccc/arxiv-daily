@@ -896,12 +896,17 @@ function installExternalOpenGuard() {
  * correctly records it as a permanent failure and logs why. A persona is free to try such a date (the
  * first-time-user persona picked 2025-06-10), and without this carve-out the correct log fails the whole
  * scenario the moment it is observed (`exploration.mjs` treats any `observation.errors` entry as a
- * product failure). Only the console error from that exact situation is exempted, and only when it is a
- * console error: a page exception carrying the same text is still a real failure.
+ * product failure).
+ *
+ * The carve-out is not opt-in per task because the model chooses the date at runtime, so preparation
+ * cannot know whether the chosen date is out of range. Narrowness comes from the exact shape instead:
+ * only a console error (a page exception with the same text is still a real failure), only the product's
+ * own prefix, and the run date must equal the offending date it reports — a message about a different
+ * date than the one the run was for is a product bug and still surfaces.
  */
 export function isExpectedOutOfRangeDateLog(entry) {
   if (entry?.source !== "console" || entry?.level !== "error") return false;
-  return /^\[arxiv-daily\] arXiv \d{4}-\d{2}-\d{2} permanent: date \d{4}-\d{2}-\d{2} is older than the oldest .+ \/recent bucket \d{4}-\d{2}-\d{2}; arXiv no longer lists it there/.test(entry.text ?? "");
+  return /^\[arxiv-daily\] arXiv (\d{4}-\d{2}-\d{2}) permanent: date \1 is older than the oldest .+ \/recent bucket \d{4}-\d{2}-\d{2}; arXiv no longer lists it there/.test(entry.text ?? "");
 }
 
 export async function createObsidianExplorationDriver({ session, fixture, artifactDir, redact = value => String(value ?? ""), signal } = {}) {

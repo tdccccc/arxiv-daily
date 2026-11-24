@@ -12,9 +12,9 @@
 
 ### 处理
 
-- 所有手动单日运行入口（Dashboard 工具栏/空态/日历、More 菜单的 Run for date…/Force run for date…、命令面板、设置页“Generate first report”）保留“running…”通知的句柄；结果为 `skipped`（已完成、锁被占用、不可运行）时隐藏该通知，只留下最终结果。
-- 新增插件级单飞闸门 `plugin/src/services/manual-run-gate.ts`，按日期记录手动运行：同一天正在运行时，第二次请求立即提示“DATE is already running”，不再排到日期锁后面等第一次结束、再报告过期的“already done”。不同日期互不影响；跨窗口仍由调度器自己的跨进程锁协调。
-- 新增测试：`plugin/tests/manual-run-gate.test.ts`、`plugin/tests/commands.test.ts`（跳过时隐藏通知、运行中拒绝第二次、结束后恢复）、`plugin/tests/dashboard/calendar-state.test.ts`（同样的窗口侧行为）。
+- 所有手动单日运行入口（Dashboard 工具栏/空态/日历、More 菜单的 Run for date…/Force run for date…、命令面板、设置页“Generate first report”）统一走 `runManualDate`：运行结束（成功、跳过、失败、挂起或抛错）时隐藏“running…”通知，只留下最终结果或错误提示。
+- 新增插件级单飞闸门 `plugin/src/services/manual-run-gate.ts`，按日期记录手动运行：同一天正在运行时，第二次请求立即提示“DATE is already running”，不再先弹出自己的“running…”通知、再收到调度器笼统的“lock held”（若第一次恰好已结束则是“already done”）。不同日期互不影响；跨窗口仍由调度器自己的跨进程锁协调。
+- 新增测试：`plugin/tests/manual-run-gate.test.ts`、`plugin/tests/commands.test.ts`（跳过/失败/挂起/抛错时隐藏通知、运行中拒绝第二次、结束后恢复）、`plugin/tests/dashboard/calendar-state.test.ts`（同样的窗口侧行为）。
 
 ## 问题 2：打开 More 菜单后键盘焦点逸出、Tab/Escape 被探索工具拒绝
 
@@ -32,4 +32,4 @@
 
 ## 附带：探索工具对“早于最近窗口的日期”的分类
 
-`first-time-user` 角色输入了 `2025-06-10`，产品正确地把它记为永久失败并记录日志“date 2025-06-10 is older than the oldest cs.AI /recent bucket …; arXiv no longer lists it there”，但探索循环把任何观察到的控制台错误都判为场景失败。现对该产品日志做窄豁免（`isExpectedOutOfRangeDateLog`）：只接受控制台 error、且消息前缀完全匹配；页面异常（`pageerror`）和其它控制台错误仍然照常失败。测试见 `scripts/tests/acceptance-exploration-host.test.mjs`。
+`first-time-user` 角色输入了 `2025-06-10`，产品正确地把它记为永久失败并记录日志“date 2025-06-10 is older than the oldest cs.AI /recent bucket …; arXiv no longer lists it there”，但探索循环把任何观察到的控制台错误都判为场景失败。现对该产品日志做窄豁免（`isExpectedOutOfRangeDateLog`）：只接受控制台 error、消息前缀完全匹配、且日志里的运行日期与被拒日期必须相同；页面异常（`pageerror`）、其它控制台错误、以及两个日期不一致的消息仍然照常失败。测试见 `scripts/tests/acceptance-exploration-host.test.mjs`。

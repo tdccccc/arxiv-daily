@@ -482,6 +482,63 @@ describe("registerCommands", () => {
     expect(running?.notice.hidden).toBe(true);
   });
 
+  it.each([
+    [{ kind: "failed_permanent", reason: "date 2025-06-10 is older than the oldest cs.AI /recent bucket" }, /permanent: /],
+    [{ kind: "pending", outcome: "awaiting_announcement", reason: "not announced yet" }, /awaiting announcement: /],
+  ])("hides the interim running notice when the run returns a terminal non-success result: %#", async (result, expected) => {
+    Notice.calls = [];
+    const plugin = makePlugin();
+    plugin.settings = {
+      ...DEFAULT_SETTINGS,
+      llm: { ...DEFAULT_SETTINGS.llm, apiKey: "sk-test" },
+      arxiv: {
+        ...DEFAULT_SETTINGS.arxiv,
+        topics: [{ id: "t", name: "Galaxies", tag: "galaxies", description: "Galaxies", directions: [{ id: "d", text: "Galaxies", source: "manual" }], detail: false }],
+      },
+    };
+    plugin.scheduler.runForDateNow.mockResolvedValue(result as never);
+    registerCommands(plugin as any);
+    const command = vi.mocked(plugin.addCommand).mock.calls
+      .map(([value]) => value)
+      .find((value) => value.id === "run-now");
+
+    command?.callback?.();
+
+    await vi.waitFor(() =>
+      expect(Notice.calls.some((call) => expected.test(call.message))).toBe(true));
+    const running = Notice.calls.find((call) =>
+      call.message.startsWith("arXiv Daily: running for"),
+    );
+    expect(running?.notice.hidden).toBe(true);
+  });
+
+  it("hides the interim running notice when the run throws", async () => {
+    Notice.calls = [];
+    const plugin = makePlugin();
+    plugin.settings = {
+      ...DEFAULT_SETTINGS,
+      llm: { ...DEFAULT_SETTINGS.llm, apiKey: "sk-test" },
+      arxiv: {
+        ...DEFAULT_SETTINGS.arxiv,
+        topics: [{ id: "t", name: "Galaxies", tag: "galaxies", description: "Galaxies", directions: [{ id: "d", text: "Galaxies", source: "manual" }], detail: false }],
+      },
+    };
+    plugin.scheduler.runForDateNow.mockRejectedValue(new Error("plugin unloaded"));
+    registerCommands(plugin as any);
+    const command = vi.mocked(plugin.addCommand).mock.calls
+      .map(([value]) => value)
+      .find((value) => value.id === "run-now");
+
+    command?.callback?.();
+
+    await vi.waitFor(() =>
+      expect(Notice.calls.some((call) => /failed to run today: plugin unloaded/.test(call.message))).toBe(true));
+    const running = Notice.calls.find((call) =>
+      call.message.startsWith("arXiv Daily: running for"),
+    );
+    expect(running?.notice.hidden).toBe(true);
+  });
+
   it("rejects a second Run today for a date that is already running and recovers after it ends", async () => {
     Notice.calls = [];
     const plugin = makePlugin();
@@ -514,6 +571,11 @@ describe("registerCommands", () => {
     finish({ kind: "completed", papersWritten: 1 });
     await vi.waitFor(() =>
       expect(Notice.calls.some((call) => /done \(1 papers\)$/.test(call.message))).toBe(true));
+    const runningNotices = Notice.calls.filter((call) =>
+      call.message.startsWith("arXiv Daily: running for"),
+    );
+    expect(runningNotices).toHaveLength(1);
+    expect(runningNotices[0]?.notice.hidden).toBe(true);
 
     plugin.scheduler.runForDateNow.mockResolvedValue({ kind: "skipped", reason: "already done" });
     command?.callback?.();

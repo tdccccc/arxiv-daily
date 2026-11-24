@@ -1080,7 +1080,8 @@ describe("settings tab regressions", () => {
     expect(guideBody).toContain("status.firstReportComplete");
     expect(guideBody).toContain('"Generate first report"');
     expect(guideBody).toContain('this.runAction("generate first report"');
-    expect(firstReportBody).toContain("await this.plugin.scheduler.runForDateNow(date)");
+    expect(firstReportBody).toContain("await runManualDate(");
+    expect(firstReportBody).toContain("this.plugin.scheduler.runForDateNow(date)");
     expect(firstReportBody).toContain("this.refreshSetupGuide()");
     expect(settingsTabSource).not.toContain('this.executeCommand("run-now")');
     expect(guideBody).toContain('guide.addClass("arxiv-daily-setup--complete")');

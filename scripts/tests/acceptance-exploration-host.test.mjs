@@ -700,6 +700,11 @@ test("isExpectedOutOfRangeDateLog accepts only the product's out-of-range consol
   assert.equal(isExpectedOutOfRangeDateLog({ source: "pageerror", level: "error", text: OUT_OF_RANGE_DATE_TEXT }), false, "a page exception with the same text is still a real failure");
   assert.equal(isExpectedOutOfRangeDateLog({ source: "console", level: "warning", text: OUT_OF_RANGE_DATE_TEXT }), false);
   assert.equal(isExpectedOutOfRangeDateLog({ source: "console", level: "error", text: "[arxiv-daily] arXiv 2025-06-10 permanent: something else broke" }), false, "the carve-out must not become a generic permanent-failure switch");
+  assert.equal(
+    isExpectedOutOfRangeDateLog({ source: "console", level: "error", text: "[arxiv-daily] arXiv 2026-11-22 permanent: date 2025-06-10 is older than the oldest cs.AI /recent bucket 2026-10-01; arXiv no longer lists it there" }),
+    false,
+    "the run date and the offending date must match; a message about a different date is a product bug",
+  );
 });
 
 test("observe() suppresses the expected out-of-range date log but still surfaces anything else", async () => {

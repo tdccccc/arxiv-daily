@@ -9,7 +9,7 @@ import {
   summarizeFullTextRuntimeDiagnostics,
 } from "./services/fulltext-runtime-diagnostics";
 import { normalizeArxivId } from "@arxiv-daily/core";
-import { manualRunGateFor } from "./services/manual-run-gate";
+import { runManualDate } from "./services/manual-run-gate";
 import {
   type PaperPriority,
   type PaperStatus,
@@ -82,19 +82,13 @@ export function registerCommands(plugin: ArxivDailyPlugin): void {
   async function runToday() {
     if (!gateFilter()) return;
     const date = today();
-    const release = manualRunGateFor(plugin).tryBegin(date);
-    if (!release) {
-      notice(`arXiv Daily: ${date} is already running`);
-      return;
-    }
-    const runningNotice = notice(`arXiv Daily: running for ${date}…`);
-    try {
-      const result = await plugin.scheduler.runForDateNow(date);
-      if (result.kind === "skipped") runningNotice.hide();
-      notice(`arXiv Daily ${date}: ${describeResult(result)}`);
-    } finally {
-      release();
-    }
+    const result = await runManualDate(plugin, date, {
+      notice,
+      runningMessage: `arXiv Daily: running for ${date}…`,
+      run: () => plugin.scheduler.runForDateNow(date),
+    });
+    if (!result) return;
+    notice(`arXiv Daily ${date}: ${describeResult(result)}`);
     await refreshOpenDashboardViews(plugin);
   }
 
@@ -132,19 +126,13 @@ export function registerCommands(plugin: ArxivDailyPlugin): void {
       (date) => {
         runDetached(
           (async () => {
-            const release = manualRunGateFor(plugin).tryBegin(date);
-            if (!release) {
-              notice(`arXiv Daily: ${date} is already running`);
-              return;
-            }
-            const runningNotice = notice(`arXiv Daily: running for ${date}…`);
-            try {
-              const result = await plugin.scheduler.runForDateNow(date);
-              if (result.kind === "skipped") runningNotice.hide();
-              notice(`arXiv Daily ${date}: ${describeResult(result)}`);
-            } finally {
-              release();
-            }
+            const result = await runManualDate(plugin, date, {
+              notice,
+              runningMessage: `arXiv Daily: running for ${date}…`,
+              run: () => plugin.scheduler.runForDateNow(date),
+            });
+            if (!result) return;
+            notice(`arXiv Daily ${date}: ${describeResult(result)}`);
             await refreshOpenDashboardViews(plugin);
           })(),
           `run for ${date}`,
@@ -162,19 +150,13 @@ export function registerCommands(plugin: ArxivDailyPlugin): void {
       (date) => {
         runDetached(
           (async () => {
-            const release = manualRunGateFor(plugin).tryBegin(date);
-            if (!release) {
-              notice(`arXiv Daily: ${date} is already running`);
-              return;
-            }
-            const runningNotice = notice(`arXiv Daily: force running for ${date}…`);
-            try {
-              const result = await plugin.scheduler.forceRunForDate(date);
-              if (result.kind === "skipped") runningNotice.hide();
-              notice(`arXiv Daily ${date}: ${describeResult(result)}`);
-            } finally {
-              release();
-            }
+            const result = await runManualDate(plugin, date, {
+              notice,
+              runningMessage: `arXiv Daily: force running for ${date}…`,
+              run: () => plugin.scheduler.forceRunForDate(date),
+            });
+            if (!result) return;
+            notice(`arXiv Daily ${date}: ${describeResult(result)}`);
             await refreshOpenDashboardViews(plugin);
           })(),
           `force run for ${date}`,
