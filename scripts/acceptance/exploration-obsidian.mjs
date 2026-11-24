@@ -891,6 +891,19 @@ function installExternalOpenGuard() {
   return true;
 }
 
+/**
+ * A day older than the oldest arXiv `/recent` bucket is not a product malfunction: the source adapter
+ * correctly records it as a permanent failure and logs why. A persona is free to try such a date (the
+ * first-time-user persona picked 2025-06-10), and without this carve-out the correct log fails the whole
+ * scenario the moment it is observed (`exploration.mjs` treats any `observation.errors` entry as a
+ * product failure). Only the console error from that exact situation is exempted, and only when it is a
+ * console error: a page exception carrying the same text is still a real failure.
+ */
+export function isExpectedOutOfRangeDateLog(entry) {
+  if (entry?.source !== "console" || entry?.level !== "error") return false;
+  return /^\[arxiv-daily\] arXiv \d{4}-\d{2}-\d{2} permanent: date \d{4}-\d{2}-\d{2} is older than the oldest .+ \/recent bucket \d{4}-\d{2}-\d{2}; arXiv no longer lists it there/.test(entry.text ?? "");
+}
+
 export async function createObsidianExplorationDriver({ session, fixture, artifactDir, redact = value => String(value ?? ""), signal } = {}) {
   if (!session?.evaluate || !session?.client) throw new Error("Obsidian exploration driver needs a CDP session");
   if (!fixture?.vaultRoot || !fixture?.server?.url) throw new Error("Obsidian exploration driver needs an owned fixture");
@@ -940,7 +953,9 @@ export async function createObsidianExplorationDriver({ session, fixture, artifa
     const { unexpected } = classifyObsidianDiagnostics(fresh, authFailureExpected
       ? { authorizationFailureExpected: true, fixtureRequests: fixture.server.requests }
       : undefined);
-    snapshot.errors = unexpected.map(entry => redact(entry.text ?? JSON.stringify(entry)));
+    snapshot.errors = unexpected
+      .filter(entry => !isExpectedOutOfRangeDateLog(entry))
+      .map(entry => redact(entry.text ?? JSON.stringify(entry)));
     // P4 Chunk 2 Fix 3: dedupe repeated <select> option lists (e.g. many identical arXiv-category rows)
     // into one shared observation.optionSets map, in Node rather than inside the in-page/CDP
     // observation expression, so obsidianObservation's own DOM-scanning code stays untouched.
