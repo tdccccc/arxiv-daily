@@ -58,6 +58,7 @@ import {
   type SetupStatus,
 } from "../onboarding";
 import { openDashboardView, refreshOpenDashboardViews } from "../dashboard/view";
+import { runManualDate } from "../services/manual-run-gate";
 import { redactText } from "@arxiv-daily/core";
 import {
   ARXIV_DAILY_DOCS_URL,
@@ -2711,12 +2712,15 @@ export class ArxivDailySettingTab extends PluginSettingTab {
       );
       const date = await this.latestAnnouncedDate(today);
       this.plugin.logger.info(`settings: first report requested for ${date}`);
-      new Notice(
-        date === today
-          ? `arXiv Daily: running for ${date}…`
-          : `arXiv Daily: today's papers are not announced yet, so the first report uses the latest announced day, ${date}…`,
-      );
-      const result = await this.plugin.scheduler.runForDateNow(date);
+      const result = await runManualDate(this.plugin, date, {
+        notice: (message, timeoutMs) => new Notice(message, timeoutMs),
+        runningMessage:
+          date === today
+            ? `arXiv Daily: running for ${date}…`
+            : `arXiv Daily: today's papers are not announced yet, so the first report uses the latest announced day, ${date}…`,
+        run: () => this.plugin.scheduler.runForDateNow(date),
+      });
+      if (!result) return;
       new Notice(`arXiv Daily ${date}: ${describeResult(result)}`);
       await refreshOpenDashboardViews(this.plugin).catch((error: unknown) => {
         this.plugin.logger.warn("settings: dashboard refresh after first report failed", error);

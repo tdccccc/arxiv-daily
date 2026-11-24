@@ -13,6 +13,7 @@ import {
   dailyReportFile,
   HISTORY_FILE,
   INDEX_FILE,
+  isExpectedOutOfRangeDateLog,
   obsidianFocusInScopeExpression,
   paperNoteFile,
   SETTINGS_FILE,
@@ -680,6 +681,44 @@ test("expectAuthorizationFailure(): the allowance does not carry over once reset
     diagnosticsEntries.push({ source: "console", level: "error", text: CONTROLLED_401_TEXT });
     const after = await driver.observe();
     assert.ok(after.errors.some(text => text.includes(CONTROLLED_401_TEXT)), "reset() must clear the allowance: the next task did not opt in, so the same text is unexpected again");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// A model-chosen date older than arXiv's oldest /recent bucket is a legitimate
+// product answer (pruned out of the recent listing), not a malfunction. The
+// product logs it as a permanent failure, and exploration.mjs fails any
+// scenario the moment observation.errors is non-empty, so the exact console
+// error is carved out — narrowly: only that console error, never a page
+// exception or the same text under a different source.
+// ---------------------------------------------------------------------------
+
+const OUT_OF_RANGE_DATE_TEXT = "[arxiv-daily] arXiv 2025-06-10 permanent: date 2025-06-10 is older than the oldest cs.AI /recent bucket 2026-10-01; arXiv no longer lists it there (have: 2026-10-09,2026-10-08)";
+
+test("isExpectedOutOfRangeDateLog accepts only the product's out-of-range console error", () => {
+  assert.equal(isExpectedOutOfRangeDateLog({ source: "console", level: "error", text: OUT_OF_RANGE_DATE_TEXT }), true);
+  assert.equal(isExpectedOutOfRangeDateLog({ source: "pageerror", level: "error", text: OUT_OF_RANGE_DATE_TEXT }), false, "a page exception with the same text is still a real failure");
+  assert.equal(isExpectedOutOfRangeDateLog({ source: "console", level: "warning", text: OUT_OF_RANGE_DATE_TEXT }), false);
+  assert.equal(isExpectedOutOfRangeDateLog({ source: "console", level: "error", text: "[arxiv-daily] arXiv 2025-06-10 permanent: something else broke" }), false, "the carve-out must not become a generic permanent-failure switch");
+  assert.equal(
+    isExpectedOutOfRangeDateLog({ source: "console", level: "error", text: "[arxiv-daily] arXiv 2026-11-22 permanent: date 2025-06-10 is older than the oldest cs.AI /recent bucket 2026-10-01; arXiv no longer lists it there" }),
+    false,
+    "the run date and the offending date must match; a message about a different date is a product bug",
+  );
+});
+
+test("observe() suppresses the expected out-of-range date log but still surfaces anything else", async () => {
+  await withTempFixture(async ({ fixture, artifactDir }) => {
+    const diagnosticsEntries = [];
+    const { session } = buildFakeObsidianSession({ diagnosticsEntries });
+    const driver = await createObsidianExplorationDriver({ session, fixture, artifactDir });
+    diagnosticsEntries.push(
+      { source: "console", level: "error", text: OUT_OF_RANGE_DATE_TEXT },
+      { source: "console", level: "error", text: "Something else broke" },
+    );
+    const snapshot = await driver.observe();
+    assert.ok(!snapshot.errors.some(text => text.includes("is older than the oldest")), "the expected out-of-range date log must not fail the scenario");
+    assert.ok(snapshot.errors.some(text => text.includes("Something else broke")), "unrelated console errors in the same task must still surface");
   });
 });
 

@@ -9,6 +9,7 @@ import {
   summarizeFullTextRuntimeDiagnostics,
 } from "./services/fulltext-runtime-diagnostics";
 import { normalizeArxivId } from "@arxiv-daily/core";
+import { runManualDate } from "./services/manual-run-gate";
 import {
   type PaperPriority,
   type PaperStatus,
@@ -43,9 +44,9 @@ import {
 export function registerCommands(plugin: ArxivDailyPlugin): void {
   const tz = () => plugin.settings.arxiv.timezone;
   const today = () => formatDate(todayInTz(new Date(), tz()));
-  const notice: CommandNotice = (message, timeoutMs) => {
+  const notice = (message: string, timeoutMs?: number): Notice => {
     plugin.logger.info(message);
-    new Notice(message, timeoutMs);
+    return new Notice(message, timeoutMs);
   };
   const runDetached = (promise: Promise<unknown>, action: string): void => {
     void promise.catch((error: unknown) => {
@@ -81,8 +82,12 @@ export function registerCommands(plugin: ArxivDailyPlugin): void {
   async function runToday() {
     if (!gateFilter()) return;
     const date = today();
-    notice(`arXiv Daily: running for ${date}…`);
-    const result = await plugin.scheduler.runForDateNow(date);
+    const result = await runManualDate(plugin, date, {
+      notice,
+      runningMessage: `arXiv Daily: running for ${date}…`,
+      run: () => plugin.scheduler.runForDateNow(date),
+    });
+    if (!result) return;
     notice(`arXiv Daily ${date}: ${describeResult(result)}`);
     await refreshOpenDashboardViews(plugin);
   }
@@ -121,8 +126,12 @@ export function registerCommands(plugin: ArxivDailyPlugin): void {
       (date) => {
         runDetached(
           (async () => {
-            notice(`arXiv Daily: running for ${date}…`);
-            const result = await plugin.scheduler.runForDateNow(date);
+            const result = await runManualDate(plugin, date, {
+              notice,
+              runningMessage: `arXiv Daily: running for ${date}…`,
+              run: () => plugin.scheduler.runForDateNow(date),
+            });
+            if (!result) return;
             notice(`arXiv Daily ${date}: ${describeResult(result)}`);
             await refreshOpenDashboardViews(plugin);
           })(),
@@ -141,8 +150,12 @@ export function registerCommands(plugin: ArxivDailyPlugin): void {
       (date) => {
         runDetached(
           (async () => {
-            notice(`arXiv Daily: force running for ${date}…`);
-            const result = await plugin.scheduler.forceRunForDate(date);
+            const result = await runManualDate(plugin, date, {
+              notice,
+              runningMessage: `arXiv Daily: force running for ${date}…`,
+              run: () => plugin.scheduler.forceRunForDate(date),
+            });
+            if (!result) return;
             notice(`arXiv Daily ${date}: ${describeResult(result)}`);
             await refreshOpenDashboardViews(plugin);
           })(),
