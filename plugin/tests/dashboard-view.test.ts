@@ -314,7 +314,7 @@ describe("dashboard date-run controls", () => {
     expect(body).toBeDefined();
     expect(body).toContain("forceRunForDate(date)");
     expect(body).toContain("runForDateNow(date)");
-    expect(body).toMatch(/finally \{\s*await this\.reloadIndex\(\);/);
+    expect(body).toMatch(/finally \{\s*release\(\);\s*await this\.reloadIndex\(\);/);
   });
 });
 

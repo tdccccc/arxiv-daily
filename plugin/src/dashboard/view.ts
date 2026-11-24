@@ -31,6 +31,7 @@ import type { RunStateEntry } from "@arxiv-daily/core";
 import { daysBefore, formatDate, isWeekendDate, todayInTz } from "@arxiv-daily/core";
 import { getSetupStatus, logSetupStatus } from "../onboarding";
 import { chooseModal } from "../services/modal";
+import { manualRunGateFor } from "../services/manual-run-gate";
 import { openDatePickerModal } from "../date-picker-modal";
 import { markArxivDailyMenu } from "../plugin-menu";
 import {
@@ -1358,12 +1359,22 @@ class ArxivDailyDashboardView extends ItemView {
       return;
     }
 
-    this.notice(`arXiv Daily: running for ${date}…`);
-    await this.plugin.recentDates.refresh();
+    const release = manualRunGateFor(this.plugin).tryBegin(date);
+    if (!release) {
+      this.notice(`arXiv Daily: ${date} is already running`);
+      return;
+    }
+    const runningNotice = this.notice(`arXiv Daily: running for ${date}…`);
+    try {
+      await this.plugin.recentDates.refresh();
 
-    this.plugin.logger.info(`dashboard: manual calendar run requested for ${date}`);
-    const result = await this.plugin.scheduler.runForDateNow(date, { trigger: "calendar" });
-    this.notice(`arXiv Daily ${date}: ${describeResult(result)}`);
+      this.plugin.logger.info(`dashboard: manual calendar run requested for ${date}`);
+      const result = await this.plugin.scheduler.runForDateNow(date, { trigger: "calendar" });
+      if (result.kind === "skipped") runningNotice.hide();
+      this.notice(`arXiv Daily ${date}: ${describeResult(result)}`);
+    } finally {
+      release();
+    }
 
     // Refresh dashboard
     await this.reloadIndex();
@@ -2189,9 +2200,9 @@ class ArxivDailyDashboardView extends ItemView {
     }
   }
 
-  private notice(message: string, timeoutMs?: number): void {
+  private notice(message: string, timeoutMs?: number): Notice {
     this.plugin.logger.info(message);
-    new Notice(message, timeoutMs);
+    return new Notice(message, timeoutMs);
   }
 
   private clearSearchDebounce(): void {
@@ -2269,16 +2280,25 @@ class ArxivDailyDashboardView extends ItemView {
   }
 
   private async runSelectedDate(date: string, force: boolean): Promise<void> {
+    const release = manualRunGateFor(this.plugin).tryBegin(date);
+    if (!release) {
+      this.notice(`arXiv Daily: ${date} is already running`);
+      return;
+    }
     this.plugin.logger.info(
       `dashboard: manual ${force ? "force " : ""}run requested for ${date}`,
     );
-    this.notice(`arXiv Daily: ${force ? "force " : ""}running for ${date}…`);
+    const runningNotice = this.notice(
+      `arXiv Daily: ${force ? "force " : ""}running for ${date}…`,
+    );
     try {
       const result = force
         ? await this.plugin.scheduler.forceRunForDate(date)
         : await this.plugin.scheduler.runForDateNow(date);
+      if (result.kind === "skipped") runningNotice.hide();
       this.notice(`arXiv Daily ${date}: ${describeResult(result)}`);
     } finally {
+      release();
       await this.reloadIndex();
     }
   }
@@ -2286,10 +2306,20 @@ class ArxivDailyDashboardView extends ItemView {
   private async runToday(): Promise<void> {
     if (!this.gateFilter()) return;
     const date = this.todayDate();
+    const release = manualRunGateFor(this.plugin).tryBegin(date);
+    if (!release) {
+      this.notice(`arXiv Daily: ${date} is already running`);
+      return;
+    }
     this.plugin.logger.info(`dashboard: manual run today requested for ${date}`);
-    this.notice(`arXiv Daily: running for ${date}…`);
-    const result = await this.plugin.scheduler.runForDateNow(date);
-    this.notice(`arXiv Daily ${date}: ${describeResult(result)}`);
+    const runningNotice = this.notice(`arXiv Daily: running for ${date}…`);
+    try {
+      const result = await this.plugin.scheduler.runForDateNow(date);
+      if (result.kind === "skipped") runningNotice.hide();
+      this.notice(`arXiv Daily ${date}: ${describeResult(result)}`);
+    } finally {
+      release();
+    }
     await this.reloadIndex();
   }
 

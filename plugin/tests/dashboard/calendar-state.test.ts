@@ -1,4 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
+import { Notice } from "obsidian";
 import {
   ARXIV_DAILY_DASHBOARD_VIEW,
   calendarCellAriaLabel,
@@ -678,5 +679,70 @@ describe("runDateFromCalendar", () => {
       "arXiv Daily: running for 2026-06-22…",
       "refresh",
     ]);
+  });
+
+  function makeCalendarRunView(scheduler: { runForDateNow: (date: string) => Promise<unknown> }) {
+    let createView: ((leaf: unknown) => unknown) | undefined;
+    const plugin = {
+      app: {},
+      settings: {
+        ...DEFAULT_SETTINGS,
+        llm: { ...DEFAULT_SETTINGS.llm, apiKey: "test-key" },
+        arxiv: {
+          ...DEFAULT_SETTINGS.arxiv,
+          topics: [{ name: "Topic", tag: "topic", description: "Topic description", directions: [{ id: "d1", text: "Topic description", origin: "migrated" }] }],
+        },
+      },
+      registerView: vi.fn((type: string, viewCreator: (leaf: unknown) => unknown) => {
+        if (type === ARXIV_DAILY_DASHBOARD_VIEW) createView = viewCreator;
+      }),
+      openSettings: vi.fn(),
+      logger: { info: vi.fn(), warn: vi.fn() },
+      recentDates: { refresh: vi.fn(async () => undefined), hasDate: vi.fn(() => false) },
+      stateStore: { get: vi.fn(() => ({ status: "pending", lastAttempt: 0, attempts: 0 })) },
+      scheduler,
+    };
+    registerDashboardView(plugin as never);
+    const view = createView?.({}) as { runDateFromCalendar(date: string): Promise<void>; reloadIndex(): Promise<void> };
+    view.reloadIndex = vi.fn(async () => undefined);
+    return view;
+  }
+
+  it("hides the interim running notice when the run is skipped", async () => {
+    Notice.calls = [];
+    const view = makeCalendarRunView({
+      runForDateNow: vi.fn(async () => ({ kind: "skipped", reason: "already done" })),
+    });
+
+    await view.runDateFromCalendar("2026-06-22");
+
+    const running = Notice.calls.find((call) =>
+      call.message === "arXiv Daily: running for 2026-06-22…",
+    );
+    expect(running?.notice.hidden).toBe(true);
+    expect(Notice.calls.at(-1)?.message).toBe(
+      "arXiv Daily 2026-06-22: skipped: already done",
+    );
+  });
+
+  it("rejects a second run for a date that is already running", async () => {
+    Notice.calls = [];
+    let finish!: (result: unknown) => void;
+    const runForDateNow = vi.fn(
+      () => new Promise((resolve) => { finish = resolve; }),
+    );
+    const view = makeCalendarRunView({ runForDateNow });
+
+    const first = view.runDateFromCalendar("2026-06-22");
+    await vi.waitFor(() => expect(runForDateNow).toHaveBeenCalledTimes(1));
+
+    await view.runDateFromCalendar("2026-06-22");
+    expect(runForDateNow).toHaveBeenCalledTimes(1);
+    expect(Notice.calls.map((call) => call.message)).toContain(
+      "arXiv Daily: 2026-06-22 is already running",
+    );
+
+    finish({ kind: "skipped", reason: "already done" });
+    await first;
   });
 });
